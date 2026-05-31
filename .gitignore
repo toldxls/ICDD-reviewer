@@ -1,0 +1,5 @@
+.mindat_key
+.cache/
+__pycache__/
+*.pyc
+.DS_Store

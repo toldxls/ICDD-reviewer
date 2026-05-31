@@ -1,0 +1,7 @@
+# Python dependencies for the PXRD review tool.
+#   pip3 install -r requirements.txt
+
+PyMuPDF              # imported as 'fitz' — PDF text extraction (cell_lambda_check.py)
+python-docx>=1.1     # docx parsing + Word comments API (annotate_review.py); >=1.1 for the comment API
+lxml                 # docx XML via lxml.etree (annotate_review.py); also a python-docx dependency
+certifi              # optional — used for CA certs if importable, for HTTPS to the Mindat API (mindat.py)
