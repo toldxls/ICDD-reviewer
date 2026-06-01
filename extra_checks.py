@@ -422,6 +422,17 @@ def check4_calculated(e, text):
                  and re.search(r'structure|single-crystal|cif|refinement|atomic', s.lower())
                  and not re.search(r'\bcompar', s.lower())
                  and not _MEASURED.search(s)]
+        # Multi-species papers often say "for all species EXCEPT <name>, … were
+        # calculated". If THIS entry is the excepted species, its pattern was
+        # measured, not calculated — don't flag it.
+        nm = (e.name or e.primary or '').strip().lower()
+        nm_root = re.sub(r'[^a-z]', '', nm)[:6]
+        def _excepted(s):
+            if not nm_root:
+                return False
+            m = re.search(r'\bexcept\b(.{0,60})', s, re.I)
+            return bool(m and nm_root in re.sub(r'[^a-z]', '', m.group(1).lower()))
+        sents = [s for s in sents if not _excepted(s)]
         if sents and not (spac == 'calculated'):
             out.append(Finding('calculated', 'flag',
                        "PDF states the powder pattern was calculated from the structure.",
@@ -862,6 +873,148 @@ def check_cif(e, cif_data):
     # entries where the CIF represents a different structural variant.
     # The correct reference is the PDF for the specific phase described.
     # SG check is therefore omitted here pending PDF-based SG extraction.
+    return out
+
+# ----------------------------------------------------------------------------- ICDD .dft (DataQuacker) parse — co-equal proxy, soft cross-check only
+def _dft_comment_loop(text):
+    """Parse the `loop_ _icdd_PDF_comment_type / _icdd_PDF_comment` block into
+    {type: text}. Handles inline values ("IM 2021-068", "OP '…'") and ;-delimited
+    multi-line blocks (AB analysis, DC data-collection)."""
+    lines = text.splitlines()
+    out = {}
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() == '_icdd_PDF_comment' and i and lines[i-1].strip() == '_icdd_PDF_comment_type':
+            break
+        i += 1
+    i += 1
+    cur = None
+    while i < len(lines):
+        s = lines[i].strip()
+        if s.startswith('#') or s.startswith('data_') or s == 'loop_':
+            break
+        if s == ';':
+            i += 1; buf = []
+            while i < len(lines) and lines[i].strip() != ';':
+                buf.append(lines[i].strip()); i += 1
+            if cur:
+                out[cur] = _sq(' '.join(buf))
+            cur = None
+        else:
+            m = re.match(r"^([A-Z]{2})\s+'?(.*?)'?\s*$", s)
+            if m and m.group(2):
+                out[m.group(1)] = m.group(2).strip(); cur = None
+            elif re.match(r'^[A-Z]{2}$', s):
+                cur = s
+        i += 1
+    return out
+
+def parse_dft(dft_path):
+    """Extract the structured fields of an ICDD DataQuacker .dft (CIF-like). Returns
+    {} on any failure — the .dft is supplementary, never load-bearing."""
+    try:
+        with open(dft_path, encoding='utf-8', errors='replace') as f:
+            text = f.read()
+    except Exception:
+        return {}
+    def g(key):
+        m = re.search(r'^%s\s+(.+?)\s*$' % re.escape(key), text, re.M)
+        if not m:
+            return None
+        v = m.group(1).strip().strip("'").strip()
+        return None if v in ('', '?') else v
+    d = {}
+    cell = {}
+    for ax, key in (('a', '_cell_length_a'), ('b', '_cell_length_b'), ('c', '_cell_length_c'),
+                    ('α', '_cell_angle_alpha'), ('β', '_cell_angle_beta'), ('γ', '_cell_angle_gamma')):
+        v = g(key)
+        if v:
+            cell[ax] = v
+    d['cell'] = cell
+    z = g('_cell_formula_units_Z')
+    if z and re.match(r'\d+$', z):
+        d['Z'] = int(z)
+    for k, key in (('SG', '_space_group_name_H-M_alt'), ('volume', '_cell_volume'),
+                   ('density', '_icdd_density_calculated'), ('temperature', '_diffrn_ambient_temperature'),
+                   ('geometry', '_pd_instr_geometry'), ('method', '_exptl_method'),
+                   ('intensity_details', '_icdd_PDF_intensity_meas_details')):
+        v = g(key)
+        if v:
+            d[k] = v
+    formulas = {}
+    for fk, key in (('iupac', '_chemical_formula_iupac'), ('structural', '_chemical_formula_structural'),
+                    ('analytical', '_chemical_formula_analytical'), ('general', '_icdd_PDF_general_formula')):
+        v = g(key)
+        if v:
+            formulas[fk] = v
+    d['formulas'] = formulas
+    d['comments'] = _dft_comment_loop(text)   # {HB,OP,IM,AB,DC,...}
+    return d
+
+def _dft_fmt(s):
+    """Display a .dft cell value, dropping a malformed esd (>4 digits) some .dft
+    files carry, e.g. '124.0889970000(70000000)' -> '124.089'."""
+    m = re.match(r'\s*(-?\d+\.?\d*)\s*(?:\((\d+)\))?', s or '')
+    if not m:
+        return s
+    val, esd = m.group(1), m.group(2)
+    if '.' in val and len(val.split('.')[1]) > 6:        # absurd precision -> round
+        val = ('%.4f' % float(val)).rstrip('0').rstrip('.')
+    return '%s(%s)' % (val, esd) if (esd and len(esd) <= 4) else val
+
+def check_dft(e, dft_data):
+    """Soft docx ↔ ICDD-.dft cross-check. The .dft is a CO-EQUAL PROXY, not ground
+    truth (the PDF is the arbiter), so every finding is sev='note' — surfaced in the
+    console/log as 'verify vs ICDD .dft', NEVER written into the docx. Stays quiet
+    when they agree (≈91% of cells match exactly). Deliberately limited to the
+    reliable structured signals: cell VALUE divergence, Z, and (measured-only)
+    geometry. SG (notation differences), precision/esd (overlaps check8, and the
+    docx is often the more complete one), temperature (.dft field is ambiguous) and
+    the comment-loop fields (IMA/optical — garbled in some .dft) are NOT compared."""
+    out = []
+    if not dft_data:
+        return out
+    PRE = 'verify vs ICDD .dft'
+    dcell = dft_data.get('cell', {})
+    # Compare the cell HOLISTICALLY. Emit per-axis notes only when it's the SAME
+    # cell with 1–2 discrepant axes (transcription-level). If most axes differ
+    # (axis permutation / different setting or phase — common between a powder docx
+    # and an SC .dft), stay quiet: that is not a transcription issue and the
+    # docx-vs-PDF cell check is the real validator.
+    diffs, ncomp = [], 0
+    for k in ('a', 'b', 'c', 'α', 'β', 'γ'):
+        dv_s, fv_s = e.cell.get(k), dcell.get(k)
+        if not dv_s or not fv_s:
+            continue
+        dv, fv = _val(dv_s), _val(fv_s)
+        if dv is None or fv is None:
+            continue
+        if k in ('α', 'β', 'γ') and fv in (90.0, 120.0) and dv in (90.0, 120.0):
+            continue
+        ncomp += 1
+        tol = 0.05 if k in ('α', 'β', 'γ') else 0.0015
+        if abs(dv - fv) > tol:
+            diffs.append((k, dv_s, fv_s, abs(dv - fv)))
+    same_cell = ncomp > 0 and len(diffs) <= 2 and (ncomp - len(diffs)) >= 1
+    if diffs and same_cell:
+        for k, dv_s, fv_s, d in diffs:
+            out.append(Finding('dft', 'note', "%s — %s: docx=%s but .dft=%s (Δ=%.4f)."
+                       % (PRE, k, _dft_fmt(dv_s), _dft_fmt(fv_s), d), None))
+    # Z: only meaningful when the cells otherwise agree (a different cell scales Z
+    # proportionally, which is not an error). Z-vs-CIF is covered separately.
+    dz = _val(e.cell.get('Z'))
+    if same_cell and not diffs and dz is not None and dft_data.get('Z') is not None and int(dz) != dft_data['Z']:
+        out.append(Finding('dft', 'note', "%s — Z: docx=%d but .dft=%d (check the paper; a phase's "
+                   "Z should match between SCXRD and powder)." % (PRE, int(dz), dft_data['Z']), None))
+    # geometry: only for genuinely measured methods (a .dft 'Diffractometer:' default
+    # vs a docx 'Calculated'/'Other' is not a real disagreement).
+    sp = (e.instr.get('spacing_instr') or '').strip()
+    geo = dft_data.get('geometry', '')
+    if sp.lower() in MEASURED_METHODS and geo:
+        geo_cls = geo.split(':')[0].strip()
+        if geo_cls and sp.lower() != geo_cls.lower() and sp.lower() not in geo.lower():
+            out.append(Finding('dft', 'note', "%s — Spacing Instr.=%r but .dft geometry=%r."
+                       % (PRE, sp, geo), None))
     return out
 
 # ----------------------------------------------------------------------------- 12. microprobe analysis field
@@ -1424,7 +1577,7 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check13_temperature, check15_strongest_lines,
           check16_instr_vocab, check17_pdf_filter, check18_name_formula]
 
-def run_all(e, text, cif_data=None):
+def run_all(e, text, cif_data=None, dft_data=None):
     findings = []
     for fn in CHECKS:
         try:
@@ -1435,6 +1588,10 @@ def run_all(e, text, cif_data=None):
         findings.extend(check_cif(e, cif_data or {}))
     except Exception as ex:
         findings.append(Finding('check_cif', 'note', 'CIF check errored: %s' % ex, None))
+    try:
+        findings.extend(check_dft(e, dft_data or {}))
+    except Exception as ex:
+        findings.append(Finding('dft', 'note', '.dft check errored: %s' % ex, None))
     return findings
 
 _SEV = {'flag': '⚑', 'info': 'ℹ', 'note': '·'}

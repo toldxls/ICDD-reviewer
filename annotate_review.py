@@ -64,18 +64,19 @@ def _is_clean(res):
             and not _has_lam_flag(res) and not _writable_extras(res))
 
 # ----------------------------------------------------------------------------- analysis
-def analyze(docx_path, pdf_path, cif_path=None):
+def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
     """Return a structured verdict mirroring cell_lambda_check.report()."""
     d = C.parse_docx(docx_path)
     res = {'docx': d, 'cell': ('nopdf',), 'params': {}, 'lam': None, 'extra': []}
     text = C.pdf_text(pdf_path) if pdf_path else None
     cif_data = X.parse_cif(cif_path) if cif_path else {}
+    dft_data = X.parse_dft(dft_path) if dft_path else {}
     # extra checks run regardless of a PDF (symmetry/indexing/calculated are
     # docx-internal). Never let them break the core cell/λ verdict.
     entry = None
     try:
         entry = X.parse_entry(docx_path)
-        res['extra'] = X.run_all(entry, text, cif_data)
+        res['extra'] = X.run_all(entry, text, cif_data, dft_data)
     except Exception as ex:
         res['extra'] = []
     # a CALCULATED powder pattern uses the modelling wavelength (calc software
@@ -488,6 +489,7 @@ def main():
 
     idx = C.pdf_index(args.folder)
     cif_idx = C.cif_index(args.folder)
+    dft_idx = C.dft_index(args.folder)
     docs = sorted(f for f in glob.glob(os.path.join(args.folder, '*.docx'))
                   if not os.path.basename(f).startswith('~$'))
     if args.id:
@@ -501,7 +503,8 @@ def main():
         eid = C.entry_id(dp)
         pdf = idx.get(eid)
         cif = cif_idx.get(eid)
-        res = analyze(dp, pdf, cif)
+        dft = dft_idx.get(eid)
+        res = analyze(dp, pdf, cif, dft)
         # Name the output by what the tool found: flagged entries -> '<name>_edited.docx',
         # clean ones keep the source name. Cleanliness is deterministic for a given
         # source, so the path is stable across reruns (refresh below still works).
@@ -564,14 +567,18 @@ def main():
         if refresh:
             rec['refreshed'] = True
         rec['outfile'] = os.path.basename(out)
+        # .dft cross-check notes are console/log only (the .dft is a co-equal proxy);
+        # collect them for the log's 'verify' section — they are NOT written into the docx.
+        rec['dft'] = [f.msg for f in res.get('extra', []) if f.code == 'dft']
         records.append((os.path.basename(dp), rec))
         n = len(rec['comments'])
         tag = ' [REFRESHED: manual edits kept]' if rec.get('refreshed') else ''
         renamed = '' if (args.inplace or rec['clean']) else ' -> %s' % rec['outfile']
-        print('%-44s cell=%-12s %-26s (%d comment%s)%s%s'
+        dtag = '  {%d .dft-verify}' % len(rec['dft']) if rec['dft'] else ''
+        print('%-44s cell=%-12s %-26s (%d comment%s)%s%s%s'
               % (os.path.basename(dp), rec['status'],
                  'clean' if rec['clean'] else ('highlights: ' + ', '.join(rec['highlights']) or 'flag'),
-                 n, '' if n == 1 else 's', renamed, tag))
+                 n, '' if n == 1 else 's', renamed, dtag, tag))
 
     # --- write the run log -------------------------------------------------
     log_path = args.log or os.path.join(out_dir if not args.inplace else args.folder, 'annotation_log.txt')
@@ -615,6 +622,20 @@ def main():
         for f, r in records:
             if r['clean']:
                 fh.write('  %-32s (%s)\n' % (C.entry_name(f).upper(), C.entry_id(f) or '?'))
+        # .dft cross-check: a co-equal ICDD proxy (NOT ground truth) — these are
+        # surfaced for the reviewer to verify against the paper; they are NOT
+        # written into any docx.
+        dft_recs = [(f, r) for f, r in records if r.get('dft')]
+        if dft_recs:
+            fh.write('\n' + '=' * 78 + '\n\n')
+            fh.write('ICDD .dft CROSS-CHECK (verify against the paper — NOT written to docx)\n'
+                     + '-' * 78 + '\n')
+            for f, r in dft_recs:
+                fh.write('\n  %s   (%s)\n' % ((C.entry_name(f) or C.entry_id(f) or f).upper(), C.entry_id(f) or '?'))
+                for c in r['dft']:
+                    c = re.sub(r'^verify vs ICDD \.dft — ', '', c)
+                    fh.write(textwrap.fill(c, width=78, initial_indent='    - ',
+                                           subsequent_indent=' ' * 6) + '\n')
     print('\nlog written -> %s' % log_path)
 
 if __name__ == '__main__':

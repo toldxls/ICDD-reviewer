@@ -227,6 +227,28 @@ and writes the suggested value; it never rewrites a field.
 
 Run just the extras: `python3 extra_checks.py <folder> [<id>]`.
 
+#### ICDD `.dft` (DataQuacker) cross-check — a co-equal proxy (console/log only)
+ICDD DataQuacker `.dft` files (CIF-like structured records: cell+esd, Z, SG,
+density, formulas, geometry, temperature, comments) are paired by entry id
+(`cell_lambda_check.dft_index`, `extra_checks.parse_dft`) and compared to the
+docx. The `.dft` is a **co-equal proxy, NOT ground truth** (the PDF is the
+arbiter), so every `check_dft` finding is **`note` severity — surfaced in the
+console and a dedicated "ICDD .dft CROSS-CHECK (verify…)" section of the log,
+and NEVER written into the docx.** It is deliberately limited to the reliable
+structured signals and stays quiet on agreement (Part 1: 8/62 entries;
+training: 18/168):
+- **cell value divergence**, but only when it's the *same cell* with 1–2
+  discrepant axes (transcription-level); when most axes differ (axis permutation /
+  different setting — common between a powder docx and an SC `.dft`) it stays
+  silent, since the docx-vs-PDF cell check is the real validator;
+- **Z** (only when the cells otherwise agree — a different cell scales Z
+  proportionally and isn't an error; docx-vs-CIF Z is covered separately);
+- **geometry** for measured methods (e.g. docx `Film` vs `.dft` `Camera:Gandolfi`).
+SG (notation noise), precision/esd (overlaps check 8; the docx is often the more
+complete one), temperature (the `.dft` field is ambiguous — sometimes the SC
+value) and the comment-loop fields (IMA/optical — garbled in some `.dft`) are
+NOT compared.
+
 ### Mindat lookup (`mindat.py`) — authoritative classification
 A Python port of my Apps Script (Token auth, page-size 500,
 exponential backoff). It pulls every IMA-approved geomaterial once with its
@@ -389,6 +411,17 @@ Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
   sentences containing *observed / experimental / measured / matches / fits /
   theoretical / "calculated from (the) powder"* (those describe a measured pattern
   or a comparison column). *(#mineral1, #mineral2, #mineral3 = measured.)*
+  In multi-species papers ("for all species **except &lt;name&gt;** … were
+  calculated"), if THIS entry is the excepted species its pattern was measured —
+  don't flag it. *(camanchacaite = excepted, no flag; its siblings = flagged.)*
+- **`.dft` cross-check is a co-equal proxy, console/log only.** `check_dft` is
+  always `note` severity — never written to the docx. Keep it quiet on agreement:
+  cell notes ONLY for a same-cell 1–2-axis transcription difference (suppress when
+  most axes differ = a different setting/phase); Z notes ONLY when the cells
+  otherwise agree (a different cell scales Z). Do NOT compare SG (notation noise),
+  temperature (ambiguous `.dft` field), or the `.dft` comment-loop fields
+  (IMA/optical are garbled in some files). The PDF stays the arbiter; the `.dft`
+  never overrides the docx-vs-PDF or docx-vs-CIF checks.
 - **Radiation.** PDF text extraction drops the Kα α-glyph → accept the α-less form
   (`CuK radiation`, `(CuK)`). Skip microprobe **standard** emission lines
   (`hematite (FeKα)`) and pick the powder radiation that carries an explicit λ.

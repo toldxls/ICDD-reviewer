@@ -25,6 +25,7 @@ if not FOLDER:
 
 _idx = C.pdf_index(FOLDER)
 _cif = C.cif_index(FOLDER)
+_dft = C.dft_index(FOLDER)
 _cache = {}
 def res_for(eid):
     if eid not in _cache:
@@ -32,7 +33,7 @@ def res_for(eid):
         if not dp:
             _cache[eid] = None
         else:
-            _cache[eid] = A.analyze(dp[0], _idx.get(eid), _cif.get(eid))
+            _cache[eid] = A.analyze(dp[0], _idx.get(eid), _cif.get(eid), _dft.get(eid))
     return _cache[eid]
 
 def extras(eid, code=None, sev=None, substr=None):
@@ -96,6 +97,10 @@ CASES = [
  ("I003747 PDF graphite mono (powder)",      lambda: bool(extras('I003747', 'instr_filter', substr='graphite'))),
  ("I003745 SC mono NOT attributed",          lambda: not extras('I003745', 'instr_filter')),
  ("I003566 SC mono NOT attributed",          lambda: not extras('I003566', 'instr_filter')),
+ # --- .dft (DataQuacker) soft cross-check: console/log only, never written ---
+ ("I003599 .dft Z verify note",              lambda: bool(extras('I003599', 'dft', substr='Z:'))),
+ ("I003599 .dft notes are sev=note (not flag)", lambda: not [f for f in (res_for('I003599')['extra'] if res_for('I003599') else []) if f.code == 'dft' and f.sev == 'flag']),
+ ("I003246 no .dft note (agrees)",           lambda: not extras('I003246', 'dft')),
  # --- 18. name vs ideal formula: correctly-named REE species must NOT flag ---
  ("I003511 Allanite-(Y) name OK",            lambda: not extras('I003511', 'name_formula', 'flag')),
  ("I003523 Parisite-(Nd) name OK",           lambda: not extras('I003523', 'name_formula', 'flag')),

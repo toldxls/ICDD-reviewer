@@ -566,11 +566,22 @@ def pdf_index(folder):
 def cif_index(folder):
     """Build entry-id → CIF path index, looking in folder and its Files/ subfolder."""
     cand = {}
-    for p in glob.glob(os.path.join(folder, '**', '*.cif'), recursive=True):
+    for p in glob.glob(os.path.join(folder, '**', '*.[cC][iI][fF]'), recursive=True):
         ids = re.findall(ID_RE, os.path.basename(p))
         for pre, num in ids:
             cand.setdefault(pre + num, []).append(p)
     # prefer shorter names (less likely to be supplementary)
+    return {k: sorted(ps, key=lambda p: len(os.path.basename(p)))[0]
+            for k, ps in cand.items()}
+
+def dft_index(folder):
+    """Build entry-id → ICDD DataQuacker .dft path index (recursive). The .dft is a
+    co-equal proxy (CIF-like structured ICDD record), used only as a soft cross-check."""
+    cand = {}
+    for p in glob.glob(os.path.join(folder, '**', '*.[dD][fF][tT]'), recursive=True):
+        ids = re.findall(ID_RE, os.path.basename(p))
+        for pre, num in ids:
+            cand.setdefault(pre + num, []).append(p)
     return {k: sorted(ps, key=lambda p: len(os.path.basename(p)))[0]
             for k, ps in cand.items()}
 
