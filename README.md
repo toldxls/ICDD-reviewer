@@ -224,6 +224,23 @@ and writes the suggested value; it never rewrites a field.
     cases (REE listed without coefficients) are skipped. **Polytype suffix**
     (`-1M`/`-2O`/`-3T`…) letter must be consistent with the crystal system
     (M↔monoclinic, O↔orthorhombic, T↔trigonal, Q↔tetragonal, …).
+19. **Intensity Type ↔ detector** *(the reviewers' single most frequent comment)* —
+    Intensity Type is set by the detector: **area detectors** (image-plate, Gandolfi/
+    pseudo-Gandolfi, Guinier camera, R-AXIS RAPID, curved imaging plate) integrate the
+    2D ring → **Integrated**; **Bragg-Brentano** slit optics → **Peak**. Detected in a
+    powder-context sentence; flags the mismatch (⚑). "Guinier" is guarded against the
+    author surname. Validated ~90% consistent; independently reproduces the reviewer's
+    own I001361 comment.
+20. **Calculated pattern, λ not stated** — when the docx pattern is Calculated and its
+    λ (and anode) appear nowhere in the paper, flag "confirm the wavelength used" (⚑).
+    Catches default CuKα λ on synchrotron-derived calcs (Feiite/Liuite/Tschaunerite).
+21. **Primary (systematic) name normalization** — mechanical nomenclature fixes mined
+    from reviewer edits and validated to reproduce them with **zero** false positives:
+    remove redundant **"Aqua"**, hyphenate **"Hydrogen-&lt;oxoanion&gt;"**, and put
+    oxoanions **before** Hydroxide/Hydrate (⚑, suggests the corrected name). Composition-
+    dependent fixes (dropping a non-dominant cation, the acid-salt `Arsenate+Hydroxide
+    →Hydrogen-Arsenate`, and `<Metal> Oxide→oxoanion` which needs the formula to tell
+    molybdate from molybdite) are left to the reviewer.
 
 Run just the extras: `python3 extra_checks.py <folder> [<id>]`.
 
@@ -483,6 +500,20 @@ Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
   coefficients (ambiguous ideal formula) must NOT flag. Polytype letter↔system uses
   the docx system letter (trigonal 'T' maps to h/r, tetragonal is 'Q', not 't').
   *(I003511/I003523/I003521 correctly named = no flag.)*
+- **Intensity Type ↔ detector (check19).** Area detector ⇒ Integrated, Bragg-Brentano
+  ⇒ Peak; the detector keyword must be in a powder-context sentence. **Guard "Guinier"**
+  with camera/method context — it is also the author surname (André Guinier), and a
+  "Guinier et al." citation must NOT be read as the method. Do NOT teach the full
+  Integrated/Peak distinction from raw data — only the geometry rule. *(I003657 BB→Peak,
+  I003563 Gandolfi→Integrated; I003815 real via R-AXIS image-plate.)*
+- **Calculated wavelength (check20).** Flag only when NEITHER the numeric λ (~3 s.f. or
+  2-dec) NOR the anode element (`CuK`…) appears in the paper — a paper that says "CuKα"
+  without the number is fine. *(synchrotron calcs with a default CuKα λ = flag.)*
+- **Primary name (check21).** STRING-mechanical only: remove "Aqua", hyphenate
+  "Hydrogen-&lt;oxoanion&gt;", oxoanions before Hydroxide/Hydrate. Do NOT reorder
+  Hydroxide relative to **halides** (accepted names keep "Hydroxide Fluoride/Chloride"),
+  and do NOT do `<Metal> Oxide→oxoanion` (needs the formula: molybdate vs molybdite).
+  Validated to reproduce real edits with ZERO false positives on accepted names.
 
 ### Accept marking
 `annotate_review.py` writes a lowercase **"x"** in the cell after **Accept** for

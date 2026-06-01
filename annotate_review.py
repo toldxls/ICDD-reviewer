@@ -212,6 +212,8 @@ def _anchor_cell(doc, ac_row, anchor):
                            and 'type' not in t.strip().lower())
     if anchor == 'name':
         return _find_value(doc, lambda t: t.strip() == 'Mineral')
+    if anchor == 'primary':
+        return _find_value(doc, lambda t: t.strip() == 'Primary')
     return None
 
 def _write_extras(doc, ac_row, res, rec):

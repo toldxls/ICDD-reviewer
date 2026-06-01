@@ -1570,12 +1570,120 @@ def check18_name_formula(e, text):
                        None, 'name'))
     return out
 
+# --- 19. Intensity Type follows the detector -------------------------------
+# Area detectors collect the diffraction as a 2D ring and INTEGRATE it over the
+# area (Integrated): image plate, Gandolfi / pseudo-Gandolfi, Guinier, R-AXIS
+# RAPID, curved imaging plate. Bragg-Brentano slit optics give true peak heights
+# (Peak). (Detected only in a powder-context sentence so an SC detector isn't
+# mis-attributed.) This is the reviewer's single most frequent comment.
+# 'Guinier' is also a common author surname (André Guinier) — require camera/method
+# context so a "Guinier et al." citation isn't read as the diffraction method.
+AREA_DETECTOR  = r'image[- ]?plate|imaging plate|gandolfi|r-?axis\s*rapid|curved imaging'
+GUINIER_CAMERA = r'guinier[\s-]?(?:camera|geometry|focusing|method|film|image|de[\s-]?wolff)'
+BRAGG_BRENTANO = r'bragg[\s–-]?brentano'
+
+def check19_intensity_detector(e, text):
+    out = []
+    it = (e.instr.get('intensity_type') or '').strip()
+    if not it or not text:
+        return out
+    area = bb = False
+    for s in _sentences(text):
+        if not _POWDER_CTX.search(s):
+            continue
+        if re.search(AREA_DETECTOR, s, re.I) or re.search(GUINIER_CAMERA, s, re.I):
+            area = True
+        if re.search(BRAGG_BRENTANO, s, re.I):
+            bb = True
+    if area and not bb and it.lower() == 'peak':
+        out.append(Finding('intensity_type', 'flag',
+                   "PDF describes an area detector (image-plate/Gandolfi/Guinier) — these integrate "
+                   "the 2D ring, so Intensity Type should be Integrated, not Peak.", None, 'instr'))
+    elif bb and not area and it.lower() == 'integrated':
+        out.append(Finding('intensity_type', 'flag',
+                   "PDF describes Bragg-Brentano geometry — slit optics give peak heights, so "
+                   "Intensity Type should be Peak, not Integrated.", None, 'instr'))
+    return out
+
+# --- 20. calculated pattern must document its wavelength --------------------
+def check20_calc_wavelength(e, text):
+    """A calculated pattern should state the λ it was computed at. When the docx is
+    Calculated and its λ does not appear in the paper, flag it (the reviewer's 'no
+    mention of the wavelength the calculated pattern was based on')."""
+    out = []
+    if not text:
+        return out
+    spac = (e.instr.get('spacing_instr') or '').strip().lower()
+    inten = (e.instr.get('intensity_instr') or '').strip().lower()
+    if spac != 'calculated' and inten != 'calculated':
+        return out
+    lam = (e.instr.get('lam') or '').strip()
+    lv = _val(lam)
+    if lv is None:
+        return out
+    flat = re.sub(r'\s+', ' ', text)
+    near = {'%.3f' % (lv + d) for d in (-0.001, 0.0, 0.001)} | {'%.2f' % lv}
+    if any(n in flat for n in near):
+        return out                                   # the numeric λ is documented
+    el = _anode_el2(e.instr.get('anode'))            # …or the anode is named (e.g. 'CuKα')
+    if el and re.search(r'\b%s\s*k' % el, flat, re.I):
+        return out
+    out.append(Finding('calc_wavelength', 'flag',
+               "Calculated pattern: λ=%s is not stated in the paper — confirm the wavelength "
+               "used for the calculation." % lam, None, 'radiation'))
+    return out
+
+# --- 21. Primary (systematic) name normalization ---------------------------
+# Mechanical nomenclature fixes the reviewers make to the Primary name, learned
+# from the tracked-change edits and validated to reproduce real fixes with ZERO
+# false positives on accepted names. Deliberately limited to STRING-mechanical
+# rules; composition-dependent fixes (e.g. dropping a non-dominant cation, or the
+# acid-salt 'Arsenate + Hydroxide → Hydrogen-Arsenate', or '<Metal> Oxide →
+# oxoanion' which needs the formula to tell molybdate from molybdite) are left to
+# the reviewer.
+OXOANIONS = {'Arsenate', 'Silicate', 'Phosphate', 'Sulfate', 'Vanadate', 'Carbonate', 'Borate',
+             'Selenate', 'Tellurate', 'Molybdate', 'Tungstate', 'Niobate', 'Tantalate', 'Chromate',
+             'Nitrate', 'Antimonate', 'Germanate', 'Selenite', 'Arsenite', 'Sulfite'}
+
+def _normalize_primary(nm):
+    toks = nm.split()
+    toks = [t for t in toks if t != 'Aqua']                      # R1: 'Aqua' is redundant (→ Hydrate)
+    out, i = [], 0
+    while i < len(toks):                                         # R2: 'Hydrogen <oxoanion>' → 'Hydrogen-<oxoanion>'
+        if toks[i] == 'Hydrogen' and i + 1 < len(toks) and toks[i + 1] in OXOANIONS:
+            out.append('Hydrogen-' + toks[i + 1]); i += 2
+        else:
+            out.append(toks[i]); i += 1
+    toks = out
+    # R4-narrow: an oxoanion must precede Hydroxide/Hydrate (NOT relative to
+    # halides — accepted names keep e.g. 'Hydroxide Fluoride'/'Hydroxide Chloride').
+    tpos = [i for i, t in enumerate(toks) if t in ('Hydroxide', 'Hydrate')]
+    if tpos:
+        first = tpos[0]
+        moved = [t for t in toks[first:] if t in OXOANIONS]
+        if moved:
+            rest = [t for t in toks[first:] if t not in OXOANIONS]
+            toks = toks[:first] + moved + rest
+    return ' '.join(toks)
+
+def check21_primary_name(e, text):
+    nm = (e.primary or '').strip()
+    if not nm:
+        return []
+    suggested = _normalize_primary(nm)
+    if suggested and suggested != nm:
+        return [Finding('primary_name', 'flag',
+                "Primary name %r — suggest %r (remove 'Aqua'; hyphenate Hydrogen-oxoanion; "
+                "oxoanions before Hydroxide/Hydrate)." % (nm, suggested), None, 'primary')]
+    return []
+
 CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check4_calculated, check5_wavelength, check6_ideal_formula,
           check7_synthetic, check8_precision_symmetry, check9_indexing,
           check10_optical, check11_ima, check12_analysis,
           check13_temperature, check15_strongest_lines,
-          check16_instr_vocab, check17_pdf_filter, check18_name_formula]
+          check16_instr_vocab, check17_pdf_filter, check18_name_formula,
+          check19_intensity_detector, check20_calc_wavelength, check21_primary_name]
 
 def run_all(e, text, cif_data=None, dft_data=None):
     findings = []

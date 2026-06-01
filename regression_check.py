@@ -97,6 +97,13 @@ CASES = [
  ("I003747 PDF graphite mono (powder)",      lambda: bool(extras('I003747', 'instr_filter', substr='graphite'))),
  ("I003745 SC mono NOT attributed",          lambda: not extras('I003745', 'instr_filter')),
  ("I003566 SC mono NOT attributed",          lambda: not extras('I003566', 'instr_filter')),
+ # --- 19. Intensity Type follows the detector (area→Integrated, BB→Peak) ---
+ ("I003657 Bragg-Brentano -> Peak flag",     lambda: bool(extras('I003657', 'intensity_type'))),
+ ("I003563 Gandolfi/area -> Integrated flag", lambda: bool(extras('I003563', 'intensity_type'))),
+ # --- 20. calculated pattern, λ not stated in the paper ---
+ ("I003511 calc pattern λ not in paper",     lambda: bool(extras('I003511', 'calc_wavelength'))),
+ # --- 21. Primary name normalization: corrected names must NOT flag ---
+ ("I003523 primary name OK (no FP)",         lambda: not extras('I003523', 'primary_name')),
  # --- .dft (DataQuacker) soft cross-check: console/log only, never written ---
  ("I003599 .dft Z verify note",              lambda: bool(extras('I003599', 'dft', substr='Z:'))),
  ("I003599 .dft notes are sev=note (not flag)", lambda: not [f for f in (res_for('I003599')['extra'] if res_for('I003599') else []) if f.code == 'dft' and f.sev == 'flag']),
