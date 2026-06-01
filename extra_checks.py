@@ -1204,6 +1204,28 @@ VOCAB_FIX = {
 KBETA_FILTER = {'cr': 'V', 'fe': 'Mn', 'co': 'Fe', 'ni': 'Co', 'cu': 'Ni', 'mo': 'Zr', 'ag': 'Pd'}
 # crystal-monochromator materials that legitimately appear as FilterType
 MONO_MATERIALS = {'graph', 'graphite', 'ge', 'si', 'quartz', 'lif', 'diamond'}
+# genuinely MEASURED collection methods (anode/intensity-type are then required).
+# Excludes 'Calculated' and 'Other' (collapsed/derived from single-crystal data),
+# where a blank radiation/intensity-type is legitimate.
+MEASURED_METHODS = {'diffractometer', 'film', 'camera', 'gandolfi', 'guinier',
+                    'debye-scherrer', 'visual', 'image plate'}
+
+# UNAMBIGUOUS PDF monochromator/β-filter phrases -> (display, Filter, FilterType).
+# Used only to FILL a blank docx Filter when the phrase sits in a powder-context
+# sentence (so the single-crystal monochromator is not mis-attributed). The element
+# prefix on '<El>-filtered' avoids the sample-prep 'was/then filtered' false hits.
+PDF_FILTER_PATTERNS = [
+    (r'graphite[\s-]*monochromat',                 'graphite monochromator', 'Monochromator Crystal', 'Graph'),
+    (r'(?:germanium|\bGe)[\s-]*monochromat',       'Ge monochromator',       'Monochromator Crystal', 'Ge'),
+    (r'(?:silicon|\bSi)[\s-]*monochromat',         'Si monochromator',       'Monochromator Crystal', 'Si'),
+    (r'quartz[\s-]*monochromat',                   'quartz monochromator',   'Monochromator Crystal', 'Quartz'),
+    (r'(?:nickel|\bNi)[\s-]*filter(?:ed)?\b',      'Ni β-filter',            'Beta-Filter', 'Ni'),
+    (r'(?:iron|\bFe)[\s-]*filter(?:ed)?\b',        'Fe β-filter',            'Beta-Filter', 'Fe'),
+    (r'(?:manganese|\bMn)[\s-]*filter(?:ed)?\b',   'Mn β-filter',            'Beta-Filter', 'Mn'),
+    (r'(?:zirconium|\bZr)[\s-]*filter(?:ed)?\b',   'Zr β-filter',            'Beta-Filter', 'Zr'),
+    (r'(?:vanadium|\bV)[\s-]*filter(?:ed)?\b',     'V β-filter',             'Beta-Filter', 'V'),
+]
+_POWDER_CTX = re.compile(r'powder|pxrd|p-?xrd|gandolfi|debye|guinier', re.I)
 
 def _anode_el2(anode):
     a = (anode or '').lower()
@@ -1254,6 +1276,23 @@ def check16_instr_vocab(e, text):
         out.append(Finding('instr_vocab', 'note',
                    "Filter = Monochromator Crystal but FilterType = %r (expected a crystal "
                    "material, e.g. Graph/Ge/Si)." % ft, None, 'instr'))
+    # Measured (empirical) powder data must record its radiation source and an
+    # intensity type. We only assert these for genuinely MEASURED methods — NOT for
+    # 'Calculated'/'Other' (a pattern collapsed/derived from single-crystal data),
+    # where a blank is legitimate. Corpus blank rates among measured entries are low
+    # (anode 1/83, intensity-type 3/83), so these are rare, high-confidence catches.
+    # (We do NOT prescribe Integrated vs Peak: the same instrument uses both.)
+    sp_raw = (instr.get('spacing_instr') or '').strip()
+    if sp_raw.lower() in MEASURED_METHODS:
+        if not (instr.get('anode') or '').strip():
+            out.append(Finding('instr_vocab', 'flag',
+                       "Radiation/anode is blank but the powder data are measured "
+                       "(Spacing Instr.=%s) — specify the radiation source." % sp_raw,
+                       None, 'radiation'))
+        if not (instr.get('intensity_type') or '').strip():
+            out.append(Finding('instr_vocab', 'flag',
+                       "Intensity Type is blank for measured powder data "
+                       "(Spacing Instr.=%s) — set Integrated or Peak." % sp_raw, None, 'instr'))
     # NB: do NOT flag 'Spacing=Calculated, Intensity=Other' as incoherent. That is
     # the standard, correct encoding for a powder pattern calculated from single-
     # crystal/synchrotron structure data: d-spacings calculated from the cell, but
@@ -1262,6 +1301,26 @@ def check16_instr_vocab(e, text):
     # simulated from the atomic model) and 'Calculated/Other' (intensities collapsed
     # from real data) are BOTH valid. 'Other' is a meaningful designator, not a
     # placeholder for 'unknown', so there is no cross-field rule to enforce here.
+    return out
+
+# --- 17. PDF monochromator/β-filter -> fill a blank docx Filter --------------
+def check17_pdf_filter(e, text):
+    """When the docx Filter field is BLANK but the PDF unambiguously names the
+    monochromator/β-filter IN A POWDER-CONTEXT sentence (so the single-crystal
+    monochromator isn't mis-attributed), suggest filling it as a comment."""
+    out = []
+    if not text or (e.instr.get('filter') or '').strip():
+        return out                       # no PDF, or Filter already populated
+    for s in _sentences(text):
+        if not _POWDER_CTX.search(s):
+            continue                     # only powder-context sentences
+        for pat, display, filt, ftype in PDF_FILTER_PATTERNS:
+            if re.search(pat, s):
+                out.append(Finding('instr_filter', 'flag',
+                           "Filter field is blank but the PDF describes a %s for the powder "
+                           "data — add Filter = %s, FilterType = %s." % (display, filt, ftype),
+                           _sq(s)[:160], 'filter'))
+                return out               # one suggestion is enough
     return out
 
 # --- 18. mineral name vs ideal formula --------------------------------------
@@ -1327,7 +1386,7 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check7_synthetic, check8_precision_symmetry, check9_indexing,
           check10_optical, check11_ima, check12_analysis,
           check13_temperature, check15_strongest_lines,
-          check16_instr_vocab, check18_name_formula]
+          check16_instr_vocab, check17_pdf_filter, check18_name_formula]
 
 def run_all(e, text, cif_data=None):
     findings = []

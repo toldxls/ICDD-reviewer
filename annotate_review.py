@@ -204,6 +204,11 @@ def _anchor_cell(doc, ac_row, anchor):
         # the 'Analysis' comment cell (where the microprobe wt.% data is given);
         # falls back to the 'Analysis' label cell when that field is empty.
         return _find_value(doc, lambda t: t.strip() == 'Analysis')
+    if anchor == 'radiation':
+        return _find_value(doc, lambda t: t.strip().lower().startswith('radiation'))
+    if anchor == 'filter':
+        return _find_value(doc, lambda t: t.strip().lower().startswith('filter')
+                           and 'type' not in t.strip().lower())
     if anchor == 'name':
         return _find_value(doc, lambda t: t.strip() == 'Mineral')
     return None

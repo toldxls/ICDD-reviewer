@@ -89,6 +89,13 @@ CASES = [
  ("I003246 instrument recognised (R-AXIS)",  lambda: bool(extras('I003246', 'geometry', substr='R-AXIS'))),
  ("I003747 no instr_vocab flag (clean)",     lambda: not extras('I003747', 'instr_vocab', 'flag')),
  ("I003698 no instr_vocab flag (clean)",     lambda: not extras('I003698', 'instr_vocab', 'flag')),
+ # --- 16b. measured-data completeness (blank anode/intensity-type) ---
+ ("I003600 blank anode flagged (measured)",  lambda: bool(extras('I003600', 'instr_vocab', substr='Radiation/anode is blank'))),
+ ("I003246 no blank-field flag",             lambda: not extras('I003246', 'instr_vocab', substr='blank')),
+ # --- 17. PDF monochromator/β-filter -> fill blank Filter (powder-context only) ---
+ ("I003747 PDF graphite mono (powder)",      lambda: bool(extras('I003747', 'instr_filter', substr='graphite'))),
+ ("I003745 SC mono NOT attributed",          lambda: not extras('I003745', 'instr_filter')),
+ ("I003566 SC mono NOT attributed",          lambda: not extras('I003566', 'instr_filter')),
  # --- 18. name vs ideal formula: correctly-named REE species must NOT flag ---
  ("I003511 Allanite-(Y) name OK",            lambda: not extras('I003511', 'name_formula', 'flag')),
  ("I003523 Parisite-(Nd) name OK",           lambda: not extras('I003523', 'name_formula', 'flag')),

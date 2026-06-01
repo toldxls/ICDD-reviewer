@@ -197,10 +197,25 @@ and writes the suggested value; it never rewrites a field.
       (⚑ flag; caught real CoKα+Ni and FeKα+Ni errors in the corpus).
     - **monochromator material** — `Monochromator Crystal` should carry a crystal
       material (Graph/Ge/Si…), not a β-filter foil (· note).
+    - **measured data completeness** — for a genuinely measured method (Spacing
+      Instr. ∈ Diffractometer/Film/Camera/Gandolfi/Guinier/Debye-Scherrer/Visual/
+      Image plate), a blank **Radiation/anode** or blank **Intensity Type** is
+      flagged (⚑). NOT applied to `Calculated`/`Other` (collapsed/derived from
+      single-crystal data), where a blank is legitimate. Corpus blank-rates are
+      low (anode 1/83, intensity-type 3/83), so these are rare catches. Intensity
+      Type is flagged as blank only — Integrated vs Peak is *not* prescribed (the
+      same instrument uses both, so it can't be reliably derived).
     - *(Deliberately NOT checked: `Spacing=Calculated` with `Intensity=Other`. That
       is the correct encoding for a pattern calculated from single-crystal/synchrotron
       data — d-spacings from the cell, intensities collapsed/derived from the observed
       structure factors. `Other` is meaningful, not "unknown".)*
+17. **PDF monochromator/β-filter → fill a blank Filter** — when the docx `Filter`
+    field is blank AND the PDF names the device in an **unambiguous, powder-context
+    sentence** (e.g. "graphite-monochromated", "Ni-filtered"; the sentence must
+    carry powder/PXRD/Gandolfi/Debye/Guinier), suggest the value as a comment on the
+    Filter cell (⚑). The powder-context gate is essential: it skips single-crystal
+    monochromator mentions (which would otherwise be mis-attributed to the powder
+    Filter — e.g. for calculated-from-SC patterns). High precision, low yield.
 18. **name vs ideal formula** — the **Levinson rare-earth suffix** `-(Ce)`/`-(La)`/
     `-(Y)`… must name the dominant REE in the (empirical) formula; flags a mismatch
     with the corrected name (⚑ flag; validated 29/29 on the corpus). Ambiguous
@@ -420,6 +435,14 @@ Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
   Instruments/geometry are surfaced as ℹ info — never "correct" `Spacing Instr.` to
   a camera name (reviewer keeps it generic and notes geometry in a comment).
   *(I003747/I003698 = no vocab flag; I003246 = R-AXIS recognised.)*
+  Blank **anode**/**Intensity Type** are flagged ONLY for measured methods
+  (`MEASURED_METHODS`), never for Calculated/Other. Do NOT prescribe Integrated vs
+  Peak — the same instrument uses both. **Do NOT auto-fill filter/filtertype/anode
+  from an "instrument → canonical profile" table:** corpus mining showed the same
+  instrument runs different anodes, filter is blank ~67% of the time and accepted,
+  PDF "X-filtered" mentions are mostly sample-prep noise, and instrument detection
+  is confounded by the single-crystal source named on calculated patterns. Only the
+  anode↔λ↔β-filter physics (above) is reliable enough to flag.
 - **Name vs formula (check18).** Levinson suffix flags ONLY on a confident dominant
   (≥2 REE with explicit coefficients, unique max ≠ suffix). REE listed without
   coefficients (ambiguous ideal formula) must NOT flag. Polytype letter↔system uses
