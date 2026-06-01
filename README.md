@@ -139,7 +139,10 @@ confidence). The ten:
 1. **geometry / camera method** — surfaces the specific named method in the PDF
    (Bragg-Brentano, Gandolfi, pseudo-Gandolfi, Debye-Scherrer, Guinier, image
    plate, neutron TOF) when the docx `Spacing Instr.` is generic. Keyword must
-   share a sentence with a diffraction term.
+   share a sentence with a diffraction term. Also names the **specific instrument**
+   when recognised (Rigaku R-AXIS RAPID II, XtaLAB Synergy, SuperNova, MiniFlex,
+   SmartLab; Bruker D8/APEX; STOE; PANalytical Empyrean) to help confirm the
+   designators (ℹ info — the geometry goes in a comment, *not* into `Spacing Instr.`).
 2. **cell not powder-refined** — strong phrasings only ("were not refined",
    "from the single-crystal", "cell from SAED").
 3. **group / structural classification** — **authoritative via Mindat**
@@ -170,6 +173,40 @@ confidence). The ten:
 10. **IMA number** — flags only when the **PDF carries an IMA proposal id** (e.g.
     `IMA 20XX-XXX`) but the docx IMA Number field is blank, and prints the number
     to add (avoids false-flagging established minerals).
+
+(Checks 11–15 add optical-sign, IMA-section, analysis-total/count, non-ambient
+temperature, and strongest-line cross-checks.)
+
+#### Corpus-curated checks (16, 18) — hardened instrumentation & naming
+Reference tables mined from the corrected corpus (ICDD/TAO/Tony's/2028) then
+hand-curated as small, editable constants at the bottom of `extra_checks.py`
+(`VOCAB_CANON`, `VOCAB_FIX`, `KBETA_FILTER`, `MONO_MATERIALS`, `REE_ELEMENTS`,
+`POLYTYPE_SYS`). They **comment/suggest only** — the annotator highlights the cell
+and writes the suggested value; it never rewrites a field.
+
+16. **instrumentation designators** — the parser now also reads the **FilterType**
+    field. Checks:
+    - **controlled-vocabulary** spelling/casing of `Spacing Instr.`, `Intensity
+      Instr.`, `Intensity Type`, `Filter` — suggests the canonical value (⚑ flag).
+      Catches typos (`Diffractomer`/`Diffractomter` → `Diffractometer`), casing
+      (`Monochromator crystal` → `Monochromator Crystal`, `Beta-filter` →
+      `Beta-Filter`), and `Visual?` → `Visual`. Unseen typos are caught by
+      closeness to a canonical value (never forces a far-off value).
+    - **β-filter element vs anode** (textbook Kβ rule): with `Filter = Beta-Filter`,
+      `FilterType` is fixed by the anode — Cu→Ni, Co→Fe, Fe→Mn, Cr→V, Mo→Zr, Ag→Pd
+      (⚑ flag; caught real CoKα+Ni and FeKα+Ni errors in the corpus).
+    - **monochromator material** — `Monochromator Crystal` should carry a crystal
+      material (Graph/Ge/Si…), not a β-filter foil (· note).
+    - *(Deliberately NOT checked: `Spacing=Calculated` with `Intensity=Other`. That
+      is the correct encoding for a pattern calculated from single-crystal/synchrotron
+      data — d-spacings from the cell, intensities collapsed/derived from the observed
+      structure factors. `Other` is meaningful, not "unknown".)*
+18. **name vs ideal formula** — the **Levinson rare-earth suffix** `-(Ce)`/`-(La)`/
+    `-(Y)`… must name the dominant REE in the (empirical) formula; flags a mismatch
+    with the corrected name (⚑ flag; validated 29/29 on the corpus). Ambiguous
+    cases (REE listed without coefficients) are skipped. **Polytype suffix**
+    (`-1M`/`-2O`/`-3T`…) letter must be consistent with the crystal system
+    (M↔monoclinic, O↔orthorhombic, T↔trigonal, Q↔tetragonal, …).
 
 Run just the extras: `python3 extra_checks.py <folder> [<id>]`.
 
@@ -366,6 +403,21 @@ Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
 - **Density (check14) is DEREGISTERED.** docx Dcalc uses the empirical formula about
   as often as the ideal, so a docx/PDF density gap is not an error. Helpers remain
   for possible future "grossly mistyped density" use. *(No density flags anywhere.)*
+- **Instrument designators (check16).** Vocabulary fixes and the β-filter element
+  rule (Cu→Ni, Co→Fe, Fe→Mn, Cr→V, Mo→Zr, Ag→Pd) are ⚑ flags — high confidence,
+  textbook. **Do NOT add a `Spacing=Calculated` / `Intensity=Other` coherence
+  check** — it fired on ~25 % of submissions and was wrong: that pair is the correct
+  encoding for a powder pattern calculated from single-crystal/synchrotron data
+  (d-spacings from the cell; intensities `Other` = collapsed/derived from the
+  observed structure factors). `Other` is a meaningful designator, not "unknown".
+  Instruments/geometry are surfaced as ℹ info — never "correct" `Spacing Instr.` to
+  a camera name (reviewer keeps it generic and notes geometry in a comment).
+  *(I003747/I003698 = no vocab flag; I003246 = R-AXIS recognised.)*
+- **Name vs formula (check18).** Levinson suffix flags ONLY on a confident dominant
+  (≥2 REE with explicit coefficients, unique max ≠ suffix). REE listed without
+  coefficients (ambiguous ideal formula) must NOT flag. Polytype letter↔system uses
+  the docx system letter (trigonal 'T' maps to h/r, tetragonal is 'Q', not 't').
+  *(I003511/I003523/I003521 correctly named = no flag.)*
 
 ### Accept marking
 `annotate_review.py` writes a lowercase **"x"** in the cell after **Accept** for

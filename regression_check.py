@@ -85,6 +85,14 @@ CASES = [
  # --- density check is deregistered (never fires) ---
  ("No density flags anywhere",               lambda: not any(extras(e, 'density')
                                                    for e in ('I003704','I003448','I003562'))),
+ # --- 16. instrumentation designators (corpus-curated) ---
+ ("I003246 instrument recognised (R-AXIS)",  lambda: bool(extras('I003246', 'geometry', substr='R-AXIS'))),
+ ("I003747 no instr_vocab flag (clean)",     lambda: not extras('I003747', 'instr_vocab', 'flag')),
+ ("I003698 no instr_vocab flag (clean)",     lambda: not extras('I003698', 'instr_vocab', 'flag')),
+ # --- 18. name vs ideal formula: correctly-named REE species must NOT flag ---
+ ("I003511 Allanite-(Y) name OK",            lambda: not extras('I003511', 'name_formula', 'flag')),
+ ("I003523 Parisite-(Nd) name OK",           lambda: not extras('I003523', 'name_formula', 'flag')),
+ ("I003521 Marsaalamite-(Y) name OK",        lambda: not extras('I003521', 'name_formula', 'flag')),
 ]
 
 def main():

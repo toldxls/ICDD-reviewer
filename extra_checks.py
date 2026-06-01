@@ -27,6 +27,10 @@ Checks (numbered to match the review write-up):
   8  precision / esd / symmetry consistency    (docx-internal, no PDF)
   9  hkl indexing vs the stated cell           (docx-internal, no PDF)
  10  IMA proposal number missing on a new mineral
+ 16  instrumentation designator vocabulary + cross-field consistency
+     (typos/casing; β-filter element vs anode; monochromator material;
+      Calculated coherence)   — curated from the corrected corpus
+ 18  mineral name vs ideal formula (Levinson rare-earth suffix; polytype letter)
 """
 import re, zipfile, math
 from collections import namedtuple
@@ -71,7 +75,7 @@ def parse_entry(path):
     formulas = {}                 # Chemical/General/Structural/Empirical -> str
     crystal_system = space_group = None
     cell = {}                     # a..γ + SG + Z (raw strings, esd kept)
-    instr = {}                    # anode, lam, standard, spacing_instr, intensity_instr, intensity_type, camera
+    instr = {}                    # anode, lam, standard, filter, filtertype, spacing_instr, intensity_instr, intensity_type, camera
     comments = {}                 # Desc code -> text  (IMA Number, Analysis, Structure, GC, DC, …)
     refl = []                     # [(d,I,h,k,l)] from both halves of the reflection table
     section = None
@@ -114,6 +118,8 @@ def parse_entry(path):
                     instr['standard'] = r[i + 1].strip()
                 if xs.startswith('filter:') and i + 1 < len(r):
                     instr['filter'] = r[i + 1].strip()
+                if xs.startswith('filtertype') and i + 1 < len(r):
+                    instr['filtertype'] = r[i + 1].strip()
         for i, x in enumerate(r):
             xs = _ns(x)
             if xs.startswith('SpacingInstr') and i + 1 < len(r):
@@ -187,6 +193,19 @@ GEOMETRY_KW = [
     'transmission geometry', 'reflection geometry', 'capillary',
     'time-of-flight', 'time of flight', 'neutron',
 ]
+# Specific instruments the reviewer recognises; naming one helps confirm the
+# designators (the geometry still goes in a comment, not the Spacing Instr.).
+INSTRUMENTS = [
+    ('Rigaku R-AXIS RAPID II', r'r-?axis\s*rapid'),
+    ('Rigaku XtaLAB Synergy',  r'xtalab\s*synergy|synergy[- ]?s\b'),
+    ('Rigaku/Oxford SuperNova', r'supernova'),
+    ('Rigaku MiniFlex',        r'miniflex'),
+    ('Rigaku SmartLab',        r'smartlab'),
+    ('Bruker D8',              r'\bd8\b|bruker\s+d8'),
+    ('Bruker APEX/SMART',      r'\bapex\s*(?:ii|iii)?\b|\bsmart\b'),
+    ('STOE (IPDS/Stadi)',      r'\bstoe\b|ipds|stadi'),
+    ('PANalytical Empyrean',   r'empyrean|x.?pert'),
+]
 def check1_geometry(e, text):
     out = []
     spac = (e.instr.get('spacing_instr') or '').strip()
@@ -202,14 +221,25 @@ def check1_geometry(e, text):
             for kw in GEOMETRY_KW:
                 if kw in low and kw.replace('–', '-') not in [f.replace('–', '-') for f in found]:
                     found.append(kw)
+    instrument = None
+    if text:
+        for name, pat in INSTRUMENTS:
+            if re.search(pat, text, re.I):
+                instrument = name
+                break
     if found:
         # the docx 'Spacing Instr.' is generic (Diffractometer/Film/Other); the
         # reviewer routinely annotates the SPECIFIC named geometry from the paper.
+        instr_note = (' on a %s' % instrument) if instrument else ''
         out.append(Finding('geometry', 'info',
-                   "PDF names a specific geometry/method: %s (docx Spacing Instr. = %r) "
+                   "PDF names a specific geometry/method: %s%s (docx Spacing Instr. = %r) "
                    "— consider annotating 'Powder data — %s'."
-                   % (', '.join(found), spac or '(blank)', found[0]),
+                   % (', '.join(found), instr_note, spac or '(blank)', found[0]),
                    None))
+    elif instrument:
+        out.append(Finding('geometry', 'info',
+                   "PDF instrument: %s (docx Spacing Instr. = %r) — confirm the geometry/designators."
+                   % (instrument, spac or '(blank)'), None))
     elif spac in ('', 'Other'):
         out.append(Finding('geometry', 'note',
                    "Spacing Instr. = %r and no named geometry found in PDF — set the method."
@@ -1138,11 +1168,166 @@ def check15_strongest_lines(e, text):
 # end-member (no single convention), so a docx/PDF density difference is normally
 # just a formula-basis choice, not an error. (The ideal-density helpers are retained
 # for possible future use, e.g. catching a grossly mistyped density.)
+# =============================================================================
+# 16/17. Instrumentation designators + 18. mineral naming
+# -----------------------------------------------------------------------------
+# Reference tables below were derived by mining the corrected corpus
+# (ICDD/TAO/Tony's/2028) and then hand-curated. They are deliberately small and
+# editable. Per the project's convention these checks COMMENT/SUGGEST only — the
+# annotator highlights the cell and writes the suggested value; it never rewrites
+# a field. Note: the reviewer keeps 'Spacing Instr.' generic (Diffractometer/
+# Film/Other) and records the SPECIFIC camera/geometry as a comment — so the
+# instrument logic SURFACES the geometry (info), it does not "correct" Spacing
+# Instr. to e.g. 'Gandolfi'.
+# =============================================================================
+
+# --- controlled vocabularies: canonical spellings seen in corrected entries ---
+VOCAB_CANON = {
+    'spacing_instr':   {'Diffractometer', 'Calculated', 'Film', 'Camera', 'Gandolfi',
+                        'Guinier', 'Debye-Scherrer', 'Visual', 'Image plate', 'Other'},
+    'intensity_instr': {'Diffractometer', 'Calculated', 'Film', 'Gandolfi', 'Guinier',
+                        'Debye-Scherrer', 'Visual', 'Image plate', 'Other'},
+    'intensity_type':  {'Integrated', 'Peak', 'Visual'},
+    'filter':          {'Monochromator Crystal', 'Beta-Filter', 'None'},
+}
+# observed misspellings / casing variants -> canonical (lowercased keys)
+VOCAB_FIX = {
+    'spacing_instr':   {'diffractomter': 'Diffractometer', 'diffractomer': 'Diffractometer'},
+    'intensity_instr': {'diffractomter': 'Diffractometer', 'diffractomer': 'Diffractometer'},
+    'intensity_type':  {'visual?': 'Visual'},
+    'filter':          {'monochromator crystal': 'Monochromator Crystal',
+                        'monochromator': 'Monochromator Crystal',
+                        'beta-filter': 'Beta-Filter', 'beta filter': 'Beta-Filter',
+                        'β-filter': 'Beta-Filter'},
+}
+# Kβ-filter element fixed by the anode (foil with Z just below the anode's).
+KBETA_FILTER = {'cr': 'V', 'fe': 'Mn', 'co': 'Fe', 'ni': 'Co', 'cu': 'Ni', 'mo': 'Zr', 'ag': 'Pd'}
+# crystal-monochromator materials that legitimately appear as FilterType
+MONO_MATERIALS = {'graph', 'graphite', 'ge', 'si', 'quartz', 'lif', 'diamond'}
+
+def _anode_el2(anode):
+    a = (anode or '').lower()
+    for el in ('cr', 'fe', 'co', 'ni', 'cu', 'mo', 'ag'):
+        if a.startswith(el):
+            return el
+    return None
+
+def check16_instr_vocab(e, text):
+    """Controlled-vocabulary spelling/casing of the instrumentation designators,
+    plus cross-field physics consistency (β-filter element, monochromator
+    material, Calculated coherence). Suggests the canonical value in a comment."""
+    import difflib
+    out = []
+    instr = e.instr
+    for field, label in (('spacing_instr', 'Spacing Instr.'), ('intensity_instr', 'Intensity Instr.'),
+                         ('intensity_type', 'Intensity Type'), ('filter', 'Filter')):
+        v = (instr.get(field) or '').strip()
+        if not v:
+            continue
+        canon = VOCAB_CANON.get(field, set())
+        if v in canon:
+            continue
+        fix = VOCAB_FIX.get(field, {}).get(v.lower())
+        if not fix:
+            # catch unseen typos by closeness, but never force a far-off value
+            m = difflib.get_close_matches(v, canon, n=1, cutoff=0.86)
+            fix = m[0] if m else None
+        if fix and fix != v:
+            out.append(Finding('instr_vocab', 'flag',
+                       "%s = %r — should be %r." % (label, v, fix), None, 'instr'))
+    # β-filter element must match the anode
+    filt = (instr.get('filter') or '').strip().lower()
+    ft = (instr.get('filtertype') or '').strip()
+    el = _anode_el2(instr.get('anode'))
+    if filt.replace(' ', '').startswith('beta') and el and el in KBETA_FILTER:
+        want = KBETA_FILTER[el]
+        if ft and ft.lower() != want.lower():
+            out.append(Finding('instr_vocab', 'flag',
+                       "FilterType = %r with a β-filter on %s — the Kβ filter for %s is %s."
+                       % (ft, instr.get('anode'), instr.get('anode'), want), None, 'instr'))
+        elif not ft:
+            out.append(Finding('instr_vocab', 'note',
+                       "β-filter on %s but FilterType is blank — expected %s."
+                       % (instr.get('anode'), want), None, 'instr'))
+    # monochromator crystal carries a crystal material, not a β-filter foil
+    if 'monochromator' in filt and ft and ft.lower() not in MONO_MATERIALS:
+        out.append(Finding('instr_vocab', 'note',
+                   "Filter = Monochromator Crystal but FilterType = %r (expected a crystal "
+                   "material, e.g. Graph/Ge/Si)." % ft, None, 'instr'))
+    # NB: do NOT flag 'Spacing=Calculated, Intensity=Other' as incoherent. That is
+    # the standard, correct encoding for a powder pattern calculated from single-
+    # crystal/synchrotron structure data: d-spacings calculated from the cell, but
+    # the intensities 'Other' = collapsed/derived from the (observed) single-crystal
+    # structure factors rather than model-calculated. 'Calculated/Calculated' (both
+    # simulated from the atomic model) and 'Calculated/Other' (intensities collapsed
+    # from real data) are BOTH valid. 'Other' is a meaningful designator, not a
+    # placeholder for 'unknown', so there is no cross-field rule to enforce here.
+    return out
+
+# --- 18. mineral name vs ideal formula --------------------------------------
+REE_ELEMENTS = ['La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho',
+                'Er', 'Tm', 'Yb', 'Lu', 'Y', 'Sc']
+# polytype trailing letter -> acceptable crystal-system letter(s) in the docx
+# (trigonal 'T' is reported under hexagonal/rhombohedral here; tetragonal is 'Q').
+POLYTYPE_SYS = {'A': {'a'}, 'M': {'m'}, 'O': {'o'}, 'Q': {'t'},
+                'T': {'h', 'r'}, 'H': {'h', 'r'}, 'R': {'r', 'h'}, 'C': {'c'}}
+
+def _ree_coeffs(formula):
+    """{REE element: max numeric coefficient seen} from a formula string. A REE
+    with no explicit number counts as 1.0 (lookahead avoids matching e.g. 'Y'
+    inside 'Yb')."""
+    out = {}
+    for el in REE_ELEMENTS:
+        for m in re.finditer(el + r'(?![a-z])\s*([0-9]+\.?[0-9]*)?', formula or ''):
+            v = float(m.group(1)) if m.group(1) else 1.0
+            out[el] = max(out.get(el, 0.0), v)
+    return out
+
+def check18_name_formula(e, text):
+    """Levinson rare-earth suffix must name the dominant REE in the formula;
+    polytype suffix letter must be consistent with the crystal system."""
+    out = []
+    nm = e.primary or e.name or ''
+    # Levinson suffix -(Ce)/-(La)/-(Y)... — use the empirical/measured formula
+    m = re.search(r'-\(([A-Z][a-z]?)\)\s*$', nm)
+    if m and m.group(1) in REE_ELEMENTS:
+        suf = m.group(1)
+        formula = (e.formulas.get('Empirical') or e.formulas.get('Structural')
+                   or e.formulas.get('Chemical') or e.formulas.get('General') or '')
+        coeffs = _ree_coeffs(formula)
+        numbered = {el: v for el, v in coeffs.items() if re.search(el + r'(?![a-z])\s*[0-9]', formula or '')}
+        base = re.sub(r'-\([A-Za-z]+\)\s*$', '', nm)
+        if len(numbered) >= 2:
+            top = max(numbered.values())
+            winners = [el for el, v in numbered.items() if abs(v - top) < 1e-9]
+            if len(winners) == 1 and winners[0] != suf:
+                out.append(Finding('name_formula', 'flag',
+                           "Levinson suffix -(%s) but the dominant rare-earth in the formula is "
+                           "%s — name should be %s-(%s)." % (suf, winners[0], base, winners[0]),
+                           None, 'name'))
+        elif coeffs and suf not in coeffs:
+            out.append(Finding('name_formula', 'note',
+                       "Levinson suffix -(%s) but %s is not present in the formula — verify the "
+                       "dominant rare-earth." % (suf, suf), None, 'name'))
+    # polytype suffix -1M / -2O / -3T ...
+    mp = re.search(r'-(\d+)([A-Z])\s*$', nm)
+    if mp:
+        letter = mp.group(2)
+        sysl = _sys_letter(e)
+        allowed = POLYTYPE_SYS.get(letter)
+        if allowed and sysl and sysl in 'amothrc' and sysl not in allowed:
+            out.append(Finding('name_formula', 'flag',
+                       "Polytype suffix -%s%s implies a %s lattice, but the crystal system is %r "
+                       "— verify." % (mp.group(1), letter, letter, e.crystal_system or sysl),
+                       None, 'name'))
+    return out
+
 CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check4_calculated, check5_wavelength, check6_ideal_formula,
           check7_synthetic, check8_precision_symmetry, check9_indexing,
           check10_optical, check11_ima, check12_analysis,
-          check13_temperature, check15_strongest_lines]
+          check13_temperature, check15_strongest_lines,
+          check16_instr_vocab, check18_name_formula]
 
 def run_all(e, text, cif_data=None):
     findings = []
