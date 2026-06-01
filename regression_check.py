@@ -90,7 +90,7 @@ CASES = [
  ("I003747 no instr_vocab flag (clean)",     lambda: not extras('I003747', 'instr_vocab', 'flag')),
  ("I003698 no instr_vocab flag (clean)",     lambda: not extras('I003698', 'instr_vocab', 'flag')),
  # --- 16b. measured-data completeness (blank anode/intensity-type) ---
- ("I003600 blank anode flagged (measured)",  lambda: bool(extras('I003600', 'instr_vocab', substr='Radiation/anode is blank'))),
+ ("I003600 blank anode -> derive Sync (synch λ)", lambda: bool(extras('I003600', 'instr_vocab', substr='set the anode to Sync'))),
  ("I003246 no blank-field flag",             lambda: not extras('I003246', 'instr_vocab', substr='blank')),
  # --- 17. PDF monochromator/β-filter -> fill blank Filter (powder-context only) ---
  ("I003747 PDF graphite mono (powder)",      lambda: bool(extras('I003747', 'instr_filter', substr='graphite'))),

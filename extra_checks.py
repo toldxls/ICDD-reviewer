@@ -1226,6 +1226,24 @@ PDF_FILTER_PATTERNS = [
     (r'(?:vanadium|\bV)[\s-]*filter(?:ed)?\b',     'V β-filter',             'Beta-Filter', 'V'),
 ]
 _POWDER_CTX = re.compile(r'powder|pxrd|p-?xrd|gandolfi|debye|guinier', re.I)
+# PDF cues that the radiation is synchrotron (tunable λ, anode should be 'Sync').
+_SYNCHROTRON = re.compile(r'synchrotron|beamline|\bSR-?(?:PXD|XRD|PD)\b|\bESRF\b|\bALBA\b|'
+                          r'\bAPS\b|diamond light|spring-?8|\bDESY\b|\bELETTRA\b|petra\s*iii',
+                          re.I)
+
+def _anode_from_lambda(lam):
+    """Reverse-lookup a docx λ to a characteristic anode line (display, Δ) within
+    0.002 Å, else None — e.g. a tunable synchrotron wavelength matches nothing."""
+    lv = _val(lam)
+    if lv is None:
+        return None
+    best = None
+    for el, lines in CANON.items():
+        for line, wl in lines.items():
+            d = abs(wl - lv)
+            if best is None or d < best[1]:
+                best = (el.capitalize() + 'K' + {'ka1': 'α1', 'ka': 'α', 'ka2': 'α2'}[line], d)
+    return best if (best and best[1] <= 0.002) else None
 
 def _anode_el2(anode):
     a = (anode or '').lower()
@@ -1285,10 +1303,28 @@ def check16_instr_vocab(e, text):
     sp_raw = (instr.get('spacing_instr') or '').strip()
     if sp_raw.lower() in MEASURED_METHODS:
         if not (instr.get('anode') or '').strip():
-            out.append(Finding('instr_vocab', 'flag',
-                       "Radiation/anode is blank but the powder data are measured "
-                       "(Spacing Instr.=%s) — specify the radiation source." % sp_raw,
-                       None, 'radiation'))
+            # a blank anode with a λ given isn't really "missing": derive the source
+            # from the wavelength (characteristic line, or synchrotron via the PDF).
+            lam = (instr.get('lam') or '').strip()
+            guess = _anode_from_lambda(lam) if lam else None
+            if guess:
+                out.append(Finding('instr_vocab', 'flag',
+                           "Radiation/anode is blank but λ=%s is given — matches %s (Δ=%.5f Å); "
+                           "set the anode." % (lam, guess[0], guess[1]), None, 'radiation'))
+            elif lam and text and _SYNCHROTRON.search(text):
+                out.append(Finding('instr_vocab', 'flag',
+                           "Radiation/anode is blank; λ=%s matches no characteristic tube line and the "
+                           "PDF describes synchrotron radiation — set the anode to Sync." % lam,
+                           None, 'radiation'))
+            elif lam:
+                out.append(Finding('instr_vocab', 'flag',
+                           "Radiation/anode is blank; λ=%s matches no characteristic tube line "
+                           "(synchrotron?) — specify the source." % lam, None, 'radiation'))
+            else:
+                out.append(Finding('instr_vocab', 'flag',
+                           "Radiation/anode is blank but the powder data are measured "
+                           "(Spacing Instr.=%s) — specify the radiation source." % sp_raw,
+                           None, 'radiation'))
         if not (instr.get('intensity_type') or '').strip():
             out.append(Finding('instr_vocab', 'flag',
                        "Intensity Type is blank for measured powder data "

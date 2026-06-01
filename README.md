@@ -201,10 +201,12 @@ and writes the suggested value; it never rewrites a field.
       Instr. ∈ Diffractometer/Film/Camera/Gandolfi/Guinier/Debye-Scherrer/Visual/
       Image plate), a blank **Radiation/anode** or blank **Intensity Type** is
       flagged (⚑). NOT applied to `Calculated`/`Other` (collapsed/derived from
-      single-crystal data), where a blank is legitimate. Corpus blank-rates are
-      low (anode 1/83, intensity-type 3/83), so these are rare catches. Intensity
-      Type is flagged as blank only — Integrated vs Peak is *not* prescribed (the
-      same instrument uses both, so it can't be reliably derived).
+      single-crystal data), where a blank is legitimate. A blank anode is **not
+      treated as simply missing when λ is given**: the source is derived from the
+      wavelength — λ matching a characteristic line → "set the anode to CuKα/MoKα…";
+      λ matching nothing + PDF describes synchrotron/beamline → "set the anode to
+      Sync"; otherwise "synchrotron? — specify". Intensity Type is flagged blank
+      only — Integrated vs Peak is *not* prescribed (the same instrument uses both).
     - *(Deliberately NOT checked: `Spacing=Calculated` with `Intensity=Other`. That
       is the correct encoding for a pattern calculated from single-crystal/synchrotron
       data — d-spacings from the cell, intensities collapsed/derived from the observed
