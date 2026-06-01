@@ -14,6 +14,9 @@ report.
 Comparison logic is reused verbatim from cell_lambda_check (single source of
 truth); this module only renders the result into the document.
 
+Flagged entries are written as '<name>_edited.docx' so the ones the tool
+commented on stand out in the folder listing; clean entries keep the source name.
+
 Usage:
     python3 annotate_review.py "/path/to/Part 1"                 # -> <folder>/review_out
     python3 annotate_review.py "/path/to/Part 1" --id I003416
@@ -454,6 +457,13 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None):
     return rec
 
 # ----------------------------------------------------------------------------- main
+def output_name(src_basename, edited):
+    """Output filename for a source docx: flagged entries (the tool added a
+    comment/highlight) get an '_edited' suffix so they stand out in the folder
+    listing; clean entries keep the source name."""
+    stem, ext = os.path.splitext(src_basename)
+    return stem + ('_edited' if edited else '') + ext
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('folder')
@@ -481,7 +491,33 @@ def main():
         eid = C.entry_id(dp)
         pdf = idx.get(eid)
         cif = cif_idx.get(eid)
-        out = dp if args.inplace else os.path.join(out_dir, os.path.basename(dp))
+        res = analyze(dp, pdf, cif)
+        # Name the output by what the tool found: flagged entries -> '<name>_edited.docx',
+        # clean ones keep the source name. Cleanliness is deterministic for a given
+        # source, so the path is stable across reruns (refresh below still works).
+        if args.inplace:
+            out = dp
+        else:
+            edited = not _is_clean(res)
+            out = os.path.join(out_dir, output_name(os.path.basename(dp), edited))
+            # A prior run may have written the opposite-named twin (clean<->edited can
+            # flip if the source/PDF changed, or it predates this naming). Keep one
+            # output per entry without ever losing the reviewer's work:
+            #   * a pristine tool output under the old name -> drop it;
+            #   * a hand-edited old name with no new-name output yet -> RENAME it onto
+            #     the new name, so refresh-in-place (below) carries the edits forward;
+            #   * both names already present and the old one edited -> leave it, warn.
+            stale = os.path.join(out_dir, output_name(os.path.basename(dp), not edited))
+            if os.path.exists(stale):
+                if not output_hand_edited(stale, dp):
+                    os.remove(stale)
+                elif not os.path.exists(out):
+                    os.rename(stale, out)
+                    print('  -- %s: migrated hand-edited %s -> %s (edits preserved)'
+                          % (os.path.basename(dp), os.path.basename(stale), os.path.basename(out)))
+                else:
+                    print('  !! %s: hand-edited %s sits alongside %s — reconcile manually'
+                          % (os.path.basename(dp), os.path.basename(stale), os.path.basename(out)))
         # If the reviewer hand-edited this output, REFRESH in place: back it up,
         # strip the tool's own old comments/highlights, then re-annotate ONTO the
         # edited file so tracked changes / comments / text fixes are preserved.
@@ -507,7 +543,6 @@ def main():
                                 {'status': 'preserved', 'highlights': [], 'comments': [],
                                  'clean': False, 'accept': None, 'refreshed': True}))
                 continue
-        res = analyze(dp, pdf, cif)
         try:
             rec = annotate(dp, res, out, inplace=args.inplace, base_path=base)
         except Exception as e:
@@ -518,13 +553,15 @@ def main():
                 os.remove(base)
         if refresh:
             rec['refreshed'] = True
+        rec['outfile'] = os.path.basename(out)
         records.append((os.path.basename(dp), rec))
         n = len(rec['comments'])
         tag = ' [REFRESHED: manual edits kept]' if rec.get('refreshed') else ''
-        print('%-44s cell=%-12s %-26s (%d comment%s)%s'
+        renamed = '' if (args.inplace or rec['clean']) else ' -> %s' % rec['outfile']
+        print('%-44s cell=%-12s %-26s (%d comment%s)%s%s'
               % (os.path.basename(dp), rec['status'],
                  'clean' if rec['clean'] else ('highlights: ' + ', '.join(rec['highlights']) or 'flag'),
-                 n, '' if n == 1 else 's', tag))
+                 n, '' if n == 1 else 's', renamed, tag))
 
     # --- write the run log -------------------------------------------------
     log_path = args.log or os.path.join(out_dir if not args.inplace else args.folder, 'annotation_log.txt')

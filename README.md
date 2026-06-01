@@ -33,6 +33,11 @@ python3 annotate_review.py "/path/to/entries"             # -> <folder>/review_o
 python3 annotate_review.py "/path/to/entries" --id Innnnnn
 python3 annotate_review.py "/path/to/entries" --inplace   # edit the originals instead
 ```
+Flagged entries are saved as **`<name>_edited.docx`** (the ones with a comment /
+highlight), so you can spot them at a glance in the `review_out/` listing; clean
+entries keep the source name. (`--inplace` edits the originals and does not
+rename.) A stale opposite-named twin from an earlier run is removed automatically
+unless you hand-edited it, in which case it is kept and noted on the console.
 What it writes:
 - a comment on each flagged Author's-Cell value (value / significant-figures /
   esd mismatch), with that value highlighted;
@@ -380,6 +385,8 @@ tool's own comments (author "PXRD Review Tool") + yellow highlights from a temp
 copy, and re-annotates onto it — so tracked changes, your comments, text edits, and
 your Accept mark survive while the tool's findings are made current. The strip is
 atomic (temp copy; `out` is replaced only on success). `--force` rebuilds from
-source (discards manual edits). NOTE for maintainers: python-docx `.text` does NOT
+source (discards manual edits). The `_edited` vs clean output name is derived from
+the (deterministic) `_is_clean()` verdict, so the path of a given entry is stable
+across reruns and refresh-in-place still finds the right file. NOTE for maintainers: python-docx `.text` does NOT
 include tracked **insertions** — never rely on it to detect a track-changes edit;
 check `w:ins`/`w:del` in `document.xml`.
