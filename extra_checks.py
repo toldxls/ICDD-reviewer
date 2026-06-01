@@ -857,7 +857,7 @@ def check_cif(e, cif_data):
     if docx_z is not None and cif_z is not None and cif_z > 1 and docx_z != cif_z:
         out.append(Finding('cif', 'flag',
                    "Z mismatch: docx Z=%d but CIF Z=%d" % (docx_z, cif_z),
-                   None, 'name'))
+                   None, 'cell:Z'))
     # Space group: CIF comparison is unreliable for polytypic minerals and
     # entries where the CIF represents a different structural variant.
     # The correct reference is the PDF for the specific phase described.
@@ -895,7 +895,7 @@ def check12_analysis(e, text):
             out.append(Finding('analysis', 'flag',
                        "Analysis field is empty, but microprobe/analytical data is "
                        "present in the '%s' comment field — it should be moved to "
-                       "the Analysis field." % field, None, 'formula'))
+                       "the Analysis field." % field, None, 'analysis'))
         elif text and re.search(
                 r'microprobe\s+anal|electron\s+(?:micro)?probe\s+anal|'
                 r'EPMA\s+(?:anal|data|result)|EMP\s+anal|'
@@ -905,7 +905,7 @@ def check12_analysis(e, text):
             out.append(Finding('analysis', 'flag',
                        "PDF describes a chemical/microprobe analysis but the docx "
                        "Analysis field is empty — it may have been omitted.",
-                       None, 'formula'))
+                       None, 'analysis'))
         else:
             # No analysis anywhere. Worth flagging only for a natural mineral whose
             # listed formula is clean end-member stoichiometry (i.e. likely the
@@ -918,7 +918,7 @@ def check12_analysis(e, text):
                 out.append(Finding('analysis', 'flag',
                            "Analysis field is empty and the listed formula is clean "
                            "end-member stoichiometry — the measured (empirical) "
-                           "composition appears to be missing.", None, 'formula'))
+                           "composition appears to be missing.", None, 'analysis'))
         return out
 
     # strip formula portion that sometimes follows a bare ':'
@@ -943,11 +943,11 @@ def check12_analysis(e, text):
                 break
     if n_pdf and not n_docx:
         out.append(Finding('analysis', 'flag',
-                   "Analysis count missing — PDF gives n=%d" % n_pdf, None, 'formula'))
+                   "Analysis count missing — PDF gives n=%d" % n_pdf, None, 'analysis'))
     elif n_pdf and n_docx and n_pdf != n_docx:
         out.append(Finding('analysis', 'flag',
                    "Analysis count mismatch: docx=%d, PDF=%d" % (n_docx, n_pdf),
-                   None, 'formula'))
+                   None, 'analysis'))
 
     # --- 2. Calculated light elements missing (calc) notation ---
     if text:
@@ -973,7 +973,7 @@ def check12_analysis(e, text):
             if not marked:
                 out.append(Finding('analysis', 'flag',
                            "Analysis: %s is calculated per PDF but not marked (calc) "
-                           "in docx" % elem, None, 'formula'))
+                           "in docx" % elem, None, 'analysis'))
 
     # --- 3. wt.% total sanity ---
     # Prefer an explicit "Total XX.XX" stated in the analysis over summing values,
@@ -984,11 +984,11 @@ def check12_analysis(e, text):
         if total < 94:
             out.append(Finding('analysis', 'flag',
                        "Analysis explicit total = %.1f%% (below 94%% — possible "
-                       "missing oxide or transcription error)" % total, None, 'formula'))
+                       "missing oxide or transcription error)" % total, None, 'analysis'))
         elif total > 103:
             out.append(Finding('analysis', 'flag',
                        "Analysis explicit total = %.1f%% (above 103%% — possible "
-                       "transcription error)" % total, None, 'formula'))
+                       "transcription error)" % total, None, 'analysis'))
     return out
 
 # ----------------------------------------------------------------------------- 13. non-ambient PXRD collection temperature

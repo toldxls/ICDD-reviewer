@@ -310,15 +310,22 @@ of flags.
 anchored on the relevant cell (Word comment by **"PXRD Review Tool"**; flags also
 yellow-highlight their anchor):
 - **symmetry / precision** → the offending Author's-Cell parameter (a…γ);
-- **Calculated pattern** → the Instrumentation row;
+- **Calculated pattern / instrumentation vocab** → the Instrumentation row;
 - **hkl indexing** → the Reflection List;
 - **missing IMA number** → the IMA Number field;
+- **analysis** (count missing/mismatch, (calc), wt.% total, empty/misplaced) → the
+  **Analysis comment cell** (where the `Microprobe analysis (wt.%): …` data is
+  given; the label cell when that field is empty);
+- **CIF Z mismatch** → the **Z cell** of the Author's-Cell row (`cell:Z`);
 - **ideal formula** → the formula row;
+- **name vs formula** (Levinson/polytype) → the mineral name;
 - **Mindat group** (informational, not highlighted) → the mineral name.
 
 Soft `note`/other `info` findings stay console-only (`cell_lambda_check.py`).
-Each `Finding` carries an `anchor` (`'cell:a'`, `'instr'`, `'refl'`, `'ima'`,
-`'formula'`, `'name'`) that the annotator maps to a cell. An entry is still
+Each `Finding` carries an `anchor` (`'cell:a'`…`'cell:Z'`/`'cell:SG'`, `'instr'`,
+`'refl'`, `'ima'`, `'analysis'`, `'formula'`, `'name'`) that the annotator maps to a
+cell. Comment placement matters to the reviewer, so anchor each finding to the cell
+a human would edit. An entry is still
 copied **byte-for-byte** when it has no cell/λ issue *and* no writable extra
 (verified: clean entries remain identical to source). On a 44-entry batch:
 44 entries → 41 edited, 3 untouched, 99 comments.

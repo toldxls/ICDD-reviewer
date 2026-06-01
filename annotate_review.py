@@ -32,7 +32,8 @@ from lxml import etree
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 AUTHOR, INITIALS = 'PXRD Review Tool', 'PXRD'
 def _q(tag): return W + tag
-PARAM_COL = {'a': 1, 'b': 2, 'c': 3, 'α': 4, 'β': 5, 'γ': 6}   # Author's-Cell column per parameter
+PARAM_COL = {'a': 1, 'b': 2, 'c': 3, 'α': 4, 'β': 5, 'γ': 6,
+             'SG': 7, 'Z': 8}                                  # Author's-Cell column per parameter
 KIND_LABEL = {'value': 'VALUE MISMATCH', 'precision': 'significant figures differ',
               'esd': 'uncertainty (esd) differs'}
 
@@ -199,6 +200,10 @@ def _anchor_cell(doc, ac_row, anchor):
     if anchor == 'formula':
         return (_find_value(doc, lambda t: t.strip() == 'Empirical')
                 or _find_value(doc, lambda t: t.strip() == 'Chemical'))
+    if anchor == 'analysis':
+        # the 'Analysis' comment cell (where the microprobe wt.% data is given);
+        # falls back to the 'Analysis' label cell when that field is empty.
+        return _find_value(doc, lambda t: t.strip() == 'Analysis')
     if anchor == 'name':
         return _find_value(doc, lambda t: t.strip() == 'Mineral')
     return None
