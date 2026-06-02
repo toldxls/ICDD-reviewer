@@ -298,6 +298,10 @@ function termsFor(fkey, step = 0) {
       } else if (f.code === 'indexing' && a.entry && (a.entry.refl_d || []).length) {
         // the reflection d-spacings cluster in the paper's powder table -> frame it
         terms = a.entry.refl_d;
+      } else if (f.code === 'instr_class' || f.code === 'geometry') {
+        // highlight the instrument as written in the .pdf (evidence, e.g. 'R-AXIS Rapid')
+        // plus 'diffractometer' — not the generic 'axis' that matches everywhere
+        terms = [...new Set([f.evidence, 'diffractometer'].filter(t => t && t.length < 40))];
       } else {
         const nums = (f.msg.match(/\d+\.\d{2,}/g) || []).slice(0, 2);
         // a short evidence keyword (e.g. the detected "Gandolfi") is the best locator
@@ -314,7 +318,7 @@ function termsFor(fkey, step = 0) {
 function phraseTerms(msg) {
   const KW = [[/brentano/i, 'Brentano'], [/gandolfi/i, 'Gandolfi'], [/guinier/i, 'Guinier'],
     [/scherrer/i, 'Scherrer'], [/precession/i, 'precession'], [/synchrotron/i, 'synchrotron'],
-    [/debye/i, 'Debye'], [/image[\s-]*plate|imaging plate/i, 'plate'], [/r[-\s]?axis/i, 'AXIS'],
+    [/debye/i, 'Debye'], [/image[\s-]*plate|imaging plate/i, 'plate'], [/r[-\s]?axis\s*rapid/i, 'AXIS Rapid'],
     [/rietveld/i, 'Rietveld'], [/le ?bail/i, 'Bail']];
   const out = [];
   for (const [re, tok] of KW) if (re.test(msg) && !out.includes(tok)) out.push(tok);

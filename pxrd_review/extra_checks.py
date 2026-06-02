@@ -240,61 +240,67 @@ def check1_geometry(e, text):
                     continue                  # planned/future mention, not the method used
                 if kw.replace('–', '-') not in [f.replace('–', '-') for f in found]:
                     found.append(kw)
-    instrument = None               # recognised anywhere (soft confirm)
-    powder_instrument = None        # recognised in a POWDER-context sentence (confident)
+    instrument = instrument_match = None      # recognised anywhere (soft confirm)
+    powder_instrument = powder_match = None   # recognised in a POWDER-context sentence (confident)
+    # capture the instrument text AS WRITTEN in the .pdf so the GUI highlights the actual
+    # name (e.g. 'R-AXIS Rapid'), not a generic substring like 'axis'.
     if text:
         for name, pat in INSTRUMENTS:
-            if re.search(pat, text, re.I):
-                instrument = name
+            mm = re.search(pat, text, re.I)
+            if mm:
+                instrument, instrument_match = name, mm.group(0)
                 break
         for s in _sentences(text):
             if not _POW_INSTR_CTX.search(s):
                 continue
             for name, pat in INSTRUMENTS:
-                if re.search(pat, s, re.I):
-                    powder_instrument = name
+                mm = re.search(pat, s, re.I)
+                if mm:
+                    powder_instrument, powder_match = name, mm.group(0)
                     break
             if powder_instrument:
                 break
-    if found:
-        # the docx 'Spacing Instr.' is generic (Diffractometer/Film/Other); the
-        # reviewer routinely annotates the SPECIFIC named geometry from the paper.
-        instr_note = (' on a %s' % instrument) if instrument else ''
-        out.append(Finding('geometry', 'info',
-                   ".pdf names a specific geometry/method: %s%s (docx Spacing Instr. = %r) "
-                   "— consider annotating 'Powder data — %s'."
-                   % (', '.join(found), instr_note, spac or '(blank)', found[0]),
-                   None))
-    # Spacing/Intensity Instr. FIELD value: a recognised diffractometer named in a
+    # (1) Spacing/Intensity Instr. FIELD value: a recognised diffractometer named in a
     # POWDER-context sentence is high-confidence that the pattern was collected on a
     # diffractometer, so 'Other'/blank should be 'Diffractometer' (FLAG → highlight +
     # suggest). The curated INSTRUMENTS are all diffractometers; the corrected corpus
     # is near-unanimous (R-AXIS RAPID II, D8, Empyrean… → 'Diffractometer'). Skip
     # CALCULATED patterns (no collection instrument) and require the powder tie-in so a
     # single-crystal-only instrument (e.g. a D8 Venture used for SC-XRD) is NOT assumed.
+    # Evidence = the instrument text as written in the .pdf (for the highlight).
     field_flagged = False
     if powder_instrument and not is_calc:
         if spac.lower() in ('', 'other'):
             out.append(Finding('instr_class', 'flag',
                        "Spacing Instr. = %r, but the .pdf states the powder pattern was collected on a "
                        "%s (a diffractometer) — set Spacing Instr. to 'Diffractometer'."
-                       % (spac or '(blank)', powder_instrument), None, 'spacing_instr'))
+                       % (spac or '(blank)', powder_instrument), powder_match, 'spacing_instr'))
             field_flagged = True
         if iinstr.lower() in ('', 'other'):
             out.append(Finding('instr_class', 'flag',
                        "Intensity Instr. = %r, but the powder pattern was collected on a "
                        "%s (a diffractometer) — set Intensity Instr. to 'Diffractometer'."
-                       % (iinstr or '(blank)', powder_instrument), None, 'intensity_instr'))
+                       % (iinstr or '(blank)', powder_instrument), powder_match, 'intensity_instr'))
             field_flagged = True
-    # soft fallbacks (only when nothing more specific was said above)
-    if not found and not field_flagged:
+    # (2) The SPECIFIC geometry/method (Debye-Scherrer, image-plate, Gandolfi) is
+    # descriptive metadata, NOT a required ICDD field. Only nudge when the Spacing Instr.
+    # designator is MISSING (Other/blank) and we did not already pin it down as a
+    # diffractometer above — a genuine gap. When the designator is already set
+    # (Diffractometer/Film/Calculated), say nothing: the method is correct/obvious and
+    # the reviewer routinely documents it in a comment. (This used to fire on every
+    # named geometry, nagging entries whose Spacing Instr. was already correct.)
+    if not field_flagged and not is_calc and spac in ('', 'Other'):
         if instrument:
             out.append(Finding('geometry', 'info',
-                       ".pdf instrument: %s (docx Spacing Instr. = %r) — confirm the geometry/designators."
-                       % (instrument, spac or '(blank)'), None))
-        elif spac in ('', 'Other'):
+                       ".pdf names a %s (docx Spacing Instr. = %r) — set the method."
+                       % (instrument, spac or '(blank)'), instrument_match))
+        elif found:
             out.append(Finding('geometry', 'note',
-                       "Spacing Instr. = %r and no named geometry found in .pdf — set the method."
+                       ".pdf method: %s (docx Spacing Instr. = %r) — set the method."
+                       % (', '.join(found), spac or '(blank)'), found[0]))
+        else:
+            out.append(Finding('geometry', 'note',
+                       "Spacing Instr. = %r and no named geometry in .pdf — set the method."
                        % (spac or '(blank)'), None))
     return out
 

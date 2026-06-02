@@ -76,7 +76,10 @@ CASES = [
  # --- 1. geometry: a 'neutron'/ToF mention in a planned/future-work sentence must NOT
  #     masquerade as the collection method; the real X-ray geometry is still found ---
  ("I003599 no geometry 'neutron' grab (future-work)", lambda: not extras('I003599', 'geometry', substr='neutron')),
- ("I003510 geometry keeps debye-scherrer (neutron in .pdf)", lambda: bool(extras('I003510', 'geometry', substr='debye-scherrer'))),
+ # geometry method is descriptive metadata: when Spacing Instr. is already a valid
+ # designator (Diffractometer), don't nag to annotate the specific method (I003510 is
+ # Diffractometer and its DC comment already documents the Debye-Scherrer geometry)
+ ("I003510 no geometry nag (Spacing Instr. already Diffractometer)", lambda: not extras('I003510', 'geometry')),
  # --- instr_class: a diffractometer named in a POWDER sentence -> 'Other'/blank
  #     Spacing/Intensity Instr. should be 'Diffractometer' (FLAG). Requires the powder
  #     tie-in (a single-crystal-only instrument is not assumed) and skips Calculated. ---
@@ -130,7 +133,7 @@ CASES = [
  ("No density flags anywhere",               lambda: not any(extras(e, 'density')
                                                    for e in ('I003704','I003448','I003562'))),
  # --- 16. instrumentation designators (corpus-curated) ---
- ("I003246 instrument recognised (R-AXIS)",  lambda: bool(extras('I003246', 'geometry', substr='R-AXIS'))),
+ ("I003246 no geometry nag (Spacing Instr. already Diffractometer)", lambda: not extras('I003246', 'geometry')),
  ("I003747 no instr_vocab flag (clean)",     lambda: not extras('I003747', 'instr_vocab', 'flag')),
  ("I003698 no instr_vocab flag (clean)",     lambda: not extras('I003698', 'instr_vocab', 'flag')),
  # --- 16b. measured-data completeness (blank anode/intensity-type) ---
