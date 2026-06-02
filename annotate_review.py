@@ -662,8 +662,10 @@ def main():
     # newsletters), so these verify items are NOT written into any docx — a list to
     # check against the paper and, where Mindat is wrong, submit a correction.
     md_recs = [(f, r) for f, r in records if r.get('mindat')]
+    md_path = os.path.join(out_dir if not args.inplace else args.folder, 'mindat_discrepancies.txt')
+    if not md_recs and os.path.exists(md_path):
+        os.remove(md_path)                       # no discrepancies now — drop a stale file
     if md_recs:
-        md_path = os.path.join(out_dir if not args.inplace else args.folder, 'mindat_discrepancies.txt')
         LABEL = {'mindat_fix': 'CELL (docx & .cif agree, Mindat differs — likely submit to Mindat)',
                  'mindat_chem': 'CHEMISTRY (element set differs from Mindat)',
                  'ima_status': 'IMA STATUS'}
