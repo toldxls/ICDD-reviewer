@@ -622,10 +622,23 @@ def _export_report():
     return path
 
 # ------------------------------------------------------------------ main
+def _pick_port(pref, tries=25):
+    """First bindable localhost port at/after `pref`. Default 8000 sidesteps the
+    macOS AirPlay Receiver (which squats on 5000 and returns 403); the fallback
+    also covers a port that is simply already in use, so --port is rarely needed."""
+    import socket
+    for p in range(pref, pref + tries):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(('127.0.0.1', p)); s.close(); return p
+        except OSError:
+            s.close()
+    return pref
+
 def main():
     ap = argparse.ArgumentParser(description='Local review-mode GUI for the PXRD review tool.')
     ap.add_argument('folder', help='the entries folder (same one passed to annotate_review.py)')
-    ap.add_argument('--port', type=int, default=5000)
+    ap.add_argument('--port', type=int, default=8000, help='preferred port (auto-falls back to the next free one)')
     ap.add_argument('--out', help='sidecar/output folder (default <folder>/review_out)')
     ap.add_argument('--no-browser', action='store_true', help='do not auto-open the browser')
     args = ap.parse_args()
@@ -637,12 +650,15 @@ def main():
         sys.exit('no .docx entries found in %s' % args.folder)
     analyze_all()
 
-    url = 'http://127.0.0.1:%d/' % args.port
+    port = _pick_port(args.port)
+    if port != args.port:
+        print('[review_gui] port %d busy — using %d' % (args.port, port))
+    url = 'http://127.0.0.1:%d/' % port
     print('\n[review_gui] serving on %s  (localhost only — Ctrl-C to stop)' % url)
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     # 127.0.0.1 bind keeps it off the network; debug OFF (no code-exec debugger).
-    app.run(host='127.0.0.1', port=args.port, debug=False)
+    app.run(host='127.0.0.1', port=port, debug=False)
 
 if __name__ == '__main__':
     main()

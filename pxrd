@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""
+pxrd — one launcher for the PXRD review tools, so you don't type folder prefixes,
+long entries paths, or ports.
+
+    ./pxrd gui [folder] [extra…]     open the review-mode GUI (auto-port, auto-browser)
+    ./pxrd review [folder] [extra…]  write comments/highlights -> <folder>/review_out
+    ./pxrd lambda [folder] [extra…]  cell/λ console report
+    ./pxrd extras [folder] [extra…]  the extra checks, console
+    ./pxrd candidates [folder] […]   candidate-group scan, console
+    ./pxrd check [fixtures]           run the regression suite
+    ./pxrd refresh [--refresh-struct] refresh the Mindat cache
+    ./pxrd mindat [args…]             call mindat.py directly (e.g. --lookup Quartz)
+
+The entries FOLDER is remembered per sub-command: pass it once, then omit it next
+time (`./pxrd gui` reopens the last batch you reviewed). Pass a new folder to switch.
+Any extra flags (--id, --port, --refresh-struct, …) pass straight through.
+"""
+import os, sys, json
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+MEM = os.path.join(ROOT, '.cache', 'pxrd_last.json')   # remembered folder per sub-command (gitignored)
+
+SCRIPT = {
+    'gui':        'gui/review_gui.py',
+    'review':     'tools/annotate_review.py',
+    'lambda':     'tools/cell_lambda_check.py',
+    'extras':     'tools/extra_checks.py',
+    'candidates': 'tools/candidate_groups.py',
+    'check':      'tools/regression_check.py',
+    'refresh':    'mindat/mindat.py',
+    'mindat':     'mindat/mindat.py',
+}
+NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'check'}
+
+def _load():
+    try:
+        with open(MEM) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save(sub, folder):
+    d = _load(); d[sub] = os.path.abspath(folder)
+    try:
+        os.makedirs(os.path.dirname(MEM), exist_ok=True)
+        with open(MEM, 'w') as f:
+            json.dump(d, f, indent=1)
+    except Exception:
+        pass
+
+def _usage(code=0):
+    print(__doc__.strip())
+    raise SystemExit(code)
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help', 'help'):
+        _usage()
+    sub, rest = sys.argv[1], sys.argv[2:]
+    if sub not in SCRIPT:
+        print("pxrd: unknown command %r\n" % sub); _usage(2)
+    script = os.path.join(ROOT, SCRIPT[sub])
+    cmd = [sys.executable, script]
+
+    if sub in NEEDS_FOLDER:
+        # a leading non-flag argument is the folder; otherwise reuse the remembered one
+        if rest and not rest[0].startswith('-'):
+            folder, passthru = rest[0], rest[1:]
+            _save(sub, folder)
+        else:
+            folder, passthru = _load().get(sub), rest
+            if not folder:
+                raise SystemExit("pxrd %s: no folder given and none remembered — "
+                                 "pass the entries folder once, e.g.  ./pxrd %s \"/path/to/Part 1\"" % (sub, sub))
+            if not os.path.isdir(folder):
+                raise SystemExit("pxrd %s: remembered folder no longer exists: %s" % (sub, folder))
+        cmd += [folder] + passthru
+    elif sub == 'refresh':
+        cmd += (rest or ['--refresh'])      # bare `refresh` -> --refresh; else pass flags through
+    else:                                   # mindat passthrough
+        cmd += rest
+
+    os.execv(sys.executable, cmd)           # hand off (keeps Ctrl-C wired to the server)
+
+if __name__ == '__main__':
+    main()

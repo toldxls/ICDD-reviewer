@@ -6,6 +6,18 @@ reported in the source `.pdf`, and flags discrepancies for review.
 
 It does **not** check diffractometer/camera type.
 
+## Quick start (`./pxrd`)
+```
+./pxrd gui "/path/to/entries"     # first run: pass the entries folder
+./pxrd gui                         # after: reopens the last folder, on a free port, in the browser
+```
+`./pxrd` is a launcher so you don't type folder prefixes or ports. Sub-commands:
+`gui`, `review` (write comments/highlights), `lambda`, `extras`, `candidates`,
+`check` (regression), `refresh` (Mindat cache). The entries folder is **remembered
+per sub-command** (pass it once, omit it after), the GUI **auto-picks a free port**
+(no AirPlay-on-5000 clash), and any extra flags (`--id`, `--port`, …) pass through.
+The explicit `python3 tools/… / gui/… / mindat/…` forms below still work.
+
 ## Run
 ```
 python3 tools/cell_lambda_check.py /path/to/entries          # console report, whole folder
