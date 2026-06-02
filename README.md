@@ -422,6 +422,79 @@ copied **byte-for-byte** when it has no cell/λ issue *and* no writable extra
 (verified: clean entries remain identical to source). On a 44-entry batch:
 44 entries → 41 edited, 3 untouched, 99 comments.
 
+## Review-mode GUI (`review_gui.py`) — validate the flags, comments & annotations
+The CLI checks write comments/highlights + `annotation_log.txt`, but there is no
+way to **see the evidence** behind each finding, so two failure classes are
+invisible: **silent failures** (no `.pdf` paired, no cell parsed, `parse_entry`
+threw, Mindat didn't resolve, a sibling-phase match) and **close calls** (a cell
+match near the 0.004 Å tolerance, a λ "verify", an `info`/`note` that never became
+a docx flag). The GUI surfaces both and lets the reviewer triage them.
+
+```
+pip3 install -r requirements.txt              # adds Flask (GUI only)
+python3 review_gui.py "/path/to/entries"      # opens http://127.0.0.1:5000
+python3 review_gui.py "/path/to/entries" --port 8000 --no-browser
+```
+It is a **thin, read-only presentation/triage layer over `annotate_review.analyze()`**
+— it reuses the check logic verbatim, never duplicates or changes it, and **never
+edits a docx**. Its only writes are sidecars under `<folder>/review_out`:
+`gui_cache.json` (analysis cache), `triage.json` (verdicts), `triage_report.txt`
+(the exported summary).
+
+- **Dashboard** — one row per entry, the **primary lens being the major
+  fixes/annotations the tool writes into the docx** (`N fixes` badge: flagged cell
+  parameters, the cell-level comment, an anode-mismatch λ flag, indexing, intensity-
+  type, formula/name, Mindat group). Default sort is by fixes; the **Fixes /
+  Attention / Clean / All** view selector switches lenses. "Attention" is the
+  *secondary* subset — silent failures & close calls (`no .pdf`, `no cell parsed`,
+  `cell INVESTIGATE`, `docx parse error`, `cell near tolerance`, `λ unrec`,
+  `Mindat: not resolved`). Instrument-wavelength findings (`λ verify`, the
+  canonical-λ checks) are low value to ICDD, so they are shown but **muted and
+  excluded from the fixes count/sort** (the anode-mismatch λ *flag* — Mo vs Cu — is
+  a real error and is **not** demoted).
+- **Entry detail** — side-by-side panes: **findings** (the cell & λ verdicts plus
+  every extra finding, each tagged **written to docx** vs **console-only**, with
+  its docx anchor, low-priority ones muted, and per-finding triage ✓ confirm /
+  ✗ dismiss / ? look + note); **.pdf evidence** (the page rendered via PyMuPDF with
+  the cell values highlighted, page nav, a search box over the whole paper, and the
+  captured snippet beneath); **docx values** (Author's cell grid with the flagged
+  axes coloured, radiation, instrumentation, formulas, existing reviewer comments);
+  and **Mindat & cross-source** (the Mindat structural record — sorted axes, SG,
+  IMA formula, group, status — alongside the `.cif` and `.dft` cells).
+- Each entry is **analyzed eagerly at launch** (cached to `gui_cache.json`,
+  re-run only when a docx/PDF changes) so the dashboard badges are populated the
+  moment it opens. Keyboard: `j`/`k` (or ‹ ›) step entries.
+- **Appearance & layout** (⚙ in the top bar, all persisted in `localStorage`):
+  four themes — **Clear Dark** (default; translucent frosted panels), **Solid Dark**,
+  **Midnight**, **Graphite** — plus panel-opacity and backdrop-blur sliders, a
+  compact/comfortable density toggle, and a font-size control. The panes are
+  **drag-resizable** (sidebar, findings, the Mindat column, and the docx/Mindat
+  split) and each side pane **collapses** from its title bar. (True see-through-to-
+  desktop transparency would need a native window; the browser build does a frosted
+  in-app translucency instead.)
+
+### Triage → rerun feedback loop
+Triage verdicts feed back into the annotator. **Rerun entry** (header) and
+**Rerun all** (top bar) re-invoke `annotate_review.py` with `--triage triage.json`,
+which is **strictly comment-only** (the tool still never rewrites a field — fixes
+remain the reviewer's): a **dismissed** finding is **suppressed** (not written),
+a **confirmed / look** note is **folded into the tool's comment**, and the **Accept**
+box follows your agree/disagree. The header shows a live preview (`rerun writes N ·
+M suppressed`). The single-entry rerun passes `--no-logs` so it regenerates one docx
+without clobbering the batch `annotation_log.txt` / `mindat_discrepancies.txt`.
+`annotate_review --triage <json>` is also usable from the CLI; without it the output
+is byte-for-byte unchanged (the regression suite depends on this).
+
+**Security:** the server **binds to `127.0.0.1` only** (off the network/internet),
+Flask **debug is OFF**, and the browser only ever sends an entry **key** that the
+server maps to a file it indexed at startup — no raw paths from the page, so no
+path traversal. No data leaves the machine. It is a localhost, single-user tool —
+the same posture as a local Jupyter server.
+
+The GUI's **written-to-docx** findings mirror `annotate_review` exactly (verified
+entry-by-entry against `annotation_log.txt`), so it is a faithful preview of what
+the annotator would write — without writing it.
+
 ## Known limitations / next steps
 - **#3 (Mindat)** is only as current as the cached pull — re-run `--refresh` so
   newly-approved species resolve; until then they show as "not found — verify".

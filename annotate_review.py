@@ -23,7 +23,7 @@ Usage:
     python3 annotate_review.py "/path/to/Part 1" --out DIR
     python3 annotate_review.py "/path/to/Part 1" --inplace       # edit originals (asks nothing)
 """
-import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime
+import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime, json
 import cell_lambda_check as C
 import extra_checks as X
 from docx import Document
@@ -218,11 +218,37 @@ def _anchor_cell(doc, ac_row, anchor):
         return _find_value(doc, lambda t: t.strip() == 'Primary')
     return None
 
-def _write_extras(doc, ac_row, res, rec):
+# --- optional triage feedback (review_gui sidecar) ------------------------
+# A rerun may pass the reviewer's per-finding verdicts so the regenerated docx
+# reflects them — strictly COMMENT-ONLY: a 'dismiss' suppresses that comment/
+# highlight, a 'confirm'/'look' note is folded into the comment text, and the
+# Accept decision can be overridden. The tool still NEVER rewrites a field cell.
+# All of this is gated on a non-empty `triage`; with triage=None the output is
+# byte-for-byte the same as before (regression depends on this).
+def _t_dismissed(triage, fkey):
+    return bool(triage and (triage.get('findings') or {}).get(fkey, {}).get('verdict') == 'dismiss')
+
+def _t_note(triage, fkey):
+    v = (triage.get('findings') or {}).get(fkey, {}) if triage else {}
+    return v.get('note') if (v.get('verdict') in ('confirm', 'look') and v.get('note')) else None
+
+def _with_note(text, triage, fkey):
+    note = _t_note(triage, fkey)
+    return _tidy(text + '  · reviewer: ' + note) if note else text
+
+def _write_extras(doc, ac_row, res, rec, triage=None):
     """Write the writable extra-check findings as comments (flags also highlight
     their anchor cell). Authored as the same 'PXRD Review Tool' so they filter
-    apart from human reviewers'."""
-    for f in _writable_extras(res):
+    apart from human reviewers'. `triage` (optional) suppresses dismissed
+    findings and folds reviewer notes into the comment text."""
+    writable_ids = {id(f) for f in _writable_extras(res)}
+    for i, f in enumerate(res.get('extra', [])):
+        if id(f) not in writable_ids:
+            continue
+        fkey = 'f%d' % i
+        if _t_dismissed(triage, fkey):
+            rec.setdefault('suppressed', []).append(f.code)
+            continue
         cell = _anchor_cell(doc, ac_row, f.anchor) or ac_row.cells[0]
         runs = _cell_runs(cell) or _cell_runs(ac_row.cells[0])
         if not runs:
@@ -230,7 +256,7 @@ def _write_extras(doc, ac_row, res, rec):
         if f.sev == 'flag':
             _highlight(cell)
             rec['highlights'].append(f.anchor or f.code)
-        text = _tidy('PXRD check [%s] — %s' % (f.code, f.msg))
+        text = _with_note(_tidy('PXRD check [%s] — %s' % (f.code, f.msg)), triage, fkey)
         doc.add_comment(runs, text=text, author=AUTHOR, initials=INITIALS)
         rec['comments'].append(text)
 
@@ -373,7 +399,7 @@ def _strip_tool_annotations(path):
         f.write(buf.getvalue())
     return tool_ids
 
-def annotate(docx_path, res, out_path, inplace=False, base_path=None):
+def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=None):
     """Write comments/highlights for `res` into the docx — ERRORS ONLY. Entries
     whose cell matches the PDF with no discrepancies get no annotation (the
     unmodified file is copied through, preserving the original bytes). Returns
@@ -406,7 +432,9 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None):
         if not inplace:
             os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
         doc = Document(base)
-        rec['accept'] = _mark_accept(doc)
+        # clean entry is never severe → auto-Accept, unless the reviewer disagreed.
+        if not (triage and triage.get('accept') == 'disagree'):
+            rec['accept'] = _mark_accept(doc)
         doc.save(out)
         return rec
 
@@ -422,23 +450,31 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None):
             col = PARAM_COL.get(k)
             if col is None or col >= len(ac_row.cells):
                 continue
+            if _t_dismissed(triage, 'param:%s' % k):
+                rec.setdefault('suppressed', []).append('param:%s' % k); continue
             cell = ac_row.cells[col]
             _highlight(cell)
             runs = _cell_runs(cell) or _cell_runs(ac_row.cells[0])
             body = '; '.join('%s — %s' % (KIND_LABEL[kind], note) for kind, note in issues)
-            text = _tidy('PXRD check — %s: %s' % (k, body))
+            text = _with_note(_tidy('PXRD check — %s: %s' % (k, body)), triage, 'param:%s' % k)
             doc.add_comment(runs, text=text, author=AUTHOR, initials=INITIALS)
             rec['highlights'].append("Author's Cell:%s" % k)
             rec['comments'].append(text)
         # radiation hard-flag: highlight anode cell + explain
-        if _has_lam_flag(res) and rad_row is not None and len(rad_row.cells) > 1:
+        if (_has_lam_flag(res) and not _t_dismissed(triage, 'lam')
+                and rad_row is not None and len(rad_row.cells) > 1):
             cell = rad_row.cells[1]
             _highlight(cell)
             runs = _cell_runs(cell) or _cell_runs(rad_row.cells[0])
-            text = _tidy('PXRD check — radiation: ' + res['lam'][1])
+            text = _with_note(_tidy('PXRD check — radiation: ' + res['lam'][1]), triage, 'lam')
             doc.add_comment(runs, text=text, author=AUTHOR, initials=INITIALS)
             rec['highlights'].append('Radiation:anode')
             rec['comments'].append(text)
+        elif _has_lam_flag(res) and _t_dismissed(triage, 'lam'):
+            rec.setdefault('suppressed', []).append('lam')
+    elif _t_dismissed(triage, 'cell'):
+        # reviewer dismissed the cell-level comment (investigate / no-match) entirely.
+        rec.setdefault('suppressed', []).append('cell')
     elif status == 'investigate' and res.get('cell_diffs'):
         # closest PDF cell exists but isn't an exact match — pinpoint the axis.
         diffs = res['cell_diffs']
@@ -449,29 +485,33 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None):
             col = PARAM_COL.get(lab)
             cell = ac_row.cells[col] if (col is not None and col < len(ac_row.cells)) else ac_row.cells[0]
             _highlight(cell)
-            text = _tidy('PXRD check — %s: likely transcription error — docx=%s but .pdf cell gives %s '
-                         '(Δ=%.4f Å); the other axes match exactly.' % (lab, dv, nv, dd))
+            text = _with_note(_tidy('PXRD check — %s: likely transcription error — docx=%s but .pdf cell gives %s '
+                         '(Δ=%.4f Å); the other axes match exactly.' % (lab, dv, nv, dd)), triage, 'cell')
             doc.add_comment(_cell_runs(cell) or _cell_runs(ac_row.cells[0]),
                             text=text, author=AUTHOR, initials=INITIALS)
             rec['highlights'].append("Author's Cell:%s" % lab)
             rec['comments'].append(text)
         else:
-            text = ('No exact cell match — closest .pdf cell differs on %s; it may be a different '
+            text = _with_note('No exact cell match — closest .pdf cell differs on %s; it may be a different '
                     'phase/cell in a multi-cell .pdf (the matching cell may be unparsed).'
-                    % ', '.join(t[0] for t in out_axes))
+                    % ', '.join(t[0] for t in out_axes), triage, 'cell')
             doc.add_comment(_cell_runs(ac_row.cells[0]), text=text, author=AUTHOR, initials=INITIALS)
             rec['comments'].append(text)
     else:
-        # no cell parsed at all (nocell / nopdf): one brief flag
-        doc.add_comment(_cell_runs(ac_row.cells[0]), text=NO_MATCH, author=AUTHOR, initials=INITIALS)
+        # no cell parsed at all (nocell / nopdf / investigate w/o diffs): one brief flag
+        doc.add_comment(_cell_runs(ac_row.cells[0]),
+                        text=_with_note(NO_MATCH, triage, 'cell'), author=AUTHOR, initials=INITIALS)
         rec['comments'].append(NO_MATCH)
 
     # the 10 extra reviewer-comment checks (symmetry, calculated, indexing, IMA,
     # ideal-formula, and the authoritative Mindat group statement)
-    _write_extras(doc, ac_row, res, rec)
+    _write_extras(doc, ac_row, res, rec, triage)
 
-    # auto-Accept unless the entry is severe (then leave blank for manual decision)
-    if not _is_severe(res):
+    # auto-Accept unless the entry is severe (then leave blank); the reviewer can
+    # override the tool's Accept decision via triage ('disagree' flips it).
+    _tool_severe = _is_severe(res)
+    _severe = (not _tool_severe) if (triage and triage.get('accept') == 'disagree') else _tool_severe
+    if not _severe:
         rec['accept'] = _mark_accept(doc)
 
     os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
@@ -496,7 +536,20 @@ def main():
     ap.add_argument('--log', help='log file path (default <out>/annotation_log.txt)')
     ap.add_argument('--force', action='store_true',
                     help='regenerate every output even if it has manual edits (default: preserve hand-edited outputs)')
+    ap.add_argument('--triage', help='review_gui triage.json — suppress dismissed findings, fold reviewer '
+                    'notes into the comments, override Accept (COMMENT-ONLY; never rewrites a field)')
+    ap.add_argument('--no-logs', action='store_true',
+                    help='skip the folder-level annotation_log.txt / mindat_discrepancies.txt writes '
+                         '(used by the GUI single-entry rerun so it does not clobber the batch logs)')
     args = ap.parse_args()
+
+    triage = {}
+    if args.triage and os.path.exists(args.triage):
+        try:
+            with open(args.triage) as _tf:
+                triage = json.load(_tf)
+        except Exception as ex:
+            print('  !! could not read triage %s (%s) — ignoring' % (args.triage, ex))
 
     idx = C.pdf_index(args.folder)
     cif_idx = C.cif_index(args.folder)
@@ -572,7 +625,9 @@ def main():
                                  'clean': False, 'accept': None, 'refreshed': True}))
                 continue
         try:
-            rec = annotate(dp, res, out, inplace=args.inplace, base_path=base)
+            tkey = os.path.splitext(os.path.basename(dp))[0]    # matches the GUI's triage key
+            rec = annotate(dp, res, out, inplace=args.inplace, base_path=base,
+                           triage=triage.get(tkey))
         except Exception as e:
             # `out` is untouched on failure (annotate read the temp, not `out`)
             print('  !! %s: %s' % (os.path.basename(dp), e)); continue
@@ -598,6 +653,12 @@ def main():
               % (os.path.basename(dp), rec['status'],
                  'clean' if rec['clean'] else ('highlights: ' + ', '.join(rec['highlights']) or 'flag'),
                  n, '' if n == 1 else 's', renamed, dtag, tag))
+
+    # The single-entry GUI rerun passes --no-logs so it regenerates one docx
+    # without rewriting the batch-wide annotation_log.txt / mindat_discrepancies.txt
+    # (which, scoped to one entry, would otherwise clobber the full-folder files).
+    if args.no_logs:
+        return
 
     # --- write the run log -------------------------------------------------
     log_path = args.log or os.path.join(out_dir if not args.inplace else args.folder, 'annotation_log.txt')

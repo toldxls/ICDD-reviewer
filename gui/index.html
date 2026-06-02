@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en" data-theme="clear-dark" data-density="comfortable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PXRD review — review mode</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">PXRD review · <span class="muted">review mode</span></div>
+    <div id="folder" class="muted" title=""></div>
+    <div class="spacer"></div>
+    <span id="rerun-status" class="muted"></span>
+    <button id="gear" title="Appearance &amp; layout">⚙</button>
+    <button id="rerun-all" title="Regenerate every docx, applying your triage (suppress dismissed, fold notes, set Accept)">Rerun all ▸</button>
+    <button id="export" title="Write triage_report.txt (never edits a docx)">Export triage</button>
+  </header>
+
+  <!-- appearance / layout settings -->
+  <div id="settings" class="panel hidden">
+    <div class="set-row"><span class="set-label">Theme</span>
+      <div id="theme-picker" class="seg">
+        <button data-theme="clear-dark" class="on">Clear Dark</button>
+        <button data-theme="solid-dark">Solid Dark</button>
+        <button data-theme="midnight">Midnight</button>
+        <button data-theme="graphite">Graphite</button>
+      </div>
+    </div>
+    <div class="set-row"><span class="set-label">Panel opacity</span>
+      <input type="range" id="opacity" min="0.4" max="1" step="0.02" value="0.72">
+      <span id="opacity-val" class="muted"></span>
+    </div>
+    <div class="set-row"><span class="set-label">Background blur</span>
+      <input type="range" id="blur" min="0" max="22" step="1" value="14">
+      <span id="blur-val" class="muted"></span>
+    </div>
+    <div class="set-row"><span class="set-label">Density</span>
+      <div id="density-picker" class="seg">
+        <button data-density="comfortable" class="on">Comfortable</button>
+        <button data-density="compact">Compact</button>
+      </div>
+    </div>
+    <div class="set-row"><span class="set-label">Font size</span>
+      <input type="range" id="fontsize" min="11" max="16" step="1" value="13">
+      <span id="fontsize-val" class="muted"></span>
+    </div>
+    <div class="set-row">
+      <button id="reset-layout" class="ghost">Reset layout &amp; theme</button>
+    </div>
+  </div>
+
+  <div id="app">
+    <!-- dashboard / entry list -->
+    <aside id="sidebar">
+      <div class="side-head">
+        <div id="views" class="seg">
+          <button data-view="fixes" class="on">Fixes</button>
+          <button data-view="attention">Attention</button>
+          <button data-view="clean">Clean</button>
+          <button data-view="all">All</button>
+        </div>
+        <input type="search" id="filter" placeholder="filter entries…" autocomplete="off">
+        <div id="counts" class="muted"></div>
+      </div>
+      <ul id="entry-list"></ul>
+    </aside>
+    <div class="splitter v" data-resize="sidebar" title="drag to resize"></div>
+
+    <!-- entry detail -->
+    <main id="detail">
+      <div id="empty" class="empty">
+        <p>Select an entry to review its evidence.</p>
+        <p class="muted">The list leads with the entries carrying the most
+          <b>fixes</b> (the major annotations the tool writes). Nothing here edits a
+          docx; triage is saved to <code>review_out/triage.json</code>, and the Rerun
+          buttons regenerate the docx applying it.</p>
+      </div>
+
+      <div id="entry" class="hidden">
+        <section id="head">
+          <div class="head-main">
+            <button id="prev" class="nav" title="previous (k)">‹</button>
+            <h1 id="e-name">—</h1>
+            <span id="e-eid" class="pill"></span>
+            <button id="next" class="nav" title="next (j)">›</button>
+            <span class="spacer"></span>
+            <div id="e-badges" class="badges"></div>
+          </div>
+          <div class="head-meta">
+            <span id="e-files"></span>
+            <span class="sep">·</span>
+            <span id="e-output" class="ellip"></span>
+            <span class="sep">·</span>
+            <span id="e-accept"></span>
+            <span id="e-accept-triage" class="accept-triage"></span>
+            <span class="spacer"></span>
+            <span id="e-preview" class="preview" title="what a rerun will write into this docx after your triage"></span>
+            <button id="rerun-entry" title="Regenerate just this docx, applying your triage">Rerun entry ▸</button>
+            <label class="chk reviewed"><input type="checkbox" id="e-reviewed"> reviewed</label>
+          </div>
+        </section>
+
+        <div class="ebody">
+          <section id="findings" class="pane" data-collapse="col">
+            <div class="pane-title">
+              <button class="collapse" title="collapse">▾</button>
+              <span class="ptitle">Findings</span>
+              <span class="muted" id="f-count"></span>
+            </div>
+            <div class="pane-body" id="findings-body"></div>
+          </section>
+
+          <div class="splitter v" data-resize="find"></div>
+
+          <section id="pdf" class="pane">
+            <div class="pane-title">
+              <span class="ptitle">.pdf evidence</span>
+              <span class="muted ellip" id="pdf-name"></span>
+              <span class="spacer"></span>
+              <span id="pdf-pager" class="pager"></span>
+            </div>
+            <div class="pdf-search">
+              <input type="search" id="pdf-q" placeholder="search the paper… (Enter)" autocomplete="off">
+              <span id="pdf-hits" class="muted"></span>
+            </div>
+            <div id="pdf-view"><div class="empty muted">no .pdf paired</div></div>
+            <div id="pdf-snippet" class="snippet"></div>
+          </section>
+
+          <div class="splitter v" data-resize="side"></div>
+
+          <div id="rightcol">
+            <section id="docx" class="pane" data-collapse="row">
+              <div class="pane-title">
+                <button class="collapse" title="collapse">▾</button>
+                <span class="ptitle">docx values</span>
+              </div>
+              <div class="pane-body" id="docx-body"></div>
+            </section>
+
+            <div class="splitter h" data-resize="docrow"></div>
+
+            <section id="mindat" class="pane" data-collapse="row">
+              <div class="pane-title">
+                <button class="collapse" title="collapse">▾</button>
+                <span class="ptitle">Mindat &amp; cross-source</span>
+              </div>
+              <div class="pane-body" id="mindat-body"></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

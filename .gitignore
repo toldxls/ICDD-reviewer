@@ -3,5 +3,9 @@
 __pycache__/
 *.pyc
 .DS_Store
+# review-mode GUI sidecars (written into a data folder's review_out/, never the repo)
+gui_cache.json
+triage.json
+triage_report.txt
 # local-only working brief for Claude Code; not shared in the repo
 CLAUDE.md
