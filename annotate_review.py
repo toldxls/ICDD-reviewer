@@ -660,18 +660,18 @@ def main():
     # --- separate Mindat cross-check feedback log -------------------------
     # Mindat is a co-equal proxy (its data is transcribed from delayed CNMNC
     # newsletters), so these verify items are NOT written into any docx — a list to
-    # check against the paper and, where Mindat is wrong, submit a correction.
+    # check against the paper and follow up (either side may be the one to fix).
     md_recs = [(f, r) for f, r in records if r.get('mindat')]
     md_path = os.path.join(out_dir if not args.inplace else args.folder, 'mindat_discrepancies.txt')
     if not md_recs and os.path.exists(md_path):
         os.remove(md_path)                       # no discrepancies now — drop a stale file
     if md_recs:
-        LABEL = {'mindat_fix': 'CELL (docx & .cif agree, Mindat differs — likely submit to Mindat)',
-                 'mindat_chem': 'CHEMISTRY (element set differs from Mindat)',
+        LABEL = {'mindat_fix': 'CELL (docx & .cif disagree with Mindat — verify which is correct)',
+                 'mindat_chem': 'CHEMISTRY (ideal formula differs from Mindat)',
                  'ima_status': 'IMA STATUS'}
         with open(md_path, 'w') as fh:
-            fh.write('Mindat cross-check — verify against the paper (Mindat data can lag the '
-                     'CNMNC newsletter by years). Not written into any docx.\n')
+            fh.write('Mindat cross-check — verify against the paper and follow up; either side may be '
+                     'the one to fix (Mindat data can lag the CNMNC newsletter). Not written into any docx.\n')
             fh.write('%d entr%s.\n' % (len(md_recs), 'y' if len(md_recs) == 1 else 'ies') + '=' * 78 + '\n')
             for f, r in md_recs:
                 fh.write('\n  %s   (%s)\n' % ((C.entry_name(f) or C.entry_id(f) or f).upper(), C.entry_id(f) or '?'))

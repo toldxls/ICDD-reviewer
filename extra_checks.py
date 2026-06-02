@@ -32,7 +32,7 @@ Checks (numbered to match the review write-up):
       Calculated coherence)   — curated from the corrected corpus
  18  mineral name vs ideal formula (Levinson rare-earth suffix; polytype letter)
 """
-import re, zipfile, math
+import re, zipfile, math, html
 from collections import namedtuple
 from xml.etree import ElementTree as ET
 
@@ -1793,9 +1793,10 @@ def check22_cross_sources(e, cif_data, dft_data):
     which legitimately differs a little from the submitted powder cell — so this
     uses a HIGH tolerance and only speaks on large, non-polytype differences.
     Two outcomes:
-      * Mindat is the lone outlier (docx≈.cif, Mindat differs) → 'mindat_fix' NOTE,
-        routed to a separate mindat_discrepancies log (NOT written to the docx) —
-        a feedback list to submit to Mindat.
+      * docx≈.cif but Mindat differs → 'mindat_fix' NOTE, routed to a separate
+        mindat_discrepancies log (NOT written to the docx) — a list to verify and
+        follow up; EITHER side may be the one to fix (Mindat is sometimes the correct
+        one, e.g. a synchrotron-refined cell that deviates from the published cell).
       * the powder cell differs grossly from the SCXRD structure (docx ≠ .cif≈Mindat)
         → 'cell_cif' flag for the reviewer."""
     out = []
@@ -1817,7 +1818,8 @@ def check22_cross_sources(e, cif_data, dft_data):
             and _len_maxdiff(docx, mind) >= SAME and not _len_rational(docx, mind):
         out.append(Finding('mindat_fix', 'note',
                    "docx and .cif agree on the cell (a,b,c≈%s) but Mindat lists %s (off %.0f%%) "
-                   "— Mindat may need correcting." % (fmt(docx), fmt(mind), _len_maxdiff(docx, mind) * 100), None))
+                   "— verify which is correct and follow up (either side may be the one to fix)."
+                   % (fmt(docx), fmt(mind), _len_maxdiff(docx, mind) * 100), None))
     if docx and cif and _len_maxdiff(docx, cif) > 0.05 and not _len_rational(docx, cif) \
             and (mind is None or _len_maxdiff(cif, mind) < SAME):
         out.append(Finding('cell_cif', 'flag',
@@ -1858,8 +1860,10 @@ def check22_cross_sources(e, cif_data, dft_data):
                 if docx_lacks:
                     bits.append("Mindat's formula has %s, docx lacks it" % ','.join(sorted(docx_lacks)))
                 out.append(Finding('mindat_chem', 'note',
-                           "ideal formula vs Mindat: %s — verify (docx=%r, Mindat=%r)."
-                           % ('; '.join(bits), docx_f[:48], re.sub(r'</?su[bp]>', '', Mx['formula'])[:48]), None))
+                           "ideal formula vs Mindat: %s — verify (may be non-essential void/channel "
+                           "or substituent content, or a Mindat lag) (docx=%r, Mindat=%r)."
+                           % ('; '.join(bits), docx_f[:48],
+                              html.unescape(re.sub(r'</?su[bp]>', '', Mx['formula']))[:48]), None))
     # IMA status from the lightweight cache (QUESTIONABLE species are worth a look)
     try:
         import mindat

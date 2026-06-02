@@ -277,10 +277,12 @@ stores γ=0 for uniaxial cells, so a *volume* comparison wrongly inflates hexago
 cells by 1/sin120°≈1.155) and robust to powder↔SCXRD axis relabeling. The `.cif`/Mindat
 are usually the **single-crystal** cell, which legitimately differs a little from the
 submitted powder cell, so the bar is **high** (only large, non-polytype differences):
-- **Mindat is the lone outlier** (docx ≈ `.cif`, Mindat differs, not a super/sub-cell)
-  → a `mindat_fix` **note** routed to a separate **`mindat_discrepancies.txt`** — a
-  feedback list to verify against the paper and submit to Mindat. **Never** written
-  into a docx (Mindat is a co-equal proxy, not ground truth).
+- **docx & `.cif` disagree with Mindat** (docx ≈ `.cif`, Mindat differs, not a super/
+  sub-cell) → a `mindat_fix` **note** routed to a separate **`mindat_discrepancies.txt`**
+  — a list to verify against the paper and follow up; **either side may be the one to
+  fix** (Mindat is a co-equal proxy, and is sometimes the correct one — e.g. Feiite,
+  where the synchrotron-refined docx/.cif cell deviates from the published cell Mindat
+  carries). **Never** written into a docx.
 - **the powder cell differs grossly** from the SCXRD structure (docx ≠ `.cif` ≈ Mindat,
   >5 %, non-polytype) → a `cell_cif` ⚑ flag for the reviewer.
 - **axis swap** — same cell magnitudes but the axes are in a different *order* than the
