@@ -599,7 +599,7 @@ def entry_name(path):
 def report(docx_path, pdf_path):
     name = os.path.basename(docx_path)
     print('=' * 78)
-    print(name, ' <- ', os.path.basename(pdf_path) if pdf_path else '(NO PDF FOUND)')
+    print(name, ' <- ', os.path.basename(pdf_path) if pdf_path else '(NO .pdf FOUND)')
     d = parse_docx(docx_path)
     if d.authors_cell:
         print('  docx Author\'s Cell : a=%s b=%s c=%s  α=%s β=%s γ=%s  SG=%s Z=%s'
@@ -623,11 +623,11 @@ def report(docx_path, pdf_path):
         cd, nmatch, ncomp, dev, mode = best_match(d.authors_cell[:3], cands, entry_name(docx_path))
         full = cd is not None and ncomp >= 2 and nmatch == ncomp
         if cd is None:
-            print('  CELL  : ✗ no inline cell parsed from PDF (cell may be table-only) — CHECK MANUALLY')
+            print('  CELL  : ✗ no inline cell parsed from .pdf (cell may be table-only) — CHECK MANUALLY')
         elif full:
             print('  CELL  : ✓ value match to a reported cell  [%d/%d axes, %s, Σ|Δ|=%.4f Å]'
                   % (nmatch, ncomp, mode, dev))
-            print('          PDF cell: a=%s b=%s c=%s α=%s β=%s γ=%s V=%s Z=%s'
+            print('          .pdf cell: a=%s b=%s c=%s α=%s β=%s γ=%s V=%s Z=%s'
                   % (cd.a, cd.b, cd.c, cd.al, cd.be, cd.ga, cd.V, cd.Z))
             # significant-figure & esd checks across every comparable parameter
             docx_p = dict(zip(['a','b','c','α','β','γ'], d.authors_cell[:6]))
@@ -651,7 +651,7 @@ def report(docx_path, pdf_path):
                       '(acceptable for some entries; reviewer to confirm)')
                 print('            evidence: …%s…' % re.sub(r'\s+', ' ', cd.snippet).strip())
         else:
-            print('  CELL  : ⚠ no exact cell match in PDF — INVESTIGATE '
+            print('  CELL  : ⚠ no exact cell match in .pdf — INVESTIGATE '
                   '(closest off by Σ|Δ|=%.4f Å over %d axes)' % (dev, ncomp))
             # Per-axis diagnosis. A single axis off while the rest match tightly is
             # the signature of a transcription typo in that axis (e.g. nigelcookite
@@ -665,14 +665,14 @@ def report(docx_path, pdf_path):
                 print('          ↳ SINGLE-AXIS discrepancy: %s docx=%s vs pdf=%s (Δ=%.4f Å); '
                       'other axes match exactly — likely a transcription error in %s' % (lab, dv, nv, dd, lab))
             elif len(out_axes) >= 2:
-                print('          ↳ %d of %d axes differ — the closest PDF cell is probably a '
-                      'different phase/cell (multi-cell PDF); the matching cell may be unparsed' %
+                print('          ↳ %d of %d axes differ — the closest .pdf cell is probably a '
+                      'different phase/cell (multi-cell .pdf); the matching cell may be unparsed' %
                       (len(out_axes), len(diffs)))
             for lab, dv, nv, dd, ok in diffs:
                 print('          %s: docx=%-12s pdf=%-12s Δ=%.4f %s' % (lab, dv, nv, dd, '✓' if ok else '✗'))
             print('          near cell context: [%s]' % cd.context)
         if cands:
-            print('          PDF reported cells:')
+            print('          .pdf reported cells:')
             for c in cands:
                 print('            [%-7s] a=%s b=%s c=%s β=%s' % (c.context, c.a, c.b, c.c, c.be))
 
@@ -686,17 +686,17 @@ def report(docx_path, pdf_path):
         print('  λ     : docx anode not recognised (%s)' % d.radiation)
     elif pk is not None:
         if anode_key(pk[0]) == dk:
-            print('  λ     : ✓ docx anode %s matches PDF POWDER radiation' % d.radiation)
+            print('  λ     : ✓ docx anode %s matches .pdf POWDER radiation' % d.radiation)
         else:
-            print('  λ     : ⚠ docx anode %s but PDF POWDER radiation is %sKα — FLAG'
+            print('  λ     : ⚠ docx anode %s but .pdf POWDER radiation is %sKα — FLAG'
                   % (d.radiation, pk[0].capitalize()))
         if pk[1] and d.lam and not close(float(pk[1]), num_val(d.lam), abstol=0.003):
             print('          ↳ λ value docx=%s pdf=%s' % (d.lam, pk[1]))
     elif any_match:
-        print('  λ     : • docx anode %s appears in PDF (no clear powder-context radiation found — verify)' % d.radiation)
+        print('  λ     : • docx anode %s appears in .pdf (no clear powder-context radiation found — verify)' % d.radiation)
     else:
         anodes = sorted(set(r[0].capitalize() + 'Kα' for r in rads)) or ['(none found)']
-        print('  λ     : ⚠ docx anode %s NOT found in PDF; PDF mentions: %s — verify'
+        print('  λ     : ⚠ docx anode %s NOT found in .pdf; .pdf mentions: %s — verify'
               % (d.radiation, ', '.join(anodes)))
     _run_extra(docx_path, text)
 

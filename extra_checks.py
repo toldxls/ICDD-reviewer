@@ -232,17 +232,17 @@ def check1_geometry(e, text):
         # reviewer routinely annotates the SPECIFIC named geometry from the paper.
         instr_note = (' on a %s' % instrument) if instrument else ''
         out.append(Finding('geometry', 'info',
-                   "PDF names a specific geometry/method: %s%s (docx Spacing Instr. = %r) "
+                   ".pdf names a specific geometry/method: %s%s (docx Spacing Instr. = %r) "
                    "— consider annotating 'Powder data — %s'."
                    % (', '.join(found), instr_note, spac or '(blank)', found[0]),
                    None))
     elif instrument:
         out.append(Finding('geometry', 'info',
-                   "PDF instrument: %s (docx Spacing Instr. = %r) — confirm the geometry/designators."
+                   ".pdf instrument: %s (docx Spacing Instr. = %r) — confirm the geometry/designators."
                    % (instrument, spac or '(blank)'), None))
     elif spac in ('', 'Other'):
         out.append(Finding('geometry', 'note',
-                   "Spacing Instr. = %r and no named geometry found in PDF — set the method."
+                   "Spacing Instr. = %r and no named geometry found in .pdf — set the method."
                    % (spac or '(blank)'), None))
     return out
 
@@ -269,7 +269,7 @@ def check2_cell_provenance(e, text):
     if hits:
         sent = _find_sentences(text, any_of=hits)
         out.append(Finding('cell_provenance', 'info',
-                   "PDF indicates the cell was not powder-refined / came from single-crystal "
+                   ".pdf indicates the cell was not powder-refined / came from single-crystal "
                    "or electron data — confirm provenance.",
                    (sent[0] if sent else hits[0])[:160]))
     return out
@@ -358,7 +358,7 @@ def check3_classification(e, text):
             frag = m.group(0)
             if frag.lower() in seen: continue
             seen.add(frag.lower())
-            out.append(Finding('classification', 'note', "PDF structural relation: '%s'." % frag, None))
+            out.append(Finding('classification', 'note', ".pdf structural relation: '%s'." % frag, None))
             if len(seen) >= 3: break
         # Named 'X group/family' prose is noisy (geological formations like 'Creek
         # group'), and Mindat already gives membership authoritatively — so only
@@ -375,7 +375,7 @@ def check3_classification(e, text):
                 if frag.lower() in seen: continue
                 seen.add(frag.lower())
                 out.append(Finding('classification', 'note',
-                           "PDF names a '%s' (Mindat has no group for this species — verify)." % frag, None))
+                           ".pdf names a '%s' (Mindat has no group for this species — verify)." % frag, None))
                 if len(seen) >= 3: break
     return out
 
@@ -435,7 +435,7 @@ def check4_calculated(e, text):
         sents = [s for s in sents if not _excepted(s)]
         if sents and not (spac == 'calculated'):
             out.append(Finding('calculated', 'flag',
-                       "PDF states the powder pattern was calculated from the structure.",
+                       ".pdf states the powder pattern was calculated from the structure.",
                        sents[0][:170], 'instr'))
     return out
 
@@ -472,7 +472,7 @@ def check5_wavelength(e, text):
                        "anode labelled Kα1 but λ=%s matches the weighted-mean Kα." % lam, None))
     # Kα2 stripped is a method note the reviewer records; surface it from the PDF
     if text and re.search(r'k[aα]2[\s-]*(strip|remov|elimin)', text.lower()):
-        out.append(Finding('wavelength', 'info', "PDF: Kα2 stripped in software.", None))
+        out.append(Finding('wavelength', 'info', ".pdf: Kα2 stripped in software.", None))
     return out
 
 # ----------------------------------------------------------------------------- analysis-field helpers (shared by check6 & check12)
@@ -624,7 +624,7 @@ def check8_precision_symmetry(e, text):
         if v and _dec(v) >= 3 and not _esd(v):
             pdf_esd = _pdf_esd_for(v, text)
             if pdf_esd:
-                msg = ("%s=%s has no stated error (esd) — PDF gives %s=%s(%s); "
+                msg = ("%s=%s has no stated error (esd) — .pdf gives %s=%s(%s); "
                        "add the (%s)." % (k, v, k, v, pdf_esd, pdf_esd))
             else:
                 msg = "%s=%s is quoted to %d decimals but has no stated error (esd)." % (k, v, _dec(v))
@@ -726,7 +726,7 @@ def check10_optical(e, text):
 
     if pdf_sign and pdf_sign != docx_sign:
         out.append(Finding('optical', 'flag',
-                   "Optical sign mismatch: docx Sign=%s but PDF indicates Sign=%s"
+                   "Optical sign mismatch: docx Sign=%s but .pdf indicates Sign=%s"
                    % (docx_sign, pdf_sign), None, 'name'))
     return out
 
@@ -776,7 +776,7 @@ def check11_ima(e, text):
         if re.search(r'\.\s*cnmnc|newsletter|\(\d{4}\)\s+[a-zü-]+,?\s*ima', ctx):
             continue                                        # reference citation
         num = re.sub(r'\s+', '', m.group(1)); break
-    msg = ("PDF describes this as a new mineral but the docx IMA Number field is blank — add it"
+    msg = (".pdf describes this as a new mineral but the docx IMA Number field is blank — add it"
            + (" (IMA %s)" % num if num else ""))
     out.append(Finding('ima', 'flag', msg + ".", None, 'ima'))
     return out
@@ -1056,7 +1056,7 @@ def check12_analysis(e, text):
                 text, re.I):
             # PDF clearly reports an analysis that never made it into the docx
             out.append(Finding('analysis', 'flag',
-                       "PDF describes a chemical/microprobe analysis but the docx "
+                       ".pdf describes a chemical/microprobe analysis but the docx "
                        "Analysis field is empty — it may have been omitted.",
                        None, 'analysis'))
         else:
@@ -1096,10 +1096,10 @@ def check12_analysis(e, text):
                 break
     if n_pdf and not n_docx:
         out.append(Finding('analysis', 'flag',
-                   "Analysis count missing — PDF gives n=%d" % n_pdf, None, 'analysis'))
+                   "Analysis count missing — .pdf gives n=%d" % n_pdf, None, 'analysis'))
     elif n_pdf and n_docx and n_pdf != n_docx:
         out.append(Finding('analysis', 'flag',
-                   "Analysis count mismatch: docx=%d, PDF=%d" % (n_docx, n_pdf),
+                   "Analysis count mismatch: docx=%d, .pdf=%d" % (n_docx, n_pdf),
                    None, 'analysis'))
 
     # --- 2. Calculated light elements missing (calc) notation ---
@@ -1125,7 +1125,7 @@ def check12_analysis(e, text):
                 pat + r'\s*\(calc|\(calc\)\s*' + pat, analysis_data, re.I))
             if not marked:
                 out.append(Finding('analysis', 'flag',
-                           "Analysis: %s is calculated per PDF but not marked (calc) "
+                           "Analysis: %s is calculated per .pdf but not marked (calc) "
                            "in docx" % elem, None, 'analysis'))
 
     # --- 3. wt.% total sanity ---
@@ -1258,7 +1258,7 @@ def check14_density(e, text):
         return out
     diff_pct = abs(dx_docx - dx_pdf) / dx_pdf * 100
     if diff_pct > 3.0:
-        msg = ("Density mismatch: docx Dx=%.3f g/cm³ but PDF states %.3f "
+        msg = ("Density mismatch: docx Dx=%.3f g/cm³ but .pdf states %.3f "
                "(%.1f%% difference)" % (dx_docx, dx_pdf, diff_pct))
         # Resolve the basis: compute the ideal/end-member density from the docx
         # cell + Z. Whichever stated value it matches reveals the formula basis;
@@ -1271,7 +1271,7 @@ def check14_density(e, text):
             tag_docx = 'ideal' if near(dx_docx) else 'empirical/other'
             tag_pdf  = 'ideal' if near(dx_pdf) else 'empirical/other'
             msg += (". Ideal-formula density = %.3f (Z=%d, V=%.1f Å³) → "
-                    "docx uses %s basis, PDF uses %s basis"
+                    "docx uses %s basis, .pdf uses %s basis"
                     % (d_ideal, idl[3], idl[2], tag_docx, tag_pdf))
         out.append(Finding('density', 'flag', msg, None, 'name'))
     return out
@@ -1308,7 +1308,7 @@ def check15_strongest_lines(e, text):
         # confirm it's not just a combined/multiplet line
         closest = min(docx_ds, key=lambda d: abs(d - pdf_100))
         out.append(Finding('strongest_lines', 'flag',
-                   "PDF strongest line (I=100, d=%.4f Å) not found in docx "
+                   ".pdf strongest line (I=100, d=%.4f Å) not found in docx "
                    "reflection list (closest: %.4f Å, %.1f%% off) — possible "
                    "missing reflection or wrong cell assignment"
                    % (pdf_100, closest, abs(closest-pdf_100)/pdf_100*100),
@@ -1467,7 +1467,7 @@ def check16_instr_vocab(e, text):
             elif lam and text and _SYNCHROTRON.search(text):
                 out.append(Finding('instr_vocab', 'flag',
                            "Radiation/anode is blank; λ=%s matches no characteristic tube line and the "
-                           "PDF describes synchrotron radiation — set the anode to Sync." % lam,
+                           ".pdf describes synchrotron radiation — set the anode to Sync." % lam,
                            None, 'radiation'))
             elif lam:
                 out.append(Finding('instr_vocab', 'flag',
@@ -1506,7 +1506,7 @@ def check17_pdf_filter(e, text):
         for pat, display, filt, ftype in PDF_FILTER_PATTERNS:
             if re.search(pat, s):
                 out.append(Finding('instr_filter', 'flag',
-                           "Filter field is blank but the PDF describes a %s for the powder "
+                           "Filter field is blank but the .pdf describes a %s for the powder "
                            "data — add Filter = %s, FilterType = %s." % (display, filt, ftype),
                            _sq(s)[:160], 'filter'))
                 return out               # one suggestion is enough
@@ -1604,12 +1604,12 @@ def check19_intensity_detector(e, text):
             bb = True
     if area and not bb and it.lower() == 'peak':
         out.append(Finding('intensity_type', 'flag',
-                   "PDF describes an area detector (image-plate/Gandolfi/Guinier) — these integrate "
-                   "the 2D ring, so Intensity Type should be Integrated, not Peak.", None, 'instr'))
+                   ".pdf describes a digital area detector, so Intensity Type should be "
+                   "Integrated, not Peak.", None, 'instr'))
     elif bb and not area and it.lower() == 'integrated':
         out.append(Finding('intensity_type', 'flag',
-                   "PDF describes Bragg-Brentano geometry — slit optics give peak heights, so "
-                   "Intensity Type should be Peak, not Integrated.", None, 'instr'))
+                   ".pdf describes Bragg-Brentano geometry, so Intensity Type should be "
+                   "Peak, not Integrated.", None, 'instr'))
     return out
 
 # --- 20. calculated pattern must document its wavelength --------------------

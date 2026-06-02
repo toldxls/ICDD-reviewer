@@ -44,7 +44,7 @@ def _tidy(s):
     s = re.sub(r'(?<=[A-Za-z])Ka', 'Kα', s)
     return re.sub(r' {2,}', ' ', s).strip()
 
-NO_MATCH = 'No matching PDF cell found.'
+NO_MATCH = 'No matching .pdf cell found.'
 
 def _has_lam_flag(res):
     return res['lam'] is not None and res['lam'][0] == 'flag'
@@ -117,17 +117,17 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
         res['lam'] = ('unrec', 'docx anode not recognised (%s)' % d.radiation)
     elif pk is not None:
         if C.anode_key(pk[0]) == dk:
-            res['lam'] = ('ok', 'anode %s matches PDF powder radiation' % d.radiation)
+            res['lam'] = ('ok', 'anode %s matches .pdf powder radiation' % d.radiation)
         else:
-            res['lam'] = ('flag', 'docx anode %s but PDF POWDER radiation is %sKα'
+            res['lam'] = ('flag', 'docx anode %s but .pdf POWDER radiation is %sKα'
                           % (d.radiation, pk[0].capitalize()))
         if pk[1] and d.lam and not C.close(float(pk[1]), C.num_val(d.lam), abstol=0.003):
             res['lam'] = (res['lam'][0], res['lam'][1] + ' (λ docx=%s pdf=%s)' % (d.lam, pk[1]))
     elif any_match:
-        res['lam'] = ('verify', 'anode %s appears in PDF but no clear powder-context radiation found' % d.radiation)
+        res['lam'] = ('verify', 'anode %s appears in .pdf but no clear powder-context radiation found' % d.radiation)
     else:
         anodes = sorted(set(r[0].capitalize() + 'Kα' for r in rads)) or ['(none found)']
-        res['lam'] = ('flag', 'docx anode %s NOT found in PDF; PDF mentions: %s'
+        res['lam'] = ('flag', 'docx anode %s NOT found in .pdf; .pdf mentions: %s'
                       % (d.radiation, ', '.join(anodes)))
     # For a CALCULATED pattern the docx anode/λ is the modelling wavelength and
     # legitimately differs from the experimental radiation in the article
@@ -440,15 +440,15 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None):
             col = PARAM_COL.get(lab)
             cell = ac_row.cells[col] if (col is not None and col < len(ac_row.cells)) else ac_row.cells[0]
             _highlight(cell)
-            text = _tidy('PXRD check — %s: likely transcription error — docx=%s but PDF cell gives %s '
+            text = _tidy('PXRD check — %s: likely transcription error — docx=%s but .pdf cell gives %s '
                          '(Δ=%.4f Å); the other axes match exactly.' % (lab, dv, nv, dd))
             doc.add_comment(_cell_runs(cell) or _cell_runs(ac_row.cells[0]),
                             text=text, author=AUTHOR, initials=INITIALS)
             rec['highlights'].append("Author's Cell:%s" % lab)
             rec['comments'].append(text)
         else:
-            text = ('No exact cell match — closest PDF cell differs on %s; it may be a different '
-                    'phase/cell in a multi-cell PDF (the matching cell may be unparsed).'
+            text = ('No exact cell match — closest .pdf cell differs on %s; it may be a different '
+                    'phase/cell in a multi-cell .pdf (the matching cell may be unparsed).'
                     % ', '.join(t[0] for t in out_axes))
             doc.add_comment(_cell_runs(ac_row.cells[0]), text=text, author=AUTHOR, initials=INITIALS)
             rec['comments'].append(text)

@@ -80,7 +80,7 @@ CASES = [
  # --- classification (docx already names the group) ---
  ("I003657 no classification comment",    lambda: not extras('I003657', 'classification', 'info')),
  # --- precision check names the esd to add ---
- ("I003566 names esd to add",      lambda: bool(extras('I003566', 'precision', substr='PDF gives'))),
+ ("I003566 names esd to add",      lambda: bool(extras('I003566', 'precision', substr='.pdf gives'))),
  # --- analysis field ---
  ("I003510 misplaced-analysis flag",  lambda: bool(extras('I003510', 'analysis', substr='moved'))),
  # --- density check is deregistered (never fires) ---
@@ -94,7 +94,7 @@ CASES = [
  ("I003600 blank anode -> derive Sync (synch λ)", lambda: bool(extras('I003600', 'instr_vocab', substr='set the anode to Sync'))),
  ("I003246 no blank-field flag",             lambda: not extras('I003246', 'instr_vocab', substr='blank')),
  # --- 17. PDF monochromator/β-filter -> fill blank Filter (powder-context only) ---
- ("I003747 PDF graphite mono (powder)",      lambda: bool(extras('I003747', 'instr_filter', substr='graphite'))),
+ ("I003747 .pdf graphite mono (powder)",      lambda: bool(extras('I003747', 'instr_filter', substr='graphite'))),
  ("I003745 SC mono NOT attributed",          lambda: not extras('I003745', 'instr_filter')),
  ("I003566 SC mono NOT attributed",          lambda: not extras('I003566', 'instr_filter')),
  # --- 19. Intensity Type follows the detector (area→Integrated, BB→Peak) ---
