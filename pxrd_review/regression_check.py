@@ -118,6 +118,10 @@ CASES = [
  ("I003511 NO IMA flag (reinvest.)",    lambda: not extras('I003511', 'ima')),
  # --- classification (docx already names the group) ---
  ("I003657 no classification comment",    lambda: not extras('I003657', 'classification', 'info')),
+ # --- 3. structure relation: don't restate a docx Structure comment; DO check when the
+ #     .pdf asserts a relation and the docx has none ---
+ ("I003416 no Structure-comment noise (docx already has it)", lambda: not extras('I003416', 'classification', substr='structure')),
+ ("I003246 checks missing Structure comment (.pdf isostructural)", lambda: bool(extras('I003246', 'classification', substr='no Structure'))),
  # --- precision check names the esd to add ---
  ("I003566 names esd to add",      lambda: bool(extras('I003566', 'precision', substr='.pdf gives'))),
  # --- analysis field ---

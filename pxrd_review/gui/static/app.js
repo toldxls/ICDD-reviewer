@@ -13,6 +13,8 @@ const S = {
   pdfTerms: [],
   pdfMode: 'page',    // 'page' = scrollable full pages | 'region' = zoomed crop around the hit
   pdfZoom: 1,         // display scale of whatever is shown
+  lookStep: {},       // per-finding '? look' cycle index (findings with ordered look-groups)
+  lookLabel: '',      // label of the current '? look' target (shown in the region pager)
   focusKey: null,     // the finding currently driving the PDF pane
   pdfIO: null,        // IntersectionObserver for lazy page loading + current-page tracking
   pdfRatios: {},      // page -> visible ratio (to pick the current page)
@@ -83,6 +85,7 @@ async function openEntry(key) {
   const r = await fetch('/api/entry/' + encodeURIComponent(key)).then(x => x.json());
   S.a = r.analysis;
   S.t = normalizeTriage(r.triage);
+  S.lookStep = {};            // reset '? look' cycles for the new entry
   $('#empty').classList.add('hidden');
   $('#entry').classList.remove('hidden');
   renderHead();
@@ -253,8 +256,30 @@ function triageControls(fkey, t) {
     mk('dismiss', '✗ dismiss'), mk('look', '? look'), note);
 }
 
-// the PDF search terms + snippet for a given finding
-function termsFor(fkey) {
+// Some findings have no number/keyword in their message to search, but the reviewer
+// still wants to land on the evidence. Return ORDERED groups of search terms; repeated
+// '? look' clicks cycle through them. null = use the default term logic below.
+function lookGroups(f) {
+  if (!f) return null;
+  // chemical-analysis findings: the evidence is the docx Analysis string (oxide wt%
+  // values) — those exact numbers appear in the paper's EPMA/EDS table, so they pinpoint
+  // it. Second click -> the 'Chemical composition' prose.
+  if (f.code === 'ideal_formula' || f.code === 'analysis' || f.code === 'mindat_chem') {
+    const nums = (f.evidence || '').match(/\d+\.\d{1,3}/g) || [];
+    const table = nums.length ? [...new Set(nums)].slice(0, 8)
+                              : ['wt.%', 'apfu', 'Range', 'Mean', 'Total', 'Probe'];
+    return [
+      { label: 'EPMA / analysis table', terms: table },
+      { label: 'chemical-composition text', terms: ['Chemical composition', 'Chemical analysis',
+        'Chemical Data', 'electron microprobe', 'microprobe', 'EPMA', 'EDS', 'WDS'] },
+    ];
+  }
+  return null;
+}
+
+// the PDF search terms + snippet for a given finding. `step` selects the look-group
+// for findings that cycle (see lookGroups); it is ignored otherwise.
+function termsFor(fkey, step = 0) {
   const a = S.a;
   let terms = [], snippet = '', label = '', page = (a.pdf ? a.pdf.evidence_page || 0 : 0);
   if (fkey === 'cell' || fkey.startsWith('param:')) {
@@ -266,7 +291,11 @@ function termsFor(fkey) {
   } else if (fkey.startsWith('f')) {
     const f = a.findings[parseInt(fkey.slice(1), 10)];
     if (f) {
-      if (f.code === 'indexing' && a.entry && (a.entry.refl_d || []).length) {
+      const groups = lookGroups(f);
+      if (groups) {
+        const g = groups[((step % groups.length) + groups.length) % groups.length];
+        terms = g.terms; label = g.label;
+      } else if (f.code === 'indexing' && a.entry && (a.entry.refl_d || []).length) {
         // the reflection d-spacings cluster in the paper's powder table -> frame it
         terms = a.entry.refl_d;
       } else {
@@ -307,8 +336,11 @@ function focusFinding(fkey) {
 // page where they CLUSTER (the powder table) and let the region crop expand to it.
 async function zoomToHighlight(fkey) {
   S.focusKey = fkey;
-  const t = termsFor(fkey);
+  const step = S.lookStep[fkey] || 0;
+  const t = termsFor(fkey, step);
   if (!S.a.pdf || !t.terms.length) { focusFinding(fkey); return; }   // nothing to locate
+  S.lookStep[fkey] = step + 1;       // next click cycles to the next look-group (if any)
+  S.lookLabel = t.label || '';
   let page = t.page;
   try {
     const probe = t.terms.slice(0, 8);
@@ -405,8 +437,16 @@ function scrollToPage(i) {
 function renderPager() {
   const a = S.a, p = $('#pdf-pager'); p.innerHTML = '';
   if (S.pdfMode === 'region') {
-    p.append(el('span', { class: 'muted' }, 'highlight crop · '),
+    const crop = S.lookLabel ? 'crop: ' + S.lookLabel + ' · ' : 'highlight crop · ';
+    p.append(el('span', { class: 'muted' }, crop),
       el('button', { onclick: () => { S.pdfMode = 'page'; S.pdfZoom = 1; renderPdf(undefined); } }, 'full page'));
+    // hint that another '? look' cycles to the next target (multi-group findings only)
+    const f = S.focusKey && S.focusKey.startsWith('f') ? S.a.findings[parseInt(S.focusKey.slice(1), 10)] : null;
+    const g = lookGroups(f);
+    if (g && g.length > 1) {
+      const next = g[(S.lookStep[S.focusKey] || 0) % g.length].label;
+      p.append(el('span', { class: 'muted' }, ' · ? look → ' + next));
+    }
     return;
   }
   p.append(
@@ -440,11 +480,23 @@ async function pdfSearch(q) {
 function renderDocx() {
   const a = S.a, body = $('#docx-body'); body.innerHTML = '';
   const ac = a.docx.authors_cell || [];
-  body.append(el('div', { class: 'sub' }, "Author's cell (docx)"));
-  body.append(cellGrid(ac, a.params, a.cell.deltas));
+  // green = the docx axis value matches the .pdf cell, red = it differs (a/b/c via the
+  // match tolerance; angles by direct compare). Only when a .pdf cell was actually matched.
+  let cmp = null;
+  if (a.cell.matched) {
+    cmp = {};
+    for (const d of (a.cell.deltas || [])) cmp[d[0]] = !!d[4];        // a, b, c : within tolerance?
+    const m = a.cell.matched;
+    for (const [ax, dv, pv] of [['α', ac[3], m.al], ['β', ac[4], m.be], ['γ', ac[5], m.ga]]) {
+      const x = parseFloat(dv), y = parseFloat(pv);
+      if (isFinite(x) && isFinite(y)) cmp[ax] = Math.abs(x - y) <= 0.1;
+    }
+  }
+  body.append(el('div', { class: 'sub' }, 'DOCX cell'));
+  body.append(cellGrid(ac, a.params, a.cell.deltas, cmp));
   if (a.cell.matched) {
     const m = a.cell.matched;
-    body.append(el('div', { class: 'sub' }, '.pdf matched cell — ' + (a.cell.provenance || m.context || '?') + (m.phase ? ' · ' + m.phase : '')));
+    body.append(el('div', { class: 'sub' }, 'Cell from PDF' + (m.phase ? ' · ' + m.phase : '')));
     body.append(cellGrid([m.a, m.b, m.c, m.al, m.be, m.ga, '', m.Z], {}, []));
   }
 
@@ -478,14 +530,15 @@ function renderDocx() {
 }
 
 const AXES = ['a', 'b', 'c', 'α', 'β', 'γ', 'SG', 'Z'];   // laid out 3-per-row: abc / αβγ / SG Z
-function cellGrid(vals, params, deltas) {
-  params = params || {}; deltas = deltas || [];
+function cellGrid(vals, params, deltas, cmp) {
+  params = params || {}; deltas = deltas || []; cmp = cmp || null;
   const dmap = {}; for (const [lab, , , dd, ok] of deltas) dmap[lab] = { dd, ok };
   vals = vals.slice(0, 8);
   const g = el('div', { class: 'cellgrid' });
   for (let i = 0; i < 8; i++) {
     const ax = AXES[i]; let cls = 'cellcell';
-    if (params[ax]) cls += ' bad';
+    if (cmp && ax in cmp) cls += cmp[ax] ? ' ok' : ' miss';   // green = matches .pdf cell, red = differs
+    else if (params[ax]) cls += ' bad';
     else if (dmap[ax] && dmap[ax].ok && dmap[ax].dd > 0.002 && dmap[ax].dd <= 0.004) cls += ' near';
     const v = esc(vals[i]) || '—';                // em dash = not reported (vs a stray dot)
     g.append(el('div', { class: cls, title: ax + ' = ' + v },
@@ -497,8 +550,18 @@ function cellGrid(vals, params, deltas) {
 function kvTable(pairs) {
   const t = el('table', { class: 'kv' });
   for (const [k, v] of pairs)
-    t.append(el('tr', {}, el('td', { class: 'k' }, esc(k)), el('td', {}, esc(v))));
+    t.append(el('tr', {}, el('td', { class: 'k' }, esc(k)),
+                          el('td', {}, (v && v.nodeType) ? v : esc(v))));   // allow a DOM node value (e.g. a formatted formula)
   return t;
+}
+
+// Render a chemical formula's <sub>/<sup> markup (Mindat ima_formula) as a node —
+// sanitised: only those two tags pass through, everything else stays literal text.
+function fmtFormula(s) {
+  const span = el('span', { class: 'formula' });
+  span.textContent = s || '';                                   // escapes < > & to entities
+  span.innerHTML = span.innerHTML.replace(/&lt;(\/?)(sub|sup)&gt;/gi, '<$1$2>');
+  return span;
 }
 
 // ---- mindat / cross-source pane -------------------------------------------
@@ -517,7 +580,7 @@ function renderMindat() {
     const kv = [];
     if (M.sorted && M.sorted.length) kv.push(['sorted axes', M.sorted.map(x => (+x).toFixed(3)).join(', ')]);
     if (M.sg) kv.push(['SG (IT no.)', M.sg]);
-    if (M.formula) kv.push(['IMA formula', M.formula]);
+    if (M.formula) kv.push(['IMA formula', fmtFormula(M.formula)]);
     if (M.group) kv.push(['group', M.group]);
     if (M.ima_status) kv.push(['IMA status', M.ima_status]);
     if (M.elements && M.elements.length) kv.push(['elements', M.elements.join(' ')]);

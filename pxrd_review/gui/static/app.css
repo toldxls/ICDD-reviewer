@@ -277,4 +277,8 @@ table.kv td.k { color: var(--muted); white-space: nowrap; width: 1%; }
 .cellcell .cv { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cellcell.bad  { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
 .cellcell.near { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+/* DOCX cell vs the .pdf cell: green = value matches, red = value differs */
+.cellcell.ok   { background: color-mix(in srgb, var(--ok) 18%, transparent);     color: var(--ok); }
+.cellcell.miss { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
+.formula sub, .formula sup { font-size: .75em; }
 .note-line { margin: 6px 10px; font-size: .85em; color: var(--warn); }

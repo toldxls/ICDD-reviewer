@@ -384,12 +384,10 @@ def _docx_group_text(e):
 
 def check3_classification(e, text):
     out = []
-    # the author often already filled Structure/Isomorphism/Polymorphism — surface it
-    for code in ('Structure', 'Isomorphism', 'Polymorphism'):
-        v = e.comments.get(code)
-        if v:
-            out.append(Finding('classification', 'info',
-                       "docx %s comment present: %s" % (code, v[:120]), None))
+    # A docx Structure/Isomorphism/Polymorphism comment is the CORRECT state, not
+    # something to surface — restating it was noise. The actionable case (the paper
+    # asserts a structural relation but the docx records none) is checked from the
+    # .pdf below.
 
     # AUTHORITATIVE: Mindat group membership (a mineral's groupid → group name).
     # Replaces guessing from prose. Cross-checks the docx Strunz-mindat field.
@@ -429,17 +427,26 @@ def check3_classification(e, text):
     except Exception as ex:
         out.append(Finding('classification', 'note', 'mindat lookup skipped: %s' % ex, None))
 
-    # PDF corroboration. Structural-RELATION statements ('isostructural with X')
-    # are a comparison Mindat's groupid does NOT encode, so always surface them.
+    # Structural RELATION — the actionable gap. ICDD entries should carry a Structure/
+    # Isomorphism/Polymorphism comment when the paper asserts an obvious structural
+    # relationship. Surface a CHECK only when the .pdf states one AND the docx records
+    # NONE (a docx that already has such a comment is correct — say nothing).
     if text:
         flat = re.sub(r'\s+', ' ', text)
         seen = set()
-        for m in re.finditer(r'\b(isostructural|isotypic|homeotypic|isomorphous) with ([A-Z][a-z]{3,})', flat):
-            frag = m.group(0)
-            if frag.lower() in seen: continue
-            seen.add(frag.lower())
-            out.append(Finding('classification', 'note', ".pdf structural relation: '%s'." % frag, None))
-            if len(seen) >= 3: break
+        has_struct = any((e.comments.get(c) or '').strip()
+                         for c in ('Structure', 'Isomorphism', 'Polymorphism'))
+        if not has_struct:
+            import unicodedata
+            norm = unicodedata.normalize('NFC', flat)   # compose split diacritics (jo¨rg -> jörg)
+            rel = re.search(r'\b(isostructural|isotypic|homeotypic|isomorphous|structurally\s+related)'
+                            r'\s+(with|to)\s+(?:the\s+)?([A-Za-zÀ-ɏ]{4,})', norm, re.I)
+            if rel and _MINERALISH.search(rel.group(3)):
+                phrase = '%s %s %s' % (rel.group(1).lower(), rel.group(2).lower(), rel.group(3))
+                out.append(Finding('classification', 'info',
+                           "docx has no Structure/Isomorphism/Polymorphism comment, but the .pdf states "
+                           "'%s' — add a Structure comment recording the relationship." % phrase,
+                           rel.group(3)))   # evidence = the related mineral, so GUI '? look' can find the sentence
         # Named 'X group/family' prose is noisy (geological formations like 'Creek
         # group'), and Mindat already gives membership authoritatively — so only
         # fall back to it when Mindat did NOT find the species (a new/renamed
