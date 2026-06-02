@@ -78,6 +78,23 @@ CASES = [
  # Gandolfi/crystal-rotation on a single-crystal instrument); two anodes stay 'verify'
  ("I003562 lam OK (single MoKα source)",     lambda: lam_verdict('I003562') == 'ok'),
  ("I003521 lam 'verify' kept (two anodes)",  lambda: lam_verdict('I003521') == 'verify'),
+ # 'Sync' is a valid synchrotron designator (λ is beamline-tunable, matches no tube
+ # line) — OK, not 'unrec'/'docx anode not recognised'
+ ("I003599 lam OK (Sync synchrotron anode)", lambda: lam_verdict('I003599') == 'ok'),
+ ("I003554 lam OK (Sync synchrotron anode)", lambda: lam_verdict('I003554') == 'ok'),
+ # --- 1. geometry: a 'neutron'/ToF mention in a planned/future-work sentence must NOT
+ #     masquerade as the collection method; the real X-ray geometry is still found ---
+ ("I003599 no geometry 'neutron' grab (future-work)", lambda: not extras('I003599', 'geometry', substr='neutron')),
+ ("I003510 geometry keeps debye-scherrer (neutron in .pdf)", lambda: bool(extras('I003510', 'geometry', substr='debye-scherrer'))),
+ # --- instr_class: a diffractometer named in a POWDER sentence -> 'Other'/blank
+ #     Spacing/Intensity Instr. should be 'Diffractometer' (FLAG). Requires the powder
+ #     tie-in (a single-crystal-only instrument is not assumed) and skips Calculated. ---
+ ("I003414 Spacing Instr. -> Diffractometer flag",  lambda: bool(extras('I003414', 'instr_class', 'flag', 'Spacing Instr.'))),
+ ("I003414 Intensity Instr. -> Diffractometer flag", lambda: bool(extras('I003414', 'instr_class', 'flag', 'Intensity Instr.'))),
+ ("I003528 instr_class flag (powder on R-AXIS)",    lambda: bool(extras('I003528', 'instr_class', 'flag'))),
+ ("I003745 no instr_class flag (D8 single-crystal only)", lambda: not extras('I003745', 'instr_class')),
+ ("I003807 no instr_class flag (no powder instrument; 'expert' != Empyrean)", lambda: not extras('I003807', 'instr_class')),
+ ("I003246 no instr_class flag (already Diffractometer)", lambda: not extras('I003246', 'instr_class')),
  # --- 2. cell provenance: powder-refined cells must NOT be flagged 'from single-crystal' ---
  ("I003562 no cell_provenance (powder-refined)", lambda: not extras('I003562', 'cell_provenance')),
  ("I003599 no cell_provenance (ADP, not cell)",  lambda: not extras('I003599', 'cell_provenance')),
@@ -96,6 +113,10 @@ CASES = [
  ("I003747 clean (no rounding noise)",  lambda: not params('I003747')),
  ("I003698 clean (full-precision cell)", lambda: not params('I003698')),
  ("I003562 indexing flagged (>3%)",     lambda: bool(extras('I003562', 'indexing', 'flag'))),
+ # weak reflections (I<20) only flag at >5%: the I=16 line 4.1440 [3.2%] is dropped,
+ # the strong I=80 line 5.0790 [3.1%] is kept
+ ("I003562 indexing keeps strong 5.0790",  lambda: bool(extras('I003562', 'indexing', substr='5.0790'))),
+ ("I003562 indexing drops weak 4.1440",     lambda: not extras('I003562', 'indexing', substr='4.1440')),
  # --- optical sign (control-char glyphs must NOT be guessed) ---
  ("I003528 no optical-sign flag",       lambda: not extras('I003528', 'optical')),
  ("I003633 no optical-sign flag",       lambda: not extras('I003633', 'optical')),

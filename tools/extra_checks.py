@@ -203,6 +203,15 @@ GEOMETRY_KW = [
     'transmission geometry', 'reflection geometry', 'capillary',
     'time-of-flight', 'time of flight', 'neutron',
 ]
+# 'neutron' / 'time-of-flight' are RADIATION-TYPE methods, not X-ray powder
+# geometries. A stray mention of a *planned future* study ("…will require additional
+# data, such as powder neutron diffraction…") sits in a powder sentence and would
+# masquerade as the collection method. Only count one in an ACTUAL collection
+# statement (past-tense verb) that is not future/hypothetical.
+RADIATION_METHOD = {'time-of-flight', 'time of flight', 'neutron'}
+_COLLECTED = re.compile(r'\b(collect|measur|record|perform|obtain|acquir|gather|carried out)', re.I)
+_HYPOTHETICAL = re.compile(r'\b(will|would|could|should|future|propos|recommend|plan|'
+                           r'such as|requir|suggest|prospect|anticipat)', re.I)
 # Specific instruments the reviewer recognises; naming one helps confirm the
 # designators (the geometry still goes in a comment, not the Spacing Instr.).
 INSTRUMENTS = [
@@ -214,11 +223,17 @@ INSTRUMENTS = [
     ('Bruker D8',              r'\bd8\b|bruker\s+d8'),
     ('Bruker APEX/SMART',      r'\bapex\s*(?:ii|iii)?\b|\bsmart\b'),
     ('STOE (IPDS/Stadi)',      r'\bstoe\b|ipds|stadi'),
-    ('PANalytical Empyrean',   r'empyrean|x.?pert'),
+    # \b before X avoids matching 'eXPERT' (the word 'expert'); covers X'Pert/X-Pert/XPert
+    ('PANalytical Empyrean',   r'empyrean|\bx[’\'\- ]?pert'),
 ]
+# A POWDER-specific cue (NOT bare 'diffraction', which also opens single-crystal
+# sentences) — used to tie a named instrument to the POWDER pattern.
+_POW_INSTR_CTX = re.compile(r'\bpowder\b|pxrd|p-?xrd|gandolfi|debye[- ]?scherrer|guinier', re.I)
 def check1_geometry(e, text):
     out = []
     spac = (e.instr.get('spacing_instr') or '').strip()
+    iinstr = (e.instr.get('intensity_instr') or '').strip()
+    is_calc = spac.lower() == 'calculated'
     # PDF vocabulary — only count a geometry keyword when it shares a sentence
     # with a diffraction/powder term, so a stray 'neutron'/'capillary' mention in
     # a reference or unrelated method doesn't masquerade as the powder geometry.
@@ -229,13 +244,27 @@ def check1_geometry(e, text):
             if not re.search(r'powder|pxrd|diffract|rietveld|patter|camera', low):
                 continue
             for kw in GEOMETRY_KW:
-                if kw in low and kw.replace('–', '-') not in [f.replace('–', '-') for f in found]:
+                if kw not in low:
+                    continue
+                if kw in RADIATION_METHOD and (not _COLLECTED.search(low) or _HYPOTHETICAL.search(low)):
+                    continue                  # planned/future mention, not the method used
+                if kw.replace('–', '-') not in [f.replace('–', '-') for f in found]:
                     found.append(kw)
-    instrument = None
+    instrument = None               # recognised anywhere (soft confirm)
+    powder_instrument = None        # recognised in a POWDER-context sentence (confident)
     if text:
         for name, pat in INSTRUMENTS:
             if re.search(pat, text, re.I):
                 instrument = name
+                break
+        for s in _sentences(text):
+            if not _POW_INSTR_CTX.search(s):
+                continue
+            for name, pat in INSTRUMENTS:
+                if re.search(pat, s, re.I):
+                    powder_instrument = name
+                    break
+            if powder_instrument:
                 break
     if found:
         # the docx 'Spacing Instr.' is generic (Diffractometer/Film/Other); the
@@ -246,14 +275,37 @@ def check1_geometry(e, text):
                    "— consider annotating 'Powder data — %s'."
                    % (', '.join(found), instr_note, spac or '(blank)', found[0]),
                    None))
-    elif instrument:
-        out.append(Finding('geometry', 'info',
-                   ".pdf instrument: %s (docx Spacing Instr. = %r) — confirm the geometry/designators."
-                   % (instrument, spac or '(blank)'), None))
-    elif spac in ('', 'Other'):
-        out.append(Finding('geometry', 'note',
-                   "Spacing Instr. = %r and no named geometry found in .pdf — set the method."
-                   % (spac or '(blank)'), None))
+    # Spacing/Intensity Instr. FIELD value: a recognised diffractometer named in a
+    # POWDER-context sentence is high-confidence that the pattern was collected on a
+    # diffractometer, so 'Other'/blank should be 'Diffractometer' (FLAG → highlight +
+    # suggest). The curated INSTRUMENTS are all diffractometers; the corrected corpus
+    # is near-unanimous (R-AXIS RAPID II, D8, Empyrean… → 'Diffractometer'). Skip
+    # CALCULATED patterns (no collection instrument) and require the powder tie-in so a
+    # single-crystal-only instrument (e.g. a D8 Venture used for SC-XRD) is NOT assumed.
+    field_flagged = False
+    if powder_instrument and not is_calc:
+        if spac.lower() in ('', 'other'):
+            out.append(Finding('instr_class', 'flag',
+                       "Spacing Instr. = %r, but the .pdf states the powder pattern was collected on a "
+                       "%s (a diffractometer) — set Spacing Instr. to 'Diffractometer'."
+                       % (spac or '(blank)', powder_instrument), None, 'spacing_instr'))
+            field_flagged = True
+        if iinstr.lower() in ('', 'other'):
+            out.append(Finding('instr_class', 'flag',
+                       "Intensity Instr. = %r, but the powder pattern was collected on a "
+                       "%s (a diffractometer) — set Intensity Instr. to 'Diffractometer'."
+                       % (iinstr or '(blank)', powder_instrument), None, 'intensity_instr'))
+            field_flagged = True
+    # soft fallbacks (only when nothing more specific was said above)
+    if not found and not field_flagged:
+        if instrument:
+            out.append(Finding('geometry', 'info',
+                       ".pdf instrument: %s (docx Spacing Instr. = %r) — confirm the geometry/designators."
+                       % (instrument, spac or '(blank)'), None))
+        elif spac in ('', 'Other'):
+            out.append(Finding('geometry', 'note',
+                       "Spacing Instr. = %r and no named geometry found in .pdf — set the method."
+                       % (spac or '(blank)'), None))
     return out
 
 # ----------------------------------------------------------------------------- 2. cell not refined from powder
@@ -705,12 +757,17 @@ def check9_indexing(e, text):
         if ds2 <= 0: continue
         d_calc = 1 / math.sqrt(ds2)
         rel = abs(d_calc - dv) / dv
-        if rel > 0.03:                       # >3% off — significant d-spacing discrepancy
+        # Weak reflections (relative intensity <20) are low-leverage and noisier, so a
+        # small d-spacing discrepancy there isn't worth flagging — require >5% for them;
+        # strong (or unknown-intensity) lines keep the >3% bar.
+        Iv = _val(I)
+        thresh = 0.05 if (Iv is not None and Iv < 20) else 0.03
+        if rel > thresh:
             bad.append((d, '%d%d%d' % (hi, ki, li), round(d_calc, 4), round(rel*100, 1)))
     if bad:
         worst = sorted(bad, key=lambda x: -x[3])[:5]
-        msg = ("%d of %d indexed reflections disagree with the stated cell by >3%% "
-               "(d_obs vs d_calc): %s" % (len(bad), n_checked,
+        msg = ("%d of %d indexed reflections disagree with the stated cell "
+               "(d_obs vs d_calc; >3%%, or >5%% for weak lines I<20): %s" % (len(bad), n_checked,
                '; '.join('%s (hkl %s)→%.4f [%.1f%%]' % (d, hkl, dc, p) for d, hkl, dc, p in worst)))
         large_esd = []
         for k in ('a', 'b', 'c'):
@@ -1704,7 +1761,10 @@ def check18_name_formula(e, text):
 # mis-attributed.) This is the reviewer's single most frequent comment.
 # 'Guinier' is also a common author surname (André Guinier) — require camera/method
 # context so a "Guinier et al." citation isn't read as the diffraction method.
-AREA_DETECTOR  = r'image[- ]?plate|imaging plate|gandolfi|r-?axis\s*rapid|curved imaging'
+AREA_DETECTOR  = (r'image[- ]?plate|imaging plate|gandolfi|r-?axis\s*rapid|curved imaging'
+                  # modern 2D / area detectors — a PXRD pattern from one is Integrated
+                  r'|pixel[- ]?array|hybrid[- ]?photon|photon[- ]?counting|pilatus|eiger|dectris'
+                  r'|\bccd\b|\bcmos\b|area detector|2d detector')
 GUINIER_CAMERA = r'guinier[\s-]?(?:camera|geometry|focusing|method|film|image|de[\s-]?wolff)'
 BRAGG_BRENTANO = r'bragg[\s–-]?brentano'
 
@@ -1720,22 +1780,24 @@ def check19_intensity_detector(e, text):
     if (e.instr.get('spacing_instr') or '').strip().lower() == 'calculated' or \
        (e.instr.get('intensity_instr') or '').strip().lower() == 'calculated':
         return out
-    area = bb = False
+    area_kw = bb_kw = None                       # remember the matched phrase (for the GUI zoom)
     for s in _sentences(text):
         if not _POWDER_CTX.search(s):
             continue
-        if re.search(AREA_DETECTOR, s, re.I) or re.search(GUINIER_CAMERA, s, re.I):
-            area = True
-        if re.search(BRAGG_BRENTANO, s, re.I):
-            bb = True
-    if area and not bb and it.lower() == 'peak':
+        m = re.search(AREA_DETECTOR, s, re.I) or re.search(GUINIER_CAMERA, s, re.I)
+        if m:
+            area_kw = area_kw or m.group(0)
+        mb = re.search(BRAGG_BRENTANO, s, re.I)
+        if mb:
+            bb_kw = bb_kw or mb.group(0)
+    if area_kw and not bb_kw and it.lower() == 'peak':
         out.append(Finding('intensity_type', 'flag',
-                   ".pdf describes a digital area detector, so Intensity Type should be "
-                   "Integrated, not Peak.", None, 'instr'))
-    elif bb and not area and it.lower() == 'integrated':
+                   ".pdf describes an area detector (%s), so Intensity Type should be "
+                   "Integrated, not Peak." % area_kw, area_kw, 'instr'))
+    elif bb_kw and not area_kw and it.lower() == 'integrated':
         out.append(Finding('intensity_type', 'flag',
                    ".pdf describes Bragg-Brentano geometry, so Intensity Type should be "
-                   "Peak, not Integrated.", None, 'instr'))
+                   "Peak, not Integrated.", bb_kw, 'instr'))
     return out
 
 # --- 20. calculated pattern must document its wavelength --------------------

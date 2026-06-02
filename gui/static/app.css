@@ -197,11 +197,15 @@ input[type=range] { accent-color: var(--accent); }
 
 /* collapsed panes */
 .pane.collapsed .pane-body, .pane.collapsed .pdf-search, .pane.collapsed #pdf-view, .pane.collapsed .snippet { display: none; }
-.pane[data-collapse="col"].collapsed { flex: 0 0 32px; }
-.pane[data-collapse="col"].collapsed .pane-title { writing-mode: vertical-rl; height: 100%; border-bottom: none; border-right: 1px solid var(--line); justify-content: flex-start; }
-.pane[data-collapse="col"].collapsed .collapse { writing-mode: horizontal-tb; }
-.pane[data-collapse="row"].collapsed { flex: 0 0 auto; }
-.pane.collapsed .collapse { transform: rotate(-90deg); }
+/* collapsed COLUMN pane -> a thin spine with just an expand chevron (no rotated text).
+   !important beats the #findings/#rightcol ID flex rules (ID > class specificity). */
+.pane[data-collapse="col"].collapsed { flex: 0 0 28px !important; }
+.pane[data-collapse="col"].collapsed .pane-title { flex-direction: column; align-items: center; justify-content: flex-start; height: 100%; padding: 8px 0; border-bottom: none; border-right: 1px solid var(--line); }
+.pane[data-collapse="col"].collapsed .pane-title > :not(.collapse) { display: none; }
+/* collapsed STACKED pane -> just its (horizontal) title bar */
+.pane[data-collapse="row"].collapsed { flex: 0 0 auto !important; }
+.pane.collapsed .collapse { transform: rotate(-90deg); font-size: 1.1em; }
+.pane.collapsed .collapse:hover { color: var(--accent); }
 
 /* findings */
 #findings-body { padding: 8px; }
@@ -228,9 +232,9 @@ input[type=range] { accent-color: var(--accent); }
 .f-anchor { font-size: .8em; color: var(--muted); margin-top: 3px; }
 .triage { margin-top: 7px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .tbtn { padding: 2px 8px; font-size: .85em; border-radius: 5px; }
-.tbtn.on.confirm { background: color-mix(in srgb, var(--ok) 16%, transparent); border-color: var(--ok); color: var(--ok); }
-.tbtn.on.dismiss { background: rgb(255 255 255 / .06); border-color: var(--muted); color: var(--muted); }
-.tbtn.on.look { background: color-mix(in srgb, var(--warn) 16%, transparent); border-color: var(--warn); color: var(--warn); }
+.tbtn.on.confirm { background: color-mix(in srgb, var(--ok) 18%, transparent); border-color: var(--ok); color: var(--ok); }
+.tbtn.on.dismiss { background: color-mix(in srgb, var(--warn) 30%, transparent); border-color: var(--warn); color: var(--warn); font-weight: 700; }
+.tbtn.on.look { background: rgb(var(--accent-rgb) / .22); border-color: var(--accent); color: var(--accent); }
 .tnote { flex: 1; min-width: 110px; font-size: .85em; padding: 2px 6px; }
 
 /* pdf */
@@ -265,9 +269,12 @@ table.kv td.k { color: var(--muted); white-space: nowrap; width: 1%; }
   border-bottom: 1px solid var(--line);
 }
 .pane-body > .sub:first-child { margin-top: 0; }
-.cellgrid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 1px; margin: 6px 10px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
-.cellgrid div { background: rgb(255 255 255 / .03); padding: 3px 4px; font-size: .85em; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cellgrid .hdr { color: var(--muted); background: rgb(255 255 255 / .06); }
-.cellgrid .bad { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
-.cellgrid .near { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+/* a b c on one row, α β γ on the next, SG Z on the third — wider cells so values
+   (e.g. 9.1153(3)) are not truncated */
+.cellgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 6px 10px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--line); }
+.cellcell { background: rgb(255 255 255 / .03); padding: 3px 8px; display: flex; gap: 6px; align-items: baseline; font-size: .9em; min-width: 0; }
+.cellcell .cl { color: var(--muted); flex: none; }
+.cellcell .cv { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cellcell.bad  { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
+.cellcell.near { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
 .note-line { margin: 6px 10px; font-size: .85em; color: var(--warn); }

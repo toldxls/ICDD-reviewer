@@ -1,0 +1,27 @@
+PXRD review tool — third-party dependency notices
+==================================================
+
+This project is licensed under the MIT License (see LICENSE). It depends on the
+following third-party packages, which carry their own licenses. They are NOT
+bundled with this repository; they are installed separately via pip
+(see requirements.txt).
+
+  python-docx   MIT
+  lxml          BSD-3-Clause
+  Flask         BSD-3-Clause   (optional — review-mode GUI only)
+  certifi       MPL-2.0        (optional — CA certs for the Mindat API)
+
+  PyMuPDF       AGPL-3.0 OR commercial (Artifex)   <-- read this
+
+PyMuPDF (imported as `fitz`) is used only in the PDF I/O layer: text extraction
+in tools/cell_lambda_check.py and page rendering in gui/review_gui.py.
+
+  - Private/personal use and local single-user runs trigger NO AGPL obligations.
+  - DISTRIBUTING a combined work, or offering it to users OVER A NETWORK
+    (AGPL-3.0 sec. 13), brings the AGPL source-availability obligations into play
+    for the PyMuPDF portion. A proprietary/commercial product therefore needs
+    either (a) Artifex's commercial PyMuPDF license, or (b) a swap to a
+    permissively-licensed renderer (e.g. pypdfium2, Apache/BSD-style), which the
+    isolated PDF layer makes a contained change.
+
+This notice is informational, not legal advice.

@@ -154,7 +154,8 @@ def _norm_pdf(s):
 
 def pdf_text(path):
     import fitz
-    return _norm_pdf('\n'.join(p.get_text() for p in fitz.open(path)))
+    with fitz.open(path) as doc:                  # close the handle (was leaked)
+        return _norm_pdf('\n'.join(p.get_text() for p in doc))
 
 # `phase` tags a cell with the mineral name it sits under (multi-phase papers list
 # several cells; the phase name disambiguates which belongs to the entry under
@@ -451,6 +452,19 @@ def anode_key(s):
     for k in ANODE_LAMBDA:
         if k in s: return k
     return None
+
+# 'Sync' is a valid ICDD radiation designator (synchrotron). Its λ is beamline-
+# tunable, so it matches no characteristic tube line and anode_key() returns None —
+# but that's correct, not "unrecognised". Recognise it so the λ check stays quiet.
+_SYNC_ANODE = re.compile(r'\bsync(?:hrotron)?\b', re.I)
+def is_sync_anode(s):
+    return bool(s and _SYNC_ANODE.search(s))
+
+_SYNCHROTRON_CUE = re.compile(
+    r'synchrotron|beamline|\bSR-?(?:PXD|XRD|PD)\b|\bESRF\b|\bALBA\b|\bAPS\b|'
+    r'diamond light|spring-?8|\bDESY\b|\bELETTRA\b|petra\s*iii', re.I)
+def pdf_mentions_synchrotron(text):
+    return bool(text and _SYNCHROTRON_CUE.search(text))
 
 def find_radiation(text):
     flat = re.sub(r'\s+', ' ', text)
@@ -767,7 +781,12 @@ def report(docx_path, pdf_path):
     any_match = any(anode_key(r[0]) == dk for r in rads)
     pk = powder_rads[0] if powder_rads else None
     if dk is None:
-        print('  λ     : docx anode not recognised (%s)' % d.radiation)
+        if is_sync_anode(d.radiation):
+            conf = ' (.pdf confirms synchrotron)' if pdf_mentions_synchrotron(text) else ''
+            print('  λ     : ✓ docx anode %s — synchrotron radiation; λ is beamline-specific%s'
+                  % (d.radiation, conf))
+        else:
+            print('  λ     : docx anode not recognised (%s)' % d.radiation)
     elif pk is not None:
         if anode_key(pk[0]) == dk:
             print('  λ     : ✓ docx anode %s matches .pdf POWDER radiation' % d.radiation)

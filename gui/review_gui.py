@@ -29,7 +29,7 @@ browser only ever sends an entry KEY that the server maps to a file it indexed a
 startup — no raw paths from the page, so no path traversal. No data leaves the
 machine.
 """
-import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess
+import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess, hashlib
 
 # --- repo layout: make the sibling code dirs importable by bare name -----------
 import os as _o, sys as _s
@@ -103,19 +103,29 @@ def _pdf_path(key):
     eid = C.entry_id(STATE['docx'].get(key, '')) if key in STATE['docx'] else None
     return STATE['pdf'].get(eid) if eid else None
 
+def _dval(s):
+    """A reflection d-spacing as a robust PDF-search token: the mantissa with
+    trailing zeros stripped ('4.1440' -> '4.144'), so it substring-matches both
+    '4.144' and '4.1440' in the paper's powder table. None if too short to be
+    distinctive."""
+    m = re.match(r'\s*(\d+\.\d{2,})', s or '')
+    if not m:
+        return None
+    v = m.group(1).rstrip('0').rstrip('.')
+    return v if len(v) >= 4 else None        # e.g. keep '4.14'+; drop '5.' / '12'
+
 def _pdf_scan(pdf_path, terms):
     """(n_pages, best_evidence_page) — the page with the most hits for `terms`."""
     import fitz
     best_pg, best_hits, n = 0, -1, 0
     try:
-        doc = fitz.open(pdf_path)
-        n = doc.page_count
-        if terms:
-            for i in range(n):
-                hits = sum(len(doc[i].search_for(t)) for t in terms)
-                if hits > best_hits:
-                    best_hits, best_pg = hits, i
-        doc.close()
+        with fitz.open(pdf_path) as doc:          # close even if search_for throws
+            n = doc.page_count
+            if terms:
+                for i in range(n):
+                    hits = sum(len(doc[i].search_for(t)) for t in terms)
+                    if hits > best_hits:
+                        best_hits, best_pg = hits, i
     except Exception:
         pass
     return n, (best_pg if best_hits > 0 else 0)
@@ -194,7 +204,8 @@ def _serialize(key):
     writable = {id(f) for f in A._writable_extras(res)}
     findings = [{'idx': i, 'code': f.code, 'sev': f.sev, 'anchor': f.anchor,
                  'msg': _u(f.msg), 'written': id(f) in writable,
-                 'major': f.code not in LOW_PRIORITY_CODES}
+                 'major': f.code not in LOW_PRIORITY_CODES,
+                 'evidence': _u(f.evidence) if f.evidence else None}   # short keyword -> GUI 'look' zoom
                 for i, f in enumerate(res.get('extra', []))]
 
     ent = None
@@ -204,7 +215,10 @@ def _serialize(key):
                'cell': entry.cell, 'instr': entry.instr,
                'formulas': {k: _u(v) for k, v in entry.formulas.items()},
                'comments': {k: _u(v) for k, v in entry.comments.items()},
-               'subfiles': entry.subfiles, 'refl_count': len(entry.refl)}
+               'subfiles': entry.subfiles, 'refl_count': len(entry.refl),
+               # d-spacings of the reflection list — search tokens to locate the
+               # paper's powder table (used by the indexing finding's "? look")
+               'refl_d': [d for d in (_dval(r[0]) for r in entry.refl) if d][:24]}
 
     # Always show the natural-species Mindat record; the UI notes that for a
     # synthetic the tool deliberately skips the Mindat CELL compare (the formula
@@ -214,6 +228,14 @@ def _serialize(key):
     pdfinfo = None
     if pdf:
         terms = _value_terms(d.authors_cell)
+        # also highlight the MATCHED .pdf cell's own a/b/c — for an INVESTIGATE the
+        # docx value is a transcription error absent from the paper (e.g. nigelcookite
+        # b=12.2770), so the deviant axis only shows if we search the .pdf value (12.2377).
+        if cd is not None:
+            for x in (cd.a, cd.b, cd.c):
+                t = _mantissa(x)
+                if t and t not in terms:
+                    terms.append(t)
         npages, evp = _pdf_scan(pdf, terms)
         pdfinfo = {'name': os.path.basename(pdf), 'pages': npages,
                    'evidence_page': evp, 'terms': terms}
@@ -326,14 +348,25 @@ def _attention(badges):
     return sum(ATTENTION.get(x['level'], 0) for x in badges)
 
 # ------------------------------------------------------------------ cache
-# Bump when the serialized shape / badge logic changes, so a stale on-disk cache
-# (keyed only by source-file mtimes) is invalidated after a code change.
-CACHE_VERSION = 6
+# A hash of the analysis source files' mtimes — folded into every cache key so that
+# editing a check (or the serializer) AUTO-invalidates the on-disk cache. Replaces the
+# old manual 'bump CACHE_VERSION on every change' ritual (easy to forget → stale cache).
+def _code_fingerprint():
+    h = hashlib.md5()
+    for mod in (C, X, A, sys.modules[__name__]):
+        f = getattr(mod, '__file__', None)
+        try:
+            h.update(('%s:%d;' % (f, int(os.path.getmtime(f)))).encode())
+        except (OSError, TypeError):
+            pass
+    return h.hexdigest()[:12]
+
+CODE_FP = _code_fingerprint()
 
 def _fingerprint(key):
     path = STATE['docx'][key]; eid = C.entry_id(path)
     parts = [path, STATE['pdf'].get(eid), STATE['cif'].get(eid), STATE['dft'].get(eid)]
-    fp = [CACHE_VERSION]
+    fp = [CODE_FP]
     for p in parts:
         try:
             fp.append(int(os.path.getmtime(p)) if p else 0)
@@ -356,7 +389,7 @@ def _cache_path():
 
 def _load_cache():
     try:
-        with open(_cache_path()) as f:
+        with open(_cache_path(), encoding='utf-8') as f:
             STATE['cache'] = json.load(f)
     except Exception:
         STATE['cache'] = {}
@@ -364,7 +397,7 @@ def _load_cache():
 def _save_cache():
     try:
         os.makedirs(STATE['out_dir'], exist_ok=True)
-        with open(_cache_path(), 'w') as f:
+        with open(_cache_path(), 'w', encoding='utf-8') as f:
             json.dump(STATE['cache'], f)
     except Exception as ex:
         print('  !! could not write gui_cache.json: %s' % ex)
@@ -375,7 +408,7 @@ def _triage_path():
 
 def _load_triage():
     try:
-        with open(_triage_path()) as f:
+        with open(_triage_path(), encoding='utf-8') as f:
             STATE['triage'] = json.load(f)
     except Exception:
         STATE['triage'] = {}
@@ -383,7 +416,7 @@ def _load_triage():
 def _save_triage():
     with STATE['lock']:
         os.makedirs(STATE['out_dir'], exist_ok=True)
-        with open(_triage_path(), 'w') as f:
+        with open(_triage_path(), 'w', encoding='utf-8') as f:
             json.dump(STATE['triage'], f, indent=1)
 
 # ------------------------------------------------------------------ indexing / launch
@@ -428,6 +461,13 @@ def analyze_all():
 def index():
     return send_file(os.path.join(HERE, 'index.html'))
 
+def _eid_key(r):
+    """Sort key for ascending ICDD id: prefix letters first, then the number
+    (e.g. I003599 < I003600 < O002127), tolerant of any digit width."""
+    eid = r['eid'] or ''
+    m = re.search(r'\d+', eid)
+    return (re.sub(r'\d+', '', eid), int(m.group()) if m else 0, eid)
+
 @app.route('/api/entries')
 def api_entries():
     rows = []
@@ -440,8 +480,10 @@ def api_entries():
                      'fixes': d.get('fixes', 0),
                      'attention': _attention(badges),
                      'reviewed': bool(STATE['triage'].get(key, {}).get('reviewed'))})
-    # primary lens = the major fixes; silent-failures/near-misses are the tiebreak.
-    rows.sort(key=lambda r: (-r['fixes'], -r['attention'], r['eid'] or ''))
+    # list in ascending ICDD-id order (earlier I-numbers first) — a stable, predictable
+    # order to work through the batch. The per-view filter (Fixes/Attention/Clean) picks
+    # WHICH entries show; the id orders them.
+    rows.sort(key=_eid_key)
     return jsonify({'folder': STATE['folder'], 'out_dir': STATE['out_dir'], 'entries': rows})
 
 @app.route('/api/entry/<key>')
@@ -462,12 +504,11 @@ def api_pdf_search(key):
     import fitz
     hits = []
     try:
-        doc = fitz.open(pdf)
-        for i in range(doc.page_count):
-            rects = doc[i].search_for(q)
-            if rects:
-                hits.append({'page': i, 'count': len(rects)})
-        doc.close()
+        with fitz.open(pdf) as doc:
+            for i in range(doc.page_count):
+                rects = doc[i].search_for(q)
+                if rects:
+                    hits.append({'page': i, 'count': len(rects)})
     except Exception as ex:
         return jsonify({'error': str(ex), 'hits': []})
     return jsonify({'hits': hits})
@@ -479,19 +520,19 @@ def api_pdf_page(key, n):
         abort(404)
     terms = [t for t in (request.args.get('find') or '').split('|') if t]
     import fitz
+    png = None
     try:
-        doc = fitz.open(pdf)
-        if n < 0 or n >= doc.page_count:
-            doc.close(); abort(404)
-        page = doc[n]
-        for t in terms:
-            for rect in page.search_for(t):
-                page.add_highlight_annot(rect)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-        png = pix.tobytes('png')
-        doc.close()
+        with fitz.open(pdf) as doc:               # with-block closes on every path
+            if 0 <= n < doc.page_count:
+                page = doc[n]
+                for t in terms:
+                    for rect in page.search_for(t):
+                        page.add_highlight_annot(rect)
+                png = page.get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes('png')
     except Exception:
         abort(500)
+    if png is None:
+        abort(404)                                # out-of-range page (was masked as 500)
     return Response(png, mimetype='image/png')
 
 @app.route('/api/pdf/<key>/region/<int:n>.png')
@@ -504,35 +545,38 @@ def api_pdf_region(key, n):
         abort(404)
     terms = [t for t in (request.args.get('find') or '').split('|') if t]
     import fitz
+    png = None
+    bad_page = False
     try:
-        doc = fitz.open(pdf)
-        if n < 0 or n >= doc.page_count:
-            doc.close(); abort(404)
-        page = doc[n]
-        rects = []
-        for t in terms:
-            rects += list(page.search_for(t))
-        pr = page.rect
-        fw, fh = pr.width * 0.52, pr.height * 0.26          # ~half-column wide, quarter tall
-        if rects:
-            x0 = min(r.x0 for r in rects); y0 = min(r.y0 for r in rects)
-            x1 = max(r.x1 for r in rects); y1 = max(r.y1 for r in rects)
-            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-            halfw = max(fw / 2, (x1 - x0) / 2 + 12)          # never smaller than the hit span
-            halfh = max(fh / 2, (y1 - y0) / 2 + 12)
-        else:
-            cx, cy, halfw, halfh = pr.width / 2, pr.height * 0.28, fw / 2, fh / 2
-        cx = min(max(cx, pr.x0 + halfw), pr.x1 - halfw)      # keep the clip inside the page
-        cy = min(max(cy, pr.y0 + halfh), pr.y1 - halfh)
-        clip = fitz.Rect(cx - halfw, cy - halfh, cx + halfw, cy + halfh) & pr
-        for t in terms:
-            for r in page.search_for(t):
-                page.add_highlight_annot(r)
-        pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=clip)
-        png = pix.tobytes('png')
-        doc.close()
+        with fitz.open(pdf) as doc:               # with-block closes on every path
+            if not (0 <= n < doc.page_count):
+                bad_page = True
+            else:
+                page = doc[n]
+                rects = []
+                for t in terms:
+                    rects += list(page.search_for(t))
+                pr = page.rect
+                fw, fh = pr.width * 0.52, pr.height * 0.26      # ~half-column wide, quarter tall
+                if rects:
+                    x0 = min(r.x0 for r in rects); y0 = min(r.y0 for r in rects)
+                    x1 = max(r.x1 for r in rects); y1 = max(r.y1 for r in rects)
+                    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+                    halfw = max(fw / 2, (x1 - x0) / 2 + 12)     # never smaller than the hit span
+                    halfh = max(fh / 2, (y1 - y0) / 2 + 12)
+                else:
+                    cx, cy, halfw, halfh = pr.width / 2, pr.height * 0.28, fw / 2, fh / 2
+                cx = min(max(cx, pr.x0 + halfw), pr.x1 - halfw)  # keep the clip inside the page
+                cy = min(max(cy, pr.y0 + halfh), pr.y1 - halfh)
+                clip = fitz.Rect(cx - halfw, cy - halfh, cx + halfw, cy + halfh) & pr
+                for t in terms:
+                    for r in page.search_for(t):
+                        page.add_highlight_annot(r)
+                png = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=clip).tobytes('png')
     except Exception:
         abort(500)
+    if bad_page:
+        abort(404)
     return Response(png, mimetype='image/png')
 
 @app.route('/api/triage', methods=['GET'])
@@ -592,7 +636,7 @@ VERDICT_LABEL = {'confirm': 'CONFIRMED', 'dismiss': 'dismissed', 'look': 'NEEDS 
 def _export_report():
     os.makedirs(STATE['out_dir'], exist_ok=True)
     path = os.path.join(STATE['out_dir'], 'triage_report.txt')
-    with open(path, 'w') as fh:
+    with open(path, 'w', encoding='utf-8') as fh:
         fh.write('PXRD review — triage report\n')
         fh.write('source folder : %s\n' % STATE['folder'])
         fh.write('generated     : %s\n' % datetime.datetime.now().isoformat(timespec='seconds'))

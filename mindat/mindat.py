@@ -50,7 +50,8 @@ def api_key():
     if k:
         return k.strip()
     if os.path.exists(KEYFILE):
-        return open(KEYFILE).read().strip()
+        with open(KEYFILE, encoding='utf-8') as f:
+            return f.read().strip()
     return None
 
 # ----------------------------------------------------------------------------- fetch (mirrors the Apps Script backoff)
@@ -111,7 +112,8 @@ def refresh_struct(verbose=True):
                      'elements': m.get('elements') or [], 'formula': m.get('ima_formula', '')})
     out = {'fetched': time.strftime('%Y-%m-%d'), 'recs': recs}
     os.makedirs(os.path.dirname(STRUCT_CACHE), exist_ok=True)
-    json.dump(out, open(STRUCT_CACHE, 'w'))
+    with open(STRUCT_CACHE, 'w', encoding='utf-8') as f:
+        json.dump(out, f)
     if verbose: print('cached -> %s  (%d records)' % (STRUCT_CACHE, len(recs)))
     return out
 
@@ -119,7 +121,11 @@ _SDB = None
 def struct_db():
     global _SDB
     if _SDB is None:
-        _SDB = json.load(open(STRUCT_CACHE)) if os.path.exists(STRUCT_CACHE) else {}
+        if os.path.exists(STRUCT_CACHE):
+            with open(STRUCT_CACHE, encoding='utf-8') as f:
+                _SDB = json.load(f)
+        else:
+            _SDB = {}
     return _SDB
 
 def struct_available():
@@ -192,7 +198,8 @@ def refresh(verbose=True):
         }
     out = {'fetched': time.strftime('%Y-%m-%d'), 'minerals': index, 'groups': groups}
     os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-    json.dump(out, open(CACHE, 'w'))
+    with open(CACHE, 'w', encoding='utf-8') as f:
+        json.dump(out, f)
     if verbose: print('cached -> %s  (%d minerals, %d groups)' % (CACHE, len(index), len(groups)))
     return out
 
@@ -249,7 +256,11 @@ _DB = None
 def _db():
     global _DB
     if _DB is None:
-        _DB = json.load(open(CACHE)) if os.path.exists(CACHE) else {}
+        if os.path.exists(CACHE):
+            with open(CACHE, encoding='utf-8') as f:
+                _DB = json.load(f)
+        else:
+            _DB = {}
     return _DB
 
 def available():

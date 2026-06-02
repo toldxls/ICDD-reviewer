@@ -68,6 +68,13 @@ def _writable_extras(res):
     return [f for f in res.get('extra', [])
             if f.sev == 'flag' or (f.code == 'classification' and f.anchor == 'name')]
 
+# Comment banner reflects the finding's domain so it reads accurately: composition/
+# formula findings say 'Chemistry check'; everything else (cell, indexing, instrument,
+# radiation, lines, symmetry) stays 'PXRD check'.
+_CHEM_CODES = {'analysis', 'ideal_formula', 'name_formula', 'mindat_chem'}
+def _check_banner(code):
+    return 'Chemistry check' if code in _CHEM_CODES else 'PXRD check'
+
 def _is_clean(res):
     """Nothing to report: the cell matched exactly, with no parameter
     discrepancies, no radiation hard-flag, and no writable extra findings. (Soft
@@ -131,7 +138,14 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
     pk = powder[0] if powder else None
     any_match = any(C.anode_key(r[0]) == dk for r in rads)
     if dk is None:
-        res['lam'] = ('unrec', 'docx anode not recognised (%s)' % d.radiation)
+        if C.is_sync_anode(d.radiation):
+            # synchrotron: λ is beamline-tunable, so it legitimately matches no
+            # characteristic tube line — 'Sync' is the correct designator, not an error.
+            conf = '; .pdf confirms synchrotron radiation' if C.pdf_mentions_synchrotron(text) else ''
+            res['lam'] = ('ok', 'anode %s — synchrotron radiation (λ is beamline-specific, '
+                          'not a characteristic tube line)%s' % (d.radiation, conf))
+        else:
+            res['lam'] = ('unrec', 'docx anode not recognised (%s)' % d.radiation)
     elif pk is not None:
         if C.anode_key(pk[0]) == dk:
             res['lam'] = ('ok', 'anode %s matches .pdf powder radiation' % d.radiation)
@@ -213,6 +227,25 @@ def _find_value(doc, pred):
                     return nxt if (nxt is not None and nxt.text.strip()) else c
     return None
 
+def _find_field_value(doc, pred):
+    """Like _find_value, but skips the horizontal-merge duplicates of the label cell
+    (a merged label repeats its text across row.cells, e.g. 'Spacing Instr. :' at
+    [5][6] then 'Other' at [7]) so the highlight/comment lands on the VALUE. Used only
+    for anchors whose value is known non-blank, so it never runs past into the next
+    field's label."""
+    for t in doc.tables:
+        for row in t.rows:
+            cells = row.cells
+            for i, c in enumerate(cells):
+                if pred(c.text):
+                    label = c.text.strip()
+                    j = i + 1
+                    while j < len(cells) and cells[j].text.strip() == label:
+                        j += 1                      # skip merged-span duplicates
+                    nxt = cells[j] if j < len(cells) else None
+                    return nxt if (nxt is not None and nxt.text.strip()) else c
+    return None
+
 def _anchor_cell(doc, ac_row, anchor):
     if anchor and anchor.startswith('cell:'):
         col = PARAM_COL.get(anchor.split(':', 1)[1])
@@ -220,6 +253,14 @@ def _anchor_cell(doc, ac_row, anchor):
     if anchor == 'instr':
         return (_find_value(doc, lambda t: 'spacing instr' in t.lower())
                 or _find_value(doc, lambda t: t.strip().lower().startswith('radiation')))
+    # the instr_class flags highlight the field VALUE ('Other') — use the merge-aware
+    # resolver so it lands on the value, not the (merged) label cell
+    if anchor == 'spacing_instr':
+        return (_find_field_value(doc, lambda t: 'spacing instr' in t.lower())
+                or _find_value(doc, lambda t: 'spacing instr' in t.lower()))
+    if anchor == 'intensity_instr':
+        return (_find_field_value(doc, lambda t: 'intensity instr' in t.lower())
+                or _find_field_value(doc, lambda t: 'spacing instr' in t.lower()))
     if anchor == 'refl':
         return _find_cell(doc, lambda t: t.strip() in ('d(A)', 'd(Å)'))
     if anchor == 'ima':
@@ -280,7 +321,7 @@ def _write_extras(doc, ac_row, res, rec, triage=None):
         if f.sev == 'flag':
             _highlight(cell)
             rec['highlights'].append(f.anchor or f.code)
-        text = _with_note(_tidy('PXRD check [%s] — %s' % (f.code, f.msg)), triage, fkey)
+        text = _with_note(_tidy('%s [%s] — %s' % (_check_banner(f.code), f.code, f.msg)), triage, fkey)
         doc.add_comment(runs, text=text, author=AUTHOR, initials=INITIALS)
         rec['comments'].append(text)
 
@@ -570,7 +611,7 @@ def main():
     triage = {}
     if args.triage and os.path.exists(args.triage):
         try:
-            with open(args.triage) as _tf:
+            with open(args.triage, encoding='utf-8') as _tf:
                 triage = json.load(_tf)
         except Exception as ex:
             print('  !! could not read triage %s (%s) — ignoring' % (args.triage, ex))
@@ -689,7 +730,7 @@ def main():
     refreshed = [(f, r) for f, r in records if r.get('refreshed')]
     edited = [(f, r) for f, r in records if not r['clean']]
     os.makedirs(os.path.dirname(log_path) or '.', exist_ok=True)
-    with open(log_path, 'w') as fh:
+    with open(log_path, 'w', encoding='utf-8') as fh:
         fh.write('PXRD review — annotation log\n')
         fh.write('source folder : %s\n' % os.path.abspath(args.folder))
         fh.write('output        : %s\n' % ('in place' if args.inplace else os.path.abspath(out_dir)))
@@ -717,7 +758,7 @@ def main():
             fh.write('-' * 78 + '\n')
             fh.write('  highlights: %s\n' % hl)
             for c in r['comments']:
-                c = re.sub(r'^PXRD check (?:\[[\w+\-]+\] — (?:Mindat: )?|— )', '', c)
+                c = re.sub(r'^(?:PXRD|Chemistry) check (?:\[[\w+\-]+\] — (?:Mindat: )?|— )', '', c)
                 fh.write(textwrap.fill(c, width=78,
                                        initial_indent='  comment   : ',
                                        subsequent_indent=' ' * 14) + '\n')
@@ -754,7 +795,7 @@ def main():
         LABEL = {'mindat_fix': 'CELL (docx & .cif disagree with Mindat — verify which is correct)',
                  'mindat_chem': 'CHEMISTRY (ideal formula differs from Mindat)',
                  'ima_status': 'IMA STATUS'}
-        with open(md_path, 'w') as fh:
+        with open(md_path, 'w', encoding='utf-8') as fh:
             fh.write('Mindat cross-check — verify against the paper and follow up; either side may be '
                      'the one to fix (Mindat data can lag the CNMNC newsletter). Not written into any docx.\n')
             fh.write('%d entr%s.\n' % (len(md_recs), 'y' if len(md_recs) == 1 else 'ies') + '=' * 78 + '\n')

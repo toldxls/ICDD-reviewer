@@ -125,7 +125,12 @@ function renderHead() {
     ? `rerun writes ${pv.write}${pv.suppress ? ` · ${pv.suppress} suppressed` : ''}`
     : (pv.suppress ? `${pv.suppress} suppressed (clean)` : 'nothing to write');
   const rv = $('#e-reviewed'); rv.checked = !!S.t.reviewed;
-  rv.onchange = () => { S.t.reviewed = rv.checked; saveTriage(); renderList(); };
+  rv.onchange = () => {
+    S.t.reviewed = rv.checked;
+    const row = S.entries.find(e => e.key === S.key);
+    if (row) row.reviewed = rv.checked;   // sync the sidebar tick NOW, before renderList
+    saveTriage(); renderList();
+  };
 }
 
 // count what a rerun will actually write into the docx given current triage
@@ -168,7 +173,11 @@ function renderFindings() {
     cellMsg = 'no .pdf paired — the cell cannot be validated';
     cellLevel = 'flag'; cellWritten = true;
   } else { cellMsg = cs; cellLevel = 'note'; cellWritten = false; }
-  if (m.provenance) cellMsg += `\n↳ ${m.provenance}`;
+  if (m.provenance) {
+    // on an INVESTIGATE the docx did NOT match — say "closest is", not "matches"
+    const prov = cs === 'investigate' ? m.provenance.replace(/^matches /, 'closest is ') : m.provenance;
+    cellMsg += `\n↳ ${prov}`;
+  }
   rows.push({ fkey: 'cell', level: cellLevel, code: 'CELL', msg: cellMsg, written: cellWritten, anchor: 'cell:' + cs });
 
   // per-parameter issues (written docx highlights+comments)
@@ -191,6 +200,12 @@ function renderFindings() {
     const level = f.sev === 'flag' ? 'flag' : (f.sev === 'info' ? 'check' : 'note');
     rows.push({ fkey: 'f' + f.idx, level, code: f.code, msg: f.msg, written: f.written, anchor: f.anchor, minor: !f.major });
   }
+
+  // promote by severity: FLAG (real problems) first, then CHECK (confirm), then OK,
+  // with NOTE (low-confidence FYI) ranked last. Stable sort keeps the cell→λ→checks
+  // order within each tier.
+  const LVL_RANK = { flag: 0, check: 1, ok: 2, note: 3 };
+  rows.sort((x, y) => (LVL_RANK[x.level] ?? 9) - (LVL_RANK[y.level] ?? 9));
 
   let hidden = 0;
   for (const r of rows) {
@@ -220,10 +235,15 @@ function fRow(r) {
 function triageControls(fkey, t) {
   const mk = (v, lbl) => el('button', {
     class: 'tbtn ' + v + (t.verdict === v ? ' on' : ''),
-    onclick: ev => { ev.stopPropagation(); t.verdict = (t.verdict === v ? null : v);
-                     saveTriage(); renderFindings();
-                     // '? look' also zooms the PDF to this finding's highlighted text
-                     if (v === 'look' && t.verdict === 'look') zoomToHighlight(fkey); }
+    onclick: ev => {
+      ev.stopPropagation();
+      // '? look' ALWAYS zooms the PDF to this finding's evidence (not gated on the
+      // toggle state) — and zoom first, before the list re-render, so the first
+      // click takes effect immediately.
+      if (v === 'look') zoomToHighlight(fkey);
+      t.verdict = (t.verdict === v ? null : v);
+      saveTriage(); renderFindings();
+    }
   }, lbl);
   const note = el('input', { class: 'tnote', type: 'text', placeholder: 'note…',
     value: t.note || '',
@@ -246,8 +266,15 @@ function termsFor(fkey) {
   } else if (fkey.startsWith('f')) {
     const f = a.findings[parseInt(fkey.slice(1), 10)];
     if (f) {
-      const nums = (f.msg.match(/\d+\.\d{2,}/g) || []).slice(0, 2);
-      terms = phraseTerms(f.msg).concat(nums);   // text findings carry no number — locate by keyword
+      if (f.code === 'indexing' && a.entry && (a.entry.refl_d || []).length) {
+        // the reflection d-spacings cluster in the paper's powder table -> frame it
+        terms = a.entry.refl_d;
+      } else {
+        const nums = (f.msg.match(/\d+\.\d{2,}/g) || []).slice(0, 2);
+        // a short evidence keyword (e.g. the detected "Gandolfi") is the best locator
+        const ev = (f.evidence && f.evidence.length < 40) ? [f.evidence] : [];
+        terms = [...new Set([...ev, ...phraseTerms(f.msg), ...phraseTerms(f.evidence || ''), ...nums])];
+      }
     }
   }
   return { terms, snippet, label, page };
@@ -275,18 +302,26 @@ function focusFinding(fkey) {
   renderPdf(t.snippet, t.label, t.terms);
 }
 
-// zoom the PDF to a cropped region framing the finding's highlighted text
+// zoom the PDF to a cropped region framing the finding's highlighted text. When the
+// finding has many terms (e.g. an indexing finding's reflection d-spacings), find the
+// page where they CLUSTER (the powder table) and let the region crop expand to it.
 async function zoomToHighlight(fkey) {
   S.focusKey = fkey;
   const t = termsFor(fkey);
   if (!S.a.pdf || !t.terms.length) { focusFinding(fkey); return; }   // nothing to locate
   let page = t.page;
   try {
-    const r = await fetch(`/api/pdf/${encodeURIComponent(S.a.key)}/search?q=${encodeURIComponent(t.terms[0])}`).then(x => x.json());
-    if (r.hits && r.hits.length) page = r.hits[0].page;
+    const probe = t.terms.slice(0, 8);
+    const res = await Promise.all(probe.map(term =>
+      fetch(`/api/pdf/${encodeURIComponent(S.a.key)}/search?q=${encodeURIComponent(term)}`)
+        .then(x => x.json()).catch(() => ({ hits: [] }))));
+    const pageHits = {};
+    for (const r of res) for (const h of (r.hits || [])) pageHits[h.page] = (pageHits[h.page] || 0) + h.count;
+    const best = Object.keys(pageHits).sort((a, b) => pageHits[b] - pageHits[a])[0];
+    if (best !== undefined) page = +best;
   } catch (e) { /* keep evidence page */ }
-  S.pdfTerms = t.terms; S.pdfPage = page; S.pdfMode = 'region'; S.pdfZoom = 1;
-  renderPdf(t.snippet, t.label, t.terms);
+  S.pdfTerms = t.terms.slice(0, 20); S.pdfPage = page; S.pdfMode = 'region'; S.pdfZoom = 1;
+  renderPdf(t.snippet, t.label, S.pdfTerms);
 }
 
 // ---- pdf pane --------------------------------------------------------------
@@ -442,19 +477,19 @@ function renderDocx() {
   }
 }
 
-const AXES = ['a', 'b', 'c', 'α', 'β', 'γ', 'SG', 'Z'];
+const AXES = ['a', 'b', 'c', 'α', 'β', 'γ', 'SG', 'Z'];   // laid out 3-per-row: abc / αβγ / SG Z
 function cellGrid(vals, params, deltas) {
   params = params || {}; deltas = deltas || [];
   const dmap = {}; for (const [lab, , , dd, ok] of deltas) dmap[lab] = { dd, ok };
-  const g = el('div', { class: 'cellgrid' });
-  for (const ax of AXES) g.append(el('div', { class: 'hdr' }, ax));
   vals = vals.slice(0, 8);
+  const g = el('div', { class: 'cellgrid' });
   for (let i = 0; i < 8; i++) {
-    const ax = AXES[i]; let cls = '';
-    if (params[ax]) cls = 'bad';
-    else if (dmap[ax] && dmap[ax].ok && dmap[ax].dd > 0.002 && dmap[ax].dd <= 0.004) cls = 'near';
-    const v = esc(vals[i]) || '·';
-    g.append(el('div', { class: cls, title: ax + ' = ' + v }, v));   // title: full value (cells ellipsize)
+    const ax = AXES[i]; let cls = 'cellcell';
+    if (params[ax]) cls += ' bad';
+    else if (dmap[ax] && dmap[ax].ok && dmap[ax].dd > 0.002 && dmap[ax].dd <= 0.004) cls += ' near';
+    const v = esc(vals[i]) || '—';                // em dash = not reported (vs a stray dot)
+    g.append(el('div', { class: cls, title: ax + ' = ' + v },
+      el('span', { class: 'cl' }, ax), el('span', { class: 'cv' }, v)));
   }
   return g;
 }
@@ -511,13 +546,12 @@ function renderMindat() {
 // ---- triage save (debounced) ----------------------------------------------
 function saveTriage() {
   clearTimeout(S.saveTimer);
-  S.saveTimer = setTimeout(async () => {
-    await fetch('/api/triage/' + encodeURIComponent(S.key), {
+  const key = S.key, payload = JSON.stringify(S.t);   // capture NOW — the entry may change before the timer fires
+  S.saveTimer = setTimeout(() => {
+    fetch('/api/triage/' + encodeURIComponent(key), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(S.t),
+      body: payload,
     });
-    const row = S.entries.find(e => e.key === S.key);
-    if (row) row.reviewed = !!S.t.reviewed;
   }, 350);
 }
 
