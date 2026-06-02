@@ -248,6 +248,15 @@ input[type=range] { accent-color: var(--accent); }
 #pdf-view img { box-shadow: 0 2px 14px rgb(0 0 0 / .5); border-radius: 2px; vertical-align: top; }
 .pdf-pages { display: flex; flex-direction: column; gap: 12px; padding-bottom: 10px; }
 .pdf-page { width: 100%; min-height: 360px; }              /* placeholder height keeps scroll stable before lazy-load */
+.page-inner { position: relative; display: inline-block; vertical-align: top; }  /* shrink-wraps the img so the text layer aligns */
+.page-inner > img { display: block; width: 100%; }
+/* selectable transparent text overlay (copy/paste + browser-native find); font-size
+   in cqh so it scales with the page as you zoom (no rebuild) */
+.text-layer { position: absolute; inset: 0; overflow: hidden; line-height: 1;
+              container-type: size; user-select: text; -webkit-user-select: text; }
+.text-layer > span { position: absolute; color: transparent; white-space: pre; cursor: text; transform-origin: 0 0; }
+.text-layer > span::selection { background: rgb(var(--accent-rgb) / .35); }
+.text-layer > span::-moz-selection { background: rgb(var(--accent-rgb) / .35); }
 .pager { display: flex; align-items: center; gap: 6px; font-size: .85em; white-space: nowrap; }
 .pager button { padding: 1px 7px; }
 .snippet { flex: none; min-height: 50px; max-height: 36%; overflow: auto; padding: 8px 10px; border-top: 1px solid var(--line); font-size: .9em; color: var(--muted); }

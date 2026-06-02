@@ -45,6 +45,18 @@ except ImportError:
 HERE = os.path.dirname(os.path.abspath(__file__))   # the packaged gui/ folder (assets live here)
 app = Flask(__name__, static_folder=os.path.join(HERE, 'static'),
             static_url_path='/static')
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0      # don't let the browser cache app.js/css/index
+
+@app.after_request
+def _no_cache_ui(resp):
+    """A localhost dev tool: never cache the UI assets, so edits show on a plain
+    reload (no hard-refresh). The expensive PDF renders (/api/pdf/.../*.png) stay
+    cacheable — they don't change."""
+    if request.path == '/' or request.path.startswith('/static/'):
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+    return resp
 
 # ------------------------------------------------------------------ global state
 # Set once at launch (single batch per process). `docx` is keyed by the docx
@@ -186,8 +198,13 @@ def _serialize(key):
     cd = cellt[1] if len(cellt) > 1 else None
     cell = {'status': status}
     if cd is not None:
+        # a CALCULATED pattern is simulated from the single-crystal structure, so the
+        # cell is unambiguously the SCXRD cell — no 'powder vs SCXRD' ambiguity to confirm.
+        is_calc = bool(entry) and (entry.instr.get('spacing_instr') or '').strip().lower() == 'calculated'
+        prov = ('SCXRD cell — the docx pattern is calculated/simulated from the single-crystal '
+                'structure (no measured powder cell to compare)') if is_calc else _provenance(cd)
         cell.update({'matched': _cand(cd), 'nmatch': cellt[2], 'ncomp': cellt[3],
-                     'dev': cellt[4], 'mode': cellt[5], 'provenance': _provenance(cd)})
+                     'dev': cellt[4], 'mode': cellt[5], 'provenance': prov})
         cell['deltas'] = [list(t) for t in C.cell_axis_deltas(d.authors_cell, cd)]
 
     # which extra findings actually get written into the docx (same gate the
@@ -503,6 +520,29 @@ def api_pdf_search(key):
     except Exception as ex:
         return jsonify({'error': str(ex), 'hits': []})
     return jsonify({'hits': hits})
+
+@app.route('/api/pdf/<key>/words/<int:n>.json')
+def api_pdf_words(key, n):
+    """Word boxes for a page (PDF points) — drives the selectable text layer the GUI
+    overlays on the rendered page so the reviewer can select/copy text and use the
+    browser's native find. {w,h} are the page size in points; words = [x0,y0,x1,y1,text]."""
+    pdf = _pdf_path(key)
+    if not pdf:
+        abort(404)
+    import fitz
+    out = None
+    try:
+        with fitz.open(pdf) as doc:
+            if 0 <= n < doc.page_count:
+                page = doc[n]; r = page.rect
+                out = {'w': r.width, 'h': r.height,
+                       'words': [[round(w[0], 1), round(w[1], 1), round(w[2], 1), round(w[3], 1), w[4]]
+                                 for w in page.get_text('words')]}
+    except Exception:
+        abort(500)
+    if out is None:
+        abort(404)
+    return jsonify(out)
 
 @app.route('/api/pdf/<key>/page/<int:n>.png')
 def api_pdf_page(key, n):

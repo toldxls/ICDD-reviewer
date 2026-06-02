@@ -36,6 +36,7 @@ function el(tag, attrs, ...kids) {
 }
 const $ = sel => document.querySelector(sel);
 const esc = s => (s == null ? '' : String(s));
+const mantissa = s => (s == null ? '' : String(s).replace(/\(.*$/, '').trim());   // '12.277(4)' -> '12.277'
 
 // ---- dashboard -------------------------------------------------------------
 async function loadEntries() {
@@ -284,10 +285,27 @@ function termsFor(fkey, step = 0) {
   let terms = [], snippet = '', label = '', page = (a.pdf ? a.pdf.evidence_page || 0 : 0);
   if (fkey === 'cell' || fkey.startsWith('param:')) {
     terms = (a.pdf && a.pdf.terms) || [];
+    if (fkey.startsWith('param:')) {
+      // a single-axis flag (e.g. β differs): search the deviant axis VALUE so the
+      // exact cell parameter highlights in the .pdf table, not the whole cell
+      const AX = { a: 0, b: 1, c: 2, 'α': 3, 'β': 4, 'γ': 5 };
+      const i = AX[fkey.slice(6)], m = a.cell.matched;
+      if (i != null) {
+        const pdfv = m ? mantissa([m.a, m.b, m.c, m.al, m.be, m.ga][i]) : '';
+        const docxv = mantissa((a.docx.authors_cell || [])[i]);
+        terms = [...new Set([pdfv, docxv, ...terms].filter(Boolean))];   // deviant value first
+      }
+    }
     if (a.cell.matched) { snippet = a.cell.matched.snippet || ''; label = 'matched cell context [' + (a.cell.matched.context || '?') + ']'; }
   } else if (fkey === 'lam') {
-    const m = /([A-Za-z]{1,2})\s*K/.exec(a.docx.radiation || '');
-    if (m) terms = [m[1] + 'K'];
+    // a radiation flag/verify is about the .pdf POWDER radiation (the conflicting or
+    // to-confirm one) — highlight THAT, parsed from the message ('… POWDER radiation
+    // is FeKα'), not the docx anode; fall back to the docx anode when none is named.
+    const msg = (a.lam && a.lam[1]) || '';
+    const pdfrad = /radiation is ([A-Z][a-z]?)\s*K/i.exec(msg);
+    const docxrad = /([A-Za-z]{1,2})\s*K/.exec(a.docx.radiation || '');
+    if (pdfrad) terms = [pdfrad[1] + 'K'];
+    else if (docxrad) terms = [docxrad[1] + 'K'];
   } else if (fkey.startsWith('f')) {
     const f = a.findings[parseInt(fkey.slice(1), 10)];
     if (f) {
@@ -392,8 +410,10 @@ function buildPageStack(a, find) {
   const slots = [];
   for (let i = 0; i < a.pdf.pages; i++) {
     const img = el('img', { alt: 'page ' + (i + 1) });
-    img.style.width = (S.pdfZoom * 100) + '%';
-    const slot = el('div', { class: 'pdf-page', 'data-page': i }, img);
+    const tl = el('div', { class: 'text-layer' });        // selectable text overlay (copy + native find)
+    const inner = el('div', { class: 'page-inner' }, img, tl);   // shrink-wraps the img; the text layer aligns to it
+    inner.style.width = (S.pdfZoom * 100) + '%';                 // zoom lives on the wrapper so the overlay tracks the img
+    const slot = el('div', { class: 'pdf-page', 'data-page': i }, inner);
     wrap.append(slot); slots.push(slot);
   }
   view.replaceChildren(wrap);
@@ -404,7 +424,7 @@ function buildPageStack(a, find) {
       S.pdfRatios[i] = e.isIntersecting ? e.intersectionRatio : 0;
       if (e.isIntersecting) {                       // lazy-load on approach
         const img = e.target.querySelector('img');
-        if (img && !img.src) img.src = url(i);
+        if (img && !img.src) { img.src = url(i); buildTextLayer(a, i, e.target); }
       }
     }
     let best = S.pdfPage, r = -1;                    // current page = most-visible slot
@@ -416,6 +436,31 @@ function buildPageStack(a, find) {
   if (target) requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
 }
 
+// Overlay transparent, word-positioned, selectable text on a rendered page so the
+// reviewer can SELECT/COPY text and use the browser's native find (Cmd/Ctrl-F, with
+// its own next/prev). Positions are % of the page; font-size uses container-query
+// height units so it scales with zoom automatically (no rebuild on zoom).
+async function buildTextLayer(a, i, slot) {
+  const tl = slot.querySelector('.text-layer');
+  if (!tl || tl.dataset.built) return;
+  tl.dataset.built = '1';
+  try {
+    const d = await fetch(`/api/pdf/${enc(a.key)}/words/${i}.json`).then(x => x.json());
+    if (!d.w || !d.h || !d.words) return;
+    const frag = document.createDocumentFragment();
+    for (const w of d.words) {
+      const [x0, y0, x1, y1, word] = w;
+      const s = document.createElement('span');
+      s.textContent = word;
+      s.style.left = (x0 / d.w * 100) + '%';
+      s.style.top = (y0 / d.h * 100) + '%';
+      s.style.fontSize = ((y1 - y0) / d.h * 100 * 0.82) + 'cqh';
+      frag.append(s);
+    }
+    tl.append(frag);
+  } catch (e) { /* no text layer for this page */ }
+}
+
 function syncZoomUI() {
   $('#zoom-val').textContent = Math.round(S.pdfZoom * 100) + '%';
   $('#zoom-page').classList.toggle('on', S.pdfMode === 'page');
@@ -424,7 +469,9 @@ function syncZoomUI() {
 
 function setZoom(z) {
   S.pdfZoom = Math.max(0.5, Math.min(4, z));
-  $('#pdf-view').querySelectorAll('img').forEach(img => img.style.width = (S.pdfZoom * 100) + '%');
+  const v = $('#pdf-view'), w = (S.pdfZoom * 100) + '%';
+  v.querySelectorAll('.page-inner').forEach(p => p.style.width = w);   // page mode (img + text layer track the wrapper)
+  v.querySelectorAll(':scope > img').forEach(img => img.style.width = w);   // region mode (bare img)
   $('#zoom-val').textContent = Math.round(S.pdfZoom * 100) + '%';
 }
 
@@ -541,8 +588,9 @@ function cellGrid(vals, params, deltas, cmp) {
   const g = el('div', { class: 'cellgrid' });
   for (let i = 0; i < 8; i++) {
     const ax = AXES[i]; let cls = 'cellcell';
-    if (cmp && ax in cmp) cls += cmp[ax] ? ' ok' : ' miss';   // green = matches .pdf cell, red = differs
-    else if (params[ax]) cls += ' bad';
+    const flagged = params[ax];                              // the tool flagged this axis
+    if (flagged) cls += flagged.some(([k]) => k === 'value') ? ' miss' : ' near';  // value diff -> red, sig-fig/esd -> orange
+    else if (cmp && ax in cmp) cls += cmp[ax] ? ' ok' : ' miss';   // green = matches .pdf cell, red = differs
     else if (dmap[ax] && dmap[ax].ok && dmap[ax].dd > 0.002 && dmap[ax].dd <= 0.004) cls += ' near';
     const v = esc(vals[i]) || '—';                // em dash = not reported (vs a stray dot)
     g.append(el('div', { class: cls, title: ax + ' = ' + v },
