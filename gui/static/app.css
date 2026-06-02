@@ -89,12 +89,14 @@ input[type=search], input[type=text] {
 }
 input[type=range] { accent-color: var(--accent); }
 
-/* segmented control (views / theme / density) */
+/* segmented control (views / theme / density) — overlap borders by 1px and raise
+   the active/hovered button so its full (accent) border draws over its neighbour. */
 .seg { display: flex; }
-.seg button { border-radius: 0; border-right: none; padding: 4px 9px; flex: 1; white-space: nowrap; }
+.seg button { border-radius: 0; padding: 4px 9px; flex: 1; white-space: nowrap; position: relative; margin-right: -1px; }
 .seg button:first-child { border-radius: 6px 0 0 6px; }
-.seg button:last-child { border-radius: 0 6px 6px 0; border-right: 1px solid var(--line); }
-.seg button.on { background: rgb(var(--accent-rgb) / .18); border-color: var(--accent); color: var(--accent); }
+.seg button:last-child { border-radius: 0 6px 6px 0; margin-right: 0; }
+.seg button:hover { z-index: 2; }
+.seg button.on { z-index: 1; background: rgb(var(--accent-rgb) / .18); border-color: var(--accent); color: var(--accent); }
 
 /* ============================================================ top bar */
 #topbar {
@@ -227,10 +229,16 @@ input[type=range] { accent-color: var(--accent); }
 .tnote { flex: 1; min-width: 110px; font-size: .85em; padding: 2px 6px; }
 
 /* pdf */
-.pdf-search { padding: 6px 10px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--line); flex: none; }
-.pdf-search input { max-width: 360px; }
+.pdf-search { padding: 6px 10px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--line); flex: none; flex-wrap: wrap; row-gap: 5px; }
+.pdf-search input { max-width: 300px; flex: 1 1 160px; }
+.zoomctl { display: flex; align-items: center; gap: 4px; }
+.zoomctl button { padding: 2px 8px; }
+.zoomctl #zoom-val { width: 40px; text-align: center; font-size: .85em; }
+.zoomctl .on { background: rgb(var(--accent-rgb) / .18); border-color: var(--accent); color: var(--accent); }
 #pdf-view { flex: 1; overflow: auto; text-align: center; background: rgb(0 0 0 / .25); padding: 8px; min-height: 0; }
-#pdf-view img { max-width: 100%; box-shadow: 0 2px 14px rgb(0 0 0 / .5); border-radius: 2px; }
+#pdf-view img { box-shadow: 0 2px 14px rgb(0 0 0 / .5); border-radius: 2px; vertical-align: top; }
+.pdf-pages { display: flex; flex-direction: column; gap: 12px; padding-bottom: 10px; }
+.pdf-page { width: 100%; min-height: 360px; }              /* placeholder height keeps scroll stable before lazy-load */
 .pager { display: flex; align-items: center; gap: 6px; font-size: .85em; white-space: nowrap; }
 .pager button { padding: 1px 7px; }
 .snippet { flex: none; min-height: 50px; max-height: 36%; overflow: auto; padding: 8px 10px; border-top: 1px solid var(--line); font-size: .9em; color: var(--muted); }
@@ -241,7 +249,17 @@ input[type=range] { accent-color: var(--accent); }
 table.kv { width: 100%; border-collapse: collapse; }
 table.kv td { padding: var(--row-pad); border-bottom: 1px solid var(--line); vertical-align: top; word-break: break-word; }
 table.kv td.k { color: var(--muted); white-space: nowrap; width: 1%; }
-.sub { margin: 8px 10px 2px; font-weight: 600; font-size: .82em; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
+/* data-source separator bar — bold header + thick accent rule so docx / Mindat /
+   .cif / .dft blocks read as distinct sources */
+.sub {
+  margin: 14px 0 6px; padding: 5px 10px;
+  font-weight: 700; font-size: .82em; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--text);
+  background: rgb(var(--accent-rgb) / .10);
+  border-top: 3px solid rgb(var(--accent-rgb) / .55);
+  border-bottom: 1px solid var(--line);
+}
+.pane-body > .sub:first-child { margin-top: 0; }
 .cellgrid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 1px; margin: 6px 10px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .cellgrid div { background: rgb(255 255 255 / .03); padding: 3px 4px; font-size: .85em; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cellgrid .hdr { color: var(--muted); background: rgb(255 255 255 / .06); }

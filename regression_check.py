@@ -50,6 +50,8 @@ def cell_verdict(eid):
     r = res_for(eid); return r['cell'][0] if r else None
 def lam_flag(eid):
     r = res_for(eid); return bool(r and r['lam'] and r['lam'][0] == 'flag')
+def lam_verdict(eid):
+    r = res_for(eid); return (r['lam'][0] if (r and r['lam']) else None)
 def params(eid):
     r = res_for(eid); return set((r.get('params') or {})) if r else set()
 
@@ -63,6 +65,14 @@ CASES = [
  ("O002127 radiation OK (CuK found)",  lambda: not lam_flag('O002127')),
  ("I003815 radiation NOT flagged",     lambda: not lam_flag('I003815')),
  ("I003699 radiation IS flagged (real)",   lambda: lam_flag('I003699')),
+ # single anode matching the docx = OK, not 'verify' (powder shares the source via
+ # Gandolfi/crystal-rotation on a single-crystal instrument); two anodes stay 'verify'
+ ("I003562 lam OK (single MoKα source)",     lambda: lam_verdict('I003562') == 'ok'),
+ ("I003521 lam 'verify' kept (two anodes)",  lambda: lam_verdict('I003521') == 'verify'),
+ # --- 2. cell provenance: powder-refined cells must NOT be flagged 'from single-crystal' ---
+ ("I003562 no cell_provenance (powder-refined)", lambda: not extras('I003562', 'cell_provenance')),
+ ("I003599 no cell_provenance (ADP, not cell)",  lambda: not extras('I003599', 'cell_provenance')),
+ ("I003750 no cell_provenance (Dcalc boilerplate)", lambda: not extras('I003750', 'cell_provenance')),
  # --- cell parsing (cubic / uniaxial / rounded-table) ---
  ("I003634 cubic cell matches",         lambda: cell_verdict('I003634') == 'match'),
  ("I003751 uniaxial: only c flagged",        lambda: params('I003751') == {'c'}),

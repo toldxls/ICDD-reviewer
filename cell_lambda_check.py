@@ -693,7 +693,12 @@ def report(docx_path, pdf_path):
         if pk[1] and d.lam and not close(float(pk[1]), num_val(d.lam), abstol=0.003):
             print('          ↳ λ value docx=%s pdf=%s' % (d.lam, pk[1]))
     elif any_match:
-        print('  λ     : • docx anode %s appears in .pdf (no clear powder-context radiation found — verify)' % d.radiation)
+        distinct = {anode_key(r[0]) for r in rads}; distinct.discard(None)
+        if distinct == {dk}:
+            print('  λ     : ✓ docx anode %s matches the .pdf radiation (single source — powder shares it, '
+                  'e.g. Gandolfi/crystal-rotation on a single-crystal instrument)' % d.radiation)
+        else:
+            print('  λ     : • docx anode %s appears in .pdf (no clear powder-context radiation found — verify)' % d.radiation)
     else:
         anodes = sorted(set(r[0].capitalize() + 'Kα' for r in rads)) or ['(none found)']
         print('  λ     : ⚠ docx anode %s NOT found in .pdf; .pdf mentions: %s — verify'

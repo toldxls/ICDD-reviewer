@@ -143,8 +143,11 @@ confidence). The ten:
    when recognised (Rigaku R-AXIS RAPID II, XtaLAB Synergy, SuperNova, MiniFlex,
    SmartLab; Bruker D8/APEX; STOE; PANalytical Empyrean) to help confirm the
    designators (ℹ info — the geometry goes in a comment, *not* into `Spacing Instr.`).
-2. **cell not powder-refined** — strong phrasings only ("were not refined",
-   "from the single-crystal", "cell from SAED").
+2. **cell not powder-refined** — suppressed when the paper says the cell was
+   refined from the **powder** data; otherwise a strong phrasing ("not refined",
+   "from single-crystal data", "cell from SAED") fires only when its sentence is
+   about the **cell** and not boilerplate (not a comparison / calc-pattern note /
+   ADP-extinction / Dcalc density sentence). High precision, very low volume.
 3. **group / structural classification** — **authoritative via Mindat**
    (`mindat.py`): the mineral's `groupid` → group name, with the species'
    Nickel-Strunz code, cross-checked against the docx Strunz-mindat field.
@@ -552,7 +555,25 @@ Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
   (`CuK radiation`, `(CuK)`). Skip microprobe **standard** emission lines
   (`hematite (FeKα)`) and pick the powder radiation that carries an explicit λ.
   *(#mineral1 CuK = powder = match; #mineral2 CoKα not CuKα; #mineral3 Mo↔Cu
-  is a real flag.)*
+  is a real flag.)* When the paper names a **single anode** and it **matches** the
+  docx, that is unambiguously *the* radiation → `ok`, **not** `verify`, even if the
+  only mention sits in a single-crystal sentence (a powder pattern collected via a
+  Gandolfi-like / crystal-rotation motion on a single-crystal instrument shares the
+  source). Only **two-or-more distinct anodes** with no powder-context stay `verify`.
+  *(I003562/I003563 single MoKα = OK; I003521 Cu+Fe = verify.)*
+- **Cell provenance (check 2).** A powder cell that the paper says was refined from
+  the **powder data** (e.g. "Refined unit-cell parameters from the powder data using
+  CHECKCELL") is fine — never flag provenance, regardless of single-crystal prose.
+  Otherwise a "from the single-crystal / not refined" phrase fires ONLY when its
+  sentence is genuinely about the **cell** AND is not boilerplate: exclude a
+  comparison ("…agree with the SC values"), a calculated-pattern table note,
+  "…were not refined" about atom displacements / the extinction coefficient, and —
+  crucially — the **Dcalc density-calculation** sentence ("calculated density, based
+  on the empirical formula and the unit-cell refined from single-crystal data"),
+  which is universal new-mineral boilerplate, not an actionable provenance issue (a
+  SC cell is acceptable). Validated on the larger training corpus: **Part 1 14→0,
+  training 8→1** (only a genuine non-density "cell determined from single-crystal"
+  statement survives). *(I003562/I003599/I003600/I003750 = no flag.)*
 - **Cubic cells.** Papers give only `a`. Parse the `a (Å) … V (Å³)` table; accept
   as cubic when "cubic" is near OR V ≈ a³ (tight, 0.5%), and NOT when a differing
   `c (Å)` is present. *(#mineral.)*

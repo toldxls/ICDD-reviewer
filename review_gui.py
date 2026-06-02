@@ -313,7 +313,7 @@ def _attention(badges):
 # ------------------------------------------------------------------ cache
 # Bump when the serialized shape / badge logic changes, so a stale on-disk cache
 # (keyed only by source-file mtimes) is invalidated after a code change.
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 
 def _fingerprint(key):
     path = STATE['docx'][key]; eid = C.entry_id(path)
@@ -473,6 +473,47 @@ def api_pdf_page(key, n):
             for rect in page.search_for(t):
                 page.add_highlight_annot(rect)
         pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+        png = pix.tobytes('png')
+        doc.close()
+    except Exception:
+        abort(500)
+    return Response(png, mimetype='image/png')
+
+@app.route('/api/pdf/<key>/region/<int:n>.png')
+def api_pdf_region(key, n):
+    """A zoomed CROP of page n framing the search-hit text — ~half-page wide (one
+    column of a 2-column article) x ~quarter-page tall, rendered at 3x with the hits
+    highlighted. Falls back to a sensible region when nothing is found."""
+    pdf = _pdf_path(key)
+    if not pdf:
+        abort(404)
+    terms = [t for t in (request.args.get('find') or '').split('|') if t]
+    import fitz
+    try:
+        doc = fitz.open(pdf)
+        if n < 0 or n >= doc.page_count:
+            doc.close(); abort(404)
+        page = doc[n]
+        rects = []
+        for t in terms:
+            rects += list(page.search_for(t))
+        pr = page.rect
+        fw, fh = pr.width * 0.52, pr.height * 0.26          # ~half-column wide, quarter tall
+        if rects:
+            x0 = min(r.x0 for r in rects); y0 = min(r.y0 for r in rects)
+            x1 = max(r.x1 for r in rects); y1 = max(r.y1 for r in rects)
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+            halfw = max(fw / 2, (x1 - x0) / 2 + 12)          # never smaller than the hit span
+            halfh = max(fh / 2, (y1 - y0) / 2 + 12)
+        else:
+            cx, cy, halfw, halfh = pr.width / 2, pr.height * 0.28, fw / 2, fh / 2
+        cx = min(max(cx, pr.x0 + halfw), pr.x1 - halfw)      # keep the clip inside the page
+        cy = min(max(cy, pr.y0 + halfh), pr.y1 - halfh)
+        clip = fitz.Rect(cx - halfw, cy - halfh, cx + halfw, cy + halfh) & pr
+        for t in terms:
+            for r in page.search_for(t):
+                page.add_highlight_annot(r)
+        pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=clip)
         png = pix.tobytes('png')
         doc.close()
     except Exception:

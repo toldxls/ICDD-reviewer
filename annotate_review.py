@@ -126,7 +126,16 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
         if pk[1] and d.lam and not C.close(float(pk[1]), C.num_val(d.lam), abstol=0.003):
             res['lam'] = (res['lam'][0], res['lam'][1] + ' (λ docx=%s pdf=%s)' % (d.lam, pk[1]))
     elif any_match:
-        res['lam'] = ('verify', 'anode %s appears in .pdf but no clear powder-context radiation found' % d.radiation)
+        # When the paper names a SINGLE anode and it matches the docx, it is
+        # unambiguously THE radiation — the powder pattern shares the source even if
+        # the only mention sits in a single-crystal sentence (Gandolfi / crystal-
+        # rotation powder on a single-crystal instrument). Don't ask to verify.
+        distinct = {C.anode_key(r[0]) for r in rads}; distinct.discard(None)
+        if distinct == {dk}:
+            res['lam'] = ('ok', 'anode %s matches the .pdf radiation (single source — powder shares it, '
+                          'e.g. Gandolfi/crystal-rotation on a single-crystal instrument)' % d.radiation)
+        else:
+            res['lam'] = ('verify', 'anode %s appears in .pdf but no clear powder-context radiation found' % d.radiation)
     else:
         anodes = sorted(set(r[0].capitalize() + 'Kα' for r in rads)) or ['(none found)']
         res['lam'] = ('flag', 'docx anode %s NOT found in .pdf; .pdf mentions: %s'

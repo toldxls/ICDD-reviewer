@@ -123,6 +123,14 @@
             <div class="pdf-search">
               <input type="search" id="pdf-q" placeholder="search the paper… (Enter)" autocomplete="off">
               <span id="pdf-hits" class="muted"></span>
+              <span class="spacer"></span>
+              <div class="zoomctl">
+                <button id="zoom-hit" title="zoom to the highlighted text (same as ? look)">⊕ hit</button>
+                <button id="zoom-page" class="on" title="fit the whole page">page</button>
+                <button id="zoom-out" title="zoom out">−</button>
+                <span id="zoom-val">100%</span>
+                <button id="zoom-in" title="zoom in">+</button>
+              </div>
             </div>
             <div id="pdf-view"><div class="empty muted">no .pdf paired</div></div>
             <div id="pdf-snippet" class="snippet"></div>

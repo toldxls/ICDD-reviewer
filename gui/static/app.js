@@ -11,8 +11,14 @@ const S = {
   view: 'fixes',      // dashboard lens: fixes | attention | clean | all
   pdfPage: 0,
   pdfTerms: [],
+  pdfMode: 'page',    // 'page' = scrollable full pages | 'region' = zoomed crop around the hit
+  pdfZoom: 1,         // display scale of whatever is shown
+  focusKey: null,     // the finding currently driving the PDF pane
+  pdfIO: null,        // IntersectionObserver for lazy page loading + current-page tracking
+  pdfRatios: {},      // page -> visible ratio (to pick the current page)
   saveTimer: null,
 };
+const enc = encodeURIComponent;
 
 // ---- tiny DOM helper -------------------------------------------------------
 function el(tag, attrs, ...kids) {
@@ -83,10 +89,8 @@ async function openEntry(key) {
   renderFindings();
   renderDocx();
   renderMindat();
-  // default PDF focus = the cell evidence
-  if (S.a.pdf) { S.pdfTerms = S.a.pdf.terms || []; S.pdfPage = S.a.pdf.evidence_page || 0; }
-  else { S.pdfTerms = []; S.pdfPage = 0; }
-  renderPdf();
+  // default PDF focus = the cell evidence (full-page scroll, jumps to the cell page)
+  S.pdfMode = 'page'; S.pdfZoom = 1;
   focusFinding('cell');
   renderList();
 }
@@ -205,7 +209,9 @@ function triageControls(fkey, t) {
   const mk = (v, lbl) => el('button', {
     class: 'tbtn ' + v + (t.verdict === v ? ' on' : ''),
     onclick: ev => { ev.stopPropagation(); t.verdict = (t.verdict === v ? null : v);
-                     saveTriage(); renderFindings(); }
+                     saveTriage(); renderFindings();
+                     // '? look' also zooms the PDF to this finding's highlighted text
+                     if (v === 'look' && t.verdict === 'look') zoomToHighlight(fkey); }
   }, lbl);
   const note = el('input', { class: 'tnote', type: 'text', placeholder: 'note…',
     value: t.note || '',
@@ -215,49 +221,136 @@ function triageControls(fkey, t) {
     mk('dismiss', '✗ dismiss'), mk('look', '? look'), note);
 }
 
-// focus a finding -> drive the PDF pane + snippet
-function focusFinding(fkey) {
-  document.querySelectorAll('.finding').forEach(d =>
-    d.classList.toggle('focus', d.getAttribute('data-fkey') === fkey));
+// the PDF search terms + snippet for a given finding
+function termsFor(fkey) {
   const a = S.a;
-  let terms = [], snippet = '', label = '';
+  let terms = [], snippet = '', label = '', page = (a.pdf ? a.pdf.evidence_page || 0 : 0);
   if (fkey === 'cell' || fkey.startsWith('param:')) {
     terms = (a.pdf && a.pdf.terms) || [];
     if (a.cell.matched) { snippet = a.cell.matched.snippet || ''; label = 'matched cell context [' + (a.cell.matched.context || '?') + ']'; }
-    if (a.pdf) S.pdfPage = a.pdf.evidence_page || 0;
   } else if (fkey === 'lam') {
     const m = /([A-Za-z]{1,2})\s*K/.exec(a.docx.radiation || '');
     if (m) terms = [m[1] + 'K'];
   } else if (fkey.startsWith('f')) {
     const f = a.findings[parseInt(fkey.slice(1), 10)];
-    if (f) { const nums = (f.msg.match(/\d+\.\d{2,}/g) || []).slice(0, 2); terms = nums; }
+    if (f) terms = (f.msg.match(/\d+\.\d{2,}/g) || []).slice(0, 2);
   }
-  S.pdfTerms = terms;
-  renderPdf(snippet, label, terms);
+  return { terms, snippet, label, page };
+}
+
+// focus a finding -> drive the PDF pane (full page) + snippet
+function focusFinding(fkey) {
+  S.focusKey = fkey;
+  document.querySelectorAll('.finding').forEach(d =>
+    d.classList.toggle('focus', d.getAttribute('data-fkey') === fkey));
+  const t = termsFor(fkey);
+  S.pdfTerms = t.terms; S.pdfPage = t.page; S.pdfMode = 'page'; S.pdfZoom = 1;
+  renderPdf(t.snippet, t.label, t.terms);
+}
+
+// zoom the PDF to a cropped region framing the finding's highlighted text
+async function zoomToHighlight(fkey) {
+  S.focusKey = fkey;
+  const t = termsFor(fkey);
+  if (!S.a.pdf || !t.terms.length) { focusFinding(fkey); return; }   // nothing to locate
+  let page = t.page;
+  try {
+    const r = await fetch(`/api/pdf/${encodeURIComponent(S.a.key)}/search?q=${encodeURIComponent(t.terms[0])}`).then(x => x.json());
+    if (r.hits && r.hits.length) page = r.hits[0].page;
+  } catch (e) { /* keep evidence page */ }
+  S.pdfTerms = t.terms; S.pdfPage = page; S.pdfMode = 'region'; S.pdfZoom = 1;
+  renderPdf(t.snippet, t.label, t.terms);
 }
 
 // ---- pdf pane --------------------------------------------------------------
 function renderPdf(snippet, snipLabel, hlTerms) {
   const a = S.a, view = $('#pdf-view');
   $('#pdf-name').textContent = a.pdf ? a.pdf.name : '';
+  if (S.pdfIO) { S.pdfIO.disconnect(); S.pdfIO = null; }
   if (!a.pdf) {
     view.innerHTML = '<div class="empty muted">no .pdf paired for this entry</div>';
     $('#pdf-pager').innerHTML = ''; $('#pdf-snippet').innerHTML = '';
     return;
   }
   const find = (S.pdfTerms || []).join('|');
-  const url = `/api/pdf/${encodeURIComponent(a.key)}/page/${S.pdfPage}.png?find=${encodeURIComponent(find)}`;
-  view.replaceChildren(el('img', { src: url, alt: 'page ' + (S.pdfPage + 1) }));
+  if (S.pdfMode === 'region') {
+    const img = el('img', { src: `/api/pdf/${enc(a.key)}/region/${S.pdfPage}.png?find=${enc(find)}`,
+                            alt: 'highlight region' });
+    img.style.width = (S.pdfZoom * 100) + '%';
+    view.replaceChildren(img);
+  } else {
+    buildPageStack(a, find);
+  }
   renderPager();
+  syncZoomUI();
   if (snippet !== undefined) renderSnippet(snippet, snipLabel, hlTerms || S.pdfTerms);
+}
+
+// a continuously-scrollable stack of all pages, lazy-loaded as they approach view
+function buildPageStack(a, find) {
+  const view = $('#pdf-view');
+  const url = i => `/api/pdf/${enc(a.key)}/page/${i}.png?find=${enc(find)}`;
+  const wrap = el('div', { class: 'pdf-pages' });
+  const slots = [];
+  for (let i = 0; i < a.pdf.pages; i++) {
+    const img = el('img', { alt: 'page ' + (i + 1) });
+    img.style.width = (S.pdfZoom * 100) + '%';
+    const slot = el('div', { class: 'pdf-page', 'data-page': i }, img);
+    wrap.append(slot); slots.push(slot);
+  }
+  view.replaceChildren(wrap);
+  S.pdfRatios = {};
+  S.pdfIO = new IntersectionObserver(ents => {
+    for (const e of ents) {
+      const i = +e.target.getAttribute('data-page');
+      S.pdfRatios[i] = e.isIntersecting ? e.intersectionRatio : 0;
+      if (e.isIntersecting) {                       // lazy-load on approach
+        const img = e.target.querySelector('img');
+        if (img && !img.src) img.src = url(i);
+      }
+    }
+    let best = S.pdfPage, r = -1;                    // current page = most-visible slot
+    for (const k in S.pdfRatios) if (S.pdfRatios[k] > r) { r = S.pdfRatios[k]; best = +k; }
+    if (best !== S.pdfPage) { S.pdfPage = best; updatePagerLabel(); }
+  }, { root: view, rootMargin: '600px 0px', threshold: [0, 0.25, 0.5, 1] });
+  slots.forEach(s => S.pdfIO.observe(s));
+  const target = slots[Math.min(S.pdfPage, slots.length - 1)];   // jump to the evidence page
+  if (target) requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
+}
+
+function syncZoomUI() {
+  $('#zoom-val').textContent = Math.round(S.pdfZoom * 100) + '%';
+  $('#zoom-page').classList.toggle('on', S.pdfMode === 'page');
+  $('#zoom-hit').classList.toggle('on', S.pdfMode === 'region');
+}
+
+function setZoom(z) {
+  S.pdfZoom = Math.max(0.5, Math.min(4, z));
+  $('#pdf-view').querySelectorAll('img').forEach(img => img.style.width = (S.pdfZoom * 100) + '%');
+  $('#zoom-val').textContent = Math.round(S.pdfZoom * 100) + '%';
+}
+
+function updatePagerLabel() {
+  const l = document.getElementById('pager-label');
+  if (l && S.a && S.a.pdf) l.textContent = `p.${S.pdfPage + 1} / ${S.a.pdf.pages}`;
+}
+function scrollToPage(i) {
+  i = Math.max(0, Math.min(S.a.pdf.pages - 1, i));
+  const slot = $('#pdf-view').querySelector(`.pdf-page[data-page="${i}"]`);
+  if (slot) slot.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 function renderPager() {
   const a = S.a, p = $('#pdf-pager'); p.innerHTML = '';
+  if (S.pdfMode === 'region') {
+    p.append(el('span', { class: 'muted' }, 'highlight crop · '),
+      el('button', { onclick: () => { S.pdfMode = 'page'; S.pdfZoom = 1; renderPdf(undefined); } }, 'full page'));
+    return;
+  }
   p.append(
-    el('button', { onclick: () => { if (S.pdfPage > 0) { S.pdfPage--; renderPdf(undefined); } } }, '‹'),
-    el('span', {}, `p.${S.pdfPage + 1} / ${a.pdf.pages}`),
-    el('button', { onclick: () => { if (S.pdfPage < a.pdf.pages - 1) { S.pdfPage++; renderPdf(undefined); } } }, '›'));
+    el('button', { onclick: () => scrollToPage(S.pdfPage - 1) }, '‹'),
+    el('span', { id: 'pager-label' }, `p.${S.pdfPage + 1} / ${a.pdf.pages}`),
+    el('button', { onclick: () => scrollToPage(S.pdfPage + 1) }, '›'));
 }
 
 function renderSnippet(snippet, label, terms) {
@@ -278,7 +371,7 @@ async function pdfSearch(q) {
   $('#pdf-hits').textContent = hits.length
     ? `${hits.reduce((s, h) => s + h.count, 0)} hit(s) on ${hits.length} page(s)`
     : 'no hits';
-  if (hits.length) { S.pdfPage = hits[0].page; S.pdfTerms = [q]; renderPdf('', '', [q]); }
+  if (hits.length) { S.pdfPage = hits[0].page; S.pdfTerms = [q]; S.pdfMode = 'page'; S.pdfZoom = 1; renderPdf('', '', [q]); }
 }
 
 // ---- docx pane -------------------------------------------------------------
@@ -457,6 +550,12 @@ $('#rerun-all').addEventListener('click', () =>
 $('#prev').addEventListener('click', () => step(-1));
 $('#next').addEventListener('click', () => step(1));
 $('#pdf-q').addEventListener('keydown', e => { if (e.key === 'Enter') pdfSearch(e.target.value.trim()); });
+$('#zoom-in').addEventListener('click', () => setZoom(S.pdfZoom + 0.25));
+$('#zoom-out').addEventListener('click', () => setZoom(S.pdfZoom - 0.25));
+$('#zoom-hit').addEventListener('click', () => { if (S.focusKey) zoomToHighlight(S.focusKey); });
+$('#zoom-page').addEventListener('click', () => {
+  S.pdfMode = 'page'; S.pdfZoom = 1; renderPdf(undefined);
+});
 $('#export').addEventListener('click', async () => {
   const r = await fetch('/api/triage/export', { method: 'POST' }).then(x => x.json());
   $('#export').textContent = 'Exported ✓';

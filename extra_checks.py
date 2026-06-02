@@ -247,31 +247,59 @@ def check1_geometry(e, text):
     return out
 
 # ----------------------------------------------------------------------------- 2. cell not refined from powder
-PROV_KW = ['single-crystal', 'single crystal', 'scxrd', 'saed', 'selected-area',
-           'electron diffraction', 'hrtem', 'fft', 'ebsd', 'precession electron']
+# A statement that the (unit-)cell WAS refined/determined from the POWDER data —
+# if present, the powder cell is fine, regardless of any single-crystal prose.
+# This is the common case of a powder pattern collected on a single-crystal
+# instrument via a Gandolfi-like / crystal-rotation motion (a SC cell is reported
+# alongside, but the entry's cell is powder-refined). e.g. nigelcookite/
+# plumbojohntomaite: "Refined unit-cell parameters from the powder data using CHECKCELL".
+POWDER_REFINED = re.compile(
+    r'(unit[- ]?cell|lattice)\s*(parameters?|constants?|dimensions?)?[^.]{0,80}\b(from|using|by|based on|with)\b[^.]{0,50}\bpowder\b'
+    r'|\bpowder\b[^.]{0,90}(unit[- ]?cell|lattice)[^.]{0,50}(refin|determin|index|calculat)'
+    r'|refined\s+from\s+the\s+powder\s+data', re.I)
+_CELLISH = re.compile(r'unit[- ]?cell|lattice|cell parameter|cell constant|cell volume', re.I)
+# the strong phrase must NOT sit in a comparison ("…agree with the single-crystal
+# values"), a calculated-pattern table note ("calculated values from single-crystal
+# data"), or an unrelated 'not refined' (atom displacement / extinction coefficient).
+_PROV_COMPARE = re.compile(r'agree|consistent|compar|similar to|in line with|and powder', re.I)
+_PROV_CALCNOTE = re.compile(r'calculated pattern|for the calculated|calculated value|calculated d[- ]?spacing', re.I)
+_PROV_NONCELL = re.compile(r'extinction|displacement|thermal|occupanc|isotropic|anisotropic|u\s*iso|u\s*eq|atom', re.I)
+# Routine "Dcalc was computed from the empirical formula and the (single-crystal)
+# unit-cell" boilerplate appears in nearly every new-mineral description — it is NOT
+# an actionable provenance problem (a single-crystal cell is acceptable), so a
+# density-calculation sentence does not count. (Corpus: this was 7 of 8 training fires.)
+_PROV_DENSITY = re.compile(r'densit|d[_\s-]?calc|d[_\s-]?x\b|d[_\s-]?meas|g\s*[^A-Za-z0-9]{0,2}\s*cm', re.I)
+
+def _sentence_around(text, i):
+    a = text.rfind('.', 0, i); b = text.find('.', i)
+    return re.sub(r'\s+', ' ', text[a + 1:(b if b > 0 else i + 140)]).strip()
+
 def check2_cell_provenance(e, text):
     out = []
-    spac = (e.instr.get('spacing_instr') or '').strip().lower()
-    # docx signal: the cell/data is explicitly Calculated (overlaps with #4 but
-    # for the CELL provenance specifically).
     if not text:
         return out
-    # Strong, specific phrasings only — a paper merely HAVING a single-crystal
-    # section is not evidence the entry's cell came from it (that fired on 27/44).
-    # We want statements that the powder cell was NOT refined, or was taken from
-    # single-crystal/electron data.
-    STRONG = ['were not refined', 'was not refined', 'not refined from',
-              'cell parameters from single', 'from single-crystal data', 'from the single-crystal',
-              'cell from scxrd', 'cell from saed', 'from the saed', 'refined from single',
-              'taken from the single-crystal', 'derived from single-crystal']
     low = text.lower()
-    hits = [p for p in STRONG if p in low]
-    if hits:
-        sent = _find_sentences(text, any_of=hits)
-        out.append(Finding('cell_provenance', 'info',
-                   ".pdf indicates the cell was not powder-refined / came from single-crystal "
-                   "or electron data — confirm provenance.",
-                   (sent[0] if sent else hits[0])[:160]))
+    if POWDER_REFINED.search(text):       # cell is powder-refined — never flag provenance
+        return out
+    # Strong, specific phrasings only that the powder cell was NOT refined, or was
+    # taken from single-crystal/electron data — and only when the matching sentence
+    # is genuinely about the CELL (not a comparison / calc-note / ADP-extinction).
+    STRONG = ['were not refined', 'was not refined', 'not refined from',
+              'cell parameters from single', 'from single-crystal data',
+              'cell from scxrd', 'cell from saed', 'from the saed',
+              'taken from the single-crystal', 'derived from single-crystal', 'refined from single']
+    for p in STRONG:
+        i = low.find(p)
+        while i >= 0:
+            sent = _sentence_around(text, i); sl = sent.lower()
+            if (_CELLISH.search(sl) and not _PROV_COMPARE.search(sl)
+                    and not _PROV_CALCNOTE.search(sl) and not _PROV_NONCELL.search(sl)
+                    and not _PROV_DENSITY.search(sl)):
+                out.append(Finding('cell_provenance', 'info',
+                           ".pdf indicates the cell was not powder-refined / came from single-crystal "
+                           "or electron data — confirm provenance.", sent[:160]))
+                return out
+            i = low.find(p, i + 1)
     return out
 
 # ----------------------------------------------------------------------------- 3. group / structural classification
