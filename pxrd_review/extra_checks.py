@@ -36,16 +36,6 @@ import re, zipfile, math, html
 from collections import namedtuple
 from xml.etree import ElementTree as ET
 
-# --- repo layout: make the sibling code dirs importable by bare name -----------
-import os as _o, sys as _s
-_d = _o.path.dirname(_o.path.abspath(__file__))
-_r = _o.path.dirname(_d) if _o.path.basename(_d) in ('tools', 'gui', 'mindat') else _d
-for _x in ('tools', 'mindat', 'gui'):
-    _p = _o.path.join(_r, _x)
-    if _o.path.isdir(_p) and _p not in _s.path:
-        _s.path.insert(0, _p)
-# -------------------------------------------------------------------------------
-
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 def _t(e): return e.tag.replace(W, '')
 
@@ -405,7 +395,7 @@ def check3_classification(e, text):
     # Replaces guessing from prose. Cross-checks the docx Strunz-mindat field.
     mindat_found = False
     try:
-        import mindat
+        from pxrd_review import mindat
         mindat.refresh_if_stale()      # auto-refresh if the cache is >2 weeks old (once/process)
         if mindat.available():
             nm = e.name or e.primary or ''
@@ -892,7 +882,7 @@ def mindat_struct(name, exact=False):
     if not name:
         return None
     try:
-        import mindat
+        from pxrd_review import mindat
         if _MINDAT_STRUCT_IDX is None:
             _MINDAT_STRUCT_IDX = {}
             for r in mindat.struct_db().get('recs', []):
@@ -1966,7 +1956,7 @@ def check22_cross_sources(e, cif_data, dft_data):
                               html.unescape(re.sub(r'</?su[bp]>', '', Mx['formula']))[:48]), None))
     # IMA status from the lightweight cache (QUESTIONABLE species are worth a look)
     try:
-        import mindat
+        from pxrd_review import mindat
         rec = mindat.lookup(e.name or e.primary or '')
         st = (rec or {}).get('ima_status') or []
         st = st if isinstance(st, list) else [st]
@@ -2033,7 +2023,7 @@ def print_findings(path, text):
 
 if __name__ == '__main__':
     import sys, glob, os
-    import cell_lambda_check as C
+    from pxrd_review import cell_lambda_check as C
     folder = sys.argv[1]
     only = sys.argv[2] if len(sys.argv) > 2 else None
     idx = C.pdf_index(folder)

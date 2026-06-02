@@ -18,24 +18,15 @@ Flagged entries are written as '<name>_edited.docx' so the ones the tool
 commented on stand out in the folder listing; clean entries keep the source name.
 
 Usage:
-    python3 tools/annotate_review.py "/path/to/Part 1"                 # -> <folder>/review_out
-    python3 tools/annotate_review.py "/path/to/Part 1" --id I003416
-    python3 tools/annotate_review.py "/path/to/Part 1" --out DIR
-    python3 tools/annotate_review.py "/path/to/Part 1" --inplace       # edit originals (asks nothing)
+    python3 -m pxrd_review.annotate_review "/path/to/Part 1"                 # -> <folder>/review_out
+    python3 -m pxrd_review.annotate_review "/path/to/Part 1" --id I003416
+    python3 -m pxrd_review.annotate_review "/path/to/Part 1" --out DIR
+    python3 -m pxrd_review.annotate_review "/path/to/Part 1" --inplace       # edit originals (asks nothing)
 """
 import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime, json
 
-# --- repo layout: make the sibling code dirs importable by bare name -----------
-import os as _o, sys as _s
-_d = _o.path.dirname(_o.path.abspath(__file__))
-_r = _o.path.dirname(_d) if _o.path.basename(_d) in ('tools', 'gui', 'mindat') else _d
-for _x in ('tools', 'mindat', 'gui'):
-    _p = _o.path.join(_r, _x)
-    if _o.path.isdir(_p) and _p not in _s.path:
-        _s.path.insert(0, _p)
-# -------------------------------------------------------------------------------
-import cell_lambda_check as C
-import extra_checks as X
+from pxrd_review import cell_lambda_check as C
+from pxrd_review import extra_checks as X
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
@@ -620,7 +611,7 @@ def main():
     cif_idx = C.cif_index(args.folder)
     dft_idx = C.dft_index(args.folder)
     try:                                    # keep the Mindat structural cache current (cross-source check)
-        import mindat; mindat.refresh_struct_if_stale()
+        from pxrd_review import mindat; mindat.refresh_struct_if_stale()
     except Exception:
         pass
     docs = sorted(f for f in glob.glob(os.path.join(args.folder, '*.docx'))

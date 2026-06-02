@@ -3,6 +3,10 @@
 __pycache__/
 *.pyc
 .DS_Store
+# packaging / editable-install artifacts
+*.egg-info/
+build/
+dist/
 # review-mode GUI sidecars (written into a data folder's review_out/, never the repo)
 gui_cache.json
 triage.json

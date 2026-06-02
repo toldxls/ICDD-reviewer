@@ -18,8 +18,8 @@ Key: read from $MINDAT_API_KEY or review_tool/.mindat_key (untracked).
 Cache: review_tool/.cache/mindat_ima.json
 
 CLI:
-    python3 mindat/mindat.py --refresh            # (re)build the cache from the API
-    python3 mindat/mindat.py --lookup "#mineral"  # test a single name against the cache
+    python3 -m pxrd_review.mindat --refresh            # (re)build the cache from the API
+    python3 -m pxrd_review.mindat --lookup "#mineral"  # test a single name against the cache
 """
 import os, re, json, time, ssl, datetime, urllib.request, urllib.error
 
@@ -38,10 +38,9 @@ def _ssl_ctx():
 _CTX = _ssl_ctx()
 
 BASE = 'https://api.mindat.org/v1'
-HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(HERE) if os.path.basename(HERE) == 'mindat' else HERE   # repo root
-CACHE = os.path.join(_ROOT, '.cache', 'mindat_ima.json')
-KEYFILE = os.path.join(_ROOT, '.mindat_key')
+from pxrd_review import paths as _paths
+CACHE = os.path.join(_paths.cache_dir(), 'mindat_ima.json')
+KEYFILE = _paths.keyfile()
 FIELDS = 'id,name,groupid,strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4,ima_status'
 
 # ----------------------------------------------------------------------------- auth
@@ -89,7 +88,7 @@ def _pull(key, **params):
 # Mindat integer code (consistent per space group; 0 = unknown). b/angles == 0
 # mean 'uniaxial / symmetry-default' (b = a).
 STRUCT_FIELDS = 'id,name,groupid,spacegroup,a,b,c,alpha,beta,gamma,elements,ima_formula,ima_status'
-STRUCT_CACHE = os.path.join(_ROOT, '.cache', 'mindat_struct.json')
+STRUCT_CACHE = os.path.join(_paths.cache_dir(), 'mindat_struct.json')
 
 def _f(x):
     try:

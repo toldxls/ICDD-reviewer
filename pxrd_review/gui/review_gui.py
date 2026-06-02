@@ -21,8 +21,8 @@ Its only writes are its own sidecars (gui_cache.json, triage.json,
 triage_report.txt) under <folder>/review_out.
 
 Run:
-    python3 gui/review_gui.py "/path/to/entries"            # opens http://127.0.0.1:5000
-    python3 gui/review_gui.py "/path/to/entries" --port 8000 --no-browser
+    python3 -m pxrd_review.gui.review_gui "/path/to/entries"            # opens http://127.0.0.1:5000
+    python3 -m pxrd_review.gui.review_gui "/path/to/entries" --port 8000 --no-browser
 
 Security: binds to 127.0.0.1 only (not the network), Flask debug OFF, and the
 browser only ever sends an entry KEY that the server maps to a file it indexed at
@@ -31,18 +31,10 @@ machine.
 """
 import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess, hashlib
 
-# --- repo layout: make the sibling code dirs importable by bare name -----------
-import os as _o, sys as _s
-_d = _o.path.dirname(_o.path.abspath(__file__))
-_r = _o.path.dirname(_d) if _o.path.basename(_d) in ('tools', 'gui', 'mindat') else _d
-for _x in ('tools', 'mindat', 'gui'):
-    _p = _o.path.join(_r, _x)
-    if _o.path.isdir(_p) and _p not in _s.path:
-        _s.path.insert(0, _p)
-# -------------------------------------------------------------------------------
-import cell_lambda_check as C
-import extra_checks as X
-import annotate_review as A
+from pxrd_review import cell_lambda_check as C
+from pxrd_review import extra_checks as X
+from pxrd_review import annotate_review as A
+from pxrd_review import paths as P
 
 try:
     from flask import Flask, jsonify, request, send_file, abort, Response
@@ -50,8 +42,7 @@ except ImportError:
     sys.exit("Flask is not installed — run: pip3 install -r requirements.txt "
              "(the GUI needs Flask; the CLI checks do not).")
 
-HERE = os.path.dirname(os.path.abspath(__file__))   # the gui/ folder
-ROOT = os.path.dirname(HERE)                          # repo root (tools/ is a sibling)
+HERE = os.path.dirname(os.path.abspath(__file__))   # the packaged gui/ folder (assets live here)
 app = Flask(__name__, static_folder=os.path.join(HERE, 'static'),
             static_url_path='/static')
 
@@ -158,7 +149,7 @@ def _mindat_block(name):
              'formula': _u(M.get('formula') or ''), 'elements': M.get('elements') or [],
              'groupid': M.get('groupid'), 'group': None, 'ima_status': None}
     try:
-        import mindat
+        from pxrd_review import mindat
         g = mindat.group_of(name)
         if g:
             block['group'], _strunz, block['matched_species'], block['ima_status'] = g
@@ -424,7 +415,7 @@ def build_index(folder, out_dir):
     STATE['folder'] = os.path.abspath(folder)
     STATE['out_dir'] = os.path.abspath(out_dir or os.path.join(folder, 'review_out'))
     try:
-        import mindat; mindat.refresh_struct_if_stale()
+        from pxrd_review import mindat; mindat.refresh_struct_if_stale()
     except Exception:
         pass
     STATE['pdf'] = C.pdf_index(folder)
@@ -604,14 +595,17 @@ def _annotate_cmd(extra):
     """annotate_review invocation that feeds the triage sidecar (comment-only:
     suppress dismissed, fold notes, override Accept). No --force, so manual edits
     in an existing output are preserved (refresh-in-place)."""
-    return [sys.executable, os.path.join(ROOT, 'tools', 'annotate_review.py'), STATE['folder'],
+    return [sys.executable, '-m', 'pxrd_review.annotate_review', STATE['folder'],
             '--triage', _triage_path()] + extra
 
 def _run_annotate(cmd):
     # ensure the sidecar the rerun consumes is on disk
     _save_triage()
+    # the subprocess is a fresh interpreter: put the repo root on PYTHONPATH so
+    # `-m pxrd_review.annotate_review` resolves even when not pip-installed (dev)
+    env = {**os.environ, 'PYTHONPATH': P.repo_root() + os.pathsep + os.environ.get('PYTHONPATH', '')}
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=1800)
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=P.repo_root(), env=env, timeout=1800)
     except Exception as ex:
         return jsonify({'ok': False, 'error': str(ex)}), 500
     tail = '\n'.join((r.stdout or '').strip().splitlines()[-12:])

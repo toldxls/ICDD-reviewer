@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pxrd-review"
+version = "0.1.0"
+description = "PXRD mineral-review tool — validate an ICDD entry .docx against the paper (.pdf), author .cif, ICDD .dft and the Mindat API; write Word comments + highlights into copies."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Travis Olds" }]
+dependencies = [
+    "PyMuPDF",          # fitz — PDF text + render (AGPL-3.0 or commercial; see NOTICE)
+    "python-docx>=1.1", # docx parse + Word comments API
+    "lxml",             # docx XML
+    "Flask",            # review-mode GUI only
+    "certifi",          # CA certs for the Mindat API (optional at runtime)
+]
+
+[project.scripts]
+pxrd = "pxrd_review.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pxrd_review*"]
+
+[tool.setuptools.package-data]
+"pxrd_review.gui" = ["index.html", "static/*"]
+"pxrd_review" = ["assets/*"]
