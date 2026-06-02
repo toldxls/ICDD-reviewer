@@ -1587,6 +1587,13 @@ def check19_intensity_detector(e, text):
     it = (e.instr.get('intensity_type') or '').strip()
     if not it or not text:
         return out
+    # Intensity Type is meaningless for most CALCULATED patterns (it's a modelling
+    # choice, not a detector fact). The patterns where it does matter are recorded
+    # as measured in the docx (e.g. Kiryuite is Spacing=Diffractometer even though
+    # the paper calculated the pattern), so they still reach this check.
+    if (e.instr.get('spacing_instr') or '').strip().lower() == 'calculated' or \
+       (e.instr.get('intensity_instr') or '').strip().lower() == 'calculated':
+        return out
     area = bb = False
     for s in _sentences(text):
         if not _POWDER_CTX.search(s):

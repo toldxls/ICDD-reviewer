@@ -229,8 +229,10 @@ and writes the suggested value; it never rewrites a field.
     pseudo-Gandolfi, Guinier camera, R-AXIS RAPID, curved imaging plate) integrate the
     2D ring → **Integrated**; **Bragg-Brentano** slit optics → **Peak**. Detected in a
     powder-context sentence; flags the mismatch (⚑). "Guinier" is guarded against the
-    author surname. Validated ~90% consistent; independently reproduces the reviewer's
-    own I001361 comment.
+    author surname. **Skips docx-Calculated patterns** (Intensity Type is a modelling
+    choice there, not a detector fact); patterns where it matters are recorded as
+    measured in the docx and still reach the check. Validated ~90% consistent;
+    independently reproduces the reviewer's own I001361 and I002366 comments.
 20. **Calculated pattern, λ not stated** — when the docx pattern is Calculated and its
     λ (and anode) appear nowhere in the paper, flag "confirm the wavelength used" (⚑).
     Catches default CuKα λ on synchrotron-derived calcs (Feiite/Liuite/Tschaunerite).
@@ -505,7 +507,10 @@ Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
   with camera/method context — it is also the author surname (André Guinier), and a
   "Guinier et al." citation must NOT be read as the method. Do NOT teach the full
   Integrated/Peak distinction from raw data — only the geometry rule. *(I003657 BB→Peak,
-  I003563 Gandolfi→Integrated; I003815 real via R-AXIS image-plate.)*
+  I003563 Gandolfi→Integrated; I003815 real via R-AXIS image-plate.)* **Skip
+  docx-Calculated patterns** — Intensity Type is meaningless for most calculated
+  patterns; the ones where it matters are docx-marked measured (e.g. I002366 Kiryuite
+  is Diffractometer though the paper calculated it). *(I003822/I002983 calc = no flag.)*
 - **Calculated wavelength (check20).** Flag only when NEITHER the numeric λ (~3 s.f. or
   2-dec) NOR the anode element (`CuK`…) appears in the paper — a paper that says "CuKα"
   without the number is fine. *(synchrotron calcs with a default CuKα λ = flag.)*

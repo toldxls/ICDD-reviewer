@@ -100,6 +100,7 @@ CASES = [
  # --- 19. Intensity Type follows the detector (area→Integrated, BB→Peak) ---
  ("I003657 Bragg-Brentano -> Peak flag",     lambda: bool(extras('I003657', 'intensity_type'))),
  ("I003563 Gandolfi/area -> Integrated flag", lambda: bool(extras('I003563', 'intensity_type'))),
+ ("I003822 calc pattern -> no intensity_type", lambda: not extras('I003822', 'intensity_type')),
  # --- 20. calculated pattern, λ not stated in the paper ---
  ("I003511 calc pattern λ not in paper",     lambda: bool(extras('I003511', 'calc_wavelength'))),
  # --- 21. Primary name normalization: corrected names must NOT flag ---
