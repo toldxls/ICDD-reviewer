@@ -467,10 +467,14 @@ edits a docx**. Its only writes are sidecars under `<folder>/review_out`:
   canonical-λ checks) are low value to ICDD, so they are shown but **muted and
   excluded from the fixes count/sort** (the anode-mismatch λ *flag* — Mo vs Cu — is
   a real error and is **not** demoted).
-- **Entry detail** — side-by-side panes: **findings** (the cell & λ verdicts plus
-  every extra finding, each tagged **written to docx** vs **console-only**, with
-  its docx anchor, low-priority ones muted, and per-finding triage ✓ confirm /
-  ✗ dismiss / ? look + note); **.pdf evidence** (the page rendered via PyMuPDF with
+- **Entry detail** — side-by-side panes: **findings** — the cell-match result, the
+  radiation result, and every extra finding, each badged by severity:
+  **FLAG** (red, a real problem, written to docx) · **CHECK** (orange, confirm —
+  info-level / λ verify) · **NOTE** (gray, low-confidence FYI) · **OK** (green, clean
+  cell match), with a coloured left-border, a written-to-docx/console-only tag, its
+  docx anchor, low-priority ones muted, and per-finding triage ✓ confirm / ✗ dismiss /
+  ? look + note. A **"hide notes"** toggle (persisted) drops the gray NOTE rows so you
+  can focus on the actionable FLAG/CHECK items. **.pdf evidence** (the page rendered via PyMuPDF with
   the cell values highlighted, page nav, a search box over the whole paper, and the
   captured snippet beneath); **docx values** (Author's cell grid with the flagged
   axes coloured, radiation, instrumentation, formulas, existing reviewer comments);
@@ -586,6 +590,20 @@ Run it after touching `tools/extra_checks.py`, `tools/cell_lambda_check.py`, or
   SC cell is acceptable). Validated on the larger training corpus: **Part 1 14→0,
   training 8→1** (only a genuine non-density "cell determined from single-crystal"
   statement survives). *(I003562/I003599/I003600/I003750 = no flag.)*
+- **Cell source — PXRD vs SCXRD (`cell_source`).** ICDD entries carry the **powder**
+  cell, so using the single-crystal cell is worth surfacing. A matched cell's source
+  is labelled by **powder cues first** (GSAS/EXPGUI/Rietveld/UnitCell/CHEKCELL/μXRD/
+  "from the powder data" — these WIN over a stray "single-crystal" word elsewhere in
+  the snippet), then **positive** single-crystal cues (single-crystal/SCXRD/centroids/
+  "N reflections"), then a hedged "refined unit-cell … space group" guess. A docx
+  **FLAG** fires ONLY on a *definitive* single-crystal cell (positive SC cue, no powder
+  cue) that ALSO has a same-phase powder cell reported (sorted-axis match within 10 %,
+  differing >tol) — "used the SCXRD cell; powder cell a=… exists". Everything else
+  SCXRD-looking is a console/GUI **note**, never a docx flag. Validated: Part 1 = 1
+  flag (I003632, "centroids of 1089 reflections" + a cubic powder cell), training = 2
+  (I003155 SCXRD-vs-PXRD-WPF table; I002960 "single-crystal techniques"); the powder/
+  Rietveld/UnitCell cells (I003510/I003566/I003636) and Julgoldite (no same-phase
+  powder cell) correctly do NOT flag.
 - **Cubic cells.** Papers give only `a`. Parse the `a (Å) … V (Å³)` table; accept
   as cubic when "cubic" is near OR V ≈ a³ (tight, 0.5%), and NOT when a differing
   `c (Å)` is present. *(#mineral.)*

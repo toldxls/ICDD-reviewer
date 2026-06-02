@@ -112,6 +112,11 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
                 iss = C.axis_issues(docx_p[k], pdf_p[k])
                 if iss:
                     res['params'][k] = iss
+            # cell SOURCE: ICDD entries use the powder cell — flag/note an SCXRD cell
+            src = C.cell_source_finding(d.authors_cell, cd, cands)
+            if src:
+                res.setdefault('extra', []).append(
+                    X.Finding('cell_source', src[0], src[1], src[2], 'cell:a'))
         else:
             res['cell'] = ('investigate', cd, nmatch, ncomp, dev, mode)
             res['cell_diffs'] = C.cell_axis_deltas(d.authors_cell, cd)

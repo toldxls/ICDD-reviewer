@@ -82,6 +82,14 @@ CASES = [
  ("I003562 no cell_provenance (powder-refined)", lambda: not extras('I003562', 'cell_provenance')),
  ("I003599 no cell_provenance (ADP, not cell)",  lambda: not extras('I003599', 'cell_provenance')),
  ("I003750 no cell_provenance (Dcalc boilerplate)", lambda: not extras('I003750', 'cell_provenance')),
+ # --- cell SOURCE: docx using the SCXRD cell when a same-phase powder cell exists = FLAG;
+ #     an SCXRD-looking cell with no powder cell = soft NOTE; a powder cell = nothing ---
+ ("I003632 cell_source FLAG (SC cell + powder cell exists)", lambda: bool(extras('I003632', 'cell_source', 'flag'))),
+ ("I003657 cell_source NOTE not flag (Julgoldite)",  lambda: bool(extras('I003657', 'cell_source', 'note')) and not extras('I003657', 'cell_source', 'flag')),
+ ("I003510 no cell_source flag (powder cell, not SC)", lambda: not extras('I003510', 'cell_source', 'flag')),
+ ("I003566 no cell_source flag (GSAS powder cell)",  lambda: not extras('I003566', 'cell_source', 'flag')),
+ ("I003636 no cell_source flag (UnitCell powder cell)", lambda: not extras('I003636', 'cell_source', 'flag')),
+ ("I003562 no cell_source (powder cell)",            lambda: not extras('I003562', 'cell_source')),
  # --- cell parsing (cubic / uniaxial / rounded-table) ---
  ("I003634 cubic cell matches",         lambda: cell_verdict('I003634') == 'match'),
  ("I003751 uniaxial: only c flagged",        lambda: params('I003751') == {'c'}),

@@ -143,66 +143,78 @@ function postTriagePreview() {
 }
 
 // ---- findings pane ---------------------------------------------------------
+// severity levels: flag (red, real problem, written) · check (orange, confirm) ·
+// note (gray, low-confidence FYI) · ok (green, clean). The cell/radiation rows carry
+// the level that matches their outcome (no more abstract "verdict").
+const SEV_LABEL = { flag: 'FLAG', check: 'CHECK', note: 'NOTE', ok: 'OK' };
+
 function renderFindings() {
   const a = S.a, body = $('#findings-body'); body.innerHTML = '';
   const rows = [];
 
-  // cell verdict (pseudo-finding)
-  const cs = a.cell.status;
-  let cellMsg;
+  // cell-match result
+  const cs = a.cell.status, m = a.cell;
+  let cellMsg, cellLevel, cellWritten;
   if (cs === 'match') {
-    const m = a.cell;
     cellMsg = `value match to a reported cell — ${m.nmatch}/${m.ncomp} axes, ${m.mode}, Σ|Δ|=${(m.dev||0).toFixed(4)} Å`;
+    cellLevel = 'ok'; cellWritten = false;
   } else if (cs === 'investigate') {
-    cellMsg = `no exact cell match — closest off by Σ|Δ|=${(a.cell.dev||0).toFixed(4)} Å over ${a.cell.ncomp} axes — INVESTIGATE`;
+    cellMsg = `no exact cell match — closest off by Σ|Δ|=${(m.dev||0).toFixed(4)} Å over ${m.ncomp} axes — INVESTIGATE`;
+    cellLevel = 'flag'; cellWritten = true;
   } else if (cs === 'nocell') {
     cellMsg = 'no cell parsed from the .pdf (table-only?) — “No matching .pdf cell found.” is written';
+    cellLevel = 'flag'; cellWritten = true;
   } else if (cs === 'nopdf') {
-    cellMsg = 'no .pdf paired — cell cannot be validated';
-  } else cellMsg = cs;
-  const cellWritten = (cs !== 'match') || Object.keys(a.params).length > 0;
-  rows.push(fRow('cell', 'verdict', 'cell', cellMsg, cellWritten, 'cell:' + cs));
+    cellMsg = 'no .pdf paired — the cell cannot be validated';
+    cellLevel = 'flag'; cellWritten = true;
+  } else { cellMsg = cs; cellLevel = 'note'; cellWritten = false; }
+  if (m.provenance) cellMsg += `\n↳ ${m.provenance}`;
+  rows.push({ fkey: 'cell', level: cellLevel, code: 'CELL', msg: cellMsg, written: cellWritten, anchor: 'cell:' + cs });
 
-  // per-parameter issues (these become docx highlights+comments)
+  // per-parameter issues (written docx highlights+comments)
   for (const ax in a.params) {
     const parts = a.params[ax].map(([kind, note]) => `${kind}: ${note}`).join('; ');
-    rows.push(fRow('param:' + ax, 'flag', 'cell ' + ax, parts, true, 'cell:' + ax));
+    rows.push({ fkey: 'param:' + ax, level: 'flag', code: 'CELL ' + ax, msg: parts, written: true, anchor: 'cell:' + ax });
   }
 
-  // radiation / wavelength verdict (anode mismatch = major; verify/unrec = low value)
+  // radiation: anode mismatch = flag; verify/unrec = check; calc = note
   if (a.lam) {
     const [st, msg] = a.lam;
     if (st !== 'ok') {
-      const sev = st === 'flag' ? 'flag' : (st === 'calc' ? 'note' : 'info');
-      rows.push(fRow('lam', sev, 'radiation', msg, st === 'flag', 'radiation', null, st !== 'flag'));
+      const level = st === 'flag' ? 'flag' : (st === 'calc' ? 'note' : 'check');
+      rows.push({ fkey: 'lam', level, code: 'RADIATION', msg, written: st === 'flag', anchor: 'radiation', minor: st !== 'flag' });
     }
   }
 
-  // extra-check findings (wavelength-family demoted to minor)
+  // extra-check findings
   for (const f of a.findings) {
-    rows.push(fRow('f' + f.idx, f.sev, f.code, f.msg, f.written, f.anchor, f.code, !f.major));
+    const level = f.sev === 'flag' ? 'flag' : (f.sev === 'info' ? 'check' : 'note');
+    rows.push({ fkey: 'f' + f.idx, level, code: f.code, msg: f.msg, written: f.written, anchor: f.anchor, minor: !f.major });
   }
 
-  for (const r of rows) body.append(r);
-  $('#f-count').textContent = `(${rows.length})`;
+  let hidden = 0;
+  for (const r of rows) {
+    if (CFG.hideNotes && r.level === 'note') { hidden++; continue; }
+    body.append(fRow(r));
+  }
+  $('#f-count').textContent = hidden
+    ? `(${rows.length - hidden} of ${rows.length} · ${hidden} note${hidden > 1 ? 's' : ''} hidden)`
+    : `(${rows.length})`;
 }
 
-function fRow(fkey, sev, code, msg, written, anchor, codeTag, minor) {
-  const t = (S.t.findings[fkey] = S.t.findings[fkey] || {});
-  t.label = `${code}: ${(msg || '').slice(0, 80)}`;
-  const sevCls = sev === 'verdict' ? 'verdict' : (sev === 'flag' ? 'flag' : (sev === 'info' ? 'info' : 'note'));
-  const wtag = written
-    ? el('span', { class: 'wtag written' }, 'written to docx')
-    : el('span', { class: 'wtag console' }, 'console-only');
-  const div = el('div', { class: 'finding' + (minor ? ' minor' : ''), 'data-fkey': fkey, onclick: () => focusFinding(fkey) },
-    el('div', { class: 'f-top' },
-      el('span', { class: 'sev ' + sevCls }, sev),
-      wtag,
-      codeTag ? el('span', { class: 'f-code' }, codeTag) : null),
-    el('div', { class: 'f-msg' }, msg || ''),
-    anchor ? el('div', { class: 'f-anchor' }, '↳ docx anchor: ' + anchor) : null,
-    triageControls(fkey, t));
-  return div;
+function fRow(r) {
+  const t = (S.t.findings[r.fkey] = S.t.findings[r.fkey] || {});
+  t.label = `${r.code}: ${(r.msg || '').slice(0, 80)}`;
+  const top = el('div', { class: 'f-top' }, el('span', { class: 'sev ' + r.level }, SEV_LABEL[r.level] || r.level));
+  if (r.level !== 'ok')                       // an 'OK' result writes nothing — no tag needed
+    top.append(r.written ? el('span', { class: 'wtag written' }, 'written to docx')
+                         : el('span', { class: 'wtag console' }, 'console-only'));
+  top.append(el('span', { class: 'f-code' }, r.code));
+  return el('div', { class: 'finding lvl-' + r.level + (r.minor ? ' minor' : ''), 'data-fkey': r.fkey, onclick: () => focusFinding(r.fkey) },
+    top,
+    el('div', { class: 'f-msg' }, r.msg || ''),
+    r.anchor ? el('div', { class: 'f-anchor' }, '↳ docx anchor: ' + r.anchor) : null,
+    triageControls(r.fkey, t));
 }
 
 function triageControls(fkey, t) {
@@ -233,9 +245,24 @@ function termsFor(fkey) {
     if (m) terms = [m[1] + 'K'];
   } else if (fkey.startsWith('f')) {
     const f = a.findings[parseInt(fkey.slice(1), 10)];
-    if (f) terms = (f.msg.match(/\d+\.\d{2,}/g) || []).slice(0, 2);
+    if (f) {
+      const nums = (f.msg.match(/\d+\.\d{2,}/g) || []).slice(0, 2);
+      terms = phraseTerms(f.msg).concat(nums);   // text findings carry no number — locate by keyword
+    }
   }
   return { terms, snippet, label, page };
+}
+
+// distinctive, dash/case-robust PDF-search tokens for a text finding's message
+// (e.g. "Bragg-Brentano geometry" -> "Brentano", which matches "bragg–brentano")
+function phraseTerms(msg) {
+  const KW = [[/brentano/i, 'Brentano'], [/gandolfi/i, 'Gandolfi'], [/guinier/i, 'Guinier'],
+    [/scherrer/i, 'Scherrer'], [/precession/i, 'precession'], [/synchrotron/i, 'synchrotron'],
+    [/debye/i, 'Debye'], [/image[\s-]*plate|imaging plate/i, 'plate'], [/r[-\s]?axis/i, 'AXIS'],
+    [/rietveld/i, 'Rietveld'], [/le ?bail/i, 'Bail']];
+  const out = [];
+  for (const [re, tok] of KW) if (re.test(msg) && !out.includes(tok)) out.push(tok);
+  return out;
 }
 
 // focus a finding -> drive the PDF pane (full page) + snippet
@@ -382,7 +409,7 @@ function renderDocx() {
   body.append(cellGrid(ac, a.params, a.cell.deltas));
   if (a.cell.matched) {
     const m = a.cell.matched;
-    body.append(el('div', { class: 'sub' }, '.pdf matched cell [' + (m.context || '?') + (m.phase ? ' · ' + m.phase : '') + ']'));
+    body.append(el('div', { class: 'sub' }, '.pdf matched cell — ' + (a.cell.provenance || m.context || '?') + (m.phase ? ' · ' + m.phase : '')));
     body.append(cellGrid([m.a, m.b, m.c, m.al, m.be, m.ga, '', m.Z], {}, []));
   }
 
@@ -573,6 +600,7 @@ const DEFAULTS = {
   theme: 'clear-dark', opacity: 0.72, blur: 14, density: 'comfortable', fontsize: 13,
   wSidebar: 320, wFind: 360, wSide: 380, hDocx: 300,
   collapsed: { findings: false, docx: false, mindat: false },
+  hideNotes: false,
 };
 // switching theme applies its natural translucency (Solid Dark = opaque, no blur)
 const THEME_PRESETS = {
@@ -685,6 +713,9 @@ function initAppearance() {
     const id = btn.closest('.pane').id;       // findings / docx / mindat
     CFG.collapsed[id] = !CFG.collapsed[id]; saveCfg(); applyCollapse();
   }));
+  const hn = $('#hide-notes');
+  hn.checked = !!CFG.hideNotes;
+  hn.addEventListener('change', () => { CFG.hideNotes = hn.checked; saveCfg(); if (S.a) renderFindings(); });
 }
 
 initAppearance();

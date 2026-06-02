@@ -127,6 +127,11 @@ def _cand(cd):
             'V': cd.V, 'Z': cd.Z, 'context': cd.context, 'phase': cd.phase,
             'snippet': (cd.snippet or '').strip()}
 
+def _provenance(cd):
+    """Matched-cell source label — delegates to the shared classifier so the GUI
+    label and the cell_source check stay in lock-step."""
+    return C.provenance_label(cd)
+
 def _mindat_block(name):
     """Mindat structural record + group/status, for the Mindat pane. None if the
     species isn't in the cache (a new mineral) — surfaced as an attention badge."""
@@ -181,7 +186,7 @@ def _serialize(key):
     cell = {'status': status}
     if cd is not None:
         cell.update({'matched': _cand(cd), 'nmatch': cellt[2], 'ncomp': cellt[3],
-                     'dev': cellt[4], 'mode': cellt[5]})
+                     'dev': cellt[4], 'mode': cellt[5], 'provenance': _provenance(cd)})
         cell['deltas'] = [list(t) for t in C.cell_axis_deltas(d.authors_cell, cd)]
 
     # which extra findings actually get written into the docx (same gate the
@@ -323,7 +328,7 @@ def _attention(badges):
 # ------------------------------------------------------------------ cache
 # Bump when the serialized shape / badge logic changes, so a stale on-disk cache
 # (keyed only by source-file mtimes) is invalidated after a code change.
-CACHE_VERSION = 4
+CACHE_VERSION = 6
 
 def _fingerprint(key):
     path = STATE['docx'][key]; eid = C.entry_id(path)

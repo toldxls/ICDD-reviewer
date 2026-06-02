@@ -205,16 +205,21 @@ input[type=range] { accent-color: var(--accent); }
 
 /* findings */
 #findings-body { padding: 8px; }
-.finding { border: 1px solid var(--line); border-radius: 7px; margin-bottom: 8px; background: rgb(255 255 255 / .03); padding: 8px; cursor: pointer; }
+.finding { border: 1px solid var(--line); border-left-width: 3px; border-radius: 7px; margin-bottom: 8px; background: rgb(255 255 255 / .03); padding: 8px; cursor: pointer; }
+.finding.lvl-flag  { border-left-color: var(--danger); }
+.finding.lvl-check { border-left-color: var(--warn); }
+.finding.lvl-note  { border-left-color: var(--line); }
+.finding.lvl-ok    { border-left-color: var(--ok); }
 .finding.focus { border-color: var(--accent); box-shadow: 0 0 0 1px rgb(var(--accent-rgb) / .4); }
 .finding.minor { opacity: .6; }
 .finding.minor .f-msg { color: var(--muted); }
 .f-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sev { font-size: .76em; padding: 1px 6px; border-radius: 4px; font-weight: 700; text-transform: uppercase; }
-.sev.flag { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
-.sev.info { background: color-mix(in srgb, var(--info) 18%, transparent); color: var(--info); }
-.sev.note { background: rgb(255 255 255 / .06); color: var(--muted); }
-.sev.verdict { background: rgb(var(--accent-rgb) / .18); color: var(--accent); }
+.sev.flag  { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
+.sev.check { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.sev.note  { background: rgb(255 255 255 / .06); color: var(--muted); }
+.sev.ok    { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.chk.mini { font-size: .85em; }
 .wtag { font-size: .76em; padding: 1px 6px; border-radius: 4px; border: 1px solid; }
 .wtag.written { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 38%, transparent); }
 .wtag.console { background: rgb(255 255 255 / .04); color: var(--muted); border-color: var(--line); }

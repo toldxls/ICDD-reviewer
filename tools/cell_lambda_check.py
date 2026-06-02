@@ -546,6 +546,77 @@ def best_match(docx_abc, cands, prefer_phase=None):
                 best_key = key; best = (cd, nmatch, len(comp), dev, mode)
     return best
 
+# --------------------------------------------------------------- cell SOURCE (powder vs SCXRD)
+# PXRD-refinement cues (GSAS/EXPGUI/Rietveld/"from the powder data" …) and positive
+# single-crystal cues. POWDER evidence wins: a stray 'single-crystal' word elsewhere in
+# the snippet must NOT flip a powder/Rietveld cell to SCXRD (that produced false flags).
+_POWDER_CUE = re.compile(r'\bpowder\b|rietveld|gsas|expgui|fullprof|profile fit|le ?bail|pawley|gandolfi'
+                         r'|debye|unitcell|celref|dicvol|treor|chekcell|checkcell|\bμxrd\b|micro[- ]?xrd', re.I)
+_SC_CUE = re.compile(r'single[- ]?crystal|scxrd|centroids|\d+\s+reflections|reflections (?:above|with|collected|measured)', re.I)
+
+def provenance_label(cd):
+    """Readable label for a matched cell's likely source. POWDER evidence is checked
+    first; then POSITIVE single-crystal evidence; then a weaker 'refined unit-cell …
+    space group …' heuristic (hedged 'likely … confirm'). Heuristic by nature, so
+    only the definitive single-crystal label drives a docx flag (see cell_source_finding)."""
+    ctx = cd.context or 'unknown'
+    snip = cd.snippet or ''
+    if ctx == 'powder' or _POWDER_CUE.search(snip):
+        return 'matches the powder cell'
+    if ctx == 'single' or _SC_CUE.search(snip):
+        return 'matches the single-crystal (SCXRD) cell'
+    if re.search(r'refined unit[- ]?cell|space group|structure (?:was )?(?:solved|refined)', snip, re.I):
+        return 'likely the single-crystal (SCXRD) structure-refinement cell — confirm'
+    return 'powder vs SCXRD context unclear — confirm'
+
+def find_powder_conflict(docx_abc, matched, cands):
+    """A DISTINCT powder-context cell of the SAME phase (sorted axes each within 10 %)
+    that differs from the matched (SCXRD) cell beyond tolerance — i.e. the paper has a
+    powder-refined cell for this phase that the docx did not use. Returns it or None."""
+    A = sorted([num_val(x) for x in docx_abc[:3] if num_val(x) is not None])
+    if len(A) < 3:
+        return None
+    for c in cands:
+        if c is matched or c.context != 'powder':          # only an explicit powder cell counts
+            continue
+        if _SC_CUE.search(c.snippet or ''):                # …and not one mislabeled (it's an SC cell)
+            continue
+        cc = sorted([v for v in (num_val(c.a), num_val(c.b), num_val(c.c)) if v is not None])
+        if len(cc) < 3:
+            continue
+        same_phase = all(abs(x - y) <= 0.10 * y for x, y in zip(cc, A))
+        distinct = any(abs(x - y) > MATCH_TOL for x, y in zip(cc, A))
+        if same_phase and distinct:
+            return c
+    return None
+
+def cell_source_finding(docx_abc, matched, cands):
+    """(sev, msg, evidence) for the 'docx used the single-crystal cell' check, or None.
+    ICDD entries should carry the POWDER-refined cell. FLAG only on a DEFINITIVE
+    single-crystal cell that ALSO has a same-phase powder cell reported (the actionable,
+    low-false-positive case); the weaker 'likely SCXRD' cases stay a soft NOTE."""
+    if matched is None:
+        return None
+    prov = provenance_label(matched)
+    if 'single-crystal' not in prov:
+        return None
+    # FLAG only on DEFINITIVE single-crystal evidence in the matched cell's OWN sentence
+    # (reflections/centroids/single-crystal) with no powder cue — the classifier's bare
+    # 'single' label is too unreliable to drive a docx flag. Everything else stays a note.
+    snip = matched.snippet or ''
+    definitive = bool(_SC_CUE.search(snip)) and not _POWDER_CUE.search(snip)
+    pc = find_powder_conflict(docx_abc, matched, cands) if definitive else None
+    if pc is not None:
+        return ('flag',
+                'docx cell appears to be the single-crystal (SCXRD) cell, but the paper also '
+                'reports a powder-refined cell for this phase (a=%s b=%s c=%s) — ICDD entries '
+                'use the PXRD cell; verify and use the powder cell.' % (pc.a, pc.b, pc.c),
+                re.sub(r'\s+', ' ', (pc.snippet or '')).strip()[:160])
+    return ('note',
+            'matched cell appears to be the single-crystal (SCXRD) cell — ICDD entries use the '
+            'powder-refined cell; confirm the powder cell was entered (no separate powder cell was parsed).',
+            re.sub(r'\s+', ' ', (matched.snippet or '')).strip()[:160])
+
 # ----------------------------------------------------------------------------- pairing docx<->pdf
 # Entry ids are I-prefixed (most) or O-prefixed (e.g. O002127); keys are the
 # full prefixed string ('Innnnnn'/'Onnnnnn') so I/O never collide numerically.
@@ -660,6 +731,9 @@ def report(docx_path, pdf_path):
                 print('          ℹ matched cell sits in a SINGLE-CRYSTAL/SCXRD context '
                       '(acceptable for some entries; reviewer to confirm)')
                 print('            evidence: …%s…' % re.sub(r'\s+', ' ', cd.snippet).strip())
+            src = cell_source_finding(d.authors_cell, cd, cands)
+            if src:
+                print('          %s [cell source] %s' % ('⚑' if src[0] == 'flag' else '·', src[1]))
         else:
             print('  CELL  : ⚠ no exact cell match in .pdf — INVESTIGATE '
                   '(closest off by Σ|Δ|=%.4f Å over %d axes)' % (dev, ncomp))
