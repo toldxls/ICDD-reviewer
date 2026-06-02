@@ -22,22 +22,22 @@ Dependencies: PyMuPDF (`fitz`). docx is parsed directly from `word/document.xml`
 
 ## Writing the review into the .docx
 `annotate_review.py` runs the same comparison and writes the findings back into
-each entry as **Word comments + yellow highlights**, so you see them
+each entry as **Word comments + yellow highlights**, so they appear
 in context. It reports **errors only** — a clean entry gets no comment. Every
 entry (clean or flagged) also gets an **"x" in the Accept box** unless its cell is
 grossly wrong (see "Accept marking" and "Behavioral contract" below), so a clean
 entry is opened + re-saved rather than byte-copied. Reruns **preserve hand-edited
-outputs** (your tracked changes / comments are kept; tool comments are refreshed).
+outputs** (hand-made tracked changes / comments are kept; tool comments are refreshed).
 ```
 python3 annotate_review.py "/path/to/entries"             # -> <folder>/review_out (copies)
 python3 annotate_review.py "/path/to/entries" --id Innnnnn
 python3 annotate_review.py "/path/to/entries" --inplace   # edit the originals instead
 ```
 Flagged entries are saved as **`<name>_edited.docx`** (the ones with a comment /
-highlight), so you can spot them at a glance in the `review_out/` listing; clean
+highlight), so they stand out at a glance in the `review_out/` listing; clean
 entries keep the source name. (`--inplace` edits the originals and does not
 rename.) A stale opposite-named twin from an earlier run is removed automatically
-unless you hand-edited it, in which case it is kept and noted on the console.
+unless it was hand-edited, in which case it is kept and noted on the console.
 What it writes:
 - a comment on each flagged Author's-Cell value (value / significant-figures /
   esd mismatch), with that value highlighted;
@@ -65,7 +65,7 @@ across runs). So it validates the *current* state of the entry.
    is itself enough to trigger a look.
 
 Whether a matched cell is from PXRD or SCXRD is **information, not a flag** —
-using a single-crystal cell is acceptable for many entries — you decide
+using a single-crystal cell is acceptable for many entries — the reviewer decides
 (it's usually stated explicitly in the PDF; note it as a comment like
 "SCXRD cell" / "cell from SCXRD"). The tool surfaces existing
 docx comments and, when a matched cell appears in a single-crystal context,
@@ -123,7 +123,7 @@ parsers also collapse newlines, since PyMuPDF emits table cells one-per-line.
   uses keyword proximity, which can mislabel when a powder-refinement sentence
   references single-crystal seeding ("…refined…starting from…single-crystal
   techniques are a = …" describes the POWDER cell — e.g. 00-XXXXX
-  #mineral). The printed evidence snippet lets you confirm.
+  #mineral). The printed evidence snippet supports confirmation.
 
 ## Extra checks (`extra_checks.py`) — my 10 most common review comments
 Mined from my own Word comments across past review batches, these are
@@ -133,7 +133,7 @@ no-PDF path, since several are docx-internal). They live in a separate module on
 purpose: more heuristic, easy to tune or switch off per check as I refine them.
 
 Each finding is graded **⚑ flag** (likely needs an edit/comment), **ℹ info**
-(surface for you to confirm — often acceptable), or **· note** (low
+(surface for the reviewer to confirm — often acceptable), or **· note** (low
 confidence). The ten:
 
 1. **geometry / camera method** — surfaces the specific named method in the PDF
@@ -349,7 +349,7 @@ A candidate is reported only when ALL hold against an existing IMA mineral:
   commensurate and in the right direction** (bigger cation → bigger cell). A
   same-size swap with a near-constant cell, or a large-radius swap whose cell
   tracks the size, reads as real; a mismatch gets a ⚠ to verify. This is the key
-  guard against Mindat's sometimes loosely-applied group labels — you judge
+  guard against Mindat's sometimes loosely-applied group labels — the reviewer judges
   from the radii + metrics, not the group name.
 
 …and only for phases where the relation is **not already identified**: ungrouped
@@ -379,13 +379,13 @@ so it is skipped (the case where this would be most useful but data is missing �
 a batch-vs-batch fallback on docx cell/formula is the next step). Mindat cells are
 sparse (b/angles often 0 = uniaxial/default), so matching uses a, b, c only.
 
-**Staleness-aware auto-refresh — you never run `--refresh` by hand.** The review
+**Staleness-aware auto-refresh — no need to run `--refresh` by hand.** The review
 tools call `mindat.refresh_if_stale()` on startup: if the cache is missing or
 older than 14 days (covering the monthly/bimonthly CNMNC cadence) and a key +
 network are present, it pulls fresh data first (one `[mindat] refreshing…` line,
 once per run). No key or offline → it quietly keeps using the existing cache, so
-a review never breaks. So newly-approved species resolve automatically the next
-time you review. Manual `--refresh` and the monthly `LaunchAgent`
+a review never breaks. So newly-approved species resolve automatically on the next
+review run. Manual `--refresh` and the monthly `LaunchAgent`
 (`com.minerals.mindat-refresh.plist`) remain available but are now optional
 belt-and-suspenders.
 
@@ -452,7 +452,7 @@ python3 regression_check.py            # all cases must PASS after any edit
 ```
 
 Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
-`annotate_review.py`. If a case fails, you reintroduced a known problem.
+`annotate_review.py`. If a case fails, a known problem was reintroduced.
 
 ### Hard-won rules (do NOT regress)
 - **Calculated pattern.** A docx correctly marked `Spacing=Calculated` is normal,
@@ -557,12 +557,16 @@ Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
   produced 23 phantom "Mindat discrepancies", all ×1.15). `.cif`/Mindat are usually the
   SCXRD cell, so use a HIGH tolerance vs the powder cell and exclude super/sub-cell
   (polytype) rational relations. Mindat is a co-equal proxy: a `mindat_fix` finding is
-  a console NOTE routed to `mindat_discrepancies.txt`, NEVER a docx flag. *(I003599 =
-  Mindat off 8%, logged separately; I003246 = agrees, no flag.)*
+  a console NOTE routed to `mindat_discrepancies.txt`, NEVER a docx flag. For a
+  **synthetic** phase, skip the Mindat CELL check (a synthetic cell differs from the
+  natural species Mindat carries) but KEEP the chemistry check — a synthetic's ideal
+  formula should still match the natural IMA formula (unless a redefinition, flagged in
+  the text). *(I003246 = agrees, no flag; I003599 Dypingite-syn = cell skipped.)*
 
 ### Accept marking
 `annotate_review.py` writes a lowercase **"x"** in the cell after **Accept** for
-essentially every entry (my usual convention). It is withheld (all boxes left
+essentially every entry (the usual convention), **centred** in the box (horizontal +
+vertical) so it doesn't sit against the label. It is withheld (all boxes left
 blank for a manual decision) ONLY when the cell is grossly wrong — `_is_severe()`:
 cell verdict `investigate` with ≥2 axes off tolerance, or one axis >2% off. Minor
 cell / sig-fig / esd / Z discrepancies are NOT severe (a new mineral is an Accept
@@ -570,13 +574,13 @@ unless the chemistry/cell/SG is completely wrong). It never overwrites a box a
 human already marked.
 
 ### Preserving manual edits on rerun
-The output docx in `review_out/` is your working copy; the source docx is
+The output docx in `review_out/` is the working copy; the source docx is
 never edited. A rerun detects a hand edit via tracked changes (`w:ins`/`w:del`), a
 non-tool comment, or body text differing from source, then **refreshes in place**:
 backs up to `review_out/.edit_backup/<name>.<timestamp>.docx`, strips ONLY the
 tool's own comments (author "PXRD Review Tool") + yellow highlights from a temp
-copy, and re-annotates onto it — so tracked changes, your comments, text edits, and
-your Accept mark survive while the tool's findings are made current. The strip is
+copy, and re-annotates onto it — so tracked changes, manual comments, text edits, and
+the manual Accept mark survive while the tool's findings are made current. The strip is
 atomic (temp copy; `out` is replaced only on success). `--force` rebuilds from
 source (discards manual edits). The `_edited` vs clean output name is derived from
 the (deterministic) `_is_clean()` verdict, so the path of a given entry is stable

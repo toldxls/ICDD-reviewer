@@ -1800,9 +1800,17 @@ def check22_cross_sources(e, cif_data, dft_data):
         → 'cell_cif' flag for the reviewer."""
     out = []
     SAME = 0.03
+    # A SYNTHETIC phase (e.g. 'Dypingite-syn') is not itself in Mindat; _norm strips
+    # '-syn' and matches the NATURAL species. Its CELL legitimately differs (hydration,
+    # synthesis), so skip the Mindat CELL comparison — but its IDEAL FORMULA should
+    # still match the natural IMA formula (unless a redefinition, flagged in the text),
+    # so the chemistry/status cross-checks DO run. The docx↔.cif comparison runs too.
+    nm_full = (e.name or '') + ' ' + (e.primary or '')
+    is_syn = bool(re.search(r'-\s*syn\b|\bsyn\b|synthetic', nm_full, re.I)) \
+        or any('synth' in (c or '').lower() for c, _ in (e.subfiles or []))
     docx = _cell_lengths(e.cell)
     cif = _cell_lengths((cif_data or {}).get('cell', {}))
-    M = mindat_struct(e.name or e.primary or '')
+    M = None if is_syn else mindat_struct(e.name or e.primary or '')
     mind = _cell_lengths({'a': M['a'], 'b': M['b'], 'c': M['c']}) if M else None
     fmt = lambda l: '/'.join('%.3f' % x for x in l)
     if docx and cif and mind and _len_maxdiff(docx, cif) < SAME \
@@ -1836,7 +1844,7 @@ def check22_cross_sources(e, cif_data, dft_data):
     # entirely ABSENT from the other (not a substituent, not a trace, order-
     # independent). Mindat lags the CNMNC newsletter, so this cuts both ways → a
     # verify note in the Mindat cross-check log, never written into the docx.
-    Mx = mindat_struct(e.name or e.primary or '', exact=True)
+    Mx = mindat_struct(e.name or e.primary or '', exact=True)   # formula check runs for synthetics too
     docx_f = e.formulas.get('Chemical') or e.formulas.get('Structural') or ''
     if Mx and Mx.get('formula') and docx_f:
         d_all, m_all = _all_formula_elements(docx_f), _all_formula_elements(Mx['formula'])

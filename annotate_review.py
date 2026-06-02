@@ -27,6 +27,8 @@ import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime
 import cell_lambda_check as C
 import extra_checks as X
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from lxml import etree
 
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
@@ -252,6 +254,13 @@ def _mark_accept(doc):
                 p.runs[0].text = 'x'
             else:
                 p.add_run('x')
+            # centre the 'x' in the checkbox cell (it otherwise sits left, hard against
+            # the 'Accept' label); also vertically centre within the cell.
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            try:
+                acc.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            except Exception:
+                pass
             return True
     return False
 
@@ -611,7 +620,7 @@ def main():
         if withheld:
             fh.write('  left blank  : %s\n' % ', '.join(C.entry_id(f) or f for f in withheld))
         if refreshed:
-            fh.write('refreshed     : %s  (hand-edited — your edits kept, tool comments refreshed; --force to rebuild from source)\n'
+            fh.write('refreshed     : %s  (hand-edited — manual edits kept, tool comments refreshed; --force to rebuild from source)\n'
                      % ', '.join(C.entry_id(f) or f for f, r in refreshed))
         fh.write('=' * 78 + '\n\nEDITED ENTRIES (highlights / comments)\n')
         for f, r in edited:

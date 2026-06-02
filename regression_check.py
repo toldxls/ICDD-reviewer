@@ -105,9 +105,8 @@ CASES = [
  ("I003511 calc pattern λ not in paper",     lambda: bool(extras('I003511', 'calc_wavelength'))),
  # --- 21. Primary name normalization: corrected names must NOT flag ---
  ("I003523 primary name OK (no FP)",         lambda: not extras('I003523', 'primary_name')),
- # --- 22. cross-source: Mindat discrepancy (docx≈.cif, Mindat differs) ---
- ("I003599 Mindat cell discrepancy logged",  lambda: bool(extras('I003599', 'mindat_fix'))),
- ("I003599 mindat_fix is a note (not docx flag)", lambda: not extras('I003599', 'mindat_fix', 'flag')),
+ # --- 22. cross-source: synthetic skips Mindat (natural≠synthetic); agreeing entry clean ---
+ ("I003599 synthetic -> Mindat cell skipped",  lambda: not extras('I003599', 'mindat_fix')),
  ("I003246 no cross-source flag (agrees)",   lambda: not extras('I003246', 'cell_cif') and not extras('I003246', 'mindat_fix')),
  # --- .dft (DataQuacker) soft cross-check: console/log only, never written ---
  ("I003599 .dft Z verify note",              lambda: bool(extras('I003599', 'dft', substr='Z:'))),
