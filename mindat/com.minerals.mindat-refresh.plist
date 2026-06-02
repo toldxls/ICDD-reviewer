@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Monthly refresh of the Mindat IMA/group cache (mindat.py --refresh).
+  Monthly refresh of the Mindat IMA/group cache (mindat/mindat.py --refresh).
   Runs on the 1st of each month at 09:00 — roughly the CNMNC newsletter cadence.
 
   NOTE: replace /ABSOLUTE/PATH/TO/review_tool below with the real path on your
   machine before installing (LaunchAgents require absolute paths).
 
   Enable:
-    cp "/ABSOLUTE/PATH/TO/review_tool/com.minerals.mindat-refresh.plist" ~/Library/LaunchAgents/
+    cp "/ABSOLUTE/PATH/TO/review_tool/mindat/com.minerals.mindat-refresh.plist" ~/Library/LaunchAgents/
     launchctl load ~/Library/LaunchAgents/com.minerals.mindat-refresh.plist
   Run once now to test:
     launchctl start com.minerals.mindat-refresh
@@ -22,7 +22,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/Library/Frameworks/Python.framework/Versions/3.12/bin/python3</string>
-        <string>/ABSOLUTE/PATH/TO/review_tool/mindat.py</string>
+        <string>/ABSOLUTE/PATH/TO/review_tool/mindat/mindat.py</string>
         <string>--refresh</string>
     </array>
     <key>WorkingDirectory</key>

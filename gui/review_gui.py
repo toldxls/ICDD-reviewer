@@ -21,8 +21,8 @@ Its only writes are its own sidecars (gui_cache.json, triage.json,
 triage_report.txt) under <folder>/review_out.
 
 Run:
-    python3 review_gui.py "/path/to/entries"            # opens http://127.0.0.1:5000
-    python3 review_gui.py "/path/to/entries" --port 8000 --no-browser
+    python3 gui/review_gui.py "/path/to/entries"            # opens http://127.0.0.1:5000
+    python3 gui/review_gui.py "/path/to/entries" --port 8000 --no-browser
 
 Security: binds to 127.0.0.1 only (not the network), Flask debug OFF, and the
 browser only ever sends an entry KEY that the server maps to a file it indexed at
@@ -31,6 +31,15 @@ machine.
 """
 import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess
 
+# --- repo layout: make the sibling code dirs importable by bare name -----------
+import os as _o, sys as _s
+_d = _o.path.dirname(_o.path.abspath(__file__))
+_r = _o.path.dirname(_d) if _o.path.basename(_d) in ('tools', 'gui', 'mindat') else _d
+for _x in ('tools', 'mindat', 'gui'):
+    _p = _o.path.join(_r, _x)
+    if _o.path.isdir(_p) and _p not in _s.path:
+        _s.path.insert(0, _p)
+# -------------------------------------------------------------------------------
 import cell_lambda_check as C
 import extra_checks as X
 import annotate_review as A
@@ -41,8 +50,9 @@ except ImportError:
     sys.exit("Flask is not installed — run: pip3 install -r requirements.txt "
              "(the GUI needs Flask; the CLI checks do not).")
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-app = Flask(__name__, static_folder=os.path.join(HERE, 'gui', 'static'),
+HERE = os.path.dirname(os.path.abspath(__file__))   # the gui/ folder
+ROOT = os.path.dirname(HERE)                          # repo root (tools/ is a sibling)
+app = Flask(__name__, static_folder=os.path.join(HERE, 'static'),
             static_url_path='/static')
 
 # ------------------------------------------------------------------ global state
@@ -411,7 +421,7 @@ def analyze_all():
 # ------------------------------------------------------------------ routes
 @app.route('/')
 def index():
-    return send_file(os.path.join(HERE, 'gui', 'index.html'))
+    return send_file(os.path.join(HERE, 'index.html'))
 
 @app.route('/api/entries')
 def api_entries():
@@ -545,14 +555,14 @@ def _annotate_cmd(extra):
     """annotate_review invocation that feeds the triage sidecar (comment-only:
     suppress dismissed, fold notes, override Accept). No --force, so manual edits
     in an existing output are preserved (refresh-in-place)."""
-    return [sys.executable, os.path.join(HERE, 'annotate_review.py'), STATE['folder'],
+    return [sys.executable, os.path.join(ROOT, 'tools', 'annotate_review.py'), STATE['folder'],
             '--triage', _triage_path()] + extra
 
 def _run_annotate(cmd):
     # ensure the sidecar the rerun consumes is on disk
     _save_triage()
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE, timeout=1800)
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=1800)
     except Exception as ex:
         return jsonify({'ok': False, 'error': str(ex)}), 500
     tail = '\n'.join((r.stdout or '').strip().splitlines()[-12:])

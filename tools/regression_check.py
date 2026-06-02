@@ -3,8 +3,8 @@
 were established by hand-auditing one private review batch (see README "Behavioral
 contract"). Run after ANY change to the checks; every case must still PASS.
 
-    python3 regression_check.py "/path/to/fixtures"
-    PXRD_REGRESSION_DIR="/path/to/fixtures" python3 regression_check.py
+    python3 tools/regression_check.py "/path/to/fixtures"
+    PXRD_REGRESSION_DIR="/path/to/fixtures" python3 tools/regression_check.py
 
 The fixtures are a private ICDD review batch (not shipped with this repo);
 point the script at your local copy via the argument or $PXRD_REGRESSION_DIR.
@@ -13,7 +13,16 @@ Read-only: it runs analyze() and inspects the verdict — it does not write docx
 Exit code 0 = all pass, 1 = a regression.
 """
 import sys, os, glob
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# --- repo layout: make the sibling code dirs importable by bare name -----------
+import os as _o, sys as _s
+_d = _o.path.dirname(_o.path.abspath(__file__))
+_r = _o.path.dirname(_d) if _o.path.basename(_d) in ('tools', 'gui', 'mindat') else _d
+for _x in ('tools', 'mindat', 'gui'):
+    _p = _o.path.join(_r, _x)
+    if _o.path.isdir(_p) and _p not in _s.path:
+        _s.path.insert(0, _p)
+# -------------------------------------------------------------------------------
 import cell_lambda_check as C
 import annotate_review as A
 

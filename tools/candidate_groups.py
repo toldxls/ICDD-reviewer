@@ -26,9 +26,19 @@ real — reported as a lead, not a conclusion).
 Never writes into the docx. Console report only.
 
 Usage:
-    python3 candidate_groups.py <folder> [--id Innnnnn] [--tol 0.04]
+    python3 tools/candidate_groups.py <folder> [--id Innnnnn] [--tol 0.04]
 """
 import os, re, glob, argparse
+
+# --- repo layout: make the sibling code dirs importable by bare name -----------
+import os as _o, sys as _s
+_d = _o.path.dirname(_o.path.abspath(__file__))
+_r = _o.path.dirname(_d) if _o.path.basename(_d) in ('tools', 'gui', 'mindat') else _d
+for _x in ('tools', 'mindat', 'gui'):
+    _p = _o.path.join(_r, _x)
+    if _o.path.isdir(_p) and _p not in _s.path:
+        _s.path.insert(0, _p)
+# -------------------------------------------------------------------------------
 import mindat
 import extra_checks as X
 import cell_lambda_check as C
@@ -215,7 +225,7 @@ def main():
 
     mindat.refresh_struct_if_stale()
     if not mindat.struct_available():
-        print('No structural cache. Run:  python3 mindat.py --refresh-struct'); return
+        print('No structural cache. Run:  python3 mindat/mindat.py --refresh-struct'); return
     recs, idx = _struct_index()
 
     docs = sorted(f for f in glob.glob(os.path.join(args.folder, '*.docx'))

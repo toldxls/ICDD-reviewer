@@ -21,12 +21,22 @@ Design notes grounded in real batch data:
 We do NOT check diffractometer / camera type (per reviewer instruction).
 
 Usage:
-    python3 cell_lambda_check.py /path/to/entries
-    python3 cell_lambda_check.py /path/to/entries --id Innnnnn
+    python3 tools/cell_lambda_check.py /path/to/entries
+    python3 tools/cell_lambda_check.py /path/to/entries --id Innnnnn
 """
 import sys, os, re, glob, zipfile, argparse
 from xml.etree import ElementTree as ET
 from collections import namedtuple
+
+# --- repo layout: make the sibling code dirs importable by bare name -----------
+import os as _o, sys as _s
+_d = _o.path.dirname(_o.path.abspath(__file__))
+_r = _o.path.dirname(_d) if _o.path.basename(_d) in ('tools', 'gui', 'mindat') else _d
+for _x in ('tools', 'mindat', 'gui'):
+    _p = _o.path.join(_r, _x)
+    if _o.path.isdir(_p) and _p not in _s.path:
+        _s.path.insert(0, _p)
+# -------------------------------------------------------------------------------
 
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 def _t(e): return e.tag.replace(W, '')

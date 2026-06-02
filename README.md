@@ -8,8 +8,8 @@ It does **not** check diffractometer/camera type.
 
 ## Run
 ```
-python3 cell_lambda_check.py /path/to/entries          # console report, whole folder
-python3 cell_lambda_check.py /path/to/entries --id Innnnnn
+python3 tools/cell_lambda_check.py /path/to/entries          # console report, whole folder
+python3 tools/cell_lambda_check.py /path/to/entries --id Innnnnn
 ```
 Auto-pairs each `Innnnnn(Name).docx` to its PDF in the folder (or a subfolder),
 expanding range-named PDFs like `Innnnnn-Innnnnn.pdf`. Ids may be `I`- or
@@ -21,7 +21,7 @@ different phase's table) — pairing the wrong file was the main cause of
 Dependencies: PyMuPDF (`fitz`). docx is parsed directly from `word/document.xml`.
 
 ## Writing the review into the .docx
-`annotate_review.py` runs the same comparison and writes the findings back into
+`tools/annotate_review.py` runs the same comparison and writes the findings back into
 each entry as **Word comments + yellow highlights**, so they appear
 in context. It reports **errors only** — a clean entry gets no comment. Every
 entry (clean or flagged) also gets an **"x" in the Accept box** unless its cell is
@@ -29,9 +29,9 @@ grossly wrong (see "Accept marking" and "Behavioral contract" below), so a clean
 entry is opened + re-saved rather than byte-copied. Reruns **preserve hand-edited
 outputs** (hand-made tracked changes / comments are kept; tool comments are refreshed).
 ```
-python3 annotate_review.py "/path/to/entries"             # -> <folder>/review_out (copies)
-python3 annotate_review.py "/path/to/entries" --id Innnnnn
-python3 annotate_review.py "/path/to/entries" --inplace   # edit the originals instead
+python3 tools/annotate_review.py "/path/to/entries"             # -> <folder>/review_out (copies)
+python3 tools/annotate_review.py "/path/to/entries" --id Innnnnn
+python3 tools/annotate_review.py "/path/to/entries" --inplace   # edit the originals instead
 ```
 Flagged entries are saved as **`<name>_edited.docx`** (the ones with a comment /
 highlight), so they stand out at a glance in the `review_out/` listing; clean
@@ -125,10 +125,10 @@ parsers also collapse newlines, since PyMuPDF emits table cells one-per-line.
   techniques are a = …" describes the POWDER cell — e.g. 00-XXXXX
   #mineral). The printed evidence snippet supports confirmation.
 
-## Extra checks (`extra_checks.py`) — my 10 most common review comments
+## Extra checks (`tools/extra_checks.py`) — my 10 most common review comments
 Mined from my own Word comments across past review batches, these are
 the recurring notes the cell/λ comparator did **not** cover. They run
-automatically at the end of every `cell_lambda_check.py` report (and on the
+automatically at the end of every `tools/cell_lambda_check.py` report (and on the
 no-PDF path, since several are docx-internal). They live in a separate module on
 purpose: more heuristic, easy to tune or switch off per check as I refine them.
 
@@ -149,7 +149,7 @@ confidence). The ten:
    about the **cell** and not boilerplate (not a comparison / calc-pattern note /
    ADP-extinction / Dcalc density sentence). High precision, very low volume.
 3. **group / structural classification** — **authoritative via Mindat**
-   (`mindat.py`): the mineral's `groupid` → group name, with the species'
+   (`mindat/mindat.py`): the mineral's `groupid` → group name, with the species'
    Nickel-Strunz code, cross-checked against the docx Strunz-mindat field.
    Falls back to the author's Structure/Isomorphism/Polymorphism comment and, only
    for species Mindat doesn't have (new/renamed), to specific PDF prose. PDF
@@ -182,7 +182,7 @@ temperature, and strongest-line cross-checks.)
 
 #### Corpus-curated checks (16, 18) — hardened instrumentation & naming
 Reference tables mined from the corrected corpus (ICDD/TAO/Tony's/2028) then
-hand-curated as small, editable constants at the bottom of `extra_checks.py`
+hand-curated as small, editable constants at the bottom of `tools/extra_checks.py`
 (`VOCAB_CANON`, `VOCAB_FIX`, `KBETA_FILTER`, `MONO_MATERIALS`, `REE_ELEMENTS`,
 `POLYTYPE_SYS`). They **comment/suggest only** — the annotator highlights the cell
 and writes the suggested value; it never rewrites a field.
@@ -247,7 +247,7 @@ and writes the suggested value; it never rewrites a field.
     →Hydrogen-Arsenate`, and `<Metal> Oxide→oxoanion` which needs the formula to tell
     molybdate from molybdite) are left to the reviewer.
 
-Run just the extras: `python3 extra_checks.py <folder> [<id>]`.
+Run just the extras: `python3 tools/extra_checks.py <folder> [<id>]`.
 
 #### ICDD `.dft` (DataQuacker) cross-check — a co-equal proxy (console/log only)
 ICDD DataQuacker `.dft` files (CIF-like structured records: cell+esd, Z, SG,
@@ -305,7 +305,7 @@ submitted powder cell, so the bar is **high** (only large, non-polytype differen
 used (H of OH/H₂O/NH₄ is usually unrefined). SG-vs-Mindat is **not** checked — Mindat
 often reports nonstandard space groups or cells from old determinations.
 
-### Mindat lookup (`mindat.py`) — authoritative classification
+### Mindat lookup (`mindat/mindat.py`) — authoritative classification
 A Python port of my Apps Script (Token auth, page-size 500,
 exponential backoff). It pulls every IMA-approved geomaterial once with its
 `groupid`, Nickel-Strunz code and `ima_status`, plus the group container entries
@@ -321,9 +321,9 @@ formations ("Creek group"). Mindat encodes the real relationship — a mineral's
 Setup:
 - API key: `$MINDAT_API_KEY` or `review_tool/.mindat_key` (untracked; in
   `.gitignore`).
-- Build/refresh the group cache: `python3 mindat.py --refresh`
-- Build/refresh the structural cache (candidate-group scan): `python3 mindat.py --refresh-struct`
-- Test one name: `python3 mindat.py --lookup "#mineral-2T"`
+- Build/refresh the group cache: `python3 mindat/mindat.py --refresh`
+- Build/refresh the structural cache (candidate-group scan): `python3 mindat/mindat.py --refresh-struct`
+- Test one name: `python3 mindat/mindat.py --lookup "#mineral-2T"`
 - HTTPS needs CA certs; the client uses `certifi` if importable (macOS
   python.org builds lack system certs). `$MINDAT_INSECURE=1` disables
   verification as a last resort.
@@ -334,13 +334,13 @@ back to the base species. Across one batch: 20 grouped, 17 ungrouped, 3
 genuinely not-in-cache new minerals (#mineral1, #mineral2, …) correctly flagged
 to verify.
 
-### Candidate-group scan (`candidate_groups.py`) — prototype
+### Candidate-group scan (`tools/candidate_groups.py`) — prototype
 Flags where a reviewed phase has an **obvious** structural relative that no group
 link records — a group the PDF authors may have missed. Console report only,
 **never** written into the docx (this is suggestive, not authoritative).
 
 ```
-python3 candidate_groups.py <folder> [--id Innnnnn] [--tol 0.04] [--max 4]
+python3 tools/candidate_groups.py <folder> [--id Innnnnn] [--tol 0.04] [--max 4]
 ```
 A candidate is reported only when ALL hold against an existing IMA mineral:
 - **same space group** (Mindat's consistent integer SG code);
@@ -401,7 +401,7 @@ co-occurrence. Volumes are ~2 findings/entry, mostly info/note with a focused se
 of flags.
 
 ## Writing the extra checks into the docx
-`annotate_review.py` now writes the reliable extra checks into each entry, each
+`tools/annotate_review.py` now writes the reliable extra checks into each entry, each
 anchored on the relevant cell (Word comment by **"PXRD Review Tool"**; flags also
 yellow-highlight their anchor):
 - **symmetry / precision** → the offending Author's-Cell parameter (a…γ);
@@ -416,7 +416,7 @@ yellow-highlight their anchor):
 - **name vs formula** (Levinson/polytype) → the mineral name;
 - **Mindat group** (informational, not highlighted) → the mineral name.
 
-Soft `note`/other `info` findings stay console-only (`cell_lambda_check.py`).
+Soft `note`/other `info` findings stay console-only (`tools/cell_lambda_check.py`).
 Each `Finding` carries an `anchor` (`'cell:a'`…`'cell:Z'`/`'cell:SG'`, `'instr'`,
 `'refl'`, `'ima'`, `'analysis'`, `'formula'`, `'name'`) that the annotator maps to a
 cell. Comment placement matters to the reviewer, so anchor each finding to the cell
@@ -425,7 +425,7 @@ copied **byte-for-byte** when it has no cell/λ issue *and* no writable extra
 (verified: clean entries remain identical to source). On a 44-entry batch:
 44 entries → 41 edited, 3 untouched, 99 comments.
 
-## Review-mode GUI (`review_gui.py`) — validate the flags, comments & annotations
+## Review-mode GUI (`gui/review_gui.py`) — validate the flags, comments & annotations
 The CLI checks write comments/highlights + `annotation_log.txt`, but there is no
 way to **see the evidence** behind each finding, so two failure classes are
 invisible: **silent failures** (no `.pdf` paired, no cell parsed, `parse_entry`
@@ -435,8 +435,8 @@ a docx flag). The GUI surfaces both and lets the reviewer triage them.
 
 ```
 pip3 install -r requirements.txt              # adds Flask (GUI only)
-python3 review_gui.py "/path/to/entries"      # opens http://127.0.0.1:5000
-python3 review_gui.py "/path/to/entries" --port 8000 --no-browser
+python3 gui/review_gui.py "/path/to/entries"      # opens http://127.0.0.1:5000
+python3 gui/review_gui.py "/path/to/entries" --port 8000 --no-browser
 ```
 It is a **thin, read-only presentation/triage layer over `annotate_review.analyze()`**
 — it reuses the check logic verbatim, never duplicates or changes it, and **never
@@ -478,7 +478,7 @@ edits a docx**. Its only writes are sidecars under `<folder>/review_out`:
 
 ### Triage → rerun feedback loop
 Triage verdicts feed back into the annotator. **Rerun entry** (header) and
-**Rerun all** (top bar) re-invoke `annotate_review.py` with `--triage triage.json`,
+**Rerun all** (top bar) re-invoke `tools/annotate_review.py` with `--triage triage.json`,
 which is **strictly comment-only** (the tool still never rewrites a field — fixes
 remain the reviewer's): a **dismissed** finding is **suppressed** (not written),
 a **confirmed / look** note is **folded into the tool's comment**, and the **Accept**
@@ -523,14 +523,14 @@ the annotator would write — without writing it.
 This is my design memory for whoever maintains the checks (Claude or a human).
 The checks were hardened by hand-auditing one review batch;
 each rule below corresponds to a real false positive that was removed or a real
-catch that must stay. `regression_check.py` encodes every case as an assertion:
+catch that must stay. `tools/regression_check.py` encodes every case as an assertion:
 
 ```
-python3 regression_check.py            # all cases must PASS after any edit
+python3 tools/regression_check.py            # all cases must PASS after any edit
 ```
 
-Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
-`annotate_review.py`. If a case fails, a known problem was reintroduced.
+Run it after touching `tools/extra_checks.py`, `tools/cell_lambda_check.py`, or
+`tools/annotate_review.py`. If a case fails, a known problem was reintroduced.
 
 ### Hard-won rules (do NOT regress)
 - **Calculated pattern.** A docx correctly marked `Spacing=Calculated` is normal,
@@ -660,7 +660,7 @@ Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
   the text). *(I003246 = agrees, no flag; I003599 Dypingite-syn = cell skipped.)*
 
 ### Accept marking
-`annotate_review.py` writes a lowercase **"x"** in the cell after **Accept** for
+`tools/annotate_review.py` writes a lowercase **"x"** in the cell after **Accept** for
 essentially every entry (the usual convention), **centred** in the box (horizontal +
 vertical) so it doesn't sit against the label. It is withheld (all boxes left
 blank for a manual decision) ONLY when the cell is grossly wrong — `_is_severe()`:
