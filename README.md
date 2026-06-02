@@ -268,6 +268,38 @@ complete one), temperature (the `.dft` field is ambiguous — sometimes the SC
 value) and the comment-loop fields (IMA/optical — garbled in some `.dft`) are
 NOT compared.
 
+#### Cross-source cell consensus + Mindat feedback (check 22)
+`parse_cif` now also reads the **cell** (a/b/c/α/β/γ), and `extra_checks.mindat_struct`
+resolves a species to its Mindat **structural** record (cell, SG=IT number, elements,
+formula) — ~93 % of reviewed entries resolve. check 22 compares the cell across
+**docx (powder), `.cif`, and Mindat** using **sorted axis lengths** — angle-free (Mindat
+stores γ=0 for uniaxial cells, so a *volume* comparison wrongly inflates hexagonal
+cells by 1/sin120°≈1.155) and robust to powder↔SCXRD axis relabeling. The `.cif`/Mindat
+are usually the **single-crystal** cell, which legitimately differs a little from the
+submitted powder cell, so the bar is **high** (only large, non-polytype differences):
+- **Mindat is the lone outlier** (docx ≈ `.cif`, Mindat differs, not a super/sub-cell)
+  → a `mindat_fix` **note** routed to a separate **`mindat_discrepancies.txt`** — a
+  feedback list to verify against the paper and submit to Mindat. **Never** written
+  into a docx (Mindat is a co-equal proxy, not ground truth).
+- **the powder cell differs grossly** from the SCXRD structure (docx ≠ `.cif` ≈ Mindat,
+  >5 %, non-polytype) → a `cell_cif` ⚑ flag for the reviewer.
+- **axis swap** — same cell magnitudes but the axes are in a different *order* than the
+  `.cif` (`cell_swap` ⚑) — a likely transcription error (axis permutations shouldn't
+  occur for the same phase). Skips near-equal/uniaxial axes.
+- **ideal formula** vs Mindat's **IMA formula** (ground truth, from the IMA list; EXACT
+  species only — a variety/Levinson suffix differs from the base). Flags only a MAJOR
+  discrepancy: a **species-defining element** in one formula **entirely absent** from
+  the other — excludes substituents (the dominant cation of a `(A,B,…)` site only),
+  traces (<0.5), and is order-independent (so `(Ca,Y)`↔`CaY`, `(Bi Sb)`↔`(Sb Bi)` don't
+  flag). → `mindat_chem` note in the cross-check log (Mindat lags the CNMNC newsletter,
+  so it cuts both ways). *(Hochleitnerite: Mindat's formula is missing the K.)*
+- IMA status `QUESTIONABLE` (from the group cache) → a note.
+
+`mindat_fix`/`mindat_chem`/`ima_status` are written to a separate **`mindat_discrepancies.txt`**
+(sectioned Cell / Chemistry / IMA status), never into a docx. `.cif` **density** is NOT
+used (H of OH/H₂O/NH₄ is usually unrefined). SG-vs-Mindat is **not** checked — Mindat
+often reports nonstandard space groups or cells from old determinations.
+
 ### Mindat lookup (`mindat.py`) — authoritative classification
 A Python port of my Apps Script (Token auth, page-size 500,
 exponential backoff). It pulls every IMA-approved geomaterial once with its
@@ -519,6 +551,14 @@ Run it after touching `extra_checks.py`, `cell_lambda_check.py`, or
   Hydroxide relative to **halides** (accepted names keep "Hydroxide Fluoride/Chloride"),
   and do NOT do `<Metal> Oxide→oxoanion` (needs the formula: molybdate vs molybdite).
   Validated to reproduce real edits with ZERO false positives on accepted names.
+- **Cross-source cell (check22).** Compare cells with **sorted axis lengths**, NEVER
+  cell volume with defaulted angles — Mindat stores γ=0 for uniaxial cells, so a
+  volume comparison inflates hexagonal cells by exactly 1/sin120°≈1.155 (this once
+  produced 23 phantom "Mindat discrepancies", all ×1.15). `.cif`/Mindat are usually the
+  SCXRD cell, so use a HIGH tolerance vs the powder cell and exclude super/sub-cell
+  (polytype) rational relations. Mindat is a co-equal proxy: a `mindat_fix` finding is
+  a console NOTE routed to `mindat_discrepancies.txt`, NEVER a docx flag. *(I003599 =
+  Mindat off 8%, logged separately; I003246 = agrees, no flag.)*
 
 ### Accept marking
 `annotate_review.py` writes a lowercase **"x"** in the cell after **Accept** for

@@ -492,6 +492,10 @@ def main():
     idx = C.pdf_index(args.folder)
     cif_idx = C.cif_index(args.folder)
     dft_idx = C.dft_index(args.folder)
+    try:                                    # keep the Mindat structural cache current (cross-source check)
+        import mindat; mindat.refresh_struct_if_stale()
+    except Exception:
+        pass
     docs = sorted(f for f in glob.glob(os.path.join(args.folder, '*.docx'))
                   if not os.path.basename(f).startswith('~$'))
     if args.id:
@@ -572,6 +576,10 @@ def main():
         # .dft cross-check notes are console/log only (the .dft is a co-equal proxy);
         # collect them for the log's 'verify' section — they are NOT written into the docx.
         rec['dft'] = [f.msg for f in res.get('extra', []) if f.code == 'dft']
+        # Mindat cross-check notes (cell / chemistry / status) — a co-equal proxy,
+        # so these go to a SEPARATE feedback log, never into the docx.
+        rec['mindat'] = [(f.code, f.msg) for f in res.get('extra', [])
+                         if f.code in ('mindat_fix', 'mindat_chem', 'ima_status')]
         records.append((os.path.basename(dp), rec))
         n = len(rec['comments'])
         tag = ' [REFRESHED: manual edits kept]' if rec.get('refreshed') else ''
@@ -639,6 +647,27 @@ def main():
                     fh.write(textwrap.fill(c, width=78, initial_indent='    - ',
                                            subsequent_indent=' ' * 6) + '\n')
     print('\nlog written -> %s' % log_path)
+
+    # --- separate Mindat cross-check feedback log -------------------------
+    # Mindat is a co-equal proxy (its data is transcribed from delayed CNMNC
+    # newsletters), so these verify items are NOT written into any docx — a list to
+    # check against the paper and, where Mindat is wrong, submit a correction.
+    md_recs = [(f, r) for f, r in records if r.get('mindat')]
+    if md_recs:
+        md_path = os.path.join(out_dir if not args.inplace else args.folder, 'mindat_discrepancies.txt')
+        LABEL = {'mindat_fix': 'CELL (docx & .cif agree, Mindat differs — likely submit to Mindat)',
+                 'mindat_chem': 'CHEMISTRY (element set differs from Mindat)',
+                 'ima_status': 'IMA STATUS'}
+        with open(md_path, 'w') as fh:
+            fh.write('Mindat cross-check — verify against the paper (Mindat data can lag the '
+                     'CNMNC newsletter by years). Not written into any docx.\n')
+            fh.write('%d entr%s.\n' % (len(md_recs), 'y' if len(md_recs) == 1 else 'ies') + '=' * 78 + '\n')
+            for f, r in md_recs:
+                fh.write('\n  %s   (%s)\n' % ((C.entry_name(f) or C.entry_id(f) or f).upper(), C.entry_id(f) or '?'))
+                for code, msg in r['mindat']:
+                    fh.write('    [%s]\n' % LABEL.get(code, code))
+                    fh.write(textwrap.fill(msg, width=78, initial_indent='      - ', subsequent_indent=' ' * 8) + '\n')
+        print('mindat cross-check -> %s  (%d)' % (md_path, len(md_recs)))
 
 if __name__ == '__main__':
     main()

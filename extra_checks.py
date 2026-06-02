@@ -781,6 +781,78 @@ def check11_ima(e, text):
     out.append(Finding('ima', 'flag', msg + ".", None, 'ima'))
     return out
 
+# ----------------------------------------------------------------------------- Mindat structural resolver (offline cache)
+_MINDAT_STRUCT_IDX = None
+def mindat_struct(name, exact=False):
+    """Resolve a mineral name to its Mindat structural record — dict with cell
+    (a,b,c,al,be,ga), sg (IT number), elements, formula, groupid — or None.
+    Uses the offline struct cache (no API call during a review). Most reviewed
+    species ARE in Mindat (~93% of the corpus); new minerals return None.
+    NB: Mindat's cell is usually the SINGLE-CRYSTAL cell, so a comparison to the
+    submitted powder cell must tolerate real powder-vs-SCXRD variance.
+    exact=True matches only the exact normalised name (no variety/polytype
+    fallback) — required for chemistry, where a variety ('Gypsum-strontian') or a
+    Levinson suffix ('Parisite-(Nd)') has different elements than the base."""
+    global _MINDAT_STRUCT_IDX
+    if not name:
+        return None
+    try:
+        import mindat
+        if _MINDAT_STRUCT_IDX is None:
+            _MINDAT_STRUCT_IDX = {}
+            for r in mindat.struct_db().get('recs', []):
+                _MINDAT_STRUCT_IDX.setdefault(r['norm'], r)
+        cands = [mindat._norm(name)] if exact else list(mindat._candidates(name))
+        for cand in cands:
+            if cand in _MINDAT_STRUCT_IDX:
+                return _MINDAT_STRUCT_IDX[cand]
+    except Exception:
+        return None
+    return None
+
+# periodic-table symbols, for element-set extraction from formulas
+_PT_ELEMENTS = frozenset((
+    "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu "
+    "Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba "
+    "La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi "
+    "Po At Rn Fr Ra Ac Th Pa U Np Pu").split())
+
+def _clean_formula(f):
+    f = f or ''
+    f = re.sub(r'</?su[bp]>', '', f)              # <sub>/<sup>
+    f = re.sub(r'&#?\w+;', ' ', f)                # HTML entities (&#60; &middot; vacancy box …)
+    return re.sub(r'\$[A-Z]+[0-9.]*', ' ', f)     # $SI/$XS site markup
+
+def _all_formula_elements(f):
+    return {t for t in re.findall(r'[A-Z][a-z]?', _clean_formula(f)) if t in _PT_ELEMENTS}
+
+def _essential_formula_elements(f):
+    """Species-defining elements of an ideal formula: standalone elements with a
+    non-trace coefficient (≥0.5), plus the DOMINANT (first-listed) cation of each
+    multi-cation substitution site `(A,B,…)`. Excludes substituents and traces, and
+    keeps polyanions/water (single-cation `(XO4)`/`(H2O)`/`(OH)`) whole. Order of
+    site cations doesn't matter for the absent-from-other test that uses this."""
+    f = _clean_formula(f)
+    ess = set()
+    for inner in re.findall(r'\(([^()]*)\)', f):
+        els = [t for t in re.findall(r'[A-Z][a-z]?', inner) if t in _PT_ELEMENTS]
+        non_o = [x for x in dict.fromkeys(els) if x not in ('O', 'H')]
+        if len(non_o) <= 1:
+            ess.update(els)                       # polyanion / water / hydroxyl — all essential
+        else:
+            seen = False
+            for x in els:                         # substitution site: dominant cation only
+                if x in ('O', 'H'):
+                    ess.add(x)
+                elif not seen:
+                    ess.add(x); seen = True
+    outside = re.sub(r'\([^()]*\)', ' ', f)       # standalone elements (skip traces <0.5)
+    for m in re.finditer(r'([A-Z][a-z]?)\s*([0-9]*\.?[0-9]+)?', outside):
+        el, co = m.group(1), m.group(2)
+        if el in _PT_ELEMENTS and not (co and float(co) < 0.5):
+            ess.add(el)
+    return ess
+
 # ----------------------------------------------------------------------------- CIF cross-check (Z and space group)
 def parse_cif(cif_path):
     """Extract Z and space group from a CIF file, using the best structural data block."""
@@ -797,6 +869,17 @@ def parse_cif(cif_path):
             z = int(m.group(1))
             if 1 <= z <= 192:
                 d['Z'] = z
+        # cell parameters (kept as raw strings with esd, like the docx/.dft). The
+        # .cif is normally the SINGLE-CRYSTAL determination, so a cross-check vs the
+        # submitted powder cell must use a high tolerance (see check_sources).
+        cell = {}
+        for ax, tag in (('a', '_cell_length_a'), ('b', '_cell_length_b'), ('c', '_cell_length_c'),
+                        ('α', '_cell_angle_alpha'), ('β', '_cell_angle_beta'), ('γ', '_cell_angle_gamma')):
+            mm = re.search(tag + r'\s+(-?\d[\d.]*(?:\(\d+\))?)', block)
+            if mm:
+                cell[ax] = mm.group(1).strip()
+        if cell:
+            d['cell'] = cell
         for tag in ('_space_group_name_H-M_alt',
                     '_symmetry_space_group_name_H-M',
                     '_space_group_name_H-M'):
@@ -826,6 +909,11 @@ def parse_cif(cif_path):
             best = d
             if is_structural:
                 break   # atom_site block is authoritative — stop here
+    if not best:                          # no Z+SG block — keep the richest (e.g. cell-only)
+        for block in blocks[1:]:
+            d = _block_data(block)
+            if len(d) > len(best):
+                best = d
     return best
 
 def _norm_sg(s):
@@ -1673,6 +1761,110 @@ def _normalize_primary(nm):
             toks = toks[:first] + moved + rest
     return ' '.join(toks)
 
+# --- 22. cross-source cell consensus (.cif / Mindat) + Mindat feedback ---------
+# Compare unit cells across docx (powder), .cif (single-crystal), and Mindat
+# (usually single-crystal) using SORTED axis lengths — angle-free (Mindat stores
+# γ=0 for uniaxial cells, so a volume comparison wrongly inflates hexagonal cells
+# by 1/sin120°≈1.155) and robust to axis relabeling between powder and SCXRD.
+def _cell_lengths(cell):
+    def n(x):
+        if x is None:
+            return None
+        if isinstance(x, (int, float)):
+            return float(x) or None          # Mindat stores 0 for a missing/uniaxial axis
+        return _val(x)                        # docx/.cif strings like '5.196(1)'
+    a, b, c = n(cell.get('a')), n(cell.get('b')), n(cell.get('c'))
+    if not (a and c):
+        return None
+    return sorted([a, b or a, c])
+
+def _len_maxdiff(l1, l2):
+    return max(abs(x - y) / max(x, y) for x, y in zip(l1, l2))
+
+_CELL_RAT = [2, 3, 4, 3 / 2, 2 / 3]
+def _len_rational(l1, l2):
+    """A super/sub-cell (polytype) relation — some sorted axis ratio is a simple
+    rational, not a transcription error."""
+    return any(abs(x / y - q) / q < 0.05 or abs(y / x - q) / q < 0.05
+               for x, y in zip(l1, l2) for q in _CELL_RAT)
+
+def check22_cross_sources(e, cif_data, dft_data):
+    """docx↔.cif↔Mindat cell consensus. The .cif/Mindat are usually the SCXRD cell,
+    which legitimately differs a little from the submitted powder cell — so this
+    uses a HIGH tolerance and only speaks on large, non-polytype differences.
+    Two outcomes:
+      * Mindat is the lone outlier (docx≈.cif, Mindat differs) → 'mindat_fix' NOTE,
+        routed to a separate mindat_discrepancies log (NOT written to the docx) —
+        a feedback list to submit to Mindat.
+      * the powder cell differs grossly from the SCXRD structure (docx ≠ .cif≈Mindat)
+        → 'cell_cif' flag for the reviewer."""
+    out = []
+    SAME = 0.03
+    docx = _cell_lengths(e.cell)
+    cif = _cell_lengths((cif_data or {}).get('cell', {}))
+    M = mindat_struct(e.name or e.primary or '')
+    mind = _cell_lengths({'a': M['a'], 'b': M['b'], 'c': M['c']}) if M else None
+    fmt = lambda l: '/'.join('%.3f' % x for x in l)
+    if docx and cif and mind and _len_maxdiff(docx, cif) < SAME \
+            and _len_maxdiff(docx, mind) >= SAME and not _len_rational(docx, mind):
+        out.append(Finding('mindat_fix', 'note',
+                   "docx and .cif agree on the cell (a,b,c≈%s) but Mindat lists %s (off %.0f%%) "
+                   "— Mindat may need correcting." % (fmt(docx), fmt(mind), _len_maxdiff(docx, mind) * 100), None))
+    if docx and cif and _len_maxdiff(docx, cif) > 0.05 and not _len_rational(docx, cif) \
+            and (mind is None or _len_maxdiff(cif, mind) < SAME):
+        out.append(Finding('cell_cif', 'flag',
+                   "Powder cell differs substantially from the .cif single-crystal structure "
+                   "(docx a,b,c=%s vs .cif %s, %.0f%%) — verify." % (fmt(docx), fmt(cif), _len_maxdiff(docx, cif) * 100),
+                   None, 'cell:a'))
+    # axis-swap: same cell magnitudes but the axes are in a DIFFERENT ORDER than the
+    # .cif — a likely transcription error (axis permutations shouldn't normally occur
+    # for the same phase). Only when the axes are distinct enough for a swap to mean
+    # something (skip near-equal axes / uniaxial).
+    dp = [_val(e.cell.get(k)) for k in ('a', 'b', 'c')]
+    cp = [_val((cif_data.get('cell') or {}).get(k)) for k in ('a', 'b', 'c')]
+    if all(dp) and all(cp) and (max(dp) - min(dp)) / max(dp) > 0.05:
+        pos = max(abs(x - y) / max(x, y) for x, y in zip(dp, cp))     # positional mismatch
+        srt = _len_maxdiff(sorted(dp), sorted(cp))                    # sorted (set) match
+        if srt < 0.02 and pos > 0.05:
+            out.append(Finding('cell_swap', 'flag',
+                       "docx cell axes appear reordered vs the .cif structure (docx a,b,c=%s; "
+                       ".cif=%s) — possible transcription swap; verify."
+                       % ('/'.join('%.3f' % x for x in dp), '/'.join('%.3f' % x for x in cp)), None, 'cell:a'))
+    # chemistry: the docx IDEAL formula vs Mindat's IMA formula (ground truth, from
+    # the IMA list — EXACT species only; a variety/Levinson suffix differs from the
+    # base). Flag only a MAJOR discrepancy: a SPECIES-DEFINING element in one formula
+    # entirely ABSENT from the other (not a substituent, not a trace, order-
+    # independent). Mindat lags the CNMNC newsletter, so this cuts both ways → a
+    # verify note in the Mindat cross-check log, never written into the docx.
+    Mx = mindat_struct(e.name or e.primary or '', exact=True)
+    docx_f = e.formulas.get('Chemical') or e.formulas.get('Structural') or ''
+    if Mx and Mx.get('formula') and docx_f:
+        d_all, m_all = _all_formula_elements(docx_f), _all_formula_elements(Mx['formula'])
+        if d_all and m_all:
+            mindat_lacks = _essential_formula_elements(docx_f) - m_all
+            docx_lacks = _essential_formula_elements(Mx['formula']) - d_all
+            if mindat_lacks or docx_lacks:
+                bits = []
+                if mindat_lacks:
+                    bits.append("docx has %s, Mindat's formula lacks it" % ','.join(sorted(mindat_lacks)))
+                if docx_lacks:
+                    bits.append("Mindat's formula has %s, docx lacks it" % ','.join(sorted(docx_lacks)))
+                out.append(Finding('mindat_chem', 'note',
+                           "ideal formula vs Mindat: %s — verify (docx=%r, Mindat=%r)."
+                           % ('; '.join(bits), docx_f[:48], re.sub(r'</?su[bp]>', '', Mx['formula'])[:48]), None))
+    # IMA status from the lightweight cache (QUESTIONABLE species are worth a look)
+    try:
+        import mindat
+        rec = mindat.lookup(e.name or e.primary or '')
+        st = (rec or {}).get('ima_status') or []
+        st = st if isinstance(st, list) else [st]
+        if 'QUESTIONABLE' in st:
+            out.append(Finding('ima_status', 'note',
+                       "Mindat lists this species' IMA status as QUESTIONABLE — confirm.", None))
+    except Exception:
+        pass
+    return out
+
 def check21_primary_name(e, text):
     nm = (e.primary or '').strip()
     if not nm:
@@ -1707,6 +1899,10 @@ def run_all(e, text, cif_data=None, dft_data=None):
         findings.extend(check_dft(e, dft_data or {}))
     except Exception as ex:
         findings.append(Finding('dft', 'note', '.dft check errored: %s' % ex, None))
+    try:
+        findings.extend(check22_cross_sources(e, cif_data or {}, dft_data or {}))
+    except Exception as ex:
+        findings.append(Finding('cell_cif', 'note', 'cross-source check errored: %s' % ex, None))
     return findings
 
 _SEV = {'flag': '⚑', 'info': 'ℹ', 'note': '·'}
