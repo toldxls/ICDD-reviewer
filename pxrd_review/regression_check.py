@@ -68,7 +68,11 @@ CASES = [
  # single anode matching the docx = OK, not 'verify' (powder shares the source via
  # Gandolfi/crystal-rotation on a single-crystal instrument); two anodes stay 'verify'
  ("I003562 lam OK (single MoKα source)",     lambda: lam_verdict('I003562') == 'ok'),
- ("I003521 lam 'verify' kept (two anodes)",  lambda: lam_verdict('I003521') == 'verify'),
+ # a radiation is attached to a collection verb whose SUBJECT sets the mode: 'powder
+ # XRD data were collected … using CuKα' is the powder radiation even when a single-
+ # crystal instrument/comparison sits nearer the token. docx CuKα matches -> OK.
+ ("I003521 lam OK (powder collected with CuKα, matches docx)", lambda: lam_verdict('I003521') == 'ok'),
+ ("I003823 lam OK (powder XRD with CuKα despite SC-instrument mention)", lambda: lam_verdict('I003823') == 'ok'),
  # 'Sync' is a valid synchrotron designator (λ is beamline-tunable, matches no tube
  # line) — OK, not 'unrec'/'docx anode not recognised'
  ("I003599 lam OK (Sync synchrotron anode)", lambda: lam_verdict('I003599') == 'ok'),
@@ -147,6 +151,10 @@ CASES = [
  ("I003657 Bragg-Brentano -> Peak flag",     lambda: bool(extras('I003657', 'intensity_type'))),
  ("I003563 Gandolfi/area -> Integrated flag", lambda: bool(extras('I003563', 'intensity_type'))),
  ("I003822 calc pattern -> no intensity_type", lambda: not extras('I003822', 'intensity_type')),
+ # --- 7. synthetic: the 'Synthetic Rock-forming minerals' subfile is a CATEGORY (a
+ #     natural mineral is also filed there) — not a 'this sample is synthetic' flag ---
+ ("I003512 no synthetic note (Synthetic Rock-forming category, not a synthetic sample)",
+                                              lambda: not extras('I003512', 'synthetic')),
  # --- 20. calculated pattern, λ not stated in the paper ---
  ("I003511 calc pattern λ not in paper",     lambda: bool(extras('I003511', 'calc_wavelength'))),
  # --- 21. Primary name normalization: corrected names must NOT flag ---

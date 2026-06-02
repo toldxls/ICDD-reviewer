@@ -174,6 +174,23 @@ def _nearest_fwd(hay, keys):
         if i != -1 and (best is None or i < best): best = i
     return best
 
+def radiation_context(text, pos):
+    """Context for a RADIATION token. A radiation is attached to a COLLECTION verb
+    whose grammatical SUBJECT sets the mode, so prefer the sentence's FIRST XRD-mode
+    keyword over the nearest one: '… Powder XRD data were collected … on the same
+    instrument as single-crystal XRD data were collected, using CuKα …' is a POWDER
+    statement even though 'single-crystal' sits nearer the token. Falls back to the
+    position-based classify_context. Skips a 'calculated' sentence (the powder there
+    is modelled from the single-crystal structure, not collected with this anode)."""
+    start = text.rfind('.', 0, pos) + 1
+    end = text.find('.', pos); end = len(text) if end == -1 else end
+    sent = text[start:end].lower()
+    if 'calc' not in sent:
+        p, s = _nearest_fwd(sent, POWDER_KW), _nearest_fwd(sent, SINGLE_KW)
+        if p is not None and (s is None or p < s):
+            return 'powder'
+    return classify_context(text, pos)
+
 def classify_context(text, pos, pre=750, post=200):
     """Classify the cell at `pos` as powder / single / unknown. A cell is
     almost always introduced by a clause that PRECEDES it ('refined from the
@@ -479,7 +496,7 @@ def find_radiation(text):
                          or bool(re.match(r'[αa]?\d?\s*(radiation|source|tube|anode|line)', after, re.I)))
         if before_char in '(,/' and not is_rad_phrase:
             continue
-        out.append((m.group(1).lower(), lam, classify_context(text, pos)))
+        out.append((m.group(1).lower(), lam, radiation_context(text, pos)))
     return out
 
 # ----------------------------------------------------------------------------- comparison

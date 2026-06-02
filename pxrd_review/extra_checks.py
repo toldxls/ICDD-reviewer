@@ -620,7 +620,11 @@ def check7_synthetic(e, text):
     nm = (e.name or '') + ' ' + (e.primary or '')
     name_syn = bool(re.search(r'-\s*syn\b|\bsyn\b|synthetic', nm, re.I))
     cls = [c.lower() for c, _ in e.subfiles]
-    sub_syn = any('synth' in c for c in cls)
+    # A genuine 'this sample is synthetic' subfile is class AND subclass synthetic
+    # (e.g. Synthetic / Synthetic). The 'Synthetic Rock-forming minerals' subfile
+    # (class Synthetic, subclass 'Rock-forming minerals') is a broad CATEGORY that
+    # natural minerals are also filed under — it does NOT mean the sample is synthetic.
+    sub_syn = any('synth' in c.lower() and 'synth' in (sub or '').lower() for c, sub in e.subfiles)
     sub_nat = any('natural' in c for c in cls)
     if name_syn and sub_nat and not sub_syn:
         out.append(Finding('synthetic', 'flag',
