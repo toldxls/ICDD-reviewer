@@ -100,14 +100,52 @@ CASES = [
  # --- cell SOURCE: docx using the SCXRD cell when a same-phase powder cell exists = FLAG;
  #     an SCXRD-looking cell with no powder cell = soft NOTE; a powder cell = nothing ---
  ("I003632 cell_source FLAG (SC cell + powder cell exists)", lambda: bool(extras('I003632', 'cell_source', 'flag'))),
+ # the same-phase powder conflict drives the FLAG even without a definitive SC cue in the
+ # matched cell's sentence (spaltiite: docx used the SCXRD cell, PXRD cell 15.821 refined)
+ ("I003807 cell_source FLAG (SCXRD used, PXRD cell refined)", lambda: bool(extras('I003807', 'cell_source', 'flag'))),
  ("I003657 cell_source NOTE not flag (Julgoldite)",  lambda: bool(extras('I003657', 'cell_source', 'note')) and not extras('I003657', 'cell_source', 'flag')),
  ("I003510 no cell_source flag (powder cell, not SC)", lambda: not extras('I003510', 'cell_source', 'flag')),
  ("I003566 no cell_source flag (GSAS powder cell)",  lambda: not extras('I003566', 'cell_source', 'flag')),
  ("I003636 no cell_source flag (UnitCell powder cell)", lambda: not extras('I003636', 'cell_source', 'flag')),
  ("I003562 no cell_source (powder cell)",            lambda: not extras('I003562', 'cell_source')),
+ # --- instrument/geometry lexicon (classify_context fallback when no bare powder/
+ #     single word sits near the cell). Mined from DC fields; mode-determining terms
+ #     only. Unit-level (no fixture needed) so the contract is locked regardless of
+ #     which private entries happen to exercise it. ---
+ ("lexicon: Gandolfi geometry -> powder",   lambda: C._instr_mode('gandolfi-like geometry, recording') == 'powder'),
+ ("lexicon: pseudo-Gandolfi motion -> powder", lambda: C._instr_mode('collected with pseudo-gandolfi motion') == 'powder'),
+ ("lexicon: Debye-Scherrer -> powder",      lambda: C._instr_mode('in debye-scherrer geometry') == 'powder'),
+ ("lexicon: kappa four-circle -> single",   lambda: C._instr_mode('bruker kappa four-circle goniometer') == 'single'),
+ # D8 Advance/Discover = dedicated powder Bragg-Brentano; D8 Venture (Photon area detector)
+ # is dual-use -> must NOT classify as single from the model name alone
+ ("lexicon: D8 Advance=powder, D8 Venture undetermined",
+                                            lambda: C._instr_mode('bruker d8 advance') == 'powder' and C._instr_mode('bruker d8 venture diffractometer') is None),
+ # dual-use area-detector single-crystal instruments run pseudo-Gandolfi/Gandolfi-like to
+ # collect POWDER -> their model names must NOT force 'single'; the geometry/motion word wins
+ ("lexicon: pseudo-Gandolfi on XtaLAB/Photon -> powder (dual-use models)",
+                                            lambda: C._instr_mode('rigaku xtalab synergy, pseudo-gandolfi motion') == 'powder'
+                                                    and C._instr_mode('bruker photon iii detector, gandolfi-like scan') == 'powder'),
+ # bare single-crystal MODEL with no geometry word -> undetermined (dual-use), not 'single'
+ ("lexicon: bare XtaLAB/Apex model -> undetermined", lambda: C._instr_mode('rigaku xtalab synergy diffractometer') is None and C._instr_mode('bruker apex ii detector') is None),
+ # dual-use Rigaku R-AXIS Rapid II -> must NOT classify (guards against re-adding it;
+ # it mislabelled a single-crystal cell as powder in I002535)
+ ("lexicon: dual-use R-AXIS Rapid -> unknown", lambda: C._instr_mode('rigaku r-axis rapid ii curved imaging plate microdiffractometer') is None),
+ # both modes named -> one-sided rule returns None rather than guessing
+ ("lexicon: both modes present -> None",    lambda: C._instr_mode('gandolfi motion on a kappa four-circle goniometer') is None),
+ # a 'calculated [X-ray] powder' pattern is simulated from the single-crystal structure,
+ # so it must NOT make a single-crystal cell read 'powder' (I003398: synchrotron crystallite
+ # refinement whose only nearby 'powder' is 'Calculated X-ray powder diffraction data')
+ ("calc-powder phrase is NOT powder context",
+   lambda: (lambda s: C.classify_context(s, s.find('a =')))('refinement gave a = 3.09(1). calculated X-ray powder diffraction data are listed in Table S1.') != 'powder'),
+ ("real 'refined from powder data' IS powder context",
+   lambda: (lambda s: C.classify_context(s, s.find('a =')))('the unit-cell parameters refined from powder data are a = 5.24(1) and so on.') == 'powder'),
  # --- cell parsing (cubic / uniaxial / rounded-table) ---
  ("I003634 cubic cell matches",         lambda: cell_verdict('I003634') == 'match'),
  ("I003751 uniaxial: only c flagged",        lambda: params('I003751') == {'c'}),
+ # Z (formula units): a/b/c match but the .pdf explicitly states a different 'Z = N'
+ # (grokhovskyite: docx Z=2, paper 'Z = 3'); a docx-Z == paper-Z entry must NOT flag
+ ("I003744 Z mismatch flagged (docx 2 vs .pdf Z=3)", lambda: 'Z' in params('I003744')),
+ ("I003634 no Z flag (docx Z matches .pdf)",        lambda: 'Z' not in params('I003634')),
  ("I003747 clean (no rounding noise)",  lambda: not params('I003747')),
  ("I003698 clean (full-precision cell)", lambda: not params('I003698')),
  ("I003562 indexing flagged (>3%)",     lambda: bool(extras('I003562', 'indexing', 'flag'))),

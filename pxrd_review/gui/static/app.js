@@ -451,7 +451,10 @@ async function buildTextLayer(a, i, slot) {
     for (const w of d.words) {
       const [x0, y0, x1, y1, word] = w;
       const s = document.createElement('span');
-      s.textContent = word;
+      // Trailing space so copy/paste keeps word separators: get_text('words')
+      // yields one box per word with no whitespace, and adjacent inline spans
+      // serialize as 'wordword'. The span is color:transparent, so it stays invisible.
+      s.textContent = word + ' ';
       s.style.left = (x0 / d.w * 100) + '%';
       s.style.top = (y0 / d.h * 100) + '%';
       s.style.fontSize = ((y1 - y0) / d.h * 100 * 0.82) + 'cqh';
@@ -549,6 +552,13 @@ function renderDocx() {
     const m = a.cell.matched;
     body.append(el('div', { class: 'sub' }, 'Cell from PDF' + (m.phase ? ' · ' + m.phase : '')));
     body.append(cellGrid([m.a, m.b, m.c, m.al, m.be, m.ga, '', m.Z], {}, []));
+  }
+
+  // Compound Names (docx): Mineral, Primary Warr symbol, Primary systematic name
+  const cn = (a.entry && a.entry.compound_names) || [];
+  if (cn.length) {
+    body.append(el('div', { class: 'sub' }, 'Compound Names'));
+    body.append(kvTable(cn));
   }
 
   const kv = [];

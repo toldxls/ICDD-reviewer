@@ -131,14 +131,34 @@ def parse_docx(path):
     return DocxData(ac, cc, anode, lam, raw_cell, raw_lam, parse_comments(path))
 
 # ----------------------------------------------------------------------------- pdf parsing
+# Ligatures PyMuPDF leaves as single glyphs ('speciﬁc'→'specific', 'reﬂection'→
+# 'reflection'); they silently break every word/keyword search that crosses them.
+_LIGATURES = {'ﬁ': 'fi', 'ﬂ': 'fl', 'ﬀ': 'ff', 'ﬃ': 'ffi', 'ﬄ': 'ffl', 'ﬆ': 'st', 'ﬅ': 'ft'}
+# Dash glyphs (hyphen-variants, en/em dash, minus) used WITHIN a word; canonicalised
+# to ASCII '-' so 'Debye–Scherrer' matches 'Debye-Scherrer' and 'Bragg–Brentano' too.
+_WORD_DASH = re.compile(r'(?<=[A-Za-z])[‐‑‒–—−](?=[A-Za-z])')
+
 def _norm_pdf(s):
-    """Fix common font/encoding mojibake in extracted text. The big one: in
-    several journals the '=' glyph extracts as '¼', so 'a ¼ 9.52(1)' is really
-    'a = 9.52(1)'. Also normalise the 'A˚' angstrom glyph and re-join esds that
-    extract with a stray space ('8.8593 (2)' -> '8.8593(2)') so table/grid cells
-    in multi-phase papers parse as single numeric tokens."""
+    """Repair the predictable damage PyMuPDF leaves in extracted text, ONCE at the
+    source, so every downstream check reads clean words (it is line-structure
+    preserving — the vertical-table parsers still see their newlines). Validated
+    against the corpus: lifts the DC-term↔PDF match rate substantially. Fixes:
+      • '¼'→'=' (the '=' glyph mis-extracts as '¼' in several journals);
+      • the 'A˚'/decomposed-ring angstrom glyph → 'Å';
+      • ligatures ('speciﬁc'→'specific') and soft hyphens;
+      • line-break hyphenation ('microdif-\\nfractometer'→'microdiffractometer',
+        'pow-\\nder'→'powder') — the dominant artifact behind powder/single misses;
+      • word-internal en/em/minus dashes → '-' ('Debye–Scherrer'→'Debye-Scherrer');
+      • esds that extract with a stray space ('8.8593 (2)'→'8.8593(2)')."""
     s = s.replace('¼', '=')
     s = s.replace('A˚', 'Å').replace('Å', 'Å')
+    for lig, rep in _LIGATURES.items():
+        s = s.replace(lig, rep)
+    s = s.replace('­', '')                          # discretionary/soft hyphen
+    # rejoin a word split across a line by a hyphen: only lowercase→lowercase, so
+    # 'X-\nray' and line-broken proper nouns keep their hyphen.
+    s = re.sub(r'([a-z])-\n[ \t]*([a-z])', r'\1\2', s)
+    s = _WORD_DASH.sub('-', s)
     s = re.sub(r'(?<=\d)\s+\((\d{1,3})\)', r'(\1)', s)   # '8.8593 (2)' -> '8.8593(2)'
     return s
 
@@ -154,7 +174,47 @@ CellCand = namedtuple('CellCand', 'a b c al be ga V Z context pos snippet phase'
                       defaults=(None,))
 
 POWDER_KW = ['powder', 'pxrd']
-SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'scxrd']
+SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'singlecrystal', 'scxrd']
+
+# Instrument/geometry lexicon mined from 221 reviewer-written DC ('Data Collection')
+# fields and validated against the paired PDFs: each term, when present, IMPLIES the
+# experiment mode even though the bare word 'powder'/'single-crystal' may be absent.
+# Restricted to MODE-DETERMINING terms only — the GEOMETRY/MOTION, never the instrument
+# MODEL, because nearly every modern area-detector diffractometer is DUAL-USE:
+#   • A Debye-Scherrer / Gandolfi / Bragg-Brentano (or pseudo-Gandolfi / Gandolfi-like
+#     MOTION) signature = powder; a kappa / four-circle goniometer = single-crystal.
+#   • 'gandolfi' (substring) already covers 'pseudo-Gandolfi' and 'Gandolfi-like'.
+#   • NO single-crystal MODEL names: Photon II/III, XtaLAB/Synergy, Xcalibur, Apex, D8
+#     Venture, R-AXIS Rapid II all run pseudo-Gandolfi/Gandolfi-like scans to collect
+#     POWDER on a traditionally single-crystal area-detector instrument (per the task-
+#     group experts; R-AXIS Rapid II mislabelled a single-crystal cell as powder in
+#     I002535). So a model name can't fix the mode — only the geometry/motion word can.
+#   • Powder side keeps DEDICATED Bragg-Brentano benchtop/floor diffractometers (D8
+#     Advance/Discover, Empyrean), which have no single-crystal capability — the asymmetry
+#     is real: powder-only instruments exist, single-crystal-only area instruments don't.
+#   • Excludes source terms 'rotating anode'/'microfocus' (moabite's POWDER used both).
+# Matched separator-blind (see _instr_mode), so hyphen/space variants need not be listed.
+POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd8 discover', 'empyrean']
+SINGLE_INSTR = ['four-circle', 'kappa']
+
+# PDF line-break hyphenation splits a word as 'pow-\nder'; after a whitespace collapse
+# that reads 'pow- der', so a substring search for 'powder' (or 'single-crystal') misses
+# it. Normalise a context haystack before the keyword search: rejoin a soft hyphen
+# between two lowercase letters ('pow- der'→'powder', 'single- crystal'→'singlecrystal'
+# — hence the no-separator SINGLE_KW form above; 'X-ray', 'semi-cylindrical', en-dashes
+# and number ranges are untouched), then collapse whitespace so a multi-word cue like
+# 'single crystal' still matches when a newline fell between the two words.
+def _norm_ctx(s):
+    s = s.lower()
+    s = re.sub(r'([a-z])-\s+([a-z])', r'\1\2', s)
+    return re.sub(r'\s+', ' ', s)
+
+# A 'calculated [X-ray] powder' pattern is SIMULATED from the (single-crystal) structure,
+# not a powder experiment, so it must not count as powder context (mirrors the 'calc'
+# sentence skip in radiation_context). Neutralise just that phrase — 'calculated and
+# observed powder profiles' (a genuine Rietveld fit) keeps its 'powder' since the 'and
+# observed' breaks the adjacency. Used by classify_context before the keyword search.
+_CALC_POWDER = re.compile(r'calc\w*\s+(?:x[- ]?ray\s+)?powder')
 
 def _nearest(hay, keys):
     """smallest distance from the END of `hay` to any keyword (for preceding
@@ -174,6 +234,28 @@ def _nearest_fwd(hay, keys):
         if i != -1 and (best is None or i < best): best = i
     return best
 
+def _canon(s):
+    """alnum-only lowercase — erases hyphen/space/dash typography so an instrument
+    term matches regardless of how the PDF split it ('D8 Venture'/'D8-Venture')."""
+    return re.sub(r'[^a-z0-9]', '', s.lower())
+_POWDER_INSTR_C = [_canon(t) for t in POWDER_INSTR]
+_SINGLE_INSTR_C = [_canon(t) for t in SINGLE_INSTR]
+
+def _instr_mode(win):
+    """Mode inferred from the instrument/geometry lexicon — ONE-SIDED only: returns
+    'powder'/'single' when the window names a mode-specific instrument for just ONE
+    mode, else None. Conservative by design (a window naming BOTH instruments stays
+    unknown rather than guessing); used only as a fallback when no explicit powder/
+    single word sits near the cell, so a paper that states its geometry/instrument but
+    not the bare word — incl. non-English papers, where brand names stay Latin — still
+    classifies."""
+    cw = _canon(win)
+    pw = any(t in cw for t in _POWDER_INSTR_C)
+    sg = any(t in cw for t in _SINGLE_INSTR_C)
+    if pw == sg:
+        return None
+    return 'powder' if pw else 'single'
+
 def radiation_context(text, pos):
     """Context for a RADIATION token. A radiation is attached to a COLLECTION verb
     whose grammatical SUBJECT sets the mode, so prefer the sentence's FIRST XRD-mode
@@ -184,7 +266,7 @@ def radiation_context(text, pos):
     is modelled from the single-crystal structure, not collected with this anode)."""
     start = text.rfind('.', 0, pos) + 1
     end = text.find('.', pos); end = len(text) if end == -1 else end
-    sent = text[start:end].lower()
+    sent = _norm_ctx(text[start:end])
     if 'calc' not in sent:
         p, s = _nearest_fwd(sent, POWDER_KW), _nearest_fwd(sent, SINGLE_KW)
         if p is not None and (s is None or p < s):
@@ -196,15 +278,18 @@ def classify_context(text, pos, pre=750, post=200):
     almost always introduced by a clause that PRECEDES it ('refined from the
     powder data ... a = ...'), so preceding text wins; following text is only a
     fallback. `text`/`pos` must be the same string the offset came from."""
-    before = text[max(0, pos - pre):pos].lower()
-    after = text[pos:pos + post].lower()
+    before = _CALC_POWDER.sub('calc', _norm_ctx(text[max(0, pos - pre):pos]))
+    after = _CALC_POWDER.sub('calc', _norm_ctx(text[pos:pos + post]))
     p, s = _nearest(before, POWDER_KW), _nearest(before, SINGLE_KW)
     if p is not None or s is not None:
         if s is None: return 'powder'
         if p is None: return 'single'
         return 'powder' if p <= s else 'single'
     p, s = _nearest_fwd(after, POWDER_KW), _nearest_fwd(after, SINGLE_KW)
-    if p is None and s is None: return 'unknown'
+    if p is None and s is None:
+        # no explicit powder/single word near the cell — fall back to the mined
+        # instrument/geometry lexicon (preceding text wins, then following).
+        return _instr_mode(before) or _instr_mode(after) or 'unknown'
     if s is None: return 'powder'
     if p is None: return 'single'
     return 'powder' if p <= s else 'single'
@@ -547,6 +632,14 @@ def best_match(docx_abc, cands, prefer_phase=None):
         if cabc[1] is None and cabc[0] is not None:   # uniaxial PDF omits b (=a)
             cabc[1] = cabc[0]
         pbonus = 1 if _phase_match(prefer_phase, cd.phase) else 0
+        # Among EXACTLY-tied candidates, prefer the powder-context cell: a paper
+        # quotes the same cubic/uniaxial value in the abstract, a crystal-data
+        # table AND the powder-refinement sentence — only the last carries a powder
+        # cue, so a tie that resolves to the abstract copy mislabels the cell as
+        # SCXRD. ICDD entries carry the powder cell, so surface that one (ranked
+        # last, below -dev, so it only ever breaks a true tie — never overrides a
+        # closer cell).
+        powbonus = 1 if cd.context == 'powder' else 0
         for mode, order in (('direct', A), ('reordered', sorted([v for v in A if v]))):
             if mode == 'reordered':
                 cc = sorted([v for v in cabc if v]); aa = order
@@ -562,7 +655,7 @@ def best_match(docx_abc, cands, prefer_phase=None):
             # one — this prefers a full-precision prose cell over a rounded summary
             # table), with the phase-name match breaking near-ties (≤1 mÅ) so a
             # multi-phase paper still resolves to the correctly-named sibling.
-            key = (nmatch, -round(dev, 3), pbonus, -dev)
+            key = (nmatch, -round(dev, 3), pbonus, -dev, powbonus)
             if key > best_key:
                 best_key = key; best = (cd, nmatch, len(comp), dev, mode)
     return best
@@ -611,27 +704,49 @@ def find_powder_conflict(docx_abc, matched, cands):
             return c
     return None
 
+def _docx_matches_a_powder_cell(docx_abc, cands):
+    """True if a POWDER-context cell equals the docx cell (within tol) — then the docx
+    already used a powder cell (e.g. a single-crystal AND a 3DED/μXRD refinement that
+    agree to the same value), so the 'used the SCXRD cell' flag must NOT fire."""
+    A = sorted([num_val(x) for x in docx_abc[:3] if num_val(x) is not None])
+    if len(A) < 3:
+        return False
+    for c in cands:
+        if c.context != 'powder' or _SC_CUE.search(c.snippet or ''):
+            continue
+        cc = sorted([v for v in (num_val(c.a), num_val(c.b), num_val(c.c)) if v is not None])
+        if len(cc) == 3 and all(close(x, y) for x, y in zip(cc, A)):
+            return True
+    return False
+
 def cell_source_finding(docx_abc, matched, cands):
     """(sev, msg, evidence) for the 'docx used the single-crystal cell' check, or None.
-    ICDD entries should carry the POWDER-refined cell. FLAG only on a DEFINITIVE
-    single-crystal cell that ALSO has a same-phase powder cell reported (the actionable,
-    low-false-positive case); the weaker 'likely SCXRD' cases stay a soft NOTE."""
+    ICDD entries should carry the POWDER-refined cell. FLAG when the matched cell is the
+    SCXRD cell AND the paper ALSO reports a DISTINCT same-phase POWDER/PXRD cell the docx
+    did not use — find_powder_conflict is conservative enough (same-phase sorted axes
+    within 10 %, distinct beyond tol, powder-context, not SC-cued) to drive the flag on
+    its own; the multi-phase trap (e.g. julgoldite's pectolite/hematite cells) is filtered
+    out by its same-phase test, so those stay a soft NOTE."""
     if matched is None:
+        return None
+    # If the docx cell equals a PARSED powder-context cell, the docx used the powder
+    # cell — full stop. A multi-cell paper repeats the same cubic/uniaxial value in
+    # the abstract and a crystal-data table (neither carrying a powder cue), so the
+    # matched copy may read 'SCXRD' even though the identical powder cell is right
+    # there; don't emit a phantom SCXRD finding (nor the false 'no separate powder
+    # cell was parsed' note) when a powder cell that equals the docx exists.
+    if _docx_matches_a_powder_cell(docx_abc, cands):
         return None
     prov = provenance_label(matched)
     if 'single-crystal' not in prov:
         return None
-    # FLAG only on DEFINITIVE single-crystal evidence in the matched cell's OWN sentence
-    # (reflections/centroids/single-crystal) with no powder cue — the classifier's bare
-    # 'single' label is too unreliable to drive a docx flag. Everything else stays a note.
-    snip = matched.snippet or ''
-    definitive = bool(_SC_CUE.search(snip)) and not _POWDER_CUE.search(snip)
-    pc = find_powder_conflict(docx_abc, matched, cands) if definitive else None
+    pc = find_powder_conflict(docx_abc, matched, cands)
     if pc is not None:
         return ('flag',
-                'docx cell appears to be the single-crystal (SCXRD) cell, but the paper also '
-                'reports a powder-refined cell for this phase (a=%s b=%s c=%s) — ICDD entries '
-                'use the PXRD cell; verify and use the powder cell.' % (pc.a, pc.b, pc.c),
+                'docx cell is the single-crystal (SCXRD) cell, but the paper reports a refined '
+                'POWDER (PXRD) cell for this phase (a=%s b=%s c=%s) — ICDD entries use the PXRD '
+                'cell; flag that the powder cell was refined but the SCXRD cell was entered.'
+                % (pc.a, pc.b, pc.c),
                 re.sub(r'\s+', ' ', (pc.snippet or '')).strip()[:160])
     return ('note',
             'matched cell appears to be the single-crystal (SCXRD) cell — ICDD entries use the '

@@ -1,5 +1,7 @@
 .mindat_key
 .cache/
+# local analysis scratch (mined DC fields etc. — derived from the private corpus)
+.scratch/
 __pycache__/
 *.pyc
 .DS_Store

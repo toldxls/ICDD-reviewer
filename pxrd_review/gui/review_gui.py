@@ -170,6 +170,28 @@ def _mindat_block(name):
     return block
 
 # ------------------------------------------------------------------ serialization
+def _compound_names(entry):
+    """The reviewer-relevant identifiers from the docx 'Compound Names' section —
+    the Mineral name, the Primary (Warr) symbol, and the Primary systematic name —
+    as [[desc, name], …]. parse_entry only keeps the first of each, so read the rows."""
+    rows = getattr(entry, 'raw_rows', None) or []
+    out, insec = [], False
+    for r in rows:
+        cells = [c.strip() for c in r if c and c.strip()]
+        if not cells:
+            continue
+        if cells[0] == 'Compound Names':
+            insec = True
+            continue
+        if not insec:
+            continue
+        if len(cells) == 1:                       # next section header ends the block
+            break
+        desc, name = cells[0], cells[1]
+        if desc in ('Mineral', 'Primary') and name.lower() not in ('add new name here.', 'mineral'):
+            out.append([desc, name])
+    return out
+
 def _serialize(key):
     """Run analyze() (the single source of truth) and render its verdict + the
     surrounding evidence to a JSON-able dict. Triage state is NOT included here —
@@ -219,6 +241,7 @@ def _serialize(key):
     ent = None
     if entry:
         ent = {'name': entry.name, 'primary': entry.primary,
+               'compound_names': [[d, _u(n)] for d, n in _compound_names(entry)],
                'crystal_system': entry.crystal_system, 'space_group': entry.space_group,
                'cell': entry.cell, 'instr': entry.instr,
                'formulas': {k: _u(v) for k, v in entry.formulas.items()},

@@ -110,6 +110,16 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
                 iss = C.axis_issues(docx_p[k], pdf_p[k])
                 if iss:
                     res['params'][k] = iss
+            # Z (formula units): a/b/c match, so this IS the same cell — a different Z is a
+            # real inconsistency. Compare the docx Z to an EXPLICIT 'Z = N' in the matched
+            # cell's own sentence (the '=' form, so a digit in the space-group symbol, e.g.
+            # P2_12_12_1, isn't misread as Z). The .pdf is ground truth (grokhovskyite: docx
+            # Z=2, but the paper states 'Z = 3').
+            zm = re.search(r'\bZ\s*=\s*(\d+)', cd.snippet or '')
+            dz = re.sub(r'\D', '', str(d.authors_cell[7])) if len(d.authors_cell) > 7 else ''
+            if zm and dz and zm.group(1) != dz:
+                res['params']['Z'] = [('value', 'docx Z=%s but the .pdf states Z=%s — verify'
+                                       % (dz, zm.group(1)))]
             # cell SOURCE: ICDD entries use the powder cell — flag/note an SCXRD cell
             src = C.cell_source_finding(d.authors_cell, cd, cands)
             if src:
