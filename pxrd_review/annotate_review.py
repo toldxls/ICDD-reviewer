@@ -376,19 +376,20 @@ def _is_severe(res):
     return False
 
 def _body_signature(doc):
-    """Concatenated body text (paragraphs + table cells) EXCLUDING the
-    Accept/Reject/Replace checkbox cells (the tool's own 'x'). Used to tell a
-    human-edited output from the untouched source."""
+    """Concatenated body text (paragraphs + table cells), used to tell a human-edited
+    output from the untouched tool output. ONLY the Accept value cell is excluded — the
+    tool auto-stamps its 'x' there, so including it would make every clean output look
+    hand-edited. Reject and Replace are NEVER written by the tool, so a mark in either is
+    a reviewer's decision that MUST register as a hand edit; otherwise a rerun rebuilds
+    the entry from source and silently re-stamps Accept over the reviewer's choice."""
     parts = [p.text for p in doc.paragraphs]
     for t in doc.tables:
         for row in t.rows:
             cells = row.cells
             idx = {c.text.strip().lower(): i for i, c in enumerate(cells)}
             skip = set()
-            if {'accept', 'reject', 'replace'} <= set(idx):
-                for k in ('accept', 'reject', 'replace'):
-                    if idx[k] + 1 < len(cells):
-                        skip.add(idx[k] + 1)
+            if {'accept', 'reject', 'replace'} <= set(idx) and idx['accept'] + 1 < len(cells):
+                skip.add(idx['accept'] + 1)         # the tool's own auto-Accept 'x' only
             for i, c in enumerate(cells):
                 if i not in skip:
                     parts.append(c.text)
@@ -443,6 +444,20 @@ def _strip_tool_annotations(path):
         parts['word/comments.xml'] = etree.tostring(croot, xml_declaration=True,
                                                     encoding='UTF-8', standalone=True)
     droot = etree.fromstring(parts['word/document.xml'])
+    # Identify the tool's OWN yellow highlights BEFORE the comment ranges are removed.
+    # The annotator highlights a cell and comments the SAME runs, so every tool
+    # highlight sits inside that finding's comment range; a yellow highlight that is
+    # NOT inside any tool comment range is the reviewer's own and must be preserved.
+    # Walk in document order (preorder), tracking how many tool ranges are open.
+    tool_highlights, open_ranges = [], 0
+    for el in droot.iter():
+        tag = el.tag
+        if tag == _q('commentRangeStart') and el.get(_q('id')) in tool_ids:
+            open_ranges += 1
+        elif tag == _q('commentRangeEnd') and el.get(_q('id')) in tool_ids:
+            open_ranges = max(0, open_ranges - 1)
+        elif open_ranges and tag == _q('highlight') and el.get(_q('val')) == 'yellow':
+            tool_highlights.append(el)
     # drop the comment anchors/refs for tool comments
     for tag in ('commentRangeStart', 'commentRangeEnd'):
         for el in list(droot.iter(_q(tag))):
@@ -453,10 +468,12 @@ def _strip_tool_annotations(path):
             run = ref.getparent()                      # the <w:r> wrapping the ref
             if run is not None and run.getparent() is not None:
                 run.getparent().remove(run)
-    # drop the tool's yellow highlights (re-applied fresh on re-annotation)
-    for hl in list(droot.iter(_q('highlight'))):
-        if hl.get(_q('val')) == 'yellow':
-            hl.getparent().remove(hl)
+    # drop ONLY the tool's own yellow highlights (re-applied fresh on re-annotation);
+    # a reviewer's manual yellow highlight, outside any tool comment range, is kept.
+    for hl in tool_highlights:
+        parent = hl.getparent()
+        if parent is not None:
+            parent.remove(hl)
     parts['word/document.xml'] = etree.tostring(droot, xml_declaration=True,
                                                 encoding='UTF-8', standalone=True)
     buf = io.BytesIO()

@@ -50,8 +50,7 @@ def _cell_text(tc):
     """Cell text with tracked insertions applied, deletions dropped (matches
     cell_lambda_check.cell_value), inter-run whitespace preserved for prose
     fields but collapsible by the caller."""
-    return ''.join(el.text or '' for el in tc.iter()
-                   if _t(el) == 't' and _t(el) != 'delText')
+    return ''.join(el.text or '' for el in tc.iter() if _t(el) == 't')
 
 def _rows(path):
     root = ET.fromstring(zipfile.ZipFile(path).read('word/document.xml'))
@@ -592,7 +591,7 @@ def check5_wavelength(e, text):
         out.append(Finding('wavelength', 'info', ".pdf: Kα2 stripped in software.", None))
     return out
 
-# ----------------------------------------------------------------------------- analysis-field helpers (shared by check6 & check12)
+# ----------------------------------------------------------------------------- analysis-field helpers (check12)
 # Comment fields that legitimately hold their own content — not analysis spillover.
 _ANALYSIS_OWN_FIELDS = {'Analysis', 'Color', 'Habit', 'Physical Properties',
     'Optical Data', 'Smpl.Src.Local.', 'Wyckoff', 'DC', 'IMA Number',
@@ -623,20 +622,10 @@ def _looks_empirical(formula):
             odd += 1
     return odd >= 2
 
-# ----------------------------------------------------------------------------- 6. analysis stated as an average of N
-def check6_ideal_formula(e, text):
-    out = []
-    # The empty-Analysis-field cases (misplaced data / omitted / ideal-only
-    # formula) are all handled in check12 so each scenario yields one comment.
-    # Here we only check: when an analysis IS present, that it states an
-    # 'average of N' (reviewer: 'no average is given for the N analyses').
-    analysis = e.comments.get('Analysis', '')
-    if analysis and not re.search(r'average of\s+\d+|mean of\s+\d+', analysis.lower()):
-        if re.search(r'analys|wt\.?%|at\.?%|epma|eds|microprobe', analysis.lower()):
-            out.append(Finding('ideal_formula', 'note',
-                       "Analysis present but no 'average of N' stated — confirm it is an "
-                       "average, not a single point.", analysis[:120]))
-    return out
+# 6. analysis stated as an average of N — folded into check12_analysis, which owns all
+# analysis-count logic so it is reported ONCE: a flag when the .pdf gives a count the docx
+# lacks or mismatches, otherwise a note to confirm the analysis is an average (not a single
+# point). (Was a standalone check that double-reported alongside check12.)
 
 # ----------------------------------------------------------------------------- 7. synthetic vs natural
 def check7_synthetic(e, text):
@@ -1518,8 +1507,9 @@ def check12_analysis(e, text):
     # handles ": Ca1.00...", ": (Pd0.76...)", ":(K0.65...)" etc.
     analysis_data = re.split(r':\s*[\(\[]|:\s*(?=[A-Z][a-z])', analysis)[0]
 
-    # --- 1. Number of analyses ---
-    m_docx = re.search(r'average\s+of\s+(\d+)', analysis, re.I)
+    # --- 1. Number of analyses --- (also accepts 'mean of N', not only 'average of N',
+    # so a docx that states 'mean of 5' is not falsely reported as count-missing)
+    m_docx = re.search(r'(?:average|mean)\s+of\s+(\d+)', analysis, re.I)
     n_docx = int(m_docx.group(1)) if m_docx else None
     n_pdf  = None
     if text:
@@ -1541,6 +1531,14 @@ def check12_analysis(e, text):
         out.append(Finding('analysis', 'flag',
                    "Analysis count mismatch: docx=%d, .pdf=%d" % (n_docx, n_pdf),
                    None, 'analysis'))
+    elif n_docx is None and n_pdf is None and re.search(
+            r'analys|wt\.?%|at\.?%|epma|eds|microprobe', analysis.lower()):
+        # No count stated anywhere (formerly check6): confirm the analysis is an
+        # average, not a single point. A console NOTE — when the .pdf DOES give a
+        # count, the flag above owns it, so this never double-reports.
+        out.append(Finding('analysis', 'note',
+                   "Analysis present but no 'average of N' stated — confirm it is an "
+                   "average, not a single point.", analysis[:120]))
 
     # --- 2. Calculated light elements missing (calc) notation ---
     if text:
@@ -2284,7 +2282,7 @@ def check21_primary_name(e, text):
     return []
 
 CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
-          check4_calculated, check5_wavelength, check6_ideal_formula,
+          check4_calculated, check5_wavelength,
           check7_synthetic, check8_precision_symmetry, check9_indexing,
           check10_optical, check11_ima, check12_analysis,
           check13_temperature, check15_strongest_lines,

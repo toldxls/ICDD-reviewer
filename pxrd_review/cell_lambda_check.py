@@ -675,7 +675,11 @@ def find_radiation(text):
                          or bool(re.search(r'\d{1,3}\s*(?:kv|ma)\b', after, re.I)))
         if before_char in '(,/' and not is_rad_phrase:
             continue
-        out.append((m.group(1).lower(), lam, radiation_context(text, pos)))
+        # `pos` is an offset into `flat`, so classify on `flat` too — radiation_context /
+        # classify_context slice the SAME string the offset came from (matching how
+        # find_cells calls classify_context; passing the original `text` here read the
+        # wrong region because whitespace collapse shifts every offset).
+        out.append((m.group(1).lower(), lam, radiation_context(flat, pos)))
     return out
 
 # ----------------------------------------------------------------------------- comparison

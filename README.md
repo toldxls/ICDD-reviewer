@@ -706,11 +706,15 @@ human already marked.
 ### Preserving manual edits on rerun
 The output docx in `review_out/` is the working copy; the source docx is
 never edited. A rerun detects a hand edit via tracked changes (`w:ins`/`w:del`), a
-non-tool comment, or body text differing from source, then **refreshes in place**:
-backs up to `review_out/.edit_backup/<name>.<timestamp>.docx`, strips ONLY the
-tool's own comments (author "PXRD Review Tool") + yellow highlights from a temp
-copy, and re-annotates onto it — so tracked changes, manual comments, text edits, and
-the manual Accept mark survive while the tool's findings are made current. The strip is
+non-tool comment, body text differing from source, or a **Reject/Replace box mark**
+(the body signature ignores only the Accept value cell, which the tool auto-stamps —
+so a reviewer's Reject/Replace decision counts as a hand edit and is preserved, not
+overwritten with Accept). It then **refreshes in place**: backs up to
+`review_out/.edit_backup/<name>.<timestamp>.docx`, strips ONLY the tool's own comments
+(author "PXRD Review Tool") + the tool's own yellow highlights (those inside a tool
+comment range — a reviewer's manual yellow highlight is kept) from a temp copy, and
+re-annotates onto it — so tracked changes, manual comments, text edits, and the manual
+Accept/Reject decision survive while the tool's findings are made current. The strip is
 atomic (temp copy; `out` is replaced only on success). `--force` rebuilds from
 source (discards manual edits). The `_edited` vs clean output name is derived from
 the (deterministic) `_is_clean()` verdict, so the path of a given entry is stable
