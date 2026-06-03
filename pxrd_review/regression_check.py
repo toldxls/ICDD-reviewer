@@ -89,6 +89,16 @@ CASES = [
  # line) — OK, not 'unrec'/'docx anode not recognised'
  ("I003599 lam OK (Sync synchrotron anode)", lambda: lam_verdict('I003599') == 'ok'),
  ("I003554 lam OK (Sync synchrotron anode)", lambda: lam_verdict('I003554') == 'ok'),
+ # a single-crystal radiation can be misclassified into a powder context (tarutinoite: the SC
+ # MoKα sits nearer a 'powder diffraction patterns' phrase than 'single crystal data', so
+ # _section_mode tags it powder). The powder radiation is ranked by the PAPER's evidence — only
+ # CoKα sits in 'Powder XRD … collected … Debye-Scherrer … CoKα' — NOT by the docx anode.
+ ("I003636 lam OK (CoKα has the powder-collection binding; MoKα is the SC source)", lambda: lam_verdict('I003636') == 'ok'),
+ # the ranking must NOT lean on the docx: a token's powder-collection evidence is what counts
+ ("radiation: CoKα powder-collection binding detected", lambda: C.powder_collected_near(
+     'Powder X-ray diffraction data were collected using Debye-Scherrer geometry, CoKa', 78)),
+ ("radiation: SC mounting sentence has NO powder binding", lambda: not C.powder_collected_near(
+     'the crystal was mounted on a glass fibre and examined through a Supernova diffractometer, MoKa', 92)),
  # --- 1. geometry: a 'neutron'/ToF mention in a planned/future-work sentence must NOT
  #     masquerade as the collection method; the real X-ray geometry is still found ---
  ("I003599 no geometry 'neutron' grab (future-work)", lambda: not extras('I003599', 'geometry', substr='neutron')),
@@ -231,9 +241,9 @@ CASES = [
  # find_radiation: a parenthesised source with kV/mA tube settings is the X-ray SOURCE,
  # not a microprobe standard (recovers I002189's 'rotating anode (CoKα, 40 kV, 15 mA)')
  ("radiation: parenthesised (CoKα, 40 kV) is found",
-   lambda: any(a == 'co' for a, _, _ in C.find_radiation('rotating anode (CoKα, 40 kV, 15 mA), imaging plate'))),
+   lambda: any(a == 'co' for a, *_ in C.find_radiation('rotating anode (CoKα, 40 kV, 15 mA), imaging plate'))),
  ("radiation: microprobe standard (FeKα) still skipped",
-   lambda: not any(a == 'fe' for a, _, _ in C.find_radiation('analysed against albite, diopside (FeKα) and apatite standards'))),
+   lambda: not any(a == 'fe' for a, *_ in C.find_radiation('analysed against albite, diopside (FeKα) and apatite standards'))),
  ("norm: thin/nbsp spaces -> normal", lambda: C._norm_pdf('Cu\u2009K\u00a0radiation') == 'Cu K radiation'),
  # a 'calculated [X-ray] powder' pattern is simulated from the single-crystal structure,
  # so it must NOT make a single-crystal cell read 'powder' (I003398: synchrotron crystallite

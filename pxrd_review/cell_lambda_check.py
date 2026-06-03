@@ -649,6 +649,29 @@ _SYNCHROTRON_CUE = re.compile(
 def pdf_mentions_synchrotron(text):
     return bool(text and _SYNCHROTRON_CUE.search(text))
 
+# A radiation named in an explicit POWDER-COLLECTION statement ('powder/PXRD … data were
+# collected/recorded/measured …'), or sat beside a powder-ONLY geometry (Debye-Scherrer /
+# Gandolfi / Guinier), IS the powder radiation — the paper's own unambiguous binding. Used to
+# RANK the powder-context radiations in the verdict so a single-crystal radiation that slipped
+# into a 'powder' context by section proximity can't outrank the genuine one. Independent of
+# the docx (the value under test). Window-based, so it survives PDF sentence-splitting on a
+# decimal ('…(radius 127.4 mm) using Debye-Scherrer geometry, CoKα …' — the '127.4' truncates
+# the sentence and hides the 'Powder … were collected' opening from a sentence parser).
+_COLLECT_VERB = re.compile(r'collect|record|measur|obtain|gather|acquir|data were|were taken', re.I)
+# powder-ONLY camera geometries — a measured pattern (you don't 'calculate assuming Gandolfi
+# film'); Bragg-Brentano is deliberately EXCLUDED, calc programs assume it too (I002367).
+_POWDER_GEOM  = re.compile(r'debye[- ]?scherrer|gandolfi|guinier', re.I)
+# dedicated powder-ONLY diffractometers / 1D strip detectors (NOT the dual-use area-detector
+# instruments — D8 Venture / XtaLAB / Apex run powder too, so they're excluded). Used only
+# WITH a collection verb, so a 'pattern was calculated' note can't trip it.
+_POWDER_HARDWARE = re.compile(r"empyrean|d8\s*advance|d8\s*discover|miniflex|x'?cel|lynxeye|mythen", re.I)
+def powder_collected_near(text, pos, before=260, after=40):
+    seg = text[max(0, pos - before): pos + after]; low = seg.lower()
+    if _POWDER_GEOM.search(seg):                       # a powder-only camera geometry == measured
+        return True
+    anchored = bool(re.search(r'powder|pxrd', low)) or bool(_POWDER_HARDWARE.search(seg))
+    return anchored and bool(_COLLECT_VERB.search(low))
+
 def find_radiation(text):
     flat = re.sub(r'\s+', ' ', text)
     out = []
@@ -678,8 +701,10 @@ def find_radiation(text):
         # `pos` is an offset into `flat`, so classify on `flat` too — radiation_context /
         # classify_context slice the SAME string the offset came from (matching how
         # find_cells calls classify_context; passing the original `text` here read the
-        # wrong region because whitespace collapse shifts every offset).
-        out.append((m.group(1).lower(), lam, radiation_context(flat, pos)))
+        # wrong region because whitespace collapse shifts every offset). The 4th field flags
+        # an explicit powder-collection binding near the token (ranks the powder radiations).
+        out.append((m.group(1).lower(), lam, radiation_context(flat, pos),
+                    powder_collected_near(flat, pos)))
     return out
 
 # ----------------------------------------------------------------------------- comparison
@@ -1029,6 +1054,12 @@ def report(docx_path, pdf_path):
     dk = anode_key(d.radiation)
     powder_rads = [r for r in rads if r[2] == 'powder']
     any_match = any(anode_key(r[0]) == dk for r in rads)
+    # prefer the radiation with explicit powder-collection evidence (r[3]) over one tagged
+    # 'powder' only by section proximity; among confirmed ones a docx-anode match breaks ties
+    # (multi-sample papers), then λ-bearing. Validation, not circular trust — a misclassified
+    # single-crystal radiation has no collection evidence so it can't win, and the verdict
+    # still flags when no confirmed powder radiation carries the docx anode.
+    powder_rads.sort(key=lambda r: (not r[3], anode_key(r[0]) != dk, r[1] is None))
     pk = powder_rads[0] if powder_rads else None
     if dk is None:
         if is_sync_anode(d.radiation):

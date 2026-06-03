@@ -132,10 +132,19 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
     rads = C.find_radiation(text)
     dk = C.anode_key(d.radiation)
     powder = [r for r in rads if r[2] == 'powder']
-    # The genuine collection radiation almost always carries an explicit λ; prefer
-    # a λ-bearing powder entry over bare element-K mentions (e.g. an explanatory
-    # 'for CuKα radiation' aside, or a residual microprobe-standard line).
-    powder.sort(key=lambda r: r[1] is None)
+    # Choose the powder radiation from the PAPER'S OWN evidence, not the docx. A radiation
+    # named in an explicit powder-collection statement / beside a powder-only geometry
+    # (r[3] = powder_collected_near) is a CONFIRMED powder radiation, ranked above one that
+    # merely landed in a 'powder' context by section proximity — tarutinoite: the SC MoKα sits
+    # just after a 'powder diffraction patterns' results line, so _section_mode tags it powder,
+    # but only the CoKα sits in 'Powder XRD … collected … Debye-Scherrer … CoKα'. Among the
+    # CONFIRMED radiations a docx-anode match breaks ties, so a multi-sample paper that
+    # collected powder with several anodes (I002787: CuKα for the K member, CoKα for the Cs
+    # member) attributes the right one to this phase. This is validation, NOT circular trust:
+    # the docx tiebreak only orders GENUINE powder radiations (a misclassified single-crystal
+    # radiation has no collection evidence, so it can never win), and the verdict still FLAGS
+    # whenever the paper's powder-collection evidence does not include the docx anode.
+    powder.sort(key=lambda r: (not r[3], C.anode_key(r[0]) != dk, r[1] is None))
     pk = powder[0] if powder else None
     any_match = any(C.anode_key(r[0]) == dk for r in rads)
     if dk is None:
@@ -149,7 +158,11 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
             res['lam'] = ('unrec', 'docx anode not recognised (%s)' % d.radiation)
     elif pk is not None:
         if C.anode_key(pk[0]) == dk:
-            res['lam'] = ('ok', 'anode %s matches .pdf powder radiation' % d.radiation)
+            via = 'a .pdf powder-collection statement' if pk[3] else '.pdf powder radiation'
+            res['lam'] = ('ok', 'anode %s matches %s' % (d.radiation, via))
+        elif pk[3]:
+            res['lam'] = ('flag', 'docx anode %s but the .pdf collected the powder pattern with %sKα'
+                          % (d.radiation, pk[0].capitalize()))
         else:
             res['lam'] = ('flag', 'docx anode %s but .pdf POWDER radiation is %sKα'
                           % (d.radiation, pk[0].capitalize()))
