@@ -310,7 +310,16 @@ CASES = [
  # --- 3. structure relation: don't restate a docx Structure comment; DO check when the
  #     .pdf asserts a relation and the docx has none ---
  ("I003416 no Structure-comment noise (docx already has it)", lambda: not extras('I003416', 'classification', substr='structure')),
- ("I003246 checks missing Structure comment (.pdf isostructural)", lambda: bool(extras('I003246', 'classification', substr='no Structure'))),
+ # fluormacraeite is already classified in the Paulkerrite Group, so 'isostructural with
+ # paulkerrite' is redundant (group membership implies it) -> suppress the note
+ ("I003246 isostructural-with-own-group note suppressed", lambda: not extras('I003246', 'classification', substr='no Structure')),
+ # but an OUT-of-group structural relation must still be surfaced
+ ("structure-relation: out-of-group isostructural still noted", lambda: [f for f in X.check3_classification(
+     type('S', (), {'comments': {}, 'raw_rows': [['IMA Classifications: Some Group Otherite']], 'name': 'zzznotarealmineral', 'primary': ''}),
+     'the new phase is isostructural with stranskiite and shares its topology.') if 'no Structure' in f.msg] != []),
+ ("structure-relation: isostructural-with-own-group-namesake suppressed", lambda: [f for f in X.check3_classification(
+     type('S', (), {'comments': {}, 'raw_rows': [['IMA Classifications: Paulkerrite Group Paulkerrite']], 'name': 'zzznotarealmineral', 'primary': ''}),
+     'the new phase is isostructural with paulkerrite, the group prototype.') if 'no Structure' in f.msg] == []),
  # --- precision check names the esd to add ---
  ("I003566 names esd to add",      lambda: bool(extras('I003566', 'precision', substr='.pdf gives'))),
  # --- analysis field ---

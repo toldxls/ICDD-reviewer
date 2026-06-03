@@ -398,6 +398,7 @@ def check3_classification(e, text):
     # AUTHORITATIVE: Mindat group membership (a mineral's groupid → group name).
     # Replaces guessing from prose. Cross-checks the docx Strunz-mindat field.
     mindat_found = False
+    mindat_gname = ''
     try:
         from pxrd_review import mindat
         mindat.refresh_if_stale()      # auto-refresh if the cache is >2 weeks old (once/process)
@@ -407,6 +408,7 @@ def check3_classification(e, text):
             if g:
                 mindat_found = True
                 gname, gstrunz, sp, status = g
+                mindat_gname = gname or ''
                 def _zs(x): return re.sub(r'[.\s]+$', '', (x or '').strip())
                 docx_strunz = _zs(e.comments.get('Strunz-mindat classification', ''))
                 strunz_ok = bool(gstrunz and docx_strunz and
@@ -448,11 +450,19 @@ def check3_classification(e, text):
             rel = re.search(r'\b(isostructural|isotypic|homeotypic|isomorphous|structurally\s+related)'
                             r'\s+(with|to)\s+(?:the\s+)?([A-Za-zÀ-ɏ]{4,})', norm, re.I)
             if rel and _MINERALISH.search(rel.group(3)):
-                phrase = '%s %s %s' % (rel.group(1).lower(), rel.group(2).lower(), rel.group(3))
-                out.append(Finding('classification', 'info',
-                           "docx has no Structure/Isomorphism/Polymorphism comment, but the .pdf states "
-                           "'%s' — add a Structure comment recording the relationship." % phrase,
-                           rel.group(3)))   # evidence = the related mineral, so GUI '? look' can find the sentence
+                partner = rel.group(3).lower()
+                # Redundant when X is simply this mineral's OWN group namesake: the docx (and
+                # Mindat) already classify it in the X Group, and group membership implies the
+                # isostructural relationship — so don't ask the reviewer to restate it
+                # (fluormacraeite is in the Paulkerrite Group; 'isostructural with paulkerrite'
+                # adds nothing). Only an OUT-of-group structural relation is worth recording.
+                grp_ctx = (_docx_group_text(e) + ' ' + mindat_gname).lower()
+                if partner not in grp_ctx:
+                    phrase = '%s %s %s' % (rel.group(1).lower(), rel.group(2).lower(), rel.group(3))
+                    out.append(Finding('classification', 'info',
+                               "docx has no Structure/Isomorphism/Polymorphism comment, but the .pdf states "
+                               "'%s' — add a Structure comment recording the relationship." % phrase,
+                               rel.group(3)))   # evidence = the related mineral, so GUI '? look' can find the sentence
         # Named 'X group/family' prose is noisy (geological formations like 'Creek
         # group'), and Mindat already gives membership authoritatively — so only
         # fall back to it when Mindat did NOT find the species (a new/renamed
