@@ -199,8 +199,12 @@ SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'singlecrys
 # Also REFINEMENT-SOFTWARE / METHOD cues, which (unlike the instruments) ARE mode-
 # determining — Rietveld is a powder method by definition, and SHELX/OLEX refine a
 # single-crystal STRUCTURE (no powder mode). Validated by mining the cue's context across
-# the paired PDFs. Excludes software that does BOTH (JANA, SUPERFLIP) and data-reduction
-# for the dual-use instruments (CrysAlis, SAINT). For a cue whose bare alnum-canon form
+# the paired PDFs. Excludes software that does BOTH powder & single (JANA — both
+# Jana2006 and Jana2020 — and SUPERFLIP) and SAINT (Bruker integration). Per the experts,
+# the CrysAlisPro and Bruker APEX SUITES primarily do single-crystal workup, so they ARE
+# single cues — the version digit ('apex3'..'apex6') separates the software from the dual-use
+# 'Apex II'/'Apex DUO' INSTRUMENT, and the one-sided rule drops to None on a genuine pseudo-
+# Gandolfi paper (which also carries a powder cue). For a cue whose bare alnum-canon form
 # collides with a common word/mineral, use a longer CHARACTERISTIC snippet that the
 # collider can't contain (these names are versioned/suffixed consistently across papers):
 # JADE→'jade2010'/'jadepro'/'jade9' (not in 'jadeite'); SIR→'sir2011'/… (versioned);
@@ -226,7 +230,11 @@ POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd
 SINGLE_INSTR = ['four-circle', 'three-circle', 'kappa', 'shelx', 'olex', 'sadabs',
                 # SIR direct-methods (single-crystal structure solution) — always versioned,
                 # so 'sir2011'/… are unique (bare 'sir' would collide):
-                'sir92', 'sir97', 'sir2004', 'sir2008', 'sir2011', 'sir2014', 'sir2019']
+                'sir92', 'sir97', 'sir2004', 'sir2008', 'sir2011', 'sir2014', 'sir2019',
+                # CrysAlisPro (Rigaku/Oxford) + Bruker APEX software suite — primarily single-
+                # crystal data workup. 'crysalis' covers CrysAlis/CrysAlisPro (not 'chrysalis');
+                # 'apex<digit>' is the software (vs the dual-use 'Apex II'/'DUO' instrument):
+                'crysalis', 'apex2', 'apex3', 'apex4', 'apex5', 'apex6']
 
 # PDF line-break hyphenation splits a word as 'pow-\nder'; after a whitespace collapse
 # that reads 'pow- der', so a substring search for 'powder' (or 'single-crystal') misses

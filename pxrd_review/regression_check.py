@@ -141,8 +141,13 @@ CASES = [
  ("lexicon: Rietveld/GSAS software -> powder", lambda: C._instr_mode('refined by the rietveld method using gsas-ii') == 'powder'),
  ("lexicon: TOPAS/FullProf -> powder",      lambda: C._instr_mode('whole-pattern refinement in topas') == 'powder' and C._instr_mode('fullprof suite') == 'powder'),
  ("lexicon: SHELX/OLEX -> single",          lambda: C._instr_mode('structure refined with shelxl-2018') == 'single' and C._instr_mode('olex2 was used') == 'single'),
- # dual-use software (does BOTH) must NOT classify
- ("lexicon: JANA (does both) -> undetermined", lambda: C._instr_mode('refined using jana2006') is None),
+ # CrysAlisPro + Bruker APEX software suites = single-crystal workup (the version digit
+ # keeps 'apex4' off the dual-use 'Apex II' instrument; 'crysalis' is not in 'chrysalis')
+ ("lexicon: CrysAlisPro/APEX4 -> single", lambda: C._instr_mode('data reduced with crysalispro') == 'single' and C._instr_mode('processed in the bruker apex4 suite') == 'single'),
+ ("lexicon: APEX software + Gandolfi -> None (pseudo-Gandolfi protected)", lambda: C._instr_mode('apex4 then gandolfi powder extraction') is None),
+ ("lexicon: 'chrysalis' is not a cue", lambda: C._instr_mode('emerged from its chrysalis') is None),
+ # dual-use software (does BOTH) must NOT classify — both Jana2006 and Jana2020
+ ("lexicon: JANA (does both) -> undetermined", lambda: C._instr_mode('refined using jana2006') is None and C._instr_mode('refined using jana2020') is None),
  # canon-substring collision guards: these common phrases/minerals must NOT read as a cue
  ("lexicon: 'unit cell' phrase is not a powder cue", lambda: C._instr_mode('the unit cell parameters were') is None),
  ("lexicon: 'jadeite' mineral is not a powder cue",  lambda: C._instr_mode('jadeite and omphacite inclusions') is None),
