@@ -35,6 +35,7 @@ from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
 from pxrd_review import annotate_review as A
 from pxrd_review import paths as P
+from pxrd_review.gui import _pdf_worker as PW   # MuPDF ops run in a subprocess (crash isolation)
 
 try:
     from flask import Flask, jsonify, request, send_file, abort, Response
@@ -118,20 +119,10 @@ def _dval(s):
     return v if len(v) >= 4 else None        # e.g. keep '4.14'+; drop '5.' / '12'
 
 def _pdf_scan(pdf_path, terms):
-    """(n_pages, best_evidence_page) — the page with the most hits for `terms`."""
-    import fitz
-    best_pg, best_hits, n = 0, -1, 0
-    try:
-        with fitz.open(pdf_path) as doc:          # close even if search_for throws
-            n = doc.page_count
-            if terms:
-                for i in range(n):
-                    hits = sum(len(doc[i].search_for(t)) for t in terms)
-                    if hits > best_hits:
-                        best_hits, best_pg = hits, i
-    except Exception:
-        pass
-    return n, (best_pg if best_hits > 0 else 0)
+    """(n_pages, best_evidence_page) — the page with the most hits for `terms`. Runs in a
+    subprocess so a malformed-image segfault degrades to (0, 0) instead of killing the server."""
+    n, best = PW.run(PW.scan, pdf_path, terms, default=[0, 0])
+    return n, best
 
 def _cand(cd):
     if cd is None:
@@ -532,16 +523,7 @@ def api_pdf_search(key):
     q = (request.args.get('q') or '').strip()
     if not q:
         return jsonify({'hits': []})
-    import fitz
-    hits = []
-    try:
-        with fitz.open(pdf) as doc:
-            for i in range(doc.page_count):
-                rects = doc[i].search_for(q)
-                if rects:
-                    hits.append({'page': i, 'count': len(rects)})
-    except Exception as ex:
-        return jsonify({'error': str(ex), 'hits': []})
+    hits = PW.run(PW.search, pdf, q, default=[])
     return jsonify({'hits': hits})
 
 @app.route('/api/pdf/<key>/words/<int:n>.json')
@@ -552,17 +534,7 @@ def api_pdf_words(key, n):
     pdf = _pdf_path(key)
     if not pdf:
         abort(404)
-    import fitz
-    out = None
-    try:
-        with fitz.open(pdf) as doc:
-            if 0 <= n < doc.page_count:
-                page = doc[n]; r = page.rect
-                out = {'w': r.width, 'h': r.height,
-                       'words': [[round(w[0], 1), round(w[1], 1), round(w[2], 1), round(w[3], 1), w[4]]
-                                 for w in page.get_text('words')]}
-    except Exception:
-        abort(500)
+    out = PW.run(PW.words, pdf, n, default=None)
     if out is None:
         abort(404)
     return jsonify(out)
@@ -573,20 +545,9 @@ def api_pdf_page(key, n):
     if not pdf:
         abort(404)
     terms = [t for t in (request.args.get('find') or '').split('|') if t]
-    import fitz
-    png = None
-    try:
-        with fitz.open(pdf) as doc:               # with-block closes on every path
-            if 0 <= n < doc.page_count:
-                page = doc[n]
-                for t in terms:
-                    for rect in page.search_for(t):
-                        page.add_highlight_annot(rect)
-                png = page.get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes('png')
-    except Exception:
-        abort(500)
+    png = PW.run(PW.page_png, pdf, n, terms, default=None)
     if png is None:
-        abort(404)                                # out-of-range page (was masked as 500)
+        abort(404)                                # out-of-range page or a render crash
     return Response(png, mimetype='image/png')
 
 @app.route('/api/pdf/<key>/region/<int:n>.png')
@@ -598,39 +559,9 @@ def api_pdf_region(key, n):
     if not pdf:
         abort(404)
     terms = [t for t in (request.args.get('find') or '').split('|') if t]
-    import fitz
-    png = None
-    bad_page = False
-    try:
-        with fitz.open(pdf) as doc:               # with-block closes on every path
-            if not (0 <= n < doc.page_count):
-                bad_page = True
-            else:
-                page = doc[n]
-                rects = []
-                for t in terms:
-                    rects += list(page.search_for(t))
-                pr = page.rect
-                fw, fh = pr.width * 0.52, pr.height * 0.26      # ~half-column wide, quarter tall
-                if rects:
-                    x0 = min(r.x0 for r in rects); y0 = min(r.y0 for r in rects)
-                    x1 = max(r.x1 for r in rects); y1 = max(r.y1 for r in rects)
-                    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-                    halfw = max(fw / 2, (x1 - x0) / 2 + 12)     # never smaller than the hit span
-                    halfh = max(fh / 2, (y1 - y0) / 2 + 12)
-                else:
-                    cx, cy, halfw, halfh = pr.width / 2, pr.height * 0.28, fw / 2, fh / 2
-                cx = min(max(cx, pr.x0 + halfw), pr.x1 - halfw)  # keep the clip inside the page
-                cy = min(max(cy, pr.y0 + halfh), pr.y1 - halfh)
-                clip = fitz.Rect(cx - halfw, cy - halfh, cx + halfw, cy + halfh) & pr
-                for t in terms:
-                    for r in page.search_for(t):
-                        page.add_highlight_annot(r)
-                png = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=clip).tobytes('png')
-    except Exception:
-        abort(500)
-    if bad_page:
-        abort(404)
+    png = PW.run(PW.region_png, pdf, n, terms, default=None)
+    if png is None:
+        abort(404)                                # out-of-range page or a render crash
     return Response(png, mimetype='image/png')
 
 @app.route('/api/triage', methods=['GET'])
