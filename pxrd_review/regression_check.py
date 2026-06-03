@@ -234,6 +234,10 @@ CASES = [
  # NEXT sentence — the I002373 case (figure caption pushed the bare 'powder' out of range)
  ("classify_context: before powder-software cue beats after 'single-crystal'",
    lambda: (lambda s: C.classify_context(s, s.find('a =')))('observed d values by profile fitting using jade pro software. refined unit-cell parameters are a = 5.04 b = 6.0. single-crystal diffraction data were collected at the synchrotron') == 'powder'),
+ # a Le Bail / Rietveld / Pawley refined cell is powder even when 'single-crystal' is the
+ # NEARER word (it's the starting-point/comparison reference) — the I002960 case
+ ("classify_context: Le Bail refinement beats a nearer 'single-crystal' starting ref",
+   lambda: (lambda s: C.classify_context(s, s.find('a =')))('powder x-ray diffraction data were collected. unit-cell parameters refined using the le bail profile-fitting method starting from parameters determined from single-crystal techniques are a = 9.20 and b = 12.4') == 'powder'),
  # a 'calculated PXRD' pattern (e.g. exported by a visualizer like Mercury/PLATON) is NOT a
  # powder experiment — same as 'calculated powder' (I003398), now also covering the 'pxrd' word
  ("calc-PXRD (Mercury export) is NOT powder context",

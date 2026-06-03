@@ -257,6 +257,11 @@ def _norm_ctx(s):
 # the 'and observed' breaks the adjacency. Used by classify_context before the keyword search.
 _CALC_POWDER = re.compile(r'(?:calculat|simulat)\w*\s+(?:x[- ]?ray\s+)?(?:powder|pxrd)')
 
+# Powder WHOLE-PATTERN refinement methods (Le Bail / Rietveld / Pawley / profile-fitting /
+# whole-pattern). These apply ONLY to powder data, so a cell refined by one is a powder cell —
+# even when 'single-crystal' appears nearby as the STARTING-POINT or comparison reference.
+_POWDER_REFINE = re.compile(r'le ?bail|rietveld|pawley|whole[- ]?pattern|profile[- ]?fit', re.I)
+
 def _nearest(hay, keys):
     """smallest distance from the END of `hay` to any keyword (for preceding
     text) — i.e. how far back the keyword is."""
@@ -324,6 +329,12 @@ def classify_context(text, pos, pre=750, post=200):
     p, s = _nearest(before, POWDER_KW), _nearest(before, SINGLE_KW)
     if p is not None or s is not None:
         if s is None: return 'powder'
+        # 'single-crystal' is present and nearer (or no bare 'powder'): a powder WHOLE-PATTERN
+        # refinement method (Le Bail / Rietveld / Pawley / profile-fitting) means the cell IS
+        # the powder-refined cell, and the 'single-crystal' is its starting-point/comparison
+        # reference ('refined by Le Bail … starting from the single-crystal parameters', I002960).
+        if (p is None or s < p) and _POWDER_REFINE.search(before):
+            return 'powder'
         if p is None: return 'single'
         return 'powder' if p <= s else 'single'
     # Preceding text wins: an instrument/software cue in the BEFORE window (e.g. 'JADE Pro'
