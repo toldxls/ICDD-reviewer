@@ -230,6 +230,10 @@ CASES = [
    lambda: (lambda s: C.classify_context(s, s.find('a =')))('refinement gave a = 3.09(1). calculated X-ray powder diffraction data are listed in Table S1.') != 'powder'),
  ("real 'refined from powder data' IS powder context",
    lambda: (lambda s: C.classify_context(s, s.find('a =')))('the unit-cell parameters refined from powder data are a = 5.24(1) and so on.') == 'powder'),
+ # preceding powder-software cue (JADE Pro) outranks a bare 'single-crystal' that opens the
+ # NEXT sentence — the I002373 case (figure caption pushed the bare 'powder' out of range)
+ ("classify_context: before powder-software cue beats after 'single-crystal'",
+   lambda: (lambda s: C.classify_context(s, s.find('a =')))('observed d values by profile fitting using jade pro software. refined unit-cell parameters are a = 5.04 b = 6.0. single-crystal diffraction data were collected at the synchrotron') == 'powder'),
  # a 'calculated PXRD' pattern (e.g. exported by a visualizer like Mercury/PLATON) is NOT a
  # powder experiment — same as 'calculated powder' (I003398), now also covering the 'pxrd' word
  ("calc-PXRD (Mercury export) is NOT powder context",

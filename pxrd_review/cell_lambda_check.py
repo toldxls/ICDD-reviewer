@@ -326,11 +326,17 @@ def classify_context(text, pos, pre=750, post=200):
         if s is None: return 'powder'
         if p is None: return 'single'
         return 'powder' if p <= s else 'single'
+    # Preceding text wins: an instrument/software cue in the BEFORE window (e.g. 'JADE Pro'
+    # / Gandolfi from the powder methods paragraph) outranks a bare 'single-crystal' that
+    # merely opens the FOLLOWING sentence (a separate SCXRD experiment) — important when a
+    # figure caption / page break pushed the powder paragraph's bare 'powder' out of range
+    # (I002373: a powder cell mis-tagged single, then mis-flagged as an SCXRD cell).
+    bm = _instr_mode(before)
+    if bm:
+        return bm
     p, s = _nearest_fwd(after, POWDER_KW), _nearest_fwd(after, SINGLE_KW)
     if p is None and s is None:
-        # no explicit powder/single word near the cell — fall back to the mined
-        # instrument/geometry lexicon (preceding text wins, then following).
-        return _instr_mode(before) or _instr_mode(after) or 'unknown'
+        return _instr_mode(after) or 'unknown'   # nothing before; fall back to following text
     if s is None: return 'powder'
     if p is None: return 'single'
     return 'powder' if p <= s else 'single'
