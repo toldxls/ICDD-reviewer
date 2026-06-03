@@ -185,6 +185,12 @@ CASES = [
  # powder experiment — same as 'calculated powder' (I003398), now also covering the 'pxrd' word
  ("calc-PXRD (Mercury export) is NOT powder context",
    lambda: (lambda s: C.classify_context(s, s.find('a =')))('refined structure a = 7.21(2). A calculated PXRD pattern was generated in Mercury.') != 'powder'),
+ # 'simulated' patterns (CrystalDiffract/Mercury) are calculated too, not measured powder
+ ("simulated PXRD (CrystalDiffract) is NOT powder context",
+   lambda: (lambda s: C.classify_context(s, s.find('a =')))('single-crystal structure a = 7.21(2). A simulated powder pattern from CrystalDiffract.') != 'powder'),
+ # but 'calcined powder' is a REAL powder sample — must NOT be swallowed by the calc guard
+ ("'calcined powder' IS powder context",
+   lambda: (lambda s: C.classify_context(s, s.find('a =')))('cell refined from calcined powder data: a = 5.24(1) and so on.') == 'powder'),
  # pure visualizers are NOT mode cues (VESTA/Diamond/CrystalMaker/Mercury)
  ("lexicon: visualizers are not mode cues", lambda: C._instr_mode('structure drawn in vesta and mercury') is None),
  # --- cell parsing (cubic / uniaxial / rounded-table) ---
