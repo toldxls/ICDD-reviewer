@@ -651,16 +651,18 @@ async function scrollToHit(page, rect) {
     const sz = (S.pageSizes && S.pageSizes[page]) || S.pdfSizes[page];
     if (!sz || !inner) { slot.scrollIntoView({ block: 'center' }); return; }
     const [w, hh] = sz;
-    const sr = slot.getBoundingClientRect(), vr = view.getBoundingClientRect();
+    // measure the page-inner (the box the hit % are relative to) — at zoom>1 it is wider than
+    // the slot and overflows it, so the slot's width would under-shoot a right-column hit
+    const ir = inner.getBoundingClientRect(), vr = view.getBoundingClientRect();
     const fb = el('div', { class: 'hit-flash' });
     fb.style.left = (rect[0] / w * 100) + '%'; fb.style.top = (rect[1] / hh * 100) + '%';
     fb.style.width = ((rect[2] - rect[0]) / w * 100) + '%';
     fb.style.height = ((rect[3] - rect[1]) / hh * 100) + '%';
     inner.appendChild(fb);
     setTimeout(() => fb.remove(), 1900);
-    const hitTop = (sr.top - vr.top) + view.scrollTop + (rect[1] / hh) * sr.height;
-    const hitH = ((rect[3] - rect[1]) / hh) * sr.height;
-    const hitCx = (sr.left - vr.left) + view.scrollLeft + ((rect[0] + rect[2]) / 2 / w) * sr.width;
+    const hitTop = (ir.top - vr.top) + view.scrollTop + (rect[1] / hh) * ir.height;
+    const hitH = ((rect[3] - rect[1]) / hh) * ir.height;
+    const hitCx = (ir.left - vr.left) + view.scrollLeft + ((rect[0] + rect[2]) / 2 / w) * ir.width;
     view.scrollTo({ top: Math.max(0, hitTop - view.clientHeight / 2 + hitH / 2),
                     left: Math.max(0, hitCx - view.clientWidth / 2), behavior: 'smooth' });   // centre both axes
   });
