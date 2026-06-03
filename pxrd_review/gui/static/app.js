@@ -18,6 +18,10 @@ const S = {
   focusKey: null,     // the finding currently driving the PDF pane
   pdfIO: null,        // IntersectionObserver for lazy page loading + current-page tracking
   pdfRatios: {},      // page -> visible ratio (to pick the current page)
+  pdfHits: [],        // flat search hits [{page, rect}] for hit-to-hit stepping
+  pdfSizes: {},       // page -> [w,h] in points, for placing a flash box in page-%
+  hitIdx: -1,         // current hit in pdfHits
+  pdfQuery: '',       // the live search query (Enter again steps to the next hit)
   saveTimer: null,
 };
 const enc = encodeURIComponent;
@@ -350,6 +354,7 @@ function focusFinding(fkey) {
     d.classList.toggle('focus', d.getAttribute('data-fkey') === fkey));
   const t = termsFor(fkey);
   S.pdfTerms = t.terms; S.pdfPage = t.page; S.pdfMode = 'page'; S.pdfZoom = 1;
+  S.pdfHits = []; S.pdfQuery = ''; S.hitIdx = -1; $('#pdf-hits').textContent = '';   // reset search hit-nav
   renderPdf(t.snippet, t.label, t.terms);
 }
 
@@ -370,10 +375,11 @@ async function zoomToHighlight(fkey) {
       fetch(`/api/pdf/${encodeURIComponent(S.a.key)}/search?q=${encodeURIComponent(term)}`)
         .then(x => x.json()).catch(() => ({ hits: [] }))));
     const pageHits = {};
-    for (const r of res) for (const h of (r.hits || [])) pageHits[h.page] = (pageHits[h.page] || 0) + h.count;
+    for (const r of res) for (const h of (r.pages || [])) pageHits[h.page] = (pageHits[h.page] || 0) + h.count;
     const best = Object.keys(pageHits).sort((a, b) => pageHits[b] - pageHits[a])[0];
     if (best !== undefined) page = +best;
   } catch (e) { /* keep evidence page */ }
+  S.pdfHits = []; S.pdfQuery = ''; S.hitIdx = -1; $('#pdf-hits').textContent = '';   // not a search context
   S.pdfTerms = t.terms.slice(0, 20); S.pdfPage = page; S.pdfMode = 'region'; S.pdfZoom = 1;
   renderPdf(t.snippet, t.label, S.pdfTerms);
 }
@@ -522,12 +528,79 @@ function renderSnippet(snippet, label, terms) {
 
 async function pdfSearch(q) {
   if (!S.a.pdf || !q) return;
-  const r = await fetch(`/api/pdf/${encodeURIComponent(S.a.key)}/search?q=${encodeURIComponent(q)}`).then(x => x.json());
-  const hits = r.hits || [];
-  $('#pdf-hits').textContent = hits.length
-    ? `${hits.reduce((s, h) => s + h.count, 0)} hit(s) on ${hits.length} page(s)`
-    : 'no hits';
-  if (hits.length) { S.pdfPage = hits[0].page; S.pdfTerms = [q]; S.pdfMode = 'page'; S.pdfZoom = 1; renderPdf('', '', [q]); }
+  // pressing Enter again on the same query steps to the next hit (Acrobat-style)
+  if (q === S.pdfQuery && S.pdfHits.length) { stepHit(1); return; }
+  S.pdfQuery = q;
+  const r = await fetch(`/api/pdf/${enc(S.a.key)}/search?q=${enc(q)}`)
+    .then(x => x.json()).catch(() => ({ pages: [], hits: [], sizes: {} }));
+  S.pdfHits = r.hits || []; S.pdfSizes = r.sizes || {}; S.hitIdx = -1;
+  S.pdfTerms = [q]; S.pdfMode = 'page'; S.pdfZoom = 1;
+  if (S.pdfHits.length) S.pdfPage = S.pdfHits[0].page;
+  renderPdf('', '', [q]);                 // rebuild the page stack with q highlighted
+  renderHitNav();
+  if (S.pdfHits.length) requestAnimationFrame(() => gotoHit(0));
+}
+
+// the search-box hit counter + ‹ › stepper (Acrobat-style click-through)
+function renderHitNav() {
+  const box = $('#pdf-hits'); box.innerHTML = '';
+  const n = S.pdfHits.length;
+  if (!n) { box.textContent = S.pdfQuery ? 'no hits' : ''; return; }
+  const pages = new Set(S.pdfHits.map(h => h.page)).size;
+  box.append(
+    el('button', { class: 'hitnav', title: 'previous hit (Shift-Enter)', onclick: () => stepHit(-1) }, '‹'),
+    el('span', { id: 'hit-counter' }, `${Math.max(S.hitIdx + 1, 1)}/${n}`),
+    el('button', { class: 'hitnav', title: 'next hit (Enter)', onclick: () => stepHit(1) }, '›'),
+    el('span', { class: 'muted' }, ` · ${n} hit${n > 1 ? 's' : ''} on ${pages} page${pages > 1 ? 's' : ''}`));
+}
+
+function stepHit(d) {
+  if (!S.pdfHits.length) return;
+  const n = S.pdfHits.length;
+  gotoHit(((S.hitIdx + d) % n + n) % n);   // wrap around
+}
+
+// jump to one search hit: scroll the live page-stack to it and flash a box on it
+function gotoHit(idx) {
+  const h = S.pdfHits[idx]; if (!h) return;
+  S.hitIdx = idx;
+  const c = $('#hit-counter'); if (c) c.textContent = `${idx + 1}/${S.pdfHits.length}`;
+  scrollToHit(h.page, h.rect);
+}
+
+// scroll #pdf-view so the hit on `page` (rect in PDF points) is centred, then flash it.
+// Stays in the navigable page view — no dead-end crop.
+function scrollToHit(page, rect) {
+  const view = $('#pdf-view');
+  const slot = view.querySelector(`.pdf-page[data-page="${page}"]`);
+  if (!slot) return;
+  S.pdfPage = page; updatePagerLabel();
+  const img = slot.querySelector('img');
+  if (img && !img.getAttribute('src')) {                 // force-load a lazy target page
+    img.src = `/api/pdf/${enc(S.a.key)}/page/${page}.png?find=${enc((S.pdfTerms || []).join('|'))}`;
+    buildTextLayer(S.a, page, slot);
+  }
+  const place = () => {
+    const inner = slot.querySelector('.page-inner');
+    const sz = S.pdfSizes[page];
+    const sr = slot.getBoundingClientRect(), vr = view.getBoundingClientRect();
+    if (sz && inner) {
+      const [w, hh] = sz;
+      const fb = el('div', { class: 'hit-flash' });
+      fb.style.left = (rect[0] / w * 100) + '%'; fb.style.top = (rect[1] / hh * 100) + '%';
+      fb.style.width = ((rect[2] - rect[0]) / w * 100) + '%';
+      fb.style.height = ((rect[3] - rect[1]) / hh * 100) + '%';
+      inner.appendChild(fb);
+      setTimeout(() => fb.remove(), 1800);
+      const hitTop = (sr.top - vr.top) + view.scrollTop + (rect[1] / hh) * sr.height;
+      const hitH = ((rect[3] - rect[1]) / hh) * sr.height;
+      view.scrollTo({ top: Math.max(0, hitTop - view.clientHeight / 2 + hitH / 2), behavior: 'smooth' });
+    } else {
+      slot.scrollIntoView({ block: 'center' });
+    }
+  };
+  if (img && !img.complete) img.addEventListener('load', place, { once: true });
+  else requestAnimationFrame(place);
 }
 
 // ---- docx pane -------------------------------------------------------------
@@ -735,7 +808,12 @@ $('#rerun-all').addEventListener('click', () =>
   rerun('/api/rerun', $('#rerun-all'), 'Rerunning all…', 'regenerated all docx ✓'));
 $('#prev').addEventListener('click', () => step(-1));
 $('#next').addEventListener('click', () => step(1));
-$('#pdf-q').addEventListener('keydown', e => { if (e.key === 'Enter') pdfSearch(e.target.value.trim()); });
+$('#pdf-q').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const v = e.target.value.trim();
+  if (e.shiftKey && v === S.pdfQuery && S.pdfHits.length) stepHit(-1);   // Shift-Enter = previous hit
+  else pdfSearch(v);
+});
 $('#zoom-in').addEventListener('click', () => setZoom(S.pdfZoom + 0.25));
 $('#zoom-out').addEventListener('click', () => setZoom(S.pdfZoom - 0.25));
 $('#zoom-hit').addEventListener('click', () => { if (S.focusKey) zoomToHighlight(S.focusKey); });

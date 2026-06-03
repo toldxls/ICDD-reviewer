@@ -259,6 +259,16 @@ input[type=range] { accent-color: var(--accent); }
 .text-layer > span::-moz-selection { background: rgb(var(--accent-rgb) / .35); }
 .pager { display: flex; align-items: center; gap: 6px; font-size: .85em; white-space: nowrap; }
 .pager button { padding: 1px 7px; }
+/* search hit-stepper (Acrobat-style click-through) */
+#pdf-hits { display: inline-flex; align-items: center; gap: 5px; font-size: .85em; flex-wrap: wrap; }
+#pdf-hits .hitnav { padding: 0 7px; line-height: 1.5; color: var(--fg); }
+#pdf-hits #hit-counter { min-width: 30px; text-align: center; font-variant-numeric: tabular-nums; color: var(--fg); }
+/* a box that briefly flashes over the current hit in the live page */
+.hit-flash { position: absolute; pointer-events: none; border-radius: 2px;
+  background: rgb(var(--accent-rgb) / .25);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 13px 3px rgb(var(--accent-rgb) / .55);
+  animation: hitflash 1.8s ease-out forwards; }
+@keyframes hitflash { 0% { opacity: 0; } 12% { opacity: 1; } 68% { opacity: 1; } 100% { opacity: 0; } }
 .snippet { flex: none; min-height: 50px; max-height: 36%; overflow: auto; padding: 8px 10px; border-top: 1px solid var(--line); font-size: .9em; color: var(--muted); }
 .snippet b { color: var(--text); }
 .snippet .hl { background: var(--hl); color: #000; border-radius: 2px; padding: 0 1px; }

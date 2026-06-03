@@ -137,12 +137,21 @@ def _selftest_segfault(*_):
 
 
 def search(pdf, q):
-    """[{page, count}, …] for query string q across all pages."""
+    """Locate query string q across all pages. Returns
+        {'pages': [{page, count}, …],            # per-page tally (legacy shape, for the search box)
+         'hits':  [{page, rect:[x0,y0,x1,y1]}…], # every individual hit, in reading order
+         'sizes': {page: [w, h], …}}             # point size of each page that has a hit
+    so the UI can step hit-to-hit and place a flash box in page-% coordinates."""
     import fitz
-    hits = []
+    pages, hits, sizes = [], [], {}
     with fitz.open(pdf) as doc:
         for i in range(doc.page_count):
             rects = doc[i].search_for(q)
             if rects:
-                hits.append({'page': i, 'count': len(rects)})
-    return hits
+                pages.append({'page': i, 'count': len(rects)})
+                r = doc[i].rect
+                sizes[i] = [round(r.width, 1), round(r.height, 1)]
+                for q_ in sorted(rects, key=lambda b: (round(b.y0, 1), b.x0)):
+                    hits.append({'page': i, 'rect': [round(q_.x0, 1), round(q_.y0, 1),
+                                                     round(q_.x1, 1), round(q_.y1, 1)]})
+    return {'pages': pages, 'hits': hits, 'sizes': sizes}

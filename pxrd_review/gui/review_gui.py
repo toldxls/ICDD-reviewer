@@ -521,10 +521,10 @@ def api_pdf_search(key):
     if not pdf:
         abort(404)
     q = (request.args.get('q') or '').strip()
+    empty = {'pages': [], 'hits': [], 'sizes': {}}
     if not q:
-        return jsonify({'hits': []})
-    hits = PW.run(PW.search, pdf, q, default=[])
-    return jsonify({'hits': hits})
+        return jsonify(empty)
+    return jsonify(PW.run(PW.search, pdf, q, default=empty))
 
 @app.route('/api/pdf/<key>/words/<int:n>.json')
 def api_pdf_words(key, n):
