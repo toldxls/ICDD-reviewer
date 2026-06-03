@@ -8,6 +8,7 @@ long module paths, or ports.
     pxrd lambda [folder] [extra…]  cell/λ console report
     pxrd extras [folder] [extra…]  the extra checks, console
     pxrd candidates [folder] […]   candidate-group scan, console
+    pxrd sweep [folder] [extra…]   read-only corpus report + diff vs last run -> review_out/
     pxrd check [fixtures]          run the regression suite
     pxrd refresh [--refresh-struct] refresh the Mindat cache
     pxrd mindat [args…]            call mindat.py directly (e.g. --lookup Quartz)
@@ -27,11 +28,12 @@ MODULE = {
     'lambda':     'pxrd_review.cell_lambda_check',
     'extras':     'pxrd_review.extra_checks',
     'candidates': 'pxrd_review.candidate_groups',
+    'sweep':      'pxrd_review.sweep',
     'check':      'pxrd_review.regression_check',
     'refresh':    'pxrd_review.mindat',
     'mindat':     'pxrd_review.mindat',
 }
-NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'check'}
+NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'sweep', 'check'}
 MEM = os.path.join(P.cache_dir(), 'pxrd_last.json')   # remembered folder per sub-command
 
 def _load():

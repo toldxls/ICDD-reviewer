@@ -26,7 +26,19 @@ the explicit `python3 -m pxrd_review.<module>` forms shown below.
 ```
 python3 -m pxrd_review.cell_lambda_check /path/to/entries          # console report, whole folder
 python3 -m pxrd_review.cell_lambda_check /path/to/entries --id Innnnnn
+python3 -m pxrd_review.sweep /path/to/corpus                       # read-only corpus report + diff vs last run
 ```
+**Corpus sweep (`pxrd sweep`).** Read-only: runs `annotate_review.analyze()` over every
+entry under a folder tree (recursive, deduped by id, skipping `review_out/`), and writes
+`review_out/sweep_report.txt` (per-check fire table split old- vs new-template, cell/λ
+verdict distributions, crashes) plus `review_out/sweep_snapshot.json`. Each run **diffs
+against the previous snapshot** — which entries changed verdict, per-check count deltas,
+new/resolved crashes — so an aggregate false-positive storm or regression is visible *before*
+a reviewer hits it (the pointwise `regression_check` can't see aggregate drift). It is a
+report, **not a gate**: the eyeball on the diff is the judgement. `--samples` adds one example
+message per check; `--baseline OLD.json` diffs against a saved snapshot without overwriting
+the auto one.
+
 Auto-pairs each `Innnnnn(Name).docx` to its PDF in the folder (or a subfolder),
 expanding range-named PDFs like `Innnnnn-Innnnnn.pdf`. Ids may be `I`- or
 `O`-prefixed. When several PDFs share an id, the **primary article PDF is
