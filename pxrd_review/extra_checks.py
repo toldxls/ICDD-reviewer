@@ -748,15 +748,18 @@ def _dstar2(a, b, c, al, be, ga, h, k, l):
 
 def _candidate_hkls(h, k, l):
     """Integer (h,k,l) interpretations of a reflection row: the literal indices, PLUS — for
-    OVERLAPPED lines written with indices concatenated per column (h='10', k='01', l='44' =
-    (1,0,4)+(0,1,4)) — the per-digit split when h,k,l are digits-only of equal length >1.
-    (Signed indices like '-2' never use this packing, so they fall through to the literal.)"""
+    OVERLAPPED lines written with indices concatenated per column — the per-(signed-)digit
+    split when h,k,l unpack to the same count >1 of single-digit indices:
+        h='10', k='01', l='44'   -> (1,0,4)+(0,1,4)
+        h='-41', k='03', l='10'  -> (-4,0,1)+(1,3,0)   (a '-' binds the digit it precedes)
+    A genuine multi-digit index (e.g. l='14') unpacks to a different count than its single-
+    digit partners, so it is NOT split and falls through to the literal interpretation."""
     cands = []
     hi, ki, li = _int(h), _int(k), _int(l)
     if None not in (hi, ki, li):
         cands.append((hi, ki, li))
-    hs, ks, ls = str(h).strip(), str(k).strip(), str(l).strip()
-    if hs.isdigit() and ks.isdigit() and ls.isdigit() and len(hs) == len(ks) == len(ls) > 1:
+    hs = re.findall(r'-?\d', str(h)); ks = re.findall(r'-?\d', str(k)); ls = re.findall(r'-?\d', str(l))
+    if len(hs) == len(ks) == len(ls) > 1:
         cands += [(int(hs[i]), int(ks[i]), int(ls[i])) for i in range(len(hs))]
     return cands
 

@@ -196,6 +196,8 @@ CASES = [
  #     (1,0,4)+(0,1,4)); split so a matching sub-line isn't a false 'disagrees' flag ---
  ("indexing: overlapped hkl splits per column",
    lambda: {(1, 0, 4), (0, 1, 4)} <= set(X._candidate_hkls('10', '01', '44'))),
+ ("indexing: SIGNED overlapped hkl splits ('-41'/'03'/'10' = (-4,0,1)+(1,3,0))",
+   lambda: {(-4, 0, 1), (1, 3, 0)} <= set(X._candidate_hkls('-41', '03', '10'))),
  ("indexing: genuine multi-digit index not split",
    lambda: X._candidate_hkls('1', '0', '14') == [(1, 0, 14)]),
  ("indexing: signed index falls through to literal",
