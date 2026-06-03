@@ -526,6 +526,13 @@ def api_pdf_search(key):
         return jsonify(empty)
     return jsonify(PW.run(PW.search, pdf, q, default=empty))
 
+@app.route('/api/pdf/<key>/sizes.json')
+def api_pdf_sizes(key):
+    pdf = _pdf_path(key)
+    if not pdf:
+        abort(404)
+    return jsonify(PW.run(PW.sizes, pdf, default=[]))
+
 @app.route('/api/pdf/<key>/words/<int:n>.json')
 def api_pdf_words(key, n):
     """Word boxes for a page (PDF points) — drives the selectable text layer the GUI

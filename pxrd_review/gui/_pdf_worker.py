@@ -129,6 +129,14 @@ def scan(pdf, terms):
     return [n, (best_pg if best_hits > 0 else 0)]
 
 
+def sizes(pdf):
+    """[[w, h], …] point size of every page — lets the UI reserve each page slot's true height
+    so lazy-loaded images cause no layout shift (accurate scroll-to-hit). No rendering."""
+    import fitz
+    with fitz.open(pdf) as doc:
+        return [[round(p.rect.width, 1), round(p.rect.height, 1)] for p in doc]
+
+
 def _selftest_segfault(*_):
     """Deliberately segfault a worker (null deref) — used only to verify crash isolation.
     Never called in normal operation."""

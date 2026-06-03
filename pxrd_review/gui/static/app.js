@@ -22,6 +22,9 @@ const S = {
   pdfSizes: {},       // page -> [w,h] in points, for placing a flash box in page-%
   hitIdx: -1,         // current hit in pdfHits
   pdfQuery: '',       // the live search query (Enter again steps to the next hit)
+  pageSizes: null,    // [[w,h], …] every page's size — reserves slot heights (no scroll-shift)
+  pageSizesKey: null, // which entry pageSizes belongs to
+  sizesPromise: null, // in-flight sizes fetch
   saveTimer: null,
 };
 const enc = encodeURIComponent;
@@ -448,6 +451,25 @@ function renderPdf(snippet, snipLabel, hlTerms) {
   if (snippet !== undefined) renderSnippet(snippet, snipLabel, hlTerms || S.pdfTerms);
 }
 
+// Fetch every page's point size ONCE per entry, so each page slot can reserve its true
+// height up front (via aspect-ratio). Without this, unloaded pages hold a short placeholder
+// and a far scroll-to-hit lands wrong once real images load and shift the layout.
+function ensureSizes() {
+  if (S.pageSizesKey === S.a.key && S.pageSizes) return S.sizesPromise || Promise.resolve();
+  S.pageSizesKey = S.a.key; S.pageSizes = null;
+  S.sizesPromise = fetch(`/api/pdf/${enc(S.a.key)}/sizes.json`).then(x => x.json())
+    .then(arr => { S.pageSizes = arr || []; applyPageAspects(); })
+    .catch(() => { S.pageSizes = []; });
+  return S.sizesPromise;
+}
+function applyPageAspects() {
+  if (!S.pageSizes || !S.pageSizes.length) return;
+  $('#pdf-view').querySelectorAll('.pdf-page .page-inner').forEach(inner => {
+    const i = +inner.parentElement.getAttribute('data-page'), sz = S.pageSizes[i];
+    if (sz && sz[1]) inner.style.aspectRatio = (sz[0] / sz[1]).toFixed(4);
+  });
+}
+
 // a continuously-scrollable stack of all pages, lazy-loaded as they approach view
 function buildPageStack(a, find) {
   const view = $('#pdf-view');
@@ -478,6 +500,8 @@ function buildPageStack(a, find) {
     if (best !== S.pdfPage) { S.pdfPage = best; updatePagerLabel(); }
   }, { root: view, rootMargin: '600px 0px', threshold: [0, 0.25, 0.5, 1] });
   slots.forEach(s => S.pdfIO.observe(s));
+  ensureSizes();                   // (clears stale sizes on entry switch, then) fetches if needed
+  applyPageAspects();              // reserve true heights now if this entry's sizes are known
   const target = slots[Math.min(S.pdfPage, slots.length - 1)];   // jump to the evidence page
   if (target) requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
 }
@@ -609,40 +633,37 @@ function gotoHit(idx) {
 }
 
 // scroll #pdf-view so the hit on `page` (rect in PDF points) is centred, then flash it.
-// Stays in the navigable page view — no dead-end crop.
-function scrollToHit(page, rect) {
+// Stays in the navigable page view — no dead-end crop. Awaits page sizes first so every slot
+// has reserved its true height (no layout shift) and the scroll target is exact.
+async function scrollToHit(page, rect) {
   const view = $('#pdf-view');
+  await ensureSizes();                                   // heights stable before we measure
   const slot = view.querySelector(`.pdf-page[data-page="${page}"]`);
   if (!slot) return;
   S.pdfPage = page; updatePagerLabel();
   const img = slot.querySelector('img');
-  if (img && !img.getAttribute('src')) {                 // force-load a lazy target page
+  if (img && !img.getAttribute('src')) {                 // load the target page's image (visual)
     img.src = `/api/pdf/${enc(S.a.key)}/page/${page}.png?find=${enc((S.pdfTerms || []).join('|'))}`;
     buildTextLayer(S.a, page, slot);
   }
-  const place = () => {
+  requestAnimationFrame(() => {
     const inner = slot.querySelector('.page-inner');
-    const sz = S.pdfSizes[page];
+    const sz = (S.pageSizes && S.pageSizes[page]) || S.pdfSizes[page];
+    if (!sz || !inner) { slot.scrollIntoView({ block: 'center' }); return; }
+    const [w, hh] = sz;
     const sr = slot.getBoundingClientRect(), vr = view.getBoundingClientRect();
-    if (sz && inner) {
-      const [w, hh] = sz;
-      const fb = el('div', { class: 'hit-flash' });
-      fb.style.left = (rect[0] / w * 100) + '%'; fb.style.top = (rect[1] / hh * 100) + '%';
-      fb.style.width = ((rect[2] - rect[0]) / w * 100) + '%';
-      fb.style.height = ((rect[3] - rect[1]) / hh * 100) + '%';
-      inner.appendChild(fb);
-      setTimeout(() => fb.remove(), 1800);
-      const hitTop = (sr.top - vr.top) + view.scrollTop + (rect[1] / hh) * sr.height;
-      const hitH = ((rect[3] - rect[1]) / hh) * sr.height;
-      const hitCx = (sr.left - vr.left) + view.scrollLeft + ((rect[0] + rect[2]) / 2 / w) * sr.width;
-      view.scrollTo({ top: Math.max(0, hitTop - view.clientHeight / 2 + hitH / 2),
-                      left: Math.max(0, hitCx - view.clientWidth / 2), behavior: 'smooth' });   // centre both axes (matters when zoomed)
-    } else {
-      slot.scrollIntoView({ block: 'center' });
-    }
-  };
-  if (img && !img.complete) img.addEventListener('load', place, { once: true });
-  else requestAnimationFrame(place);
+    const fb = el('div', { class: 'hit-flash' });
+    fb.style.left = (rect[0] / w * 100) + '%'; fb.style.top = (rect[1] / hh * 100) + '%';
+    fb.style.width = ((rect[2] - rect[0]) / w * 100) + '%';
+    fb.style.height = ((rect[3] - rect[1]) / hh * 100) + '%';
+    inner.appendChild(fb);
+    setTimeout(() => fb.remove(), 1900);
+    const hitTop = (sr.top - vr.top) + view.scrollTop + (rect[1] / hh) * sr.height;
+    const hitH = ((rect[3] - rect[1]) / hh) * sr.height;
+    const hitCx = (sr.left - vr.left) + view.scrollLeft + ((rect[0] + rect[2]) / 2 / w) * sr.width;
+    view.scrollTo({ top: Math.max(0, hitTop - view.clientHeight / 2 + hitH / 2),
+                    left: Math.max(0, hitCx - view.clientWidth / 2), behavior: 'smooth' });   // centre both axes
+  });
 }
 
 // ---- docx pane -------------------------------------------------------------
