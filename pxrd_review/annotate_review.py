@@ -467,6 +467,20 @@ def _strip_tool_annotations(path):
         f.write(buf.getvalue())
     return tool_ids
 
+def _backup_edited(out):
+    """Timestamped copy of a hand-edited output into .edit_backup/ — so ANY rerun, including
+    --force, can never lose the reviewer's work irrecoverably. Returns the backup path or None."""
+    try:
+        bdir = os.path.join(os.path.dirname(out), '.edit_backup')
+        os.makedirs(bdir, exist_ok=True)
+        stem, ext = os.path.splitext(os.path.basename(out))
+        ts = datetime.datetime.now().strftime('%Y-%m-%dT%H%M%S')
+        dst = os.path.join(bdir, '%s.%s%s' % (stem, ts, ext))
+        shutil.copy(out, dst)
+        return dst
+    except Exception:
+        return None
+
 def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=None):
     """Write comments/highlights for `res` into the docx — ERRORS ONLY. Entries
     whose cell matches the PDF with no discrepancies get no annotation (the
@@ -667,21 +681,24 @@ def main():
                 else:
                     print('  !! %s: hand-edited %s sits alongside %s — reconcile manually'
                           % (os.path.basename(dp), os.path.basename(stale), os.path.basename(out)))
-        # If the reviewer hand-edited this output, REFRESH in place: back it up,
-        # strip the tool's own old comments/highlights, then re-annotate ONTO the
-        # edited file so tracked changes / comments / text fixes are preserved.
-        refresh = (not args.inplace and not args.force and os.path.exists(out)
-                   and output_hand_edited(out, dp))
+        # If the reviewer hand-edited this output, ALWAYS preserve a timestamped backup before
+        # touching it — even under --force — so their work can never be lost irrecoverably.
+        # Then either REFRESH in place (strip only the tool's OWN comments/highlights and
+        # re-annotate ONTO the edited file, keeping the human edits), or — under --force —
+        # rebuild from source, with the backup as the safety net.
+        hand_edited = (not args.inplace and os.path.exists(out) and output_hand_edited(out, dp))
+        if hand_edited:
+            _backup_edited(out)
+            if args.force:
+                print('  !! %s: --force rebuilt a HAND-EDITED output from source; your edits were '
+                      'saved to .edit_backup/ first' % os.path.basename(dp))
+        refresh = hand_edited and not args.force
         base = None
         if refresh:
-            # back up the reviewer's edited file (TIMESTAMPED — each refresh keeps a
-            # distinct copy), then strip a TEMP copy (never the real output) so a
-            # later annotate() failure can't leave it half-done.
+            # strip a TEMP copy (never the real output) so a later annotate() failure can't
+            # leave it half-done; the timestamped backup above is the durable safeguard.
             bdir = os.path.join(os.path.dirname(out), '.edit_backup')
             os.makedirs(bdir, exist_ok=True)
-            stem, ext = os.path.splitext(os.path.basename(out))
-            ts = datetime.datetime.now().strftime('%Y-%m-%dT%H%M%S')
-            shutil.copy(out, os.path.join(bdir, '%s.%s%s' % (stem, ts, ext)))
             try:
                 base = os.path.join(bdir, '~strip_' + os.path.basename(out))
                 shutil.copy(out, base)
