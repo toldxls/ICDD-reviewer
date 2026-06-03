@@ -142,6 +142,18 @@ CASES = [
  # canon-substring collision guards: these common phrases/minerals must NOT read as a cue
  ("lexicon: 'unit cell' phrase is not a powder cue", lambda: C._instr_mode('the unit cell parameters were') is None),
  ("lexicon: 'jadeite' mineral is not a powder cue",  lambda: C._instr_mode('jadeite and omphacite inclusions') is None),
+ # full-corpus (438-pair) re-mine additions: profile/whole-pattern fitting + 1D powder
+ # detectors (LynxEye/MYTHEN are NOT dual-use area detectors)
+ ("lexicon: whole-pattern/profile fit -> powder", lambda: C._instr_mode('whole-pattern profile fit refinement') == 'powder'),
+ ("lexicon: LynxEye 1D detector -> powder",  lambda: C._instr_mode('d8 with a lynxeye detector') == 'powder'),
+ # 'xpert' was NOT added: its canon form collides with 'expert' -> must stay undetermined
+ ("lexicon: 'expert' is not a powder cue (xpert collision avoided)", lambda: C._instr_mode('in the expert opinion of the authors') is None),
+ # --- entry-id pairing: both 5-digit (ICDD Task Group) and 6-digit ids; underscore-
+ #     prefixed pdf names; a longer digit run must NOT be bitten into a false id ---
+ ("id: 6-digit docx",         lambda: C.entry_id('I003559(Selenolaurite).docx') == 'I003559'),
+ ("id: 5-digit docx",         lambda: C.entry_id('I10636(Yarzhemskiite).docx') == 'I10636'),
+ ("id: underscore-prefixed 5-digit pdf", lambda: C.entry_id('77539_I11149.pdf') == 'I11149'),
+ ("id: 7-digit run is not an id", lambda: C.entry_id('scan_I1234567.tif') is None),
  # a 'calculated [X-ray] powder' pattern is simulated from the single-crystal structure,
  # so it must NOT make a single-crystal cell read 'powder' (I003398: synchrotron crystallite
  # refinement whose only nearby 'powder' is 'Calculated X-ray powder diffraction data')

@@ -202,7 +202,10 @@ SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'singlecrys
 # Matched separator-blind (see _instr_mode), so hyphen/space variants need not be listed.
 POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd8 discover', 'empyrean',
                 'rietveld', 'le bail', 'pawley', 'gsas', 'expgui', 'fullprof', 'rietan', 'topas',
-                'dicvol', 'chekcell']
+                'dicvol', 'chekcell',
+                # profile/whole-pattern fitting (powder) + powder analysis software + 1D
+                # powder strip detectors (NOT area detectors, so not the dual-use trap):
+                'profile fit', 'whole-pattern', 'highscore', 'lynxeye', 'mythen']
 SINGLE_INSTR = ['four-circle', 'kappa', 'shelx', 'olex', 'sadabs']
 
 # PDF line-break hyphenation splits a word as 'pow-\nder'; after a whitespace collapse
@@ -764,7 +767,11 @@ def cell_source_finding(docx_abc, matched, cands):
 # ----------------------------------------------------------------------------- pairing docx<->pdf
 # Entry ids are I-prefixed (most) or O-prefixed (e.g. O002127); keys are the
 # full prefixed string ('Innnnnn'/'Onnnnnn') so I/O never collide numerically.
-ID_RE = r'([IO])(\d{6})'
+# Two id widths coexist in the corpus: 6-digit (newer batches, e.g. I003559) and
+# 5-digit (the older ICDD Task Group tree, e.g. I10636). The trailing (?!\d) stops a
+# 5-digit match from biting off the front of a longer number; keys preserve the
+# source width (no zero-padding), so a docx 'I10636' and a pdf '77539_I10636' agree.
+ID_RE = r'([IO])(\d{5,6})(?!\d)'
 
 def _is_supp(name):
     """True for supplementary / table PDFs (…_Supp, _Supp1, _TableS1, …). The
@@ -779,8 +786,8 @@ def pdf_index(folder):
         ids = re.findall(ID_RE, name)
         if not ids: continue
         if len(ids) >= 2 and '-' in name:            # range-named PDF, e.g. Innnnnn-Innnnnn.pdf
-            pre = ids[0][0]
-            keys = ['%s%06d' % (pre, n) for n in range(int(ids[0][1]), int(ids[-1][1]) + 1)]
+            pre = ids[0][0]; w = len(ids[0][1])       # preserve the source id width (5 or 6)
+            keys = ['%s%0*d' % (pre, w, n) for n in range(int(ids[0][1]), int(ids[-1][1]) + 1)]
         else:
             keys = [pre + num for pre, num in ids]
         for k in keys: cand.setdefault(k, []).append(p)
