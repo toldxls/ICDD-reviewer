@@ -181,6 +181,13 @@ CASES = [
  ("norm: spaced angstrom A ˚ -> Å",   lambda: 'Å' in C._norm_pdf('a = 5.93 A˚')),
  # Osc2tab/Osc2xrd (Britvin) generate a POWDER pattern from single-crystal frames
  ("lexicon: Osc2tab/Osc2xrd -> powder", lambda: C._instr_mode('pattern produced with osc2tab') == 'powder' and C._instr_mode('using osc2xrd software') == 'powder'),
+ ("lexicon: STOE WinXPOW -> powder", lambda: C._instr_mode('refined with stoe winxpow software') == 'powder'),
+ # find_radiation: a parenthesised source with kV/mA tube settings is the X-ray SOURCE,
+ # not a microprobe standard (recovers I002189's 'rotating anode (CoKα, 40 kV, 15 mA)')
+ ("radiation: parenthesised (CoKα, 40 kV) is found",
+   lambda: any(a == 'co' for a, _, _ in C.find_radiation('rotating anode (CoKα, 40 kV, 15 mA), imaging plate'))),
+ ("radiation: microprobe standard (FeKα) still skipped",
+   lambda: not any(a == 'fe' for a, _, _ in C.find_radiation('analysed against albite, diopside (FeKα) and apatite standards'))),
  ("norm: thin/nbsp spaces -> normal", lambda: C._norm_pdf('Cu\u2009K\u00a0radiation') == 'Cu K radiation'),
  # a 'calculated [X-ray] powder' pattern is simulated from the single-crystal structure,
  # so it must NOT make a single-crystal cell read 'powder' (I003398: synchrotron crystallite

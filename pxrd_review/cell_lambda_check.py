@@ -213,7 +213,7 @@ SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'singlecrys
 # 'unitcell' (canon == the phrase 'unit cell'). Matched separator-blind (see _instr_mode).
 POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd8 discover', 'empyrean',
                 'rietveld', 'le bail', 'pawley', 'gsas', 'expgui', 'fullprof', 'rietan', 'topas',
-                'dicvol', 'chekcell',
+                'dicvol', 'chekcell', 'winxpow',   # STOE WinXPOW = powder suite (11/1 powder)
                 # profile/whole-pattern fitting (powder) + powder analysis software + 1D
                 # powder strip detectors (NOT area detectors, so not the dual-use trap).
                 # 'xceler' = PANalytical X'Celerator; the X'-prefix makes it unique so it
@@ -616,10 +616,13 @@ def find_radiation(text):
         # 'mineral (FeKα)' inside a parenthesised enumeration — not the diffraction
         # source. Recognise them as: element-K opening/continuing a parenthetical
         # list, with no wavelength and no 'radiation/source/tube/anode' word after.
+        # BUT a parenthesised source often reads '(CoKα, 40 kV, 15 mA)' — the kV/mA
+        # tube settings mark it as the X-ray SOURCE (a microprobe standard never has them).
         before_char = flat[pos - 1] if pos > 0 else ' '
         after = flat[m.end():m.end() + 18]
         is_rad_phrase = (lam is not None
-                         or bool(re.match(r'[αa]?\d?\s*(radiation|source|tube|anode|line)', after, re.I)))
+                         or bool(re.match(r'[αa]?\d?\s*(radiation|source|tube|anode|line)', after, re.I))
+                         or bool(re.search(r'\d{1,3}\s*(?:kv|ma)\b', after, re.I)))
         if before_char in '(,/' and not is_rad_phrase:
             continue
         out.append((m.group(1).lower(), lam, radiation_context(text, pos)))
