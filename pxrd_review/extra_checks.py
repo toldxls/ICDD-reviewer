@@ -370,6 +370,48 @@ _NOT_GROUP = {'space', 'point', 'site', 'wyckoff', 'laue', 'functional', 'this',
               'sandstone', 'limestone', 'shale', 'granite', 'complex', 'terrane'}
 # a mineral (and hence a mineral-group root) almost always ends like this
 _MINERALISH = re.compile(r'(ite|ine|ase|yte|ide|ate|lite|site|ote)$', re.I)
+# Anion/oxoanion CLASS words and generic title words that END in a mineral-like suffix
+# ('phosphate', 'oxide', …) — they appear in titles ('a new Phosphate Mineral …') but are
+# NOT the subject mineral, so the relation-subject scan must skip them.
+_CLASS_WORDS = {'phosphate', 'silicate', 'arsenate', 'sulfate', 'sulphate', 'carbonate',
+    'borate', 'vanadate', 'selenate', 'tellurate', 'molybdate', 'tungstate', 'niobate',
+    'tantalate', 'chromate', 'nitrate', 'antimonate', 'germanate', 'selenite', 'arsenite',
+    'sulfite', 'titanate', 'aluminate', 'oxide', 'hydroxide', 'fluoride', 'chloride',
+    'bromide', 'iodide', 'sulfide', 'sulphide', 'selenide', 'telluride', 'arsenide',
+    'antimonide', 'phosphide', 'oxyhydroxide', 'silicide', 'mineral', 'species', 'phase',
+    'member', 'analogue', 'analog', 'variety', 'polytype'}
+
+def _relation_subject_is_other(norm, rel_start, own, partner):
+    """A structural-relation phrase ('… isotypic with X') is only about THIS entry when
+    this species (or a pronoun) is its grammatical SUBJECT. A bibliography entry or a cited
+    paper's TITLE makes a DIFFERENT mineral the subject ('… (2013) Terrywallaceite,
+    AgPb(Sb,Bi)3S6, isotypic with gustavite, …'), so the relation is about that other
+    species, not this one. Returns True when the FIRST mineral name in the clause leading
+    up to the phrase is a clearly DIFFERENT mineral. Accent- and class-word-insensitive, so
+    a paper's OWN title is kept ('Rüdlingerite, …, isostructural with Fianelite'; 'Desorite,
+    …, a New Phosphate Mineral Isotypic with Jamesite')."""
+    import unicodedata, difflib
+    def aa(s):                                   # accent- and mojibake-insensitive a–z key
+        s = ''.join(c for c in unicodedata.normalize('NFKD', s or '') if not unicodedata.combining(c))
+        return re.sub(r'[^a-z]', '', s.lower())
+    def same(a, b):                              # same species? prefix OR high similarity
+        a, b = aa(a), aa(b)
+        if not a or not b:
+            return False                         # a garbled/empty key -> can't confirm same
+        return a[:6] == b[:6] or difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
+    if not aa(own):
+        return False                            # no entry name to compare -> don't guess
+    pre = norm[max(0, rel_start - 100): rel_start]
+    cut = pre.rfind('. ')                        # stay within the current sentence / title
+    clause = pre[cut + 2:] if cut >= 0 else pre
+    for sm in re.finditer(r'[A-Za-zÀ-ɏ]{4,}(?:-?\([A-Za-z]+\))?', clause):
+        w = sm.group(0)
+        if not (w[0].isupper() and _MINERALISH.search(w)) or w.lower() in _CLASS_WORDS:
+            continue
+        if same(w, own) or same(w, partner):
+            return False                        # subject is this species (or the partner in a list) -> keep
+        return True                             # first subject mineral is a DIFFERENT species
+    return False                                # subject is a pronoun / generic -> keep
 
 def _docx_group_text(e):
     """The group/classification text stated in the docx 'IMA Classifications'
@@ -446,31 +488,41 @@ def check3_classification(e, text):
         if not has_struct:
             import unicodedata
             norm = unicodedata.normalize('NFC', flat)   # compose split diacritics (jo¨rg -> jörg)
-            rel = re.search(r'\b(isostructural|isotypic|homeotypic|isomorphous|structurally\s+related)'
-                            r'\s+(with|to)\s+(?:the\s+)?([A-Za-zÀ-ɏ]{4,})', norm, re.I)
-            if rel and _MINERALISH.search(rel.group(3)):
+            # A mineral can't be 'related to itself': the paper named THIS species as the
+            # anchor that OTHER minerals relate to ('… minerals … structurally related to
+            # keutschite, including agmantinite, …'), so the regex grabbed the entry's own
+            # name (I003806). Suppress when the partner is this species' own name (root).
+            own = re.sub(r'\s*-?\([a-z]+\)\s*$', '', (e.name or e.primary or '').lower())
+            own = re.sub(r'\s*-\d+[a-z]\s*$', '', own).strip()
+            # Redundant when the partner is this mineral's OWN group namesake: the docx (and
+            # Mindat) already classify it in the X Group, and group membership implies the
+            # isostructural relationship — so don't ask the reviewer to restate it
+            # (fluormacraeite is in the Paulkerrite Group; 'isostructural with paulkerrite'
+            # adds nothing). Only an OUT-of-group structural relation is worth recording.
+            grp_ctx = (_docx_group_text(e) + ' ' + mindat_gname).lower()
+            REL = re.compile(r'\b(isostructural|isotypic|homeotypic|isomorphous|structurally\s+related)'
+                             r'\s+(with|to)\s+(?:the\s+)?([A-Za-zÀ-ɏ]{4,})', re.I)
+            # Scan EVERY relation phrase, not just the first: the first occurrence is often in
+            # the reference list / a cited title, where it describes a DIFFERENT mineral rather
+            # than this species (tarutinoite: '… (2013) Terrywallaceite, AgPb(Sb,Bi)3S6, isotypic
+            # with gustavite, …'). Take the first phrase whose subject is genuinely this entry.
+            for rel in REL.finditer(norm):
+                if not _MINERALISH.search(rel.group(3)):
+                    continue
                 partner = rel.group(3).lower()
-                # A mineral can't be 'related to itself': the paper named THIS species as the
-                # anchor that OTHER minerals relate to ('… minerals … structurally related to
-                # keutschite, including agmantinite, …'), so the regex grabbed the entry's own
-                # name (I003806). Suppress when the partner is this species' own name (root).
-                own = re.sub(r'\s*-?\([a-z]+\)\s*$', '', (e.name or e.primary or '').lower())
-                own = re.sub(r'\s*-\d+[a-z]\s*$', '', own).strip()
                 self_ref = bool(own) and (partner == own or
                             (len(partner) >= 6 and len(own) >= 6 and
                              (partner.startswith(own) or own.startswith(partner))))
-                # Redundant when X is simply this mineral's OWN group namesake: the docx (and
-                # Mindat) already classify it in the X Group, and group membership implies the
-                # isostructural relationship — so don't ask the reviewer to restate it
-                # (fluormacraeite is in the Paulkerrite Group; 'isostructural with paulkerrite'
-                # adds nothing). Only an OUT-of-group structural relation is worth recording.
-                grp_ctx = (_docx_group_text(e) + ' ' + mindat_gname).lower()
-                if not self_ref and partner not in grp_ctx:
-                    phrase = '%s %s %s' % (rel.group(1).lower(), rel.group(2).lower(), rel.group(3))
-                    out.append(Finding('classification', 'info',
-                               "docx has no Structure/Isomorphism/Polymorphism comment, but the .pdf states "
-                               "'%s' — add a Structure comment recording the relationship." % phrase,
-                               rel.group(3)))   # evidence = the related mineral, so GUI '? look' can find the sentence
+                if self_ref or partner in grp_ctx:
+                    continue
+                if _relation_subject_is_other(norm, rel.start(), own, partner):
+                    continue                         # phrase is about a cited/other mineral, not this one
+                phrase = '%s %s %s' % (rel.group(1).lower(), rel.group(2).lower(), rel.group(3))
+                out.append(Finding('classification', 'info',
+                           "docx has no Structure/Isomorphism/Polymorphism comment, but the .pdf states "
+                           "'%s' — add a Structure comment recording the relationship." % phrase,
+                           rel.group(3)))   # evidence = the related mineral, so GUI '? look' can find the sentence
+                break
         # Named 'X group/family' prose is noisy (geological formations like 'Creek
         # group'), and Mindat already gives membership authoritatively — so only
         # fall back to it when Mindat did NOT find the species (a new/renamed
