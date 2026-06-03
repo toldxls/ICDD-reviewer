@@ -1219,7 +1219,13 @@ def _cif_name_ok(cif_data, e):
     if not cif_nm:
         return True   # no name in CIF — can't reject
     docx_nm = (e.name or e.primary or '')
-    def _words(s): return set(re.findall(r'[a-z]{4,}', s.lower()))
+    import unicodedata
+    def _words(s):
+        # strip accents first, else a diacritic splits the word and a legitimately-paired CIF
+        # is wrongly judged a different mineral and silently skipped (Ríosecoite vs 'riosecoite',
+        # Pabellóndepicaite vs 'pabellondepicaite').
+        s = ''.join(c for c in unicodedata.normalize('NFKD', s) if not unicodedata.combining(c))
+        return set(re.findall(r'[a-z]{4,}', s.lower()))
     return bool(_words(cif_nm) & _words(docx_nm))
 
 def _formula_atoms(s):

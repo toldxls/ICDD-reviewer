@@ -199,6 +199,11 @@ CASES = [
  # misleading 'Z mismatch' flag (e.g. I002904's Cd/Se CIF vs the As/Sc mineral)
  ("cif Z: chemistry-mismatched CIF -> note, not flag",
    lambda: [f.sev for f in X.check_cif(_stub_entry(4, 'As H4 O6 Sc'), {'Z': 8, 'formula': 'Cd H4 O6 Se', 'mineral_name': 'testite'})] == ['note']),
+ # _cif_name_ok must normalize accents, else a legitimately-paired CIF is silently skipped
+ ("cif name: accents normalized (Ríosecoite ~ riosecoite)", lambda: X._cif_name_ok(
+     {'mineral_name': 'riosecoite'}, type('S', (), {'name': 'Ríosecoite', 'primary': ''})) is True),
+ ("cif name: genuinely different mineral still rejected", lambda: X._cif_name_ok(
+     {'mineral_name': 'zincostottite'}, type('S', (), {'name': 'Anorthoyttrialite-(Y)', 'primary': ''})) is False),
  # --- indexing: overlapped reflections are packed per column (h='10',k='01',l='44' =
  #     (1,0,4)+(0,1,4)); split so a matching sub-line isn't a false 'disagrees' flag ---
  ("indexing: overlapped hkl splits per column",
