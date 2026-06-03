@@ -244,7 +244,7 @@ CASES = [
  ("I003747 clean (no rounding noise)",  lambda: not params('I003747')),
  ("I003698 clean (full-precision cell)", lambda: not params('I003698')),
  ("I003562 indexing flagged (>3%)",     lambda: bool(extras('I003562', 'indexing', 'flag'))),
- # weak reflections (I<20) only flag at >5%: the I=16 line 4.1440 [3.2%] is dropped,
+ # weak reflections (I≤35) only flag at >5%: the I=16 line 4.1440 [3.2%] is dropped,
  # the strong I=80 line 5.0790 [3.1%] is kept
  ("I003562 indexing keeps strong 5.0790",  lambda: bool(extras('I003562', 'indexing', substr='5.0790'))),
  ("I003562 indexing drops weak 4.1440",     lambda: not extras('I003562', 'indexing', substr='4.1440')),

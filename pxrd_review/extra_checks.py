@@ -792,17 +792,18 @@ def check9_indexing(e, text):
                 best = (rel, (hi, ki, li), d_calc)
         if best is None:
             continue
-        # Weak reflections (relative intensity <20) are low-leverage and noisier, so a
-        # small d-spacing discrepancy there isn't worth flagging — require >5% for them;
-        # strong (or unknown-intensity) lines keep the >3% bar.
+        # Weak reflections are low-leverage and noisier, so a small d-spacing discrepancy
+        # there isn't worth flagging — require >5% for them; only STRONG lines (I>35) keep
+        # the >3% bar (unknown-intensity lines stay strict). Boundary raised 20->35 so a
+        # borderline weak peak (e.g. I002439's I=29 at ~5%) isn't nagged.
         Iv = _val(I)
-        thresh = 0.05 if (Iv is not None and Iv < 20) else 0.03
+        thresh = 0.05 if (Iv is not None and Iv <= 35) else 0.03
         if best[0] > thresh:
             bad.append((d, '%d%d%d' % best[1], round(best[2], 4), round(best[0]*100, 1)))
     if bad:
         worst = sorted(bad, key=lambda x: -x[3])[:5]
         msg = ("%d of %d indexed reflections disagree with the stated cell "
-               "(d_obs vs d_calc; >3%%, or >5%% for weak lines I<20): %s" % (len(bad), n_checked,
+               "(d_obs vs d_calc; >3%%, or >5%% for weak lines I≤35): %s" % (len(bad), n_checked,
                '; '.join('%s (hkl %s)→%.4f [%.1f%%]' % (d, hkl, dc, p) for d, hkl, dc, p in worst)))
         large_esd = []
         for k in ('a', 'b', 'c'):
