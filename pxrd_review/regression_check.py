@@ -300,6 +300,10 @@ CASES = [
                     'refl': [('1.5','100','1','1','1'), ('3.0','50','2','2','2')]})) == []),
  ("reflection_geom: no wavelength -> no flag", lambda: X.check25_reflection_geometry(
      type('S', (), {'instr': {}, 'refl': [('0.7','11','1','1','1')]})) == []),
+ # a CALCULATED pattern is exempt — presentation λ (CuKα) + geometric d's + high 2θ are all fine
+ ("reflection_geom: calculated pattern exempt", lambda: X.check25_reflection_geometry(
+     type('S', (), {'instr': {'lam': '1.54056', 'anode': 'CuKa1', 'spacing_instr': 'Calculated'},
+                    'refl': [('0.7000','11','4','1','11'), ('2.5','100','1','1','1')]})) == []),
  # --- document-structure (section) tier: the cell belongs to its subsection's experiment ---
  ("section: powder subsection -> powder", lambda: (lambda s: C._section_mode(s, s.find('a =')))(
      'x-ray powder diffraction data were collected (table 2). the refined unit cell is a = 5.0 and b = 6.0') == 'powder'),

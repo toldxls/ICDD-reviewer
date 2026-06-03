@@ -1000,11 +1000,18 @@ def check24_optical_2v(e, text=None):
 # high-angle maximum is ~143 deg); higher implies a too-long stated wavelength.
 _2THETA_MAX = 160.0
 def check25_reflection_geometry(e, text=None):
-    """The reflection list must be geometrically consistent with the stated radiation. By Bragg,
-    a reflection cannot have d < λ/2 (no solution), and the implied 2θ_max should not approach
-    backscattering. A break means the radiation (anode/λ) or a d-spacing is wrong — e.g. a
-    short-λ / synchrotron pattern recorded as CuKα, or a mistyped d. Docx-internal (no PDF)."""
+    """For a MEASURED pattern, the reflection list must be geometrically consistent with the
+    stated radiation. By Bragg, a reflection cannot have d < λ/2 (no solution), and the implied
+    2θ_max should not approach backscattering. A break means the radiation (anode/λ) or a
+    d-spacing is wrong (e.g. a short-λ pattern recorded as CuKα, or a mistyped d). SKIPPED for a
+    CALCULATED pattern: there the λ is a presentation default (CuKα), the d-spacings are geometric
+    (independent of λ), and the calc legitimately extends to high 2θ — so neither limit applies.
+    Docx-internal (no PDF)."""
     out = []
+    si = (e.instr.get('spacing_instr') or '').strip().lower()
+    ii = (e.instr.get('intensity_instr') or '').strip().lower()
+    if si == 'calculated' or ii == 'calculated':
+        return out                            # calc pattern: λ presentational, d's geometric, high 2θ OK
     lam = _val(e.instr.get('lam'))
     ds = [_val(d) for d, I, h, k, l in (e.refl or []) if _val(d) and _val(d) > 0]
     if not lam or lam <= 0 or not ds:
