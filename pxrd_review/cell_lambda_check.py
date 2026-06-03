@@ -200,9 +200,13 @@ SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'singlecrys
 # determining — Rietveld is a powder method by definition, and SHELX/OLEX refine a
 # single-crystal STRUCTURE (no powder mode). Validated by mining the cue's context across
 # the paired PDFs. Excludes software that does BOTH (JANA, SUPERFLIP) and data-reduction
-# for the dual-use instruments (CrysAlis, SAINT); and short cues whose alnum-canon form
-# would collide with a common phrase/mineral ('unitcell'≈'unit cell', 'jade'≈'jadeite').
-# Matched separator-blind (see _instr_mode), so hyphen/space variants need not be listed.
+# for the dual-use instruments (CrysAlis, SAINT). For a cue whose bare alnum-canon form
+# collides with a common word/mineral, use a longer CHARACTERISTIC snippet that the
+# collider can't contain (these names are versioned/suffixed consistently across papers):
+# JADE→'jade2010'/'jadepro'/'jade9' (not in 'jadeite'); SIR→'sir2011'/… (versioned);
+# X'Celerator→'xceler' (not in 'accelerator'). Genuinely stuck (no distinguishing snippet,
+# so omitted): X'Pert ('expert' contains 'xpert'; empyrean covers PANalytical powder) and
+# 'unitcell' (canon == the phrase 'unit cell'). Matched separator-blind (see _instr_mode).
 POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd8 discover', 'empyrean',
                 'rietveld', 'le bail', 'pawley', 'gsas', 'expgui', 'fullprof', 'rietan', 'topas',
                 'dicvol', 'chekcell',
@@ -211,12 +215,18 @@ POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd
                 # 'xceler' = PANalytical X'Celerator; the X'-prefix makes it unique so it
                 # does NOT collide with 'accelerator' (bare 'celerator' would):
                 'profile fit', 'whole-pattern', 'highscore', 'lynxeye', 'mythen', 'xceler',
+                # MDI JADE (powder analysis/Rietveld) via its versioned forms — collision-safe
+                # vs 'jadeite' (96 powder contexts in the corpus, 0 in jadeite):
+                'jade2010', 'jadepro', 'jade9', 'mdijade',
                 # Osc2tab/Osc2xrd (Britvin) — derive a POWDER pattern from single-crystal
                 # area-detector frames; the OUTPUT is always a PXRD pattern (powder-method
                 # software, not a dual-use instrument). Used widely by the Russian new-
                 # mineral groups; found only by open-ended discovery, not a fixed cue list.
                 'osc2tab', 'osc2xrd']
-SINGLE_INSTR = ['four-circle', 'three-circle', 'kappa', 'shelx', 'olex', 'sadabs']
+SINGLE_INSTR = ['four-circle', 'three-circle', 'kappa', 'shelx', 'olex', 'sadabs',
+                # SIR direct-methods (single-crystal structure solution) — always versioned,
+                # so 'sir2011'/… are unique (bare 'sir' would collide):
+                'sir92', 'sir97', 'sir2004', 'sir2008', 'sir2011', 'sir2014', 'sir2019']
 
 # PDF line-break hyphenation splits a word as 'pow-\nder'; after a whitespace collapse
 # that reads 'pow- der', so a substring search for 'powder' (or 'single-crystal') misses

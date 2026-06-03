@@ -146,6 +146,9 @@ CASES = [
  # canon-substring collision guards: these common phrases/minerals must NOT read as a cue
  ("lexicon: 'unit cell' phrase is not a powder cue", lambda: C._instr_mode('the unit cell parameters were') is None),
  ("lexicon: 'jadeite' mineral is not a powder cue",  lambda: C._instr_mode('jadeite and omphacite inclusions') is None),
+ # collision-safe rescues of versioned/suffixed names (snippet the collider can't contain)
+ ("lexicon: JADE 2010 -> powder (not jadeite)", lambda: C._instr_mode('processed with MDI Jade 2010') == 'powder' and C._instr_mode('jadeite-bearing eclogite') is None),
+ ("lexicon: SIR2011 -> single (not bare 'sir')", lambda: C._instr_mode('solved by direct methods in sir2011') == 'single'),
  # full-corpus (438-pair) re-mine additions: profile/whole-pattern fitting + 1D powder
  # detectors (LynxEye/MYTHEN are NOT dual-use area detectors)
  ("lexicon: whole-pattern/profile fit -> powder", lambda: C._instr_mode('whole-pattern profile fit refinement') == 'powder'),
