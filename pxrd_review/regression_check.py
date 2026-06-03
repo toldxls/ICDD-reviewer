@@ -181,6 +181,12 @@ CASES = [
    lambda: (lambda s: C.classify_context(s, s.find('a =')))('refinement gave a = 3.09(1). calculated X-ray powder diffraction data are listed in Table S1.') != 'powder'),
  ("real 'refined from powder data' IS powder context",
    lambda: (lambda s: C.classify_context(s, s.find('a =')))('the unit-cell parameters refined from powder data are a = 5.24(1) and so on.') == 'powder'),
+ # a 'calculated PXRD' pattern (e.g. exported by a visualizer like Mercury/PLATON) is NOT a
+ # powder experiment — same as 'calculated powder' (I003398), now also covering the 'pxrd' word
+ ("calc-PXRD (Mercury export) is NOT powder context",
+   lambda: (lambda s: C.classify_context(s, s.find('a =')))('refined structure a = 7.21(2). A calculated PXRD pattern was generated in Mercury.') != 'powder'),
+ # pure visualizers are NOT mode cues (VESTA/Diamond/CrystalMaker/Mercury)
+ ("lexicon: visualizers are not mode cues", lambda: C._instr_mode('structure drawn in vesta and mercury') is None),
  # --- cell parsing (cubic / uniaxial / rounded-table) ---
  ("I003634 cubic cell matches",         lambda: cell_verdict('I003634') == 'match'),
  ("I003751 uniaxial: only c flagged",        lambda: params('I003751') == {'c'}),

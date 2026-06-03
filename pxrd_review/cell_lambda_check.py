@@ -248,12 +248,13 @@ def _norm_ctx(s):
     s = re.sub(r'([a-z])-\s+([a-z])', r'\1\2', s)
     return re.sub(r'\s+', ' ', s)
 
-# A 'calculated [X-ray] powder' pattern is SIMULATED from the (single-crystal) structure,
-# not a powder experiment, so it must not count as powder context (mirrors the 'calc'
-# sentence skip in radiation_context). Neutralise just that phrase — 'calculated and
-# observed powder profiles' (a genuine Rietveld fit) keeps its 'powder' since the 'and
-# observed' breaks the adjacency. Used by classify_context before the keyword search.
-_CALC_POWDER = re.compile(r'calc\w*\s+(?:x[- ]?ray\s+)?powder')
+# A 'calculated [X-ray] powder/PXRD' pattern is SIMULATED from the (single-crystal)
+# structure — e.g. exported by a visualizer like Mercury/PLATON — not a powder experiment,
+# so it must not count as powder context (mirrors the 'calc' sentence skip in
+# radiation_context). Covers both 'powder' and the 'pxrd' keyword. Neutralises just that
+# phrase — 'calculated and observed powder profiles' (a genuine Rietveld fit) keeps its
+# 'powder' since the 'and observed' breaks the adjacency. Used by classify_context first.
+_CALC_POWDER = re.compile(r'calc\w*\s+(?:x[- ]?ray\s+)?(?:powder|pxrd)')
 
 def _nearest(hay, keys):
     """smallest distance from the END of `hay` to any keyword (for preceding
