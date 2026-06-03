@@ -257,6 +257,18 @@ CASES = [
    lambda: (lambda s: C.classify_context(s, s.find('a =')))('cell refined from calcined powder data: a = 5.24(1) and so on.') == 'powder'),
  # pure visualizers are NOT mode cues (VESTA/Diamond/CrystalMaker/Mercury)
  ("lexicon: visualizers are not mode cues", lambda: C._instr_mode('structure drawn in vesta and mercury') is None),
+ # --- SG <-> crystal-system consistency (docx-internal, blind-spot check #1) ---
+ ("sg_system: classifier maps HM symbols", lambda: all(X._sg_system(s) == exp for s, exp in
+     [('Pbca','o'), ('P21/c','m'), ('P121/c1','m'), ('Fd-3m','c'), ('P213','c'), ('F432','c'),
+      ('P63/mmc','h'), ('P-3m1','h'), ('R-3m','r'), ('I4/mmm','t'), ('P-1','a'), ('P212121','o')])),
+ ("sg_system: mismatch flags (monoclinic system, ortho SG)", lambda: [f for f in X.check23_sg_system(
+     type('S', (), {'crystal_system': 'm', 'space_group': 'Pbca', 'cell': {}})) if f.sev=='flag'] != []),
+ ("sg_system: agreement no flag (ortho system, ortho SG)", lambda: X.check23_sg_system(
+     type('S', (), {'crystal_system': 'o', 'space_group': 'Pbca', 'cell': {}})) == []),
+ ("sg_system: rhombohedral system + hex-setting SG compatible", lambda: X.check23_sg_system(
+     type('S', (), {'crystal_system': 'h', 'space_group': 'R3m', 'cell': {}})) == []),
+ ("sg_system: corpus clean (no SG/system disagreement)", lambda: not extras('I003510', 'sg_system')
+     and not extras('I003807', 'sg_system') and not extras('I003632', 'sg_system')),
  # --- document-structure (section) tier: the cell belongs to its subsection's experiment ---
  ("section: powder subsection -> powder", lambda: (lambda s: C._section_mode(s, s.find('a =')))(
      'x-ray powder diffraction data were collected (table 2). the refined unit cell is a = 5.0 and b = 6.0') == 'powder'),

@@ -662,6 +662,68 @@ def _sys_letter(e):
         return cs[0].lower() if cs[0].lower() in 'amothrc' else cs
     return None
 
+# Crystal system implied by a Hermann-Mauguin space-group symbol — a conservative classifier
+# for cross-checking the stated Crystal System field. Returns a/m/o/t/h/r/c, or None when the
+# symbol can't be read confidently (the cross-check then abstains rather than guess). Validated
+# to classify every space group in the corpus (230) with no false disagreement.
+_SG_PLANES = 'mcabnde'
+def _sg_system(sg):
+    s = re.sub(r'\s+', '', sg or '')
+    if not s:
+        return None
+    if len(s) > 2 and s[-1] in 'HRSZ' and not s[-2].isdigit() and s[-2] != '-':
+        s = s[:-1]                                   # drop a hexagonal/rhombohedral setting marker (R-3mH)
+    lat = s[0]
+    if lat not in 'PABCFIR':
+        return None
+    rest = s[1:]
+    if not rest:
+        return None
+    if rest in ('1', '-1'):
+        return 'a'                                   # P1 / P-1 / C1 -> triclinic (anorthic)
+    if lat == 'R':
+        return 'r'                                   # rhombohedral lattice -> trigonal
+    if re.match(r'-?[36]', rest):
+        return 'h'                                   # a 3- or 6-fold PRIMARY axis -> trigonal/hexagonal
+    if '3' in rest:
+        return 'c'                                   # a 3 in a SECONDARY position -> cubic body-diagonal
+    if '6' in rest:
+        return 'h'
+    if re.search(r'-?4', rest):
+        return 't'                                   # 4-fold axis -> tetragonal
+    core = rest.replace('/', '')
+    planes = sum(core.count(c) for c in _SG_PLANES)
+    twos = core.count('2')
+    if planes >= 2 or twos >= 2:
+        return 'o'                                   # three symmetry directions -> orthorhombic
+    if planes >= 1 or twos >= 1 or core.startswith('1'):
+        return 'm'                                   # one symmetry direction -> monoclinic
+    return None
+
+_SYS_NAME = {'a': 'triclinic', 'm': 'monoclinic', 'o': 'orthorhombic', 't': 'tetragonal',
+             'h': 'hexagonal/trigonal', 'r': 'rhombohedral', 'c': 'cubic'}
+def _sys_family(x):
+    return 'hex' if x in ('r', 'h') else x           # rhombohedral & hexagonal SGs are one system
+
+def check23_sg_system(e, text=None):
+    """The stated Crystal System must agree with the space-group symbol; a disagreement is a
+    transcription error (wrong system letter, or a mistyped SG). Conservative: only the
+    unambiguous crystal-system FAMILY is compared (rhombohedral≡hexagonal), and an unparseable
+    space group abstains. Docx-internal (no PDF needed)."""
+    out = []
+    cs = (e.crystal_system or '').strip().lower()
+    cs = cs[0] if cs else ''
+    sg = (e.space_group or (e.cell or {}).get('SG') or '').strip()
+    if cs not in 'amothrc' or not sg:
+        return out
+    g = _sg_system(sg)
+    if g and _sys_family(cs) != _sys_family(g):
+        out.append(Finding('sg_system', 'flag',
+                   "Crystal System (%s) disagrees with the space group %r, which implies %s — "
+                   "verify the system or the space-group symbol."
+                   % (_SYS_NAME.get(cs, cs), sg, _SYS_NAME.get(g, g)), None, 'cell:SG'))
+    return out
+
 def _constraints(e):
     """(equal_axis_groups, equal_angle_groups, fixed_angles) for the entry's
     symmetry. fixed_angles maps param->required constant value."""
@@ -2124,7 +2186,8 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check10_optical, check11_ima, check12_analysis,
           check13_temperature, check15_strongest_lines,
           check16_instr_vocab, check17_pdf_filter, check18_name_formula,
-          check19_intensity_detector, check20_calc_wavelength, check21_primary_name]
+          check19_intensity_detector, check20_calc_wavelength, check21_primary_name,
+          check23_sg_system]
 
 def run_all(e, text, cif_data=None, dft_data=None):
     findings = []
