@@ -1008,6 +1008,11 @@ def parse_cif(cif_path):
                 if nm and nm != '?' and len(nm) > 2:
                     d.setdefault('mineral_name', nm)
                     break
+        m = re.search(r"_chemical_formula_sum\s+(?:'([^']+)'|(\S[^\n]*))", block)
+        if m:
+            f = (m.group(1) or m.group(2) or '').strip()
+            if f and f != '?':
+                d['formula'] = f
         return d
 
     # Split into data blocks; pick the one that has both Z and SG (structural block)
@@ -1053,6 +1058,16 @@ def _cif_name_ok(cif_data, e):
     def _words(s): return set(re.findall(r'[a-z]{4,}', s.lower()))
     return bool(_words(cif_nm) & _words(docx_nm))
 
+def _formula_atoms(s):
+    """{element: count(float)} from a formula string ('H2 Mo O4'/'Mo2 O8'/'Pb1.50 O4.50');
+    counts default to 1; fractional occupancies kept; charges/brackets/·nH2O ignored —
+    enough to reconcile Z across formula-unit conventions."""
+    d = {}
+    for el, n in re.findall(r'([A-Z][a-z]?)\s*(\d+(?:\.\d+)?)?', s or ''):
+        if el:
+            d[el] = d.get(el, 0.0) + (float(n) if n else 1.0)
+    return d
+
 def check_cif(e, cif_data):
     """Cross-check docx Z against the CIF, skipping obviously wrong CIF matches."""
     out = []
@@ -1066,9 +1081,22 @@ def check_cif(e, cif_data):
     docx_z = int(_val(docx_z_raw)) if _val(docx_z_raw) is not None else None
     cif_z = cif_data.get('Z')
     if docx_z is not None and cif_z is not None and cif_z > 1 and docx_z != cif_z:
-        out.append(Finding('cif', 'flag',
-                   "Z mismatch: docx Z=%d but CIF Z=%d" % (docx_z, cif_z),
-                   None, 'cell:Z'))
+        # The docx and CIF may use formula UNITS that differ by a multiple (e.g. docx
+        # MoO3·H2O vs CIF Mo2O8), so Z differs while the cell CONTENTS are identical.
+        # Reconcile via the DOMINANT framework cation (largest count, not O/H — it is fully
+        # occupied so it scales cleanly, unlike refined fractional substituents): same cell
+        # contents iff docx_Z·atoms == cif_Z·atoms for it. Flag only if it does NOT reconcile
+        # (or the CIF lacks that cation entirely — e.g. a wrong/different-mineral CIF).
+        da = _formula_atoms(e.formulas.get('Empirical') or e.formulas.get('Chemical') or '')
+        ca = _formula_atoms(cif_data.get('formula') or '')
+        cats = [el for el in da if el not in ('O', 'H')]
+        anchor = max(cats, key=lambda el: da[el]) if cats else None
+        reconciled = bool(anchor and ca.get(anchor)
+                          and abs(docx_z * da[anchor] - cif_z * ca[anchor]) < 0.5)
+        if not reconciled:
+            out.append(Finding('cif', 'flag',
+                       "Z mismatch: docx Z=%d but CIF Z=%d" % (docx_z, cif_z),
+                       None, 'cell:Z'))
     # Space group: CIF comparison is unreliable for polytypic minerals and
     # entries where the CIF represents a different structural variant.
     # The correct reference is the PDF for the specific phase described.

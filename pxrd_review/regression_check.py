@@ -16,6 +16,11 @@ import sys, os, glob
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import annotate_review as A
+from pxrd_review import extra_checks as X
+
+def _stub_entry(z, formula):   # 'testite' name so _cif_name_ok passes and the Z logic runs
+    return type('S', (), {'cell': {'Z': str(z)}, 'formulas': {'Empirical': formula},
+                          'name': 'testite', 'comments': {}})()
 
 FOLDER = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('PXRD_REGRESSION_DIR', '')
 if not FOLDER:
@@ -176,6 +181,15 @@ CASES = [
    lambda: set(C._id_keys('76264_I10126,I10499-I10500.pdf')) == {'I10126','I10499','I10500'}),
  ("pdf range: a true consecutive range still expands",
    lambda: set(C._id_keys('-60814_I000738-I000748.pdf')) == {'I%06d' % n for n in range(738, 749)}),
+ # --- cif Z-check: reconcile across formula-unit conventions (docx vs CIF formula differ by
+ #     a multiple, so Z differs while the cell CONTENTS match) — was an ~89% FP storm ---
+ ("formula atoms keep fractional occupancy", lambda: X._formula_atoms('Pb1.50 O4.50') == {'Pb': 1.5, 'O': 4.5}),
+ ("cif Z: MoO3·H2O Z=8 reconciles with Mo2O8 Z=4 (no flag)",
+   lambda: not X.check_cif(_stub_entry(8, 'H2 Mo O4'), {'Z': 4, 'formula': 'Mo2 O8', 'mineral_name': 'testite'})),
+ ("cif Z: fractional-occupancy CIF reconciles (Pb1.5 anchor, no flag)",
+   lambda: not X.check_cif(_stub_entry(24, 'O3 Pb Te'), {'Z': 16, 'formula': 'O4.50 Pb1.50 Te1.50', 'mineral_name': 'testite'})),
+ ("cif Z: genuine cation mismatch still flags",
+   lambda: bool(X.check_cif(_stub_entry(4, 'As H4 O6 Sc'), {'Z': 8, 'formula': 'Cd H4 O6 Se', 'mineral_name': 'testite'}))),
  # --- _norm_pdf font/glyph fixes (validated on the training-2 corpus) ---
  ("norm: þ -> + (charge mojibake)",   lambda: C._norm_pdf('Fe3þ and [4þ1]') == 'Fe3+ and [4+1]'),
  ("norm: spaced angstrom A ˚ -> Å",   lambda: 'Å' in C._norm_pdf('a = 5.93 A˚')),
