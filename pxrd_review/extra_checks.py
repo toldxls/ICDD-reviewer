@@ -854,6 +854,14 @@ def check11_ima(e, text):
     name_root = re.sub(r'-syn(thetic)?$', '', name_root).strip()
     if len(name_root) < 4:
         return out
+    # A REDEFINITION / re-investigation of an EXISTING mineral is not 'new' — its blank
+    # IMA-Number field is correct (the proposal is a redefinition, e.g. '22-F', not a new
+    # IMA number). Suppress only when the entry's OWN name is the OBJECT of the cue (right
+    # after it: 'redefinition of/for <name>') — NOT merely nearby, since a group paper may
+    # redefine a DIFFERENT related species while THIS one is new (e.g. 'redefinition of
+    # hiortdahlite' next to the new mineral moxuanxueite; donnayite-(Y) IS the redefined one).
+    if re.search(r'(?:redefin|re-?investigat|re-?examin|re-?stud)\w*\b[^.]{0,18}?' + re.escape(name_root), low):
+        return out
     is_new = False
     for cue in (r'new mineral', r'approved by the ima', r'approved by the commission on new min'):
         for m in re.finditer(cue, low):
@@ -862,8 +870,10 @@ def check11_ima(e, text):
                 continue
             # skip REFERENCE citations (a different 'new mineral' cited in the
             # bibliography): author-year '(YYYY)', newsletter, 'et al.', DOI, pages
-            wide = low[max(0, m.start() - 120): m.end() + 60]
-            if re.search(r'\(\d{4}\)|newsletter|et al|doi|\bpp\.|\d+\s*[-–]\s*\d+\.', wide):
+            wide = low[max(0, m.start() - 120): m.end() + 90]
+            if re.search(r'\(\d{4}\)|newsletter|et al|doi|\bpp\.|'
+                         r'\d+\s*[-–]\s*\d+\s*[.,]\s*(?:19|20)\d{2}|'   # <pages>, <year> citation tail
+                         r'\d+\s*[-–]\s*\d+\.', wide):
                 continue
             is_new = True; break
         if is_new:
