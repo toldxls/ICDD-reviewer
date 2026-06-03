@@ -267,6 +267,13 @@ CASES = [
  # --- optical sign (control-char glyphs must NOT be guessed) ---
  ("I003528 no optical-sign flag",       lambda: not extras('I003528', 'optical')),
  ("I003633 no optical-sign flag",       lambda: not extras('I003633', 'optical')),
+ # multi-mineral comparison table (several distinct signs) -> can't attribute -> no flag
+ ("optical: multi-mineral table doesn't flag", lambda: X.check10_optical(
+     type('S', (), {'comments': {'Optical Data': 'Sign=-'}}),
+     'Optical class biaxial (+) biaxial (+) biaxial (-) biaxial (+) biaxial (-) biaxial (-)') == []),
+ ("optical: single consistent sign still flags", lambda: X.check10_optical(
+     type('S', (), {'comments': {'Optical Data': 'Sign=+'}}),
+     'the mineral is optically biaxial (-), 2V = 50') != []),
  # --- IMA number (new mineral vs reinvestigation/reference) ---
  ("I003633 IMA flag (new mineral)",     lambda: bool(extras('I003633', 'ima'))),
  ("I003688 IMA flag (new mineral)",    lambda: bool(extras('I003688', 'ima'))),

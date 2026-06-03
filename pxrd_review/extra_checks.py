@@ -835,25 +835,23 @@ def check10_optical(e, text):
     # can't be read cleanly we leave it undetermined and do not flag.
     norm = re.sub(r'[−–—]', '-', text)
 
-    # scan PDF for optical sign phrases; stop at the first unambiguous statement
-    sign_pats = [
-        (r'optically\s+(?:uniaxial|biaxial)\s*[\(]?\s*([+-])', None),
-        (r'(?:uniaxial|biaxial)\s*[\(]?\s*([+-])',              None),
-        (r'optically\s+(positive|negative)',     {'positive': '+', 'negative': '-'}),
-        (r'\bsign\s*[=:]\s*([+-])',             None),
-        (r'\b(positive|negative)\s+(?:sign|optical)', {'positive': '+', 'negative': '-'}),
-    ]
-    pdf_sign = None
-    for patt, word_map in sign_pats:
-        pm = re.search(patt, norm, re.I)
-        if pm:
-            raw = pm.group(1)
-            if word_map:
-                pdf_sign = word_map.get(raw.lower())
-            elif raw in ('+', '-'):
-                pdf_sign = raw
-            if pdf_sign:
+    # Collect EVERY optical sign the paper states. A multi-mineral comparison table lists
+    # several ('Optical class biaxial (+) biaxial (+) biaxial (–) …'), so a single grabbed
+    # sign may belong to a DIFFERENT mineral — if the paper gives more than one distinct
+    # sign we cannot attribute it to THIS mineral, so leave it undetermined (no flag).
+    signs = set()
+    for pm in re.finditer(r'(?:optically\s+)?(?:uniaxial|biaxial)\s*[\(]?\s*([+-])', norm, re.I):
+        signs.add(pm.group(1))
+    for pm in re.finditer(r'optically\s+(positive|negative)', norm, re.I):
+        signs.add('+' if pm.group(1).lower() == 'positive' else '-')
+    if not signs:                                    # no biaxial/optically form — weaker fallbacks
+        for patt, wm in ((r'\bsign\s*[=:]\s*([+-])', None),
+                         (r'\b(positive|negative)\s+(?:sign|optical)', {'positive': '+', 'negative': '-'})):
+            pm = re.search(patt, norm, re.I)
+            if pm:
+                signs.add(wm[pm.group(1).lower()] if wm else pm.group(1))
                 break
+    pdf_sign = next(iter(signs)) if len(signs) == 1 else None   # one distinct sign, or undetermined
 
     if pdf_sign and pdf_sign != docx_sign:
         out.append(Finding('optical', 'flag',
