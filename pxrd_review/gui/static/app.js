@@ -97,9 +97,13 @@ async function openEntry(key) {
   renderFindings();
   renderDocx();
   renderMindat();
-  // default PDF focus = the cell evidence (full-page scroll, jumps to the cell page)
-  S.pdfMode = 'page'; S.pdfZoom = 1;
-  focusFinding('cell');
+  // open the PDF at the TOP of page 1 — a predictable starting point (not a heuristic
+  // 'evidence page' that felt random); the reviewer drives from there via findings / search
+  S.pdfMode = 'page'; S.pdfZoom = 1; S.pdfPage = 0;
+  S.pdfTerms = []; S.pdfHits = []; S.pdfQuery = ''; S.hitIdx = -1; S.focusKey = 'cell';
+  $('#pdf-hits').textContent = '';
+  document.querySelectorAll('.finding').forEach(d => d.classList.toggle('focus', d.getAttribute('data-fkey') === 'cell'));
+  renderPdf('', '', []);
   renderList();
 }
 
@@ -245,10 +249,10 @@ function triageControls(fkey, t) {
     class: 'tbtn ' + v + (t.verdict === v ? ' on' : ''),
     onclick: ev => {
       ev.stopPropagation();
-      // '? look' ALWAYS zooms the PDF to this finding's evidence (not gated on the
-      // toggle state) — and zoom first, before the list re-render, so the first
-      // click takes effect immediately.
-      if (v === 'look') zoomToHighlight(fkey);
+      // '? look' ALWAYS scrolls the PDF to this finding's evidence (not gated on the
+      // toggle state) — and locate first, before the list re-render, so the first
+      // click takes effect immediately. Lands in the live page + flashes the hit.
+      if (v === 'look') lookInPage(fkey);
       t.verdict = (t.verdict === v ? null : v);
       saveTriage(); renderFindings();
     }
@@ -382,6 +386,42 @@ async function zoomToHighlight(fkey) {
   S.pdfHits = []; S.pdfQuery = ''; S.hitIdx = -1; $('#pdf-hits').textContent = '';   // not a search context
   S.pdfTerms = t.terms.slice(0, 20); S.pdfPage = page; S.pdfMode = 'region'; S.pdfZoom = 1;
   renderPdf(t.snippet, t.label, S.pdfTerms);
+}
+
+// '? look' — land on the finding's evidence IN THE LIVE, scrollable page (scroll + flash) at a
+// readable zoom, instead of a dead-end tight crop. Locates every occurrence of the finding's
+// terms so the ‹ › stepper can walk them; lands on the page where they cluster. Repeated '? look'
+// clicks still cycle a multi-group finding's look-groups (via lookStep).
+async function lookInPage(fkey) {
+  S.focusKey = fkey;
+  const step = S.lookStep[fkey] || 0;
+  const t = termsFor(fkey, step);
+  if (!S.a.pdf || !t.terms.length) { focusFinding(fkey); return; }
+  S.lookStep[fkey] = step + 1;
+  S.lookLabel = t.label || '';
+  S.pdfTerms = t.terms.slice(0, 20);
+  S.pdfMode = 'page'; S.pdfZoom = 1.5;          // moderate zoom — readable but still navigable
+  let hits = [], sizes = {};
+  try {
+    const probe = t.terms.slice(0, 8);
+    const res = await Promise.all(probe.map(term =>
+      fetch(`/api/pdf/${enc(S.a.key)}/search?q=${enc(term)}`).then(x => x.json()).catch(() => ({ hits: [], sizes: {} }))));
+    for (const r of res) { for (const h of (r.hits || [])) hits.push(h); Object.assign(sizes, r.sizes || {}); }
+  } catch (e) { /* fall through to evidence page */ }
+  if (!hits.length) {                            // terms didn't match -> just open the evidence page
+    S.pdfHits = []; S.hitIdx = -1; S.pdfQuery = ''; S.pdfPage = t.page; $('#pdf-hits').textContent = '';
+    renderPdf(t.snippet, t.label, S.pdfTerms); return;
+  }
+  const per = {}; for (const h of hits) per[h.page] = (per[h.page] || 0) + 1;
+  const page = +Object.keys(per).sort((a, b) => per[b] - per[a])[0];   // cluster page
+  const seen = new Set();
+  hits = hits.filter(h => { const k = h.page + ':' + h.rect.join(','); if (seen.has(k)) return false; seen.add(k); return true; });
+  hits.sort((a, b) => a.page - b.page || a.rect[1] - b.rect[1]);       // reading order
+  S.pdfHits = hits; S.pdfSizes = sizes; S.hitIdx = -1; S.pdfQuery = ''; S.pdfPage = page;
+  renderPdf(t.snippet, t.label, S.pdfTerms);     // page stack with the terms highlighted
+  renderHitNav();
+  const landIdx = hits.findIndex(h => h.page === page);
+  requestAnimationFrame(() => gotoHit(landIdx >= 0 ? landIdx : 0));
 }
 
 // ---- pdf pane --------------------------------------------------------------
@@ -594,7 +634,9 @@ function scrollToHit(page, rect) {
       setTimeout(() => fb.remove(), 1800);
       const hitTop = (sr.top - vr.top) + view.scrollTop + (rect[1] / hh) * sr.height;
       const hitH = ((rect[3] - rect[1]) / hh) * sr.height;
-      view.scrollTo({ top: Math.max(0, hitTop - view.clientHeight / 2 + hitH / 2), behavior: 'smooth' });
+      const hitCx = (sr.left - vr.left) + view.scrollLeft + ((rect[0] + rect[2]) / 2 / w) * sr.width;
+      view.scrollTo({ top: Math.max(0, hitTop - view.clientHeight / 2 + hitH / 2),
+                      left: Math.max(0, hitCx - view.clientWidth / 2), behavior: 'smooth' });   // centre both axes (matters when zoomed)
     } else {
       slot.scrollIntoView({ block: 'center' });
     }
