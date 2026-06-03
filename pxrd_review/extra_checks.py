@@ -507,9 +507,14 @@ def check4_calculated(e, text):
         #   - "theoretical pattern"                    → comparison reference
         #   - "calculated/refined FROM (the) powder data", "indexing of powder"
         #     → the cell was DERIVED from measured powder (pattern is measured)
+        #   - "collected (on a diffractometer)"        → a measured pattern exists
+        #   - a Rietveld / unit-cell refinement of the pattern, or a table with measured
+        #     columns (Iobs/dobs/Imeas/dmeas) → the 'calc' is the dcalc/Icalc comparison
+        #     column (or d back-calculated from the refined cell), NOT a structure simulation
         _MEASURED = re.compile(
-            r'observed|experiment|measured|\bmatch|\bfits?\b|agreement|consistent\s+with'
-            r'|\btheoretical\b|from\s+(?:the\s+)?powder|refined\s+from\s+powder|indexing\s+of',
+            r'observed|experiment|measured|collected|\bmatch|\bfits?\b|agreement|consistent\s+with'
+            r'|\btheoretical\b|from\s+(?:the\s+)?powder|refined\s+from\s+powder|indexing\s+of'
+            r'|rietveld|\b[id]\s?obs\b|\b[id]\s?meas\b',
             re.I)
         sents = [s for s in sents if re.search(r'powder|pxrd|x-ray diffraction pattern|diffraction pattern', s.lower())
                  and re.search(r'structure|single-crystal|cif|refinement|atomic', s.lower())

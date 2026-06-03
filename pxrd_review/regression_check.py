@@ -66,6 +66,13 @@ CASES = [
  ("I003448 not flagged 'calculated'",        lambda: not extras('I003448', 'calculated', 'flag')),
  ("I003563 not 'calculated'",      lambda: not extras('I003563', 'calculated', 'flag')),
  ("I003815 not 'calculated'",          lambda: not extras('I003815', 'calculated', 'flag')),
+ # 'dcalc from a Rietveld unit-cell refinement' / measured Iobs/Imeas table = MEASURED pattern
+ ("calculated: Rietveld unit-cell dcalc not flagged", lambda: X.check4_calculated(
+     type('S', (), {'instr': {}, 'name': 'testite', 'primary': ''}),
+     'Calculated from PXRD Rietveld unit cell refinement with a = 9.00, b = 9.01 from the structure.') == []),
+ ("calculated: real structure-simulated pattern still flags", lambda: [f for f in X.check4_calculated(
+     type('S', (), {'instr': {}, 'name': 'testite', 'primary': ''}),
+     'The powder X-ray diffraction pattern was calculated from the single-crystal structure model.') if f.sev == 'flag'] != []),
  # --- radiation ---
  ("O002127 radiation OK (CuK found)",  lambda: not lam_flag('O002127')),
  ("I003815 radiation NOT flagged",     lambda: not lam_flag('I003815')),
