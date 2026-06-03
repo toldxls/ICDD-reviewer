@@ -1567,20 +1567,33 @@ def check15_strongest_lines(e, text):
     out = []
     if not e.refl or not text:
         return out
-    # extract the top d-spacing (I=100) from the PDF "strongest lines" passage
-    # common patterns: "3.276 [100]", "d=3.276 I=100", "3.276(100)"
+    # Prefer the AUTHORITATIVE prose statement: "strongest lines in the powder diffraction
+    # pattern are (d Å, I %, hkl): 4.49, 31, (110); …; 2.583, 100, (200)" — this is the entry's
+    # OWN pattern. A multi-mineral / observed-vs-calculated comparison TABLE has several columns
+    # that each carry an I=100, so a bare 'd(100)' grab can land on the WRONG column (e.g.
+    # I003264: the table's 3.174(100) is a different phase; kreiterite's I=100 line is 2.583).
     pdf_100 = None
-    for patt in [
-        r'([\d]+\.[\d]{2,4})\s*[(\[{/]\s*100\s*[)\]/}]',
-        r'd\s*=\s*([\d]+\.[\d]{2,4})[^\n]{0,20}I\s*=\s*100',
-        r'100\.0?\s*[(\[/]\s*([\d]+\.[\d]{2,4})',
-    ]:
-        m = re.search(patt, text, re.I)
-        if m:
-            v = float(m.group(1))
-            if 0.5 < v < 15.0:
-                pdf_100 = v
-                break
+    ms = re.search(r'strongest\s+lines\b.{0,140}?:\s*(.{0,400})', text, re.I | re.S)
+    if ms:
+        m100 = re.search(r'(\d+\.\d{2,4})\s*[,(\[]\s*100(?:\.0)?\b', ms.group(1))
+        if m100 and 0.5 < float(m100.group(1)) < 15.0:
+            pdf_100 = float(m100.group(1))
+    if pdf_100 is None:
+        # No prose list — fall back to a bracketed 'd(100)' grab, but ONLY when unambiguous.
+        # If several DISTINCT d-values carry I=100 (a multi-column comparison table) we cannot
+        # attribute one to THIS entry, so we stay silent rather than guess a column.
+        hits = set()
+        for patt in [
+            r'([\d]+\.[\d]{2,4})\s*[(\[{/]\s*100\s*[)\]/}]',
+            r'd\s*=\s*([\d]+\.[\d]{2,4})[^\n]{0,20}I\s*=\s*100',
+            r'100\.0?\s*[(\[/]\s*([\d]+\.[\d]{2,4})',
+        ]:
+            for m in re.finditer(patt, text, re.I):
+                v = float(m.group(1))
+                if 0.5 < v < 15.0:
+                    hits.add(round(v, 3))
+        if len(hits) == 1:
+            pdf_100 = hits.pop()
     if pdf_100 is None:
         return out
     # check if this d-spacing appears in the docx reflection list (within 1%)

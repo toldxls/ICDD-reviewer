@@ -281,6 +281,14 @@ CASES = [
  ("optical: single consistent sign still flags", lambda: X.check10_optical(
      type('S', (), {'comments': {'Optical Data': 'Sign=+'}}),
      'the mineral is optically biaxial (-), 2V = 50') != []),
+ # strongest line: use the entry's prose list, not a wrong column of a comparison table
+ ("strongest_lines: prose I=100 beats comparison-table column", lambda: X.check15_strongest_lines(
+     type('S', (), {'refl': [('2.583', '100', '2', '0', '0'), ('3.20', '20', '1', '1', '0')]}),
+     'table dmeas(I) 3.20(20) 3.174(100) 3.00(34). The strongest lines in the powder '
+     'diffraction pattern are (d A, I %, hkl): 4.49, 31, (110); 2.583, 100, (200).') == []),
+ ("strongest_lines: genuinely missing I=100 line still flags", lambda: X.check15_strongest_lines(
+     type('S', (), {'refl': [('3.20', '20', '1', '1', '0')]}),
+     'The strongest lines (d A, I %, hkl): 4.49, 31, (110); 2.583, 100, (200).') != []),
  # --- IMA number (new mineral vs reinvestigation/reference) ---
  ("I003633 IMA flag (new mineral)",     lambda: bool(extras('I003633', 'ima'))),
  ("I003688 IMA flag (new mineral)",    lambda: bool(extras('I003688', 'ima'))),
