@@ -168,6 +168,14 @@ CASES = [
  ("id: 7-digit run is not an id", lambda: C.entry_id('scan_I1234567.tif') is None),
  ("id: lowercase prefix normalised", lambda: C.entry_id('i11397(Grimmite).docx') == 'I11397'),
  ("id: lowercase i in a word is not an id", lambda: C.entry_id('doi10665.pdf') is None),
+ # pdf range pairing: a hyphen 'A-B' expands ONLY its adjacent pair, never ids[0]..ids[-1]
+ # (filenames carry unrelated comma/underscore ids) — guards the 550-id overshoot bug
+ ("pdf range: A-B plus extra id does not overshoot",
+   lambda: set(C._id_keys('2226_I001146-I001147_I001695.pdf')) == {'I001146','I001147','I001695'}),
+ ("pdf range: comma id plus range",
+   lambda: set(C._id_keys('76264_I10126,I10499-I10500.pdf')) == {'I10126','I10499','I10500'}),
+ ("pdf range: a true consecutive range still expands",
+   lambda: set(C._id_keys('-60814_I000738-I000748.pdf')) == {'I%06d' % n for n in range(738, 749)}),
  # --- _norm_pdf font/glyph fixes (validated on the training-2 corpus) ---
  ("norm: þ -> + (charge mojibake)",   lambda: C._norm_pdf('Fe3þ and [4þ1]') == 'Fe3+ and [4+1]'),
  ("norm: spaced angstrom A ˚ -> Å",   lambda: 'Å' in C._norm_pdf('a = 5.93 A˚')),

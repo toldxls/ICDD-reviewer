@@ -809,6 +809,22 @@ ID_RE = r'(?<![A-Za-z0-9])([IOio])(\d{5,6})(?!\d)'
 def _mk_key(pre, num):
     return pre.upper() + num
 
+# A hyphenated 'A-B' in a filename is a CONSECUTIVE-id range (one paper covering entries
+# A..B). Expand ONLY the id-pair ADJACENT to the '-', never ids[0]..ids[-1]: filenames also
+# carry unrelated comma/underscore-joined ids ('I10126,I10499-I10500', 'I001146-I001147_
+# I001695'), and first-to-last expansion overshot by hundreds (one supp file claimed 550 ids).
+_ID_RANGE = re.compile(ID_RE + r'\s*-\s*' + ID_RE)
+
+def _id_keys(name):
+    """Entry-id keys for a file NAME: every individually-named id, plus each true 'A-B'
+    hyphen range expanded over its adjacent pair only (same prefix, ascending, span capped)."""
+    keys = [_mk_key(pre, num) for pre, num in re.findall(ID_RE, name)]
+    for ap, an, bp, bn in _ID_RANGE.findall(name):
+        if ap.upper() == bp.upper() and 0 < int(bn) - int(an) <= 20:
+            w = len(an)
+            keys += ['%s%0*d' % (ap.upper(), w, n) for n in range(int(an), int(bn) + 1)]
+    return list(dict.fromkeys(keys))
+
 def _is_supp(name):
     """True for supplementary / table PDFs (…_Supp, _Supp1, _TableS1, …). The
     primary article PDF carries the unit cell; supplementary files usually
@@ -818,15 +834,7 @@ def _is_supp(name):
 def pdf_index(folder):
     cand = {}                                        # id -> [paths]
     for p in glob.glob(os.path.join(folder, '**', '*.pdf'), recursive=True):
-        name = os.path.basename(p)
-        ids = re.findall(ID_RE, name)
-        if not ids: continue
-        if len(ids) >= 2 and '-' in name:            # range-named PDF, e.g. Innnnnn-Innnnnn.pdf
-            pre = ids[0][0].upper(); w = len(ids[0][1])   # preserve the source id width (5 or 6)
-            keys = ['%s%0*d' % (pre, w, n) for n in range(int(ids[0][1]), int(ids[-1][1]) + 1)]
-        else:
-            keys = [_mk_key(pre, num) for pre, num in ids]
-        for k in keys: cand.setdefault(k, []).append(p)
+        for k in _id_keys(os.path.basename(p)): cand.setdefault(k, []).append(p)
     # prefer the primary article PDF (no supp/table marker), then the shorter name
     return {k: sorted(ps, key=lambda p: (_is_supp(os.path.basename(p)), len(os.path.basename(p))))[0]
             for k, ps in cand.items()}
