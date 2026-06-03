@@ -269,6 +269,18 @@ CASES = [
      type('S', (), {'crystal_system': 'h', 'space_group': 'R3m', 'cell': {}})) == []),
  ("sg_system: corpus clean (no SG/system disagreement)", lambda: not extras('I003510', 'sg_system')
      and not extras('I003807', 'sg_system') and not extras('I003632', 'sg_system')),
+ # --- optical 2V / sign vs refractive indices (docx-internal, blind-spot check #3) ---
+ # I002959 (sulfatoredmondite): β=1.850 sits next to γ=1.860 (far from α=1.780) -> optically
+ # NEGATIVE, and 2Vcalc≈40 matches the docx 2V=40, but the docx says Sign=+ (real sign error)
+ ("optical_2v: sign contradicting the indices flags", lambda: [f for f in X.check24_optical_2v(
+     type('S', (), {'comments': {'Optical Data': 'A=1.780(5), B=1.850(calc), Q=1.860(calc), Sign=+, 2V=40(3)'}}))
+     if f.sev=='flag'] != []),
+ ("optical_2v: gross 2V gap flags", lambda: [f for f in X.check24_optical_2v(
+     type('S', (), {'comments': {'Optical Data': 'A=1.540, B=1.545, Q=1.600, Sign=+, 2V=80'}})) if f.sev=='flag'] != []),
+ ("optical_2v: near-uniaxial (β≈γ) stays silent", lambda: X.check24_optical_2v(
+     type('S', (), {'comments': {'Optical Data': 'A=1.795, B=1.820, Q=1.820, Sign=+, 2V=80'}})) == []),
+ ("optical_2v: consistent sign+2V no flag", lambda: X.check24_optical_2v(
+     type('S', (), {'comments': {'Optical Data': 'A=1.540, B=1.545, Q=1.600, Sign=+, 2V=35'}})) == []),
  # --- document-structure (section) tier: the cell belongs to its subsection's experiment ---
  ("section: powder subsection -> powder", lambda: (lambda s: C._section_mode(s, s.find('a =')))(
      'x-ray powder diffraction data were collected (table 2). the refined unit cell is a = 5.0 and b = 6.0') == 'powder'),

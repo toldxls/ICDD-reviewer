@@ -942,7 +942,58 @@ def check10_optical(e, text):
     if pdf_sign and pdf_sign != docx_sign:
         out.append(Finding('optical', 'flag',
                    "Optical sign mismatch: docx Sign=%s but .pdf indicates Sign=%s"
-                   % (docx_sign, pdf_sign), None, 'name'))
+                   % (docx_sign, pdf_sign), None, 'optical'))
+    return out
+
+def check24_optical_2v(e, text=None):
+    """The optic SIGN and 2V are fixed by the three refractive indices (α<β<γ):
+    cos²Vz = (1/β²−1/γ²)/(1/α²−1/γ²). Cross-check the docx Sign/2V against the indices — but
+    ONLY for robustly-biaxial entries (β well clear of α and γ), because near a uniaxial limit
+    2V swings wildly with 3rd-decimal rounding, and measured-vs-calculated 2V legitimately
+    differs by 10-20°. Conservative: flag a sign that contradicts the indices, or a gross
+    (>30°) 2V gap — egregious transcription slips only. Docx-internal (no PDF needed)."""
+    out = []
+    od = e.comments.get('Optical Data') or ''
+    if not od:
+        return out
+    def _f(m):
+        try:
+            return float(m.group(1).rstrip('.')) if m else None
+        except ValueError:
+            return None
+    a = _f(re.search(r'\bA\s*=\s*([\d.]+)', od))
+    b = _f(re.search(r'\bB\s*=\s*([\d.]+)', od))
+    g = _f(re.search(r'\bQ\s*=\s*([\d.]+)', od))
+    ms = re.search(r'Sign\s*=\s*([+-])', od)
+    sign = ms.group(1) if ms else None
+    v2 = _f(re.search(r'2V\s*=\s*([\d.]+)', od))
+    if not (a and b and g) or not (a <= b <= g):
+        return out
+    # robustness gate: β clearly separated from α and γ — else 2V is rounding-sensitive (a
+    # near-uniaxial cell) and both sign and magnitude become meaningless.
+    if (g - a) < 0.008 or min(b - a, g - b) < 0.004:
+        return out
+    den = 1 / a**2 - 1 / g**2
+    if den <= 0:
+        return out
+    r = max(0.0, min(1.0, (1 / b**2 - 1 / g**2) / den))
+    twoVz = 2 * math.degrees(math.acos(math.sqrt(r)))
+    calc_sign = '+' if twoVz < 90 else '-'
+    exp2V = twoVz if twoVz <= 90 else 180 - twoVz          # reported 2V = the acute bisectrix angle
+    # (a) optic sign contradicts the indices — only when they put 2V clearly off 90° (else the
+    #     bisectrix is ambiguous and either sign is defensible).
+    if sign and abs(twoVz - 90) >= 18 and calc_sign != sign:
+        out.append(Finding('optical', 'flag',
+                   "Optic Sign=%s, but the refractive indices (A=%g B=%g Q=%g) describe an optically "
+                   "%s crystal (2V≈%.0f°) — verify the sign or the indices."
+                   % (sign, a, b, g, 'positive' if calc_sign == '+' else 'negative', exp2V),
+                   None, 'optical'))
+    # (b) gross 2V gap, well beyond measurement / obs-vs-calc variance
+    if v2 is not None and abs(exp2V - v2) > 30:
+        out.append(Finding('optical', 'flag',
+                   "2V=%g°, but the refractive indices (A=%g B=%g Q=%g) give 2V≈%.0f° (Δ%.0f°) — "
+                   "verify the 2V or the indices." % (v2, a, b, g, exp2V, abs(exp2V - v2)),
+                   None, 'optical'))
     return out
 
 # ----------------------------------------------------------------------------- 11. IMA number missing on a new mineral
@@ -2196,7 +2247,7 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check13_temperature, check15_strongest_lines,
           check16_instr_vocab, check17_pdf_filter, check18_name_formula,
           check19_intensity_detector, check20_calc_wavelength, check21_primary_name,
-          check23_sg_system]
+          check23_sg_system, check24_optical_2v]
 
 def run_all(e, text, cif_data=None, dft_data=None):
     findings = []

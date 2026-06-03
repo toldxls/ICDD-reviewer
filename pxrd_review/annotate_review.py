@@ -278,6 +278,8 @@ def _anchor_cell(doc, ac_row, anchor):
     if anchor == 'filter':
         return _find_value(doc, lambda t: t.strip().lower().startswith('filter')
                            and 'type' not in t.strip().lower())
+    if anchor == 'optical':
+        return _find_value(doc, lambda t: t.strip() == 'Optical Data')
     if anchor == 'name':
         return _find_value(doc, lambda t: t.strip() == 'Mineral')
     if anchor == 'primary':
