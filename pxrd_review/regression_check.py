@@ -257,6 +257,17 @@ CASES = [
    lambda: (lambda s: C.classify_context(s, s.find('a =')))('cell refined from calcined powder data: a = 5.24(1) and so on.') == 'powder'),
  # pure visualizers are NOT mode cues (VESTA/Diamond/CrystalMaker/Mercury)
  ("lexicon: visualizers are not mode cues", lambda: C._instr_mode('structure drawn in vesta and mercury') is None),
+ # --- document-structure (section) tier: the cell belongs to its subsection's experiment ---
+ ("section: powder subsection -> powder", lambda: (lambda s: C._section_mode(s, s.find('a =')))(
+     'x-ray powder diffraction data were collected (table 2). the refined unit cell is a = 5.0 and b = 6.0') == 'powder'),
+ ("section: single-crystal subsection -> single", lambda: (lambda s: C._section_mode(s, s.find('a =')))(
+     'single-crystal x-ray diffraction was carried out. the cell is a = 5.0') == 'single'),
+ ("section: umbrella heading abstains (None)", lambda: (lambda s: C._section_mode(s, s.find('a =')))(
+     'crystal structure determination was performed. the cell is a = 5.0') is None),
+ ("section: incidental 'single-crystal X' doesn't beat a powder subsection", lambda: (lambda s: C._section_mode(s, s.find('a =')))(
+     'single-crystal fragments were unavailable. x-ray powder diffraction gave a = 5.0') == 'powder'),
+ ("section tier wired into classify_context", lambda: (lambda s: C.classify_context(s, s.find('a =')))(
+     'single-crystal fragments were unavailable. x-ray powder diffraction gave a = 5.0') == 'powder'),
  # --- cell parsing (cubic / uniaxial / rounded-table) ---
  ("I003634 cubic cell matches",         lambda: cell_verdict('I003634') == 'match'),
  ("I003751 uniaxial: only c flagged",        lambda: params('I003751') == {'c'}),

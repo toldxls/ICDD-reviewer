@@ -262,6 +262,33 @@ _CALC_POWDER = re.compile(r'(?:calculat|simulat)\w*\s+(?:x[- ]?ray\s+)?(?:powder
 # even when 'single-crystal' appears nearby as the STARTING-POINT or comparison reference.
 _POWDER_REFINE = re.compile(r'le ?bail|rietveld|pawley|whole[- ]?pattern|profile[- ]?fit', re.I)
 
+# DOCUMENT-STRUCTURE signal. In a new-mineral paper each diffraction experiment gets its own
+# subsection, opened by an experiment-DEFINING phrase ('powder X-ray diffraction', 'single-
+# crystal X-ray diffraction'). A cell belongs to the experiment whose subsection it sits in —
+# a stronger cue than nearby keyword proximity, which a figure caption / table / page break, or
+# a one-line 'cf. the single-crystal value' comparison, can mislead (the I002373/I002960 class).
+# We look farther back than the 750-char keyword window for the NEAREST such phrase. The generic
+# umbrella headings ('Crystallography', 'Crystal structure') are CONTAINERS that hold BOTH
+# subsections, so they deliberately don't vote. The phrases are SPECIFIC (mode + 'diffraction'/
+# 'x-ray'/…), never bare 'powder'/'single-crystal', so an incidental mention in running prose
+# ('a single-crystal was mounted') doesn't trip it. Reach is bounded to ~one page so a mid-paper
+# cell never inherits an abstract mention.
+POWDER_SEC = re.compile(r'(?:x-?ray\s+powder|powder\s+x-?ray)\s+diffraction'
+                        r'|powder\s+diffraction\s+(?:data|pattern|study)')
+SINGLE_SEC = re.compile(r'single[- ]?crystal\s+(?:x-?ray|diffraction|structure|data|study)')
+
+def _section_mode(text, pos, reach=3000):
+    """'powder'/'single' from the NEAREST experiment-defining subsection phrase preceding the
+    cell, or None when neither (or only an ambiguous umbrella heading) is in reach."""
+    before = _CALC_POWDER.sub('calc', _norm_ctx(text[max(0, pos - reach):pos]))
+    pw = [m.start() for m in POWDER_SEC.finditer(before)]
+    sg = [m.start() for m in SINGLE_SEC.finditer(before)]
+    lp = max(pw) if pw else -1                 # nearest = LARGEST start (closest to the cell)
+    ls = max(sg) if sg else -1
+    if lp < 0 and ls < 0 or lp == ls:
+        return None
+    return 'powder' if lp > ls else 'single'
+
 def _nearest(hay, keys):
     """smallest distance from the END of `hay` to any keyword (for preceding
     text) — i.e. how far back the keyword is."""
@@ -324,6 +351,12 @@ def classify_context(text, pos, pre=750, post=200):
     almost always introduced by a clause that PRECEDES it ('refined from the
     powder data ... a = ...'), so preceding text wins; following text is only a
     fallback. `text`/`pos` must be the same string the offset came from."""
+    # 0. Document STRUCTURE first: the cell belongs to the experiment whose subsection it sits
+    #    under. The nearest experiment-defining phrase outranks local keyword proximity, which a
+    #    figure/table/page break or a one-line comparison reference can mislead (I002373/I002960).
+    sm = _section_mode(text, pos)
+    if sm:
+        return sm
     before = _CALC_POWDER.sub('calc', _norm_ctx(text[max(0, pos - pre):pos]))
     after = _CALC_POWDER.sub('calc', _norm_ctx(text[pos:pos + post]))
     p, s = _nearest(before, POWDER_KW), _nearest(before, SINGLE_KW)
