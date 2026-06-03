@@ -132,6 +132,16 @@ CASES = [
  ("lexicon: dual-use R-AXIS Rapid -> unknown", lambda: C._instr_mode('rigaku r-axis rapid ii curved imaging plate microdiffractometer') is None),
  # both modes named -> one-sided rule returns None rather than guessing
  ("lexicon: both modes present -> None",    lambda: C._instr_mode('gandolfi motion on a kappa four-circle goniometer') is None),
+ # refinement-software / method cues (Rietveld = powder by definition; SHELX/OLEX refine a
+ # single-crystal STRUCTURE). Mined+validated against the paired PDFs.
+ ("lexicon: Rietveld/GSAS software -> powder", lambda: C._instr_mode('refined by the rietveld method using gsas-ii') == 'powder'),
+ ("lexicon: TOPAS/FullProf -> powder",      lambda: C._instr_mode('whole-pattern refinement in topas') == 'powder' and C._instr_mode('fullprof suite') == 'powder'),
+ ("lexicon: SHELX/OLEX -> single",          lambda: C._instr_mode('structure refined with shelxl-2018') == 'single' and C._instr_mode('olex2 was used') == 'single'),
+ # dual-use software (does BOTH) must NOT classify
+ ("lexicon: JANA (does both) -> undetermined", lambda: C._instr_mode('refined using jana2006') is None),
+ # canon-substring collision guards: these common phrases/minerals must NOT read as a cue
+ ("lexicon: 'unit cell' phrase is not a powder cue", lambda: C._instr_mode('the unit cell parameters were') is None),
+ ("lexicon: 'jadeite' mineral is not a powder cue",  lambda: C._instr_mode('jadeite and omphacite inclusions') is None),
  # a 'calculated [X-ray] powder' pattern is simulated from the single-crystal structure,
  # so it must NOT make a single-crystal cell read 'powder' (I003398: synchrotron crystallite
  # refinement whose only nearby 'powder' is 'Calculated X-ray powder diffraction data')

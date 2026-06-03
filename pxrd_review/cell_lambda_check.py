@@ -193,9 +193,17 @@ SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'singlecrys
 #     Advance/Discover, Empyrean), which have no single-crystal capability — the asymmetry
 #     is real: powder-only instruments exist, single-crystal-only area instruments don't.
 #   • Excludes source terms 'rotating anode'/'microfocus' (moabite's POWDER used both).
+# Also REFINEMENT-SOFTWARE / METHOD cues, which (unlike the instruments) ARE mode-
+# determining — Rietveld is a powder method by definition, and SHELX/OLEX refine a
+# single-crystal STRUCTURE (no powder mode). Validated by mining the cue's context across
+# the paired PDFs. Excludes software that does BOTH (JANA, SUPERFLIP) and data-reduction
+# for the dual-use instruments (CrysAlis, SAINT); and short cues whose alnum-canon form
+# would collide with a common phrase/mineral ('unitcell'≈'unit cell', 'jade'≈'jadeite').
 # Matched separator-blind (see _instr_mode), so hyphen/space variants need not be listed.
-POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd8 discover', 'empyrean']
-SINGLE_INSTR = ['four-circle', 'kappa']
+POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd8 discover', 'empyrean',
+                'rietveld', 'le bail', 'pawley', 'gsas', 'expgui', 'fullprof', 'rietan', 'topas',
+                'dicvol', 'chekcell']
+SINGLE_INSTR = ['four-circle', 'kappa', 'shelx', 'olex', 'sadabs']
 
 # PDF line-break hyphenation splits a word as 'pow-\nder'; after a whitespace collapse
 # that reads 'pow- der', so a substring search for 'powder' (or 'single-crystal') misses
