@@ -842,6 +842,15 @@ def pdf_index(folder):
     return {k: sorted(ps, key=lambda p: (_is_supp(os.path.basename(p)), len(os.path.basename(p))))[0]
             for k, ps in cand.items()}
 
+def _cif_has_name(p):
+    """True if the CIF declares a _chemical_name_mineral (a proper, complete CIF). Used to
+    prefer a named CIF over a garbage/incomplete one when an id has duplicate CIFs."""
+    try:
+        with open(p, encoding='utf-8', errors='ignore') as f:
+            return bool(re.search(r"_chemical_name_mineral\s+'?[A-Za-z]", f.read()))
+    except Exception:
+        return False
+
 def cif_index(folder):
     """Build entry-id → CIF path index, looking in folder and its Files/ subfolder."""
     cand = {}
@@ -849,9 +858,12 @@ def cif_index(folder):
         ids = re.findall(ID_RE, os.path.basename(p))
         for pre, num in ids:
             cand.setdefault(_mk_key(pre, num), []).append(p)
-    # prefer shorter names (less likely to be supplementary)
-    return {k: sorted(ps, key=lambda p: len(os.path.basename(p)))[0]
-            for k, ps in cand.items()}
+    def pick(ps):
+        if len(ps) > 1:                                  # duplicate CIFs (e.g. a garbage file
+            named = [p for p in ps if _cif_has_name(p)]  # plus a user-added correct one):
+            ps = named or ps                             # prefer the one with a real mineral name
+        return sorted(ps, key=lambda p: len(os.path.basename(p)))[0]
+    return {k: pick(ps) for k, ps in cand.items()}
 
 def dft_index(folder):
     """Build entry-id → ICDD DataQuacker .dft path index (recursive). The .dft is a

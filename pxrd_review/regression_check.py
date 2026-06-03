@@ -188,8 +188,10 @@ CASES = [
    lambda: not X.check_cif(_stub_entry(8, 'H2 Mo O4'), {'Z': 4, 'formula': 'Mo2 O8', 'mineral_name': 'testite'})),
  ("cif Z: fractional-occupancy CIF reconciles (Pb1.5 anchor, no flag)",
    lambda: not X.check_cif(_stub_entry(24, 'O3 Pb Te'), {'Z': 16, 'formula': 'O4.50 Pb1.50 Te1.50', 'mineral_name': 'testite'})),
- ("cif Z: genuine cation mismatch still flags",
-   lambda: bool(X.check_cif(_stub_entry(4, 'As H4 O6 Sc'), {'Z': 8, 'formula': 'Cd H4 O6 Se', 'mineral_name': 'testite'}))),
+ # a CIF lacking the mineral's dominant cation is a mis-filed/garbage CIF -> NOTE, not a
+ # misleading 'Z mismatch' flag (e.g. I002904's Cd/Se CIF vs the As/Sc mineral)
+ ("cif Z: chemistry-mismatched CIF -> note, not flag",
+   lambda: [f.sev for f in X.check_cif(_stub_entry(4, 'As H4 O6 Sc'), {'Z': 8, 'formula': 'Cd H4 O6 Se', 'mineral_name': 'testite'})] == ['note']),
  # --- _norm_pdf font/glyph fixes (validated on the training-2 corpus) ---
  ("norm: þ -> + (charge mojibake)",   lambda: C._norm_pdf('Fe3þ and [4þ1]') == 'Fe3+ and [4+1]'),
  ("norm: spaced angstrom A ˚ -> Å",   lambda: 'Å' in C._norm_pdf('a = 5.93 A˚')),

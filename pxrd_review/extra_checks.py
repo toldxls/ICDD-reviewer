@@ -1091,9 +1091,14 @@ def check_cif(e, cif_data):
         ca = _formula_atoms(cif_data.get('formula') or '')
         cats = [el for el in da if el not in ('O', 'H')]
         anchor = max(cats, key=lambda el: da[el]) if cats else None
-        reconciled = bool(anchor and ca.get(anchor)
-                          and abs(docx_z * da[anchor] - cif_z * ca[anchor]) < 0.5)
-        if not reconciled:
+        if anchor and ca and not ca.get(anchor):
+            # CIF lacks the mineral's dominant cation -> it is a different compound (a
+            # mis-filed/garbage CIF), not a Z error. Note it (log only), don't docx-flag.
+            out.append(Finding('cif', 'note',
+                       "CIF chemistry doesn't match this mineral (no %s in the CIF formula) — "
+                       "possibly a mis-filed CIF; Z cross-check skipped." % anchor, None, 'cif'))
+        elif not (anchor and ca.get(anchor)
+                  and abs(docx_z * da[anchor] - cif_z * ca[anchor]) < 0.5):
             out.append(Finding('cif', 'flag',
                        "Z mismatch: docx Z=%d but CIF Z=%d" % (docx_z, cif_z),
                        None, 'cell:Z'))
