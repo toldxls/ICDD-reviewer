@@ -198,6 +198,14 @@ CASES = [
    lambda: {(1, 0, 4), (0, 1, 4)} <= set(X._candidate_hkls('10', '01', '44'))),
  ("indexing: SIGNED overlapped hkl splits ('-41'/'03'/'10' = (-4,0,1)+(1,3,0))",
    lambda: {(-4, 0, 1), (1, 3, 0)} <= set(X._candidate_hkls('-41', '03', '10'))),
+ # --- temperature: a non-ambient docx temp the paper doesn't state = likely transcription
+ #     slip (PXRD is normally room T); a paper-confirmed non-ambient value is real ---
+ ("temperature: non-ambient docx vs room-T pdf -> slip flag",
+   lambda: bool(X.check13_temperature(type('S', (), {'comments': {'Temperature': '273 K', 'DC': ''}})(), 'Temperature (K) 293 collected reflections'))),
+ ("temperature: paper-confirmed non-ambient -> no flag",
+   lambda: not X.check13_temperature(type('S', (), {'comments': {'Temperature': '100 K', 'DC': ''}})(), 'data collected at 100 K')),
+ ("temperature: ambient docx -> no flag",
+   lambda: not X.check13_temperature(type('S', (), {'comments': {'Temperature': '293 K', 'DC': ''}})(), 'x')),
  ("indexing: genuine multi-digit index not split",
    lambda: X._candidate_hkls('1', '0', '14') == [(1, 0, 14)]),
  ("indexing: signed index falls through to literal",

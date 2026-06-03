@@ -1407,29 +1407,48 @@ def check12_analysis(e, text):
     return out
 
 # ----------------------------------------------------------------------------- 13. non-ambient PXRD collection temperature
+def _pdf_temps(flat):
+    """Collection temperatures (K) the paper actually states — 'Temperature (K) 293',
+    '293(2) K', 'at 100 K', '-173 °C', 'room temperature'(=293). Range-gated to plausible
+    XRD temps so stray 'NNN K' (and the K of 'MoKα') don't leak in."""
+    ks = set()
+    for m in re.finditer(r'temperature\s*\(k\)\s*(\d{2,3})|\b(\d{2,3})(?:\s*\(\d+\))?\s*K\b', flat, re.I):
+        v = m.group(1) or m.group(2)
+        if v and 80 <= int(v) <= 500:
+            ks.add(int(v))
+    for m in re.finditer(r'(-?\d{1,3})\s*°\s*C\b', flat):
+        if 80 <= int(m.group(1)) + 273 <= 500:
+            ks.add(int(m.group(1)) + 273)
+    if re.search(r'\broom temperature\b|\bambient temperature\b', flat, re.I):
+        ks.add(293)
+    return ks
+
 def check13_temperature(e, text):
     out = []
     temp_str = (e.comments.get('Temperature') or '').strip()
     if not temp_str:
         return out
-    # parse temperature in K or °C
+    # parse the docx temperature in K or °C
     m = re.search(r'(-?\d+(?:\.\d+)?)\s*K', temp_str)
     t_k = float(m.group(1)) if m else None
     if t_k is None:
         m = re.search(r'(-?\d+(?:\.\d+)?)\s*[°]?\s*C', temp_str)
         t_k = float(m.group(1)) + 273.15 if m else None
     if t_k is None or 283 <= t_k <= 310:
-        return out   # ambient or unreadable — skip
-    dc = (e.comments.get('DC') or '').lower()
-    if re.search(r'single.crystal|synchrotron|scxrd', dc, re.I):
-        note = ('note: if this temperature refers to the SCXRD not the PXRD '
-                'collection, the entry cell is unaffected — verify')
-    else:
-        note = ('non-ambient PXRD collection; confirm cell parameters represent '
-                'the correct temperature state of the material')
+        return out   # ambient or unreadable docx temperature — fine
+    # A non-ambient docx temperature: PXRD is normally collected at room T (~293 K), so a
+    # non-ambient value the paper does NOT state is almost always a transcription slip.
+    # Compare to the temperatures the paper actually reports; if it confirms this value
+    # (a real low/high-T collection, e.g. for dehydration), it's not a slip — say nothing.
+    pdf = _pdf_temps(re.sub(r'\s+', ' ', text)) if text else set()
+    if any(abs(p - t_k) <= 3 for p in pdf):
+        return out
+    stated = (' but the .pdf states %s' % ', '.join('%d K' % p for p in sorted(pdf))) if pdf \
+             else ', but the .pdf gives no collection temperature'
     out.append(Finding('temperature', 'flag',
-               "Collection temperature = %s (%g K) — %s" % (temp_str, t_k, note),
-               None, 'instr'))
+               "docx Temperature = %s%s — PXRD is normally at room T (~293 K), so this is likely a "
+               "transcription slip; verify (unless the paper notes dehydration / phase change with "
+               "temperature)." % (temp_str, stated), None, 'instr'))
     return out
 
 # ----------------------------------------------------------------------------- density helpers
