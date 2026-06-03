@@ -117,6 +117,9 @@ CASES = [
  ("lexicon: Debye-Scherrer -> powder",      lambda: C._instr_mode('in debye-scherrer geometry') == 'powder'),
  ("lexicon: kappa four-circle -> single",   lambda: C._instr_mode('bruker kappa four-circle goniometer') == 'single'),
  ("lexicon: three-circle goniometer -> single", lambda: C._instr_mode('a three-circle diffractometer') == 'single'),
+ # X'Celerator (PANalytical 1D powder detector); the X'-prefix keeps it off 'accelerator'
+ ("lexicon: X'Celerator -> powder", lambda: C._instr_mode("equipped with an X'celerator silicon-strip detector") == 'powder'),
+ ("lexicon: 'accelerator' is not a powder cue", lambda: C._instr_mode('at the synchrotron accelerator facility') is None),
  # D8 Advance/Discover = dedicated powder Bragg-Brentano; D8 Venture (Photon area detector)
  # is dual-use -> must NOT classify as single from the model name alone
  ("lexicon: D8 Advance=powder, D8 Venture undetermined",

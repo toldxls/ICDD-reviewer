@@ -207,8 +207,10 @@ POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd
                 'rietveld', 'le bail', 'pawley', 'gsas', 'expgui', 'fullprof', 'rietan', 'topas',
                 'dicvol', 'chekcell',
                 # profile/whole-pattern fitting (powder) + powder analysis software + 1D
-                # powder strip detectors (NOT area detectors, so not the dual-use trap):
-                'profile fit', 'whole-pattern', 'highscore', 'lynxeye', 'mythen',
+                # powder strip detectors (NOT area detectors, so not the dual-use trap).
+                # 'xceler' = PANalytical X'Celerator; the X'-prefix makes it unique so it
+                # does NOT collide with 'accelerator' (bare 'celerator' would):
+                'profile fit', 'whole-pattern', 'highscore', 'lynxeye', 'mythen', 'xceler',
                 # Osc2tab/Osc2xrd (Britvin) — derive a POWDER pattern from single-crystal
                 # area-detector frames; the OUTPUT is always a PXRD pattern (powder-method
                 # software, not a dual-use instrument). Used widely by the Russian new-
