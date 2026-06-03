@@ -143,15 +143,18 @@ def _norm_pdf(s):
     source, so every downstream check reads clean words (it is line-structure
     preserving — the vertical-table parsers still see their newlines). Validated
     against the corpus: lifts the DC-term↔PDF match rate substantially. Fixes:
-      • '¼'→'=' (the '=' glyph mis-extracts as '¼' in several journals);
-      • the 'A˚'/decomposed-ring angstrom glyph → 'Å';
+      • '¼'→'=' and 'þ'→'+' (font mojibake: in several journals the '=' glyph extracts
+        as '¼' and the superscript-charge '+' as 'þ' — 'Fe3þ'→'Fe3+', '[4þ1þ1]'→'[4+1+1]');
+      • the 'A˚'/'A ˚'/decomposed-ring angstrom glyph → 'Å';
+      • exotic Unicode spaces (nbsp, thin/en/hair space) → a normal space (newlines kept);
       • ligatures ('speciﬁc'→'specific') and soft hyphens;
       • line-break hyphenation ('microdif-\\nfractometer'→'microdiffractometer',
         'pow-\\nder'→'powder') — the dominant artifact behind powder/single misses;
       • word-internal en/em/minus dashes → '-' ('Debye–Scherrer'→'Debye-Scherrer');
       • esds that extract with a stray space ('8.8593 (2)'→'8.8593(2)')."""
-    s = s.replace('¼', '=')
-    s = s.replace('A˚', 'Å').replace('Å', 'Å')
+    s = s.replace('¼', '=').replace('þ', '+')
+    s = re.sub(r'[\u00a0\u2000-\u200a\u202f\u205f]', ' ', s)   # special spaces -> normal (keep \n)
+    s = re.sub(r'A ?˚', 'Å', s).replace('Å', 'Å')
     for lig, rep in _LIGATURES.items():
         s = s.replace(lig, rep)
     s = s.replace('­', '')                          # discretionary/soft hyphen
@@ -205,8 +208,13 @@ POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd
                 'dicvol', 'chekcell',
                 # profile/whole-pattern fitting (powder) + powder analysis software + 1D
                 # powder strip detectors (NOT area detectors, so not the dual-use trap):
-                'profile fit', 'whole-pattern', 'highscore', 'lynxeye', 'mythen']
-SINGLE_INSTR = ['four-circle', 'kappa', 'shelx', 'olex', 'sadabs']
+                'profile fit', 'whole-pattern', 'highscore', 'lynxeye', 'mythen',
+                # Osc2tab/Osc2xrd (Britvin) — derive a POWDER pattern from single-crystal
+                # area-detector frames; the OUTPUT is always a PXRD pattern (powder-method
+                # software, not a dual-use instrument). Used widely by the Russian new-
+                # mineral groups; found only by open-ended discovery, not a fixed cue list.
+                'osc2tab', 'osc2xrd']
+SINGLE_INSTR = ['four-circle', 'three-circle', 'kappa', 'shelx', 'olex', 'sadabs']
 
 # PDF line-break hyphenation splits a word as 'pow-\nder'; after a whitespace collapse
 # that reads 'pow- der', so a substring search for 'powder' (or 'single-crystal') misses
@@ -768,10 +776,16 @@ def cell_source_finding(docx_abc, matched, cands):
 # Entry ids are I-prefixed (most) or O-prefixed (e.g. O002127); keys are the
 # full prefixed string ('Innnnnn'/'Onnnnnn') so I/O never collide numerically.
 # Two id widths coexist in the corpus: 6-digit (newer batches, e.g. I003559) and
-# 5-digit (the older ICDD Task Group tree, e.g. I10636). The trailing (?!\d) stops a
-# 5-digit match from biting off the front of a longer number; keys preserve the
-# source width (no zero-padding), so a docx 'I10636' and a pdf '77539_I10636' agree.
-ID_RE = r'([IO])(\d{5,6})(?!\d)'
+# 5-digit (the older ICDD Task Group tree, e.g. I10636). Some files use a LOWERCASE
+# prefix ('i11397', 'i12605'), so the prefix is case-insensitive and the key is
+# upper-cased (build keys via _mk_key, never raw group(1), so 'i11397' pairs 'I11397').
+# The leading (?<![A-Za-z0-9]) keeps a lowercase i/o inside a word (e.g. a DOI) from
+# matching; the trailing (?!\d) stops a 5-digit match biting the front off a longer
+# number; keys preserve the source width (no zero-padding) so 'I10636'~'77539_I10636'.
+ID_RE = r'(?<![A-Za-z0-9])([IOio])(\d{5,6})(?!\d)'
+
+def _mk_key(pre, num):
+    return pre.upper() + num
 
 def _is_supp(name):
     """True for supplementary / table PDFs (…_Supp, _Supp1, _TableS1, …). The
@@ -786,10 +800,10 @@ def pdf_index(folder):
         ids = re.findall(ID_RE, name)
         if not ids: continue
         if len(ids) >= 2 and '-' in name:            # range-named PDF, e.g. Innnnnn-Innnnnn.pdf
-            pre = ids[0][0]; w = len(ids[0][1])       # preserve the source id width (5 or 6)
+            pre = ids[0][0].upper(); w = len(ids[0][1])   # preserve the source id width (5 or 6)
             keys = ['%s%0*d' % (pre, w, n) for n in range(int(ids[0][1]), int(ids[-1][1]) + 1)]
         else:
-            keys = [pre + num for pre, num in ids]
+            keys = [_mk_key(pre, num) for pre, num in ids]
         for k in keys: cand.setdefault(k, []).append(p)
     # prefer the primary article PDF (no supp/table marker), then the shorter name
     return {k: sorted(ps, key=lambda p: (_is_supp(os.path.basename(p)), len(os.path.basename(p))))[0]
@@ -801,7 +815,7 @@ def cif_index(folder):
     for p in glob.glob(os.path.join(folder, '**', '*.[cC][iI][fF]'), recursive=True):
         ids = re.findall(ID_RE, os.path.basename(p))
         for pre, num in ids:
-            cand.setdefault(pre + num, []).append(p)
+            cand.setdefault(_mk_key(pre, num), []).append(p)
     # prefer shorter names (less likely to be supplementary)
     return {k: sorted(ps, key=lambda p: len(os.path.basename(p)))[0]
             for k, ps in cand.items()}
@@ -813,13 +827,13 @@ def dft_index(folder):
     for p in glob.glob(os.path.join(folder, '**', '*.[dD][fF][tT]'), recursive=True):
         ids = re.findall(ID_RE, os.path.basename(p))
         for pre, num in ids:
-            cand.setdefault(pre + num, []).append(p)
+            cand.setdefault(_mk_key(pre, num), []).append(p)
     return {k: sorted(ps, key=lambda p: len(os.path.basename(p)))[0]
             for k, ps in cand.items()}
 
 def entry_id(path):
     m = re.search(ID_RE, os.path.basename(path))
-    return (m.group(1) + m.group(2)) if m else None
+    return _mk_key(m.group(1), m.group(2)) if m else None
 
 def entry_name(path):
     """Mineral name from the docx filename parenthetical, e.g.

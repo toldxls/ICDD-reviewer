@@ -116,6 +116,7 @@ CASES = [
  ("lexicon: pseudo-Gandolfi motion -> powder", lambda: C._instr_mode('collected with pseudo-gandolfi motion') == 'powder'),
  ("lexicon: Debye-Scherrer -> powder",      lambda: C._instr_mode('in debye-scherrer geometry') == 'powder'),
  ("lexicon: kappa four-circle -> single",   lambda: C._instr_mode('bruker kappa four-circle goniometer') == 'single'),
+ ("lexicon: three-circle goniometer -> single", lambda: C._instr_mode('a three-circle diffractometer') == 'single'),
  # D8 Advance/Discover = dedicated powder Bragg-Brentano; D8 Venture (Photon area detector)
  # is dual-use -> must NOT classify as single from the model name alone
  ("lexicon: D8 Advance=powder, D8 Venture undetermined",
@@ -154,6 +155,14 @@ CASES = [
  ("id: 5-digit docx",         lambda: C.entry_id('I10636(Yarzhemskiite).docx') == 'I10636'),
  ("id: underscore-prefixed 5-digit pdf", lambda: C.entry_id('77539_I11149.pdf') == 'I11149'),
  ("id: 7-digit run is not an id", lambda: C.entry_id('scan_I1234567.tif') is None),
+ ("id: lowercase prefix normalised", lambda: C.entry_id('i11397(Grimmite).docx') == 'I11397'),
+ ("id: lowercase i in a word is not an id", lambda: C.entry_id('doi10665.pdf') is None),
+ # --- _norm_pdf font/glyph fixes (validated on the training-2 corpus) ---
+ ("norm: þ -> + (charge mojibake)",   lambda: C._norm_pdf('Fe3þ and [4þ1]') == 'Fe3+ and [4+1]'),
+ ("norm: spaced angstrom A ˚ -> Å",   lambda: 'Å' in C._norm_pdf('a = 5.93 A˚')),
+ # Osc2tab/Osc2xrd (Britvin) generate a POWDER pattern from single-crystal frames
+ ("lexicon: Osc2tab/Osc2xrd -> powder", lambda: C._instr_mode('pattern produced with osc2tab') == 'powder' and C._instr_mode('using osc2xrd software') == 'powder'),
+ ("norm: thin/nbsp spaces -> normal", lambda: C._norm_pdf('Cu\u2009K\u00a0radiation') == 'Cu K radiation'),
  # a 'calculated [X-ray] powder' pattern is simulated from the single-crystal structure,
  # so it must NOT make a single-crystal cell read 'powder' (I003398: synchrotron crystallite
  # refinement whose only nearby 'powder' is 'Calculated X-ray powder diffraction data')
