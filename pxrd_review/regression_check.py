@@ -286,6 +286,20 @@ CASES = [
      type('S', (), {'comments': {'Optical Data': 'A=1.795, B=1.820, Q=1.820, Sign=+, 2V=80'}})) == []),
  ("optical_2v: consistent sign+2V no flag", lambda: X.check24_optical_2v(
      type('S', (), {'comments': {'Optical Data': 'A=1.540, B=1.545, Q=1.600, Sign=+, 2V=35'}})) == []),
+ # --- reflection geometry vs wavelength (docx-internal, blind-spot check #2) ---
+ # I002983: d=0.70 Å is impossible under CuKα (λ/2=0.7703); I003406: d=0.7719 -> 2θ≈173° (a
+ # synchrotron λ=0.708 mislabelled as CuKα). A normal d-range stays quiet.
+ ("reflection_geom: d < λ/2 is impossible -> flag", lambda: [f for f in X.check25_reflection_geometry(
+     type('S', (), {'instr': {'lam': '1.54056', 'anode': 'CuKa1'},
+                    'refl': [('0.7000','11','4','1','11'), ('2.5','100','1','1','1')]})) if f.sev=='flag'] != []),
+ ("reflection_geom: implausibly high 2θ -> flag", lambda: [f for f in X.check25_reflection_geometry(
+     type('S', (), {'instr': {'lam': '1.54056', 'anode': 'CuKa1'},
+                    'refl': [('0.7719','14','','',''), ('3.0','100','1','1','1')]})) if f.sev=='flag'] != []),
+ ("reflection_geom: ordinary d-range stays quiet", lambda: X.check25_reflection_geometry(
+     type('S', (), {'instr': {'lam': '1.54056', 'anode': 'CuKa1'},
+                    'refl': [('1.5','100','1','1','1'), ('3.0','50','2','2','2')]})) == []),
+ ("reflection_geom: no wavelength -> no flag", lambda: X.check25_reflection_geometry(
+     type('S', (), {'instr': {}, 'refl': [('0.7','11','1','1','1')]})) == []),
  # --- document-structure (section) tier: the cell belongs to its subsection's experiment ---
  ("section: powder subsection -> powder", lambda: (lambda s: C._section_mode(s, s.find('a =')))(
      'x-ray powder diffraction data were collected (table 2). the refined unit cell is a = 5.0 and b = 6.0') == 'powder'),

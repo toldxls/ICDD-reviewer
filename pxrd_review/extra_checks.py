@@ -996,6 +996,36 @@ def check24_optical_2v(e, text=None):
                    None, 'optical'))
     return out
 
+# 2theta_max above this is implausible for a powder diffractometer (the corpus's legitimate
+# high-angle maximum is ~143 deg); higher implies a too-long stated wavelength.
+_2THETA_MAX = 160.0
+def check25_reflection_geometry(e, text=None):
+    """The reflection list must be geometrically consistent with the stated radiation. By Bragg,
+    a reflection cannot have d < λ/2 (no solution), and the implied 2θ_max should not approach
+    backscattering. A break means the radiation (anode/λ) or a d-spacing is wrong — e.g. a
+    short-λ / synchrotron pattern recorded as CuKα, or a mistyped d. Docx-internal (no PDF)."""
+    out = []
+    lam = _val(e.instr.get('lam'))
+    ds = [_val(d) for d, I, h, k, l in (e.refl or []) if _val(d) and _val(d) > 0]
+    if not lam or lam <= 0 or not ds:
+        return out
+    dmin = min(ds)
+    half = lam / 2.0
+    if dmin < half - 1e-6:
+        out.append(Finding('reflection_geom', 'flag',
+                   "Reflection d=%.4f Å is impossible for the stated radiation (λ=%.5f Å — the "
+                   "smallest possible d is λ/2=%.4f Å). Verify the radiation (anode/λ) or the d-spacing."
+                   % (dmin, lam, half), None, 'radiation'))
+        return out
+    twoth = 2 * math.degrees(math.asin(min(1.0, half / dmin)))
+    if twoth > _2THETA_MAX:
+        out.append(Finding('reflection_geom', 'flag',
+                   "The reflection list reaches d=%.4f Å, implying 2θ≈%.0f° for the stated radiation "
+                   "(λ=%.5f Å) — implausibly high; the radiation is likely wrong (e.g. a short-λ / "
+                   "synchrotron source recorded as %r)."
+                   % (dmin, twoth, lam, (e.instr.get('anode') or '?')), None, 'radiation'))
+    return out
+
 # ----------------------------------------------------------------------------- 11. IMA number missing on a new mineral
 def check11_ima(e, text):
     out = []
@@ -2253,7 +2283,7 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check13_temperature, check15_strongest_lines,
           check16_instr_vocab, check17_pdf_filter, check18_name_formula,
           check19_intensity_detector, check20_calc_wavelength, check21_primary_name,
-          check23_sg_system, check24_optical_2v]
+          check23_sg_system, check24_optical_2v, check25_reflection_geometry]
 
 def run_all(e, text, cif_data=None, dft_data=None):
     findings = []
