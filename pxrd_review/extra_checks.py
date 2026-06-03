@@ -1891,6 +1891,12 @@ def check20_calc_wavelength(e, text):
     lv = _val(lam)
     if lv is None:
         return out
+    # ICDD calculates powder patterns at the standard CuKα wavelength by default, which
+    # legitimately isn't stated in a paper whose experiment used a different (e.g. Mo)
+    # source — so a calc pattern at the default Cu λ isn't worth a nag. Only a NON-standard
+    # calc wavelength is worth the reviewer's eye.
+    if 1.539 <= lv <= 1.543:                          # CuKα (1.5406 / 1.54056 / 1.5418 …)
+        return out
     flat = re.sub(r'\s+', ' ', text)
     near = {'%.3f' % (lv + d) for d in (-0.001, 0.0, 0.001)} | {'%.2f' % lv}
     if any(n in flat for n in near):

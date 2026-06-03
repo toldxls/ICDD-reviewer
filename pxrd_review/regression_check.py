@@ -287,7 +287,12 @@ CASES = [
  ("I003512 no synthetic note (Synthetic Rock-forming category, not a synthetic sample)",
                                               lambda: not extras('I003512', 'synthetic')),
  # --- 20. calculated pattern, λ not stated in the paper ---
- ("I003511 calc pattern λ not in paper",     lambda: bool(extras('I003511', 'calc_wavelength'))),
+ # only a NON-standard calc wavelength is worth flagging; I003511 is calculated at the
+ # default CuKα (1.54056), legitimately absent from a paper using another source -> no flag
+ ("I003511 no calc_wavelength flag (standard CuKα calc default)", lambda: not extras('I003511', 'calc_wavelength')),
+ ("calc_wavelength: non-standard λ still flags",
+   lambda: bool(X.check20_calc_wavelength(type('S', (), {'instr': {'spacing_instr': 'Calculated', 'lam': '2.28970', 'anode': 'CrKa'}})(),
+                'the powder pattern was calculated from the single-crystal structure'))),
  # --- 21. Primary name normalization: corrected names must NOT flag ---
  ("I003523 primary name OK (no FP)",         lambda: not extras('I003523', 'primary_name')),
  # --- 22. cross-source: synthetic skips Mindat (natural≠synthetic); agreeing entry clean ---
