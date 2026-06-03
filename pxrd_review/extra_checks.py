@@ -746,6 +746,20 @@ def _dstar2(a, b, c, al, be, ga, h, k, l):
     S13 = a*b*b*c*(cg*ca - cb)
     return (S11*h*h + S22*k*k + S33*l*l + 2*S12*h*k + 2*S23*k*l + 2*S13*h*l) / (V*V)
 
+def _candidate_hkls(h, k, l):
+    """Integer (h,k,l) interpretations of a reflection row: the literal indices, PLUS — for
+    OVERLAPPED lines written with indices concatenated per column (h='10', k='01', l='44' =
+    (1,0,4)+(0,1,4)) — the per-digit split when h,k,l are digits-only of equal length >1.
+    (Signed indices like '-2' never use this packing, so they fall through to the literal.)"""
+    cands = []
+    hi, ki, li = _int(h), _int(k), _int(l)
+    if None not in (hi, ki, li):
+        cands.append((hi, ki, li))
+    hs, ks, ls = str(h).strip(), str(k).strip(), str(l).strip()
+    if hs.isdigit() and ks.isdigit() and ls.isdigit() and len(hs) == len(ks) == len(ls) > 1:
+        cands += [(int(hs[i]), int(ks[i]), int(ls[i])) for i in range(len(hs))]
+    return cands
+
 def check9_indexing(e, text):
     out = []
     cell = e.cell
@@ -756,21 +770,32 @@ def check9_indexing(e, text):
     bad = []
     n_checked = 0
     for d, I, h, k, l in e.refl:
-        dv = _val(d); hi, ki, li = _int(h), _int(k), _int(l)
-        if dv is None or None in (hi, ki, li) or (hi == ki == li == 0):
+        dv = _val(d)
+        if dv is None:
+            continue
+        cands = [t for t in _candidate_hkls(h, k, l) if t != (0, 0, 0)]
+        if not cands:
             continue
         n_checked += 1
-        ds2 = _dstar2(a, b, c, al, be, ga, hi, ki, li)
-        if ds2 <= 0: continue
-        d_calc = 1 / math.sqrt(ds2)
-        rel = abs(d_calc - dv) / dv
+        # A reflection is OK if ANY interpretation matches d_obs — take the closest candidate
+        # (handles overlapped lines packed per column) before deciding it disagrees.
+        best = None
+        for hi, ki, li in cands:
+            ds2 = _dstar2(a, b, c, al, be, ga, hi, ki, li)
+            if ds2 <= 0:
+                continue
+            d_calc = 1 / math.sqrt(ds2); rel = abs(d_calc - dv) / dv
+            if best is None or rel < best[0]:
+                best = (rel, (hi, ki, li), d_calc)
+        if best is None:
+            continue
         # Weak reflections (relative intensity <20) are low-leverage and noisier, so a
         # small d-spacing discrepancy there isn't worth flagging — require >5% for them;
         # strong (or unknown-intensity) lines keep the >3% bar.
         Iv = _val(I)
         thresh = 0.05 if (Iv is not None and Iv < 20) else 0.03
-        if rel > thresh:
-            bad.append((d, '%d%d%d' % (hi, ki, li), round(d_calc, 4), round(rel*100, 1)))
+        if best[0] > thresh:
+            bad.append((d, '%d%d%d' % best[1], round(best[2], 4), round(best[0]*100, 1)))
     if bad:
         worst = sorted(bad, key=lambda x: -x[3])[:5]
         msg = ("%d of %d indexed reflections disagree with the stated cell "

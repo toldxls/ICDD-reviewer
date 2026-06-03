@@ -192,6 +192,14 @@ CASES = [
  # misleading 'Z mismatch' flag (e.g. I002904's Cd/Se CIF vs the As/Sc mineral)
  ("cif Z: chemistry-mismatched CIF -> note, not flag",
    lambda: [f.sev for f in X.check_cif(_stub_entry(4, 'As H4 O6 Sc'), {'Z': 8, 'formula': 'Cd H4 O6 Se', 'mineral_name': 'testite'})] == ['note']),
+ # --- indexing: overlapped reflections are packed per column (h='10',k='01',l='44' =
+ #     (1,0,4)+(0,1,4)); split so a matching sub-line isn't a false 'disagrees' flag ---
+ ("indexing: overlapped hkl splits per column",
+   lambda: {(1, 0, 4), (0, 1, 4)} <= set(X._candidate_hkls('10', '01', '44'))),
+ ("indexing: genuine multi-digit index not split",
+   lambda: X._candidate_hkls('1', '0', '14') == [(1, 0, 14)]),
+ ("indexing: signed index falls through to literal",
+   lambda: X._candidate_hkls('-2', '2', '4') == [(-2, 2, 4)]),
  # --- _norm_pdf font/glyph fixes (validated on the training-2 corpus) ---
  ("norm: þ -> + (charge mojibake)",   lambda: C._norm_pdf('Fe3þ and [4þ1]') == 'Fe3+ and [4+1]'),
  ("norm: spaced angstrom A ˚ -> Å",   lambda: 'Å' in C._norm_pdf('a = 5.93 A˚')),
