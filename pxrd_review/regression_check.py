@@ -332,6 +332,10 @@ CASES = [
  ("structure-relation: isostructural-with-own-group-namesake suppressed", lambda: [f for f in X.check3_classification(
      type('S', (), {'comments': {}, 'raw_rows': [['IMA Classifications: Paulkerrite Group Paulkerrite']], 'name': 'zzznotarealmineral', 'primary': ''}),
      'the new phase is isostructural with paulkerrite, the group prototype.') if 'no Structure' in f.msg] == []),
+ # a mineral can't be 'related to itself' (paper names THIS species as the anchor for others)
+ ("structure-relation: self-reference suppressed", lambda: [f for f in X.check3_classification(
+     type('S', (), {'comments': {}, 'raw_rows': [], 'name': 'Keutschite', 'primary': 'Keut'}),
+     'minerals chemically or structurally related to keutschite, including agmantinite and stannite.') if 'no Structure' in f.msg] == []),
  # --- precision check names the esd to add ---
  ("I003566 names esd to add",      lambda: bool(extras('I003566', 'precision', substr='.pdf gives'))),
  # --- analysis field ---

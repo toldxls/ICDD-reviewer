@@ -451,13 +451,22 @@ def check3_classification(e, text):
                             r'\s+(with|to)\s+(?:the\s+)?([A-Za-zÀ-ɏ]{4,})', norm, re.I)
             if rel and _MINERALISH.search(rel.group(3)):
                 partner = rel.group(3).lower()
+                # A mineral can't be 'related to itself': the paper named THIS species as the
+                # anchor that OTHER minerals relate to ('… minerals … structurally related to
+                # keutschite, including agmantinite, …'), so the regex grabbed the entry's own
+                # name (I003806). Suppress when the partner is this species' own name (root).
+                own = re.sub(r'\s*-?\([a-z]+\)\s*$', '', (e.name or e.primary or '').lower())
+                own = re.sub(r'\s*-\d+[a-z]\s*$', '', own).strip()
+                self_ref = bool(own) and (partner == own or
+                            (len(partner) >= 6 and len(own) >= 6 and
+                             (partner.startswith(own) or own.startswith(partner))))
                 # Redundant when X is simply this mineral's OWN group namesake: the docx (and
                 # Mindat) already classify it in the X Group, and group membership implies the
                 # isostructural relationship — so don't ask the reviewer to restate it
                 # (fluormacraeite is in the Paulkerrite Group; 'isostructural with paulkerrite'
                 # adds nothing). Only an OUT-of-group structural relation is worth recording.
                 grp_ctx = (_docx_group_text(e) + ' ' + mindat_gname).lower()
-                if partner not in grp_ctx:
+                if not self_ref and partner not in grp_ctx:
                     phrase = '%s %s %s' % (rel.group(1).lower(), rel.group(2).lower(), rel.group(3))
                     out.append(Finding('classification', 'info',
                                "docx has no Structure/Isomorphism/Polymorphism comment, but the .pdf states "
