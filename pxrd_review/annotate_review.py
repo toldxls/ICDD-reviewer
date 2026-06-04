@@ -190,6 +190,15 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
         res['lam'] = ('calc', res['lam'][1] +
                       ' — but pattern is CALCULATED, so this is the modelling '
                       'wavelength, not the experimental radiation (no action needed)')
+    # Structured evidence for the GUI '? look', so it never parses the message prose (which
+    # silently broke the zoom twice): the .pdf radiation the verdict concerns — the matched /
+    # conflicting POWDER radiation when one was identified (anode element + its λ), else the
+    # docx anode (verify/unrec: where it does or does not appear). Anode is the lowercase
+    # element ('cu'/'mo'/…) or None when unrecognised (e.g. synchrotron).
+    if pk is not None:
+        res['lam_evidence'] = {'anode': pk[0], 'lam': pk[1]}
+    else:
+        res['lam_evidence'] = {'anode': C.anode_key(d.radiation), 'lam': None}
     return res
 
 # ----------------------------------------------------------------------------- docx writing

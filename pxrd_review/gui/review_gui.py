@@ -278,6 +278,7 @@ def _serialize(key):
         'cell': cell,
         'params': {k: [list(t) for t in v] for k, v in res.get('params', {}).items()},
         'lam': list(res['lam']) if res.get('lam') else None,
+        'lam_evidence': res.get('lam_evidence'),   # structured '? look' target (no message parsing)
         'docx': {'authors_cell': list(d.authors_cell) if d.authors_cell else [],
                  'radiation': d.radiation, 'lam': d.lam,
                  'comments': [list(c) for c in (d.comments or [])]},
