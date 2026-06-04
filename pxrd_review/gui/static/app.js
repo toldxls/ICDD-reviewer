@@ -310,12 +310,16 @@ function termsFor(fkey, step = 0) {
     if (a.cell.matched) { snippet = a.cell.matched.snippet || ''; label = 'matched cell context [' + (a.cell.matched.context || '?') + ']'; }
   } else if (fkey === 'lam') {
     // a radiation flag/verify is about the .pdf POWDER radiation (the conflicting or
-    // to-confirm one) — highlight THAT, parsed from the message ('… POWDER radiation
-    // is FeKα'), not the docx anode; fall back to the docx anode when none is named.
+    // to-confirm one) — highlight THAT, parsed from the message, not the docx anode.
+    // Two flag phrasings: '… collected the powder pattern with CuKα' (powder-collection
+    // evidence) and '… POWDER radiation is FeKα' (proximity fallback). Also pull the .pdf λ
+    // ('… pdf=1.5418') when present — it co-occurs in the powder sentence and pinpoints it.
+    // Fall back to the docx anode (verify/unrec cases name no .pdf powder anode).
     const msg = (a.lam && a.lam[1]) || '';
-    const pdfrad = /radiation is ([A-Z][a-z]?)\s*K/i.exec(msg);
+    const pdfrad = /(?:radiation is|powder pattern with)\s+([A-Z][a-z]?)\s*K/i.exec(msg);
+    const pdflam = /pdf=([\d.]+)/.exec(msg);
     const docxrad = /([A-Za-z]{1,2})\s*K/.exec(a.docx.radiation || '');
-    if (pdfrad) terms = [pdfrad[1] + 'K'];
+    if (pdfrad) terms = [pdfrad[1] + 'K', ...(pdflam ? [pdflam[1]] : [])];
     else if (docxrad) terms = [docxrad[1] + 'K'];
   } else if (fkey.startsWith('f')) {
     const f = a.findings[parseInt(fkey.slice(1), 10)];
