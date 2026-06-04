@@ -440,8 +440,11 @@ def check3_classification(e, text):
     # Replaces guessing from prose. Cross-checks the docx Strunz-mindat field.
     mindat_found = False
     mindat_gname = ''
+    mindat_gid = None                  # this species' Mindat groupid (for the same-group relation check)
+    mindat_mod = None
     try:
         from pxrd_review import mindat
+        mindat_mod = mindat
         mindat.refresh_if_stale()      # auto-refresh if the cache is >2 weeks old (once/process)
         if mindat.available():
             nm = e.name or e.primary or ''
@@ -450,6 +453,7 @@ def check3_classification(e, text):
                 mindat_found = True
                 gname, gstrunz, sp, status = g
                 mindat_gname = gname or ''
+                mindat_gid = (mindat.lookup(nm) or {}).get('groupid')
                 def _zs(x): return re.sub(r'[.\s]+$', '', (x or '').strip())
                 docx_strunz = _zs(e.comments.get('Strunz-mindat classification', ''))
                 strunz_ok = bool(gstrunz and docx_strunz and
@@ -515,6 +519,18 @@ def check3_classification(e, text):
                              (partner.startswith(own) or own.startswith(partner))))
                 if self_ref or partner in grp_ctx:
                     continue
+                # also redundant when the partner is in the SAME Mindat group as this species:
+                # group membership implies the isostructural relationship and the docx records the
+                # group (auropolybasite & auropearceite are both in the Pearceite-Polybasite Group).
+                # The grp_ctx string-match above only catches the group NAMESAKE — a different
+                # member needs the groupid compare.
+                if mindat_mod and mindat_gid:
+                    try:
+                        pg = mindat_mod.lookup(partner)
+                        if pg and pg.get('groupid') == mindat_gid:
+                            continue
+                    except Exception:
+                        pass
                 if _relation_subject_is_other(norm, rel.start(), own, partner):
                     continue                         # phrase is about a cited/other mineral, not this one
                 phrase = '%s %s %s' % (rel.group(1).lower(), rel.group(2).lower(), rel.group(3))
