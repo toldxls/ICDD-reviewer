@@ -24,4 +24,20 @@ in tools/cell_lambda_check.py and page rendering in gui/review_gui.py.
     permissively-licensed renderer (e.g. pypdfium2, Apache/BSD-style), which the
     isolated PDF layer makes a contained change.
 
+Data & provenance
+-----------------
+- No ICDD data is bundled or redistributed. No entry .docx/.dft files and no source
+  papers (.pdf) are included. The regression fixtures are a private, external set
+  (resolved via $PXRD_REGRESSION_DIR); regression_check.py refuses to run without them.
+- The reference tables encode standard crystallographic conventions (controlled
+  vocabularies, the Kβ-filter-by-anode rule, monochromator materials, …), hand-curated.
+  They do not embed proprietary ICDD field values.
+- Check rules were informed by the reviewer's own past review comments and validated
+  against a private set of already-corrected entries the author had legitimate access
+  to as a Task Group member.
+- Entry identifiers appearing in the tests and README are bare ids used to pin
+  regression cases; the underlying files are not included and the ids carry no
+  proprietary field data.
+- The tool operates on the reviewer's own working copies and never modifies source files.
+
 This notice is informational, not legal advice.

@@ -3,7 +3,7 @@
 Corpus sweep — run the review checks (read-only) over every entry in a folder tree,
 write a persistent report + a machine snapshot, and DIFF against the last run.
 
-Why this exists: the checks are hardened reactively (mine deviants -> validate against
+Why this exists: the checks are hardened reactively (surface deviants -> validate against
 the corpus -> regression-gate). The regression suite (regression_check.py) is POINTWISE —
 it asserts ~80 known cases — so it cannot see AGGREGATE drift: a check edit that starts
 firing on 100 un-asserted entries leaves it green. The only thing that catches that is a
