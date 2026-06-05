@@ -295,9 +295,12 @@ def _anchor_cell(doc, ac_row, anchor):
         return (_find_value(doc, lambda t: t.strip() == 'Empirical')
                 or _find_value(doc, lambda t: t.strip() == 'Chemical'))
     if anchor == 'analysis':
-        # the 'Analysis' comment cell (where the microprobe wt.% data is given);
-        # falls back to the 'Analysis' label cell when that field is empty.
-        return _find_value(doc, lambda t: t.strip() == 'Analysis')
+        # the 'Analysis' comment cell (where the microprobe wt.% data is given); falls back to
+        # the 'Analysis' label cell when empty, and — when the entry has no Analysis row at all
+        # — to the Comments-section header (the Analysis field lives there), rather than letting
+        # it drop to the Author's-Cell fallback.
+        return (_find_value(doc, lambda t: t.strip() == 'Analysis')
+                or _find_cell(doc, lambda t: t.strip() == 'Comments'))
     if anchor == 'radiation':
         return _find_value(doc, lambda t: t.strip().lower().startswith('radiation'))
     if anchor == 'filter':
