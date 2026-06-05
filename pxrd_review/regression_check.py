@@ -166,7 +166,15 @@ CASES = [
  # the same-phase powder conflict drives the FLAG even without a definitive SC cue in the
  # matched cell's sentence (spaltiite: docx used the SCXRD cell, PXRD cell 15.821 refined)
  ("I003807 cell_source FLAG (SCXRD used, PXRD cell refined)", lambda: bool(extras('I003807', 'cell_source', 'flag'))),
- ("I003657 cell_source NOTE not flag (Julgoldite)",  lambda: bool(extras('I003657', 'cell_source', 'note')) and not extras('I003657', 'cell_source', 'flag')),
+ # julgoldite-(Fe2+) is a POWDER-ONLY study (no single-crystal anywhere in the .pdf), so its
+ # cell — reported in the abstract / a summary table, far from the powder-methods text — is the
+ # powder cell, not SCXRD. The document-level guard settles it; no cell_source SCXRD note fires.
+ ("I003657 no cell_source (powder-only paper, no single-crystal mention)", lambda: not extras('I003657', 'cell_source')),
+ # guard mechanics (unit-level): a paper with NO single-crystal mention classifies as powder;
+ # the SC-doc detector is generous (any 'single[-/ws]crystal' / SCXRD) and quiet on powder-only.
+ ("guard: powder-only text -> cell context powder", lambda: C.classify_context('x-ray powder diffraction data; a = 9.05 A', 30) == 'powder'),
+ ("guard: SC-doc detector matches single-crystal/SCXRD, not powder-only",
+  lambda: bool(C._SINGLE_CRYSTAL_DOC.search('single crystal')) and bool(C._SINGLE_CRYSTAL_DOC.search('SCXRD')) and not C._SINGLE_CRYSTAL_DOC.search('powder-only study, a = 9.0')),
  ("I003510 no cell_source flag (powder cell, not SC)", lambda: not extras('I003510', 'cell_source', 'flag')),
  ("I003566 no cell_source flag (GSAS powder cell)",  lambda: not extras('I003566', 'cell_source', 'flag')),
  ("I003636 no cell_source flag (UnitCell powder cell)", lambda: not extras('I003636', 'cell_source', 'flag')),

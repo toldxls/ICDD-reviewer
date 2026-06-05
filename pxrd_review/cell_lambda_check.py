@@ -283,6 +283,15 @@ POWDER_SEC = re.compile(r'(?:x-?ray\s+powder|powder\s+x-?ray)\s+diffraction'
                         r'|powder\s+xrd\b')
 SINGLE_SEC = re.compile(r'single[- ]?crystal\s+(?:x-?ray|diffraction|structure|data|study)')
 
+# DOCUMENT-LEVEL guard: a paper that NEVER mentions single-crystal work has no SCXRD cell,
+# so EVERY reported cell is the powder cell — no matter how far the cell (often in the
+# abstract or a summary table) sits from the powder-methods text. Detection is deliberately
+# GENEROUS (any 'single[-/ws]*crystal' / 'SCXRD' / 'SC-XRD', any dash glyph or line-break)
+# so a genuine single-crystal paper can NEVER be mis-flipped to powder; it only fires when
+# there is truly no single-crystal mention anywhere (julgoldite-(Fe2+), dypingite-syn:
+# powder-only, where the cell was otherwise mislabelled SCXRD/unclear).
+_SINGLE_CRYSTAL_DOC = re.compile(r'single[\s\-‐-―−–—]*crystal|sc-?xrd|scxrd', re.I)
+
 def _section_mode(text, pos, reach=3000):
     """'powder'/'single' from the NEAREST experiment-defining subsection phrase preceding the
     cell, or None when neither (or only an ambiguous umbrella heading) is in reach."""
@@ -357,6 +366,16 @@ def classify_context(text, pos, pre=750, post=200):
     almost always introduced by a clause that PRECEDES it ('refined from the
     powder data ... a = ...'), so preceding text wins; following text is only a
     fallback. `text`/`pos` must be the same string the offset came from."""
+    # -1. Powder-ONLY paper: if single-crystal work is never mentioned anywhere, the cell can
+    #     only be the powder cell — settle it here before any proximity/section heuristics, which
+    #     mislabel a cell reported far from the powder-methods text (abstract / summary table).
+    #     Guard: require GENUINE collected-powder evidence — a paper whose only powder mention is
+    #     a 'calculated/simulated powder' pattern derived from a (synchrotron/ED) structure
+    #     refinement is NOT a powder experiment (I003398), so neutralise calc-powder phrases
+    #     first and demand a real powder/pxrd cue remains.
+    if text and not _SINGLE_CRYSTAL_DOC.search(text) \
+            and re.search(r'\bpowder\b|\bpxrd\b', _CALC_POWDER.sub('calc', text.lower())):
+        return 'powder'
     # 0. Document STRUCTURE first: the cell belongs to the experiment whose subsection it sits
     #    under. The nearest experiment-defining phrase outranks local keyword proximity, which a
     #    figure/table/page break or a one-line comparison reference can mislead (I002373/I002960).
