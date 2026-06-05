@@ -73,10 +73,11 @@ No error = the key works. `No API key` / an auth error = the key wasn't found.
 
 **4 — Verify the install** (optional):
 ```
-pxrd check "/path/to/2028…/Part1"
+pxrd check "/path/to/2028_Part 1/Part 1"
 ```
-Runs the regression suite against the 2028 Part 1 batch — should report **all pass**. (Point it at
-the Part 1 folder you already have; no other data is needed.)
+Runs the regression suite against the 2028 Part 1 batch — should report **all pass**. Point it at
+the folder holding the entry `.docx` files (what you extract from `Part 1.rar`); the exact folder
+name doesn't matter, and **keep the quotes** — the path contains spaces. No other data is needed.
 
 **5 — Run the review GUI on a batch:**
 ```
