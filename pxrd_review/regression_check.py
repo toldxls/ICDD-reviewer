@@ -92,6 +92,17 @@ CASES = [
  ("calculated: real structure-simulated pattern still flags", lambda: [f for f in X.check4_calculated(
      type('S', (), {'instr': {}, 'name': 'testite', 'primary': ''}),
      'The powder X-ray diffraction pattern was calculated from the single-crystal structure model.') if f.sev == 'flag'] != []),
+ # an explicit "powder data were NOT collected" means the pattern is calculated/theoretical -> a
+ # docx marked as a measured Diffractometer is wrong (grokhovskyite I003744, structure from EBSD).
+ ("I003744 calculated flag (EBSD; powder not collected, docx wrongly Diffractometer)",
+  lambda: bool(extras('I003744', 'calculated', 'flag'))),
+ # but the akasakaite group IS correctly marked Calculated (also 'powder … not collected'); the
+ # not-collected relaxation must NOT turn their console note into a docx flag.
+ ("I003810 no calculated FLAG (already Calculated; not-collected relax stays a note)",
+  lambda: not extras('I003810', 'calculated', 'flag')),
+ ("calculated: 'not collected' relax still needs a calc-powder sentence", lambda: X.check4_calculated(
+     type('S', (), {'instr': {}, 'name': 'testite', 'primary': ''}),
+     'Powder diffraction data were not collected owing to the tiny crystal size.') == []),
  # --- radiation ---
  ("O002127 radiation OK (CuK found)",  lambda: not lam_flag('O002127')),
  ("I003815 radiation NOT flagged",     lambda: not lam_flag('I003815')),

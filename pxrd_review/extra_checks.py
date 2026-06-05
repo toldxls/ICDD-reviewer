@@ -633,10 +633,23 @@ def check4_calculated(e, text):
             r'|\btheoretical\b|from\s+(?:the\s+)?powder|refined\s+from\s+powder|indexing\s+of'
             r'|rietveld|\b[id]\s?obs\b|\b[id]\s?meas\b',
             re.I)
-        sents = [s for s in sents if re.search(r'powder|pxrd|x-ray diffraction pattern|diffraction pattern', s.lower())
-                 and re.search(r'structure|single-crystal|cif|refinement|atomic', s.lower())
-                 and not re.search(r'\bcompar', s.lower())
-                 and not _MEASURED.search(s)]
+        # An explicit "(powder) diffraction data were NOT collected/measured" is definitive proof
+        # that the entry's pattern is the calculated/theoretical one — there is NO measured pattern,
+        # so the comparison-reference rejections above (which guard a measured-vs-calc comparison)
+        # must not suppress it. Grokhovskyite (I003744): structure from EBSD, "X-ray powder
+        # diffraction data were not collected", "theoretical powder … pattern was calculated" — but
+        # the docx wrongly marks it a measured Diffractometer. When present, accept any calc-powder
+        # sentence (still gated below by 'docx not already Calculated', so correctly-Calculated
+        # entries — e.g. the akasakaite group — stay silent).
+        not_collected = bool(re.search(
+            r'(?:powder|pxrd)[^.]{0,45}\b(?:was|were|could)\s+not\s+(?:be\s+)?'
+            r'(?:collected|measured|obtained|recorded|acquired)', text, re.I))
+        sents = [s for s in sents
+                 if re.search(r'powder|pxrd|x-ray diffraction pattern|diffraction pattern', s.lower())
+                 and (not_collected
+                      or (re.search(r'structure|single-crystal|cif|refinement|atomic', s.lower())
+                          and not re.search(r'\bcompar', s.lower())
+                          and not _MEASURED.search(s)))]
         # Multi-species papers often say "for all species EXCEPT <name>, … were
         # calculated". If THIS entry is the excepted species, its pattern was
         # measured, not calculated — don't flag it.
