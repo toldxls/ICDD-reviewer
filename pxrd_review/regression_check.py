@@ -162,6 +162,11 @@ CASES = [
  ("I003566 no cell_source flag (GSAS powder cell)",  lambda: not extras('I003566', 'cell_source', 'flag')),
  ("I003636 no cell_source flag (UnitCell powder cell)", lambda: not extras('I003636', 'cell_source', 'flag')),
  ("I003562 no cell_source (powder cell)",            lambda: not extras('I003562', 'cell_source')),
+ # the CHECKCELL powder cell sits under a 'Powder XRD data were collected …' subsection whose
+ # opener uses the XRD abbreviation; _section_mode must read that as powder (not inherit the
+ # earlier single-crystal subsection) so the matched cell isn't mislabelled SCXRD (plumbojohntomaite).
+ ("I003563 no cell_source flag (powder cell; 'Powder XRD' subsection)", lambda: not extras('I003563', 'cell_source')),
+ ("section: POWDER_SEC matches the 'Powder XRD' abbreviation", lambda: bool(C.POWDER_SEC.search('powder xrd data were collected')) and bool(C.POWDER_SEC.search('x-ray powder diffraction'))),
  # --- instrument/geometry lexicon (classify_context fallback when no bare powder/
  #     single word sits near the cell). Derived from DC fields; mode-determining terms
  #     only. Unit-level (no fixture needed) so the contract is locked regardless of

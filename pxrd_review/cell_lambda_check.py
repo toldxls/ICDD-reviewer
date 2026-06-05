@@ -276,7 +276,11 @@ _POWDER_REFINE = re.compile(r'le ?bail|rietveld|pawley|whole[- ]?pattern|profile
 # ('a single-crystal was mounted') doesn't trip it. Reach is bounded to ~one page so a mid-paper
 # cell never inherits an abstract mention.
 POWDER_SEC = re.compile(r'(?:x-?ray\s+powder|powder\s+x-?ray)\s+diffraction'
-                        r'|powder\s+diffraction\s+(?:data|pattern|study)')
+                        r'|powder\s+diffraction\s+(?:data|pattern|study)'
+                        # 'XRD' is the routine abbreviation of 'X-ray diffraction', so a
+                        # 'Powder XRD …' subsection opener is the same experiment-defining phrase
+                        # (e.g. nigelcookite/plumbojohntomaite: 'Powder XRD data were collected …').
+                        r'|powder\s+xrd\b')
 SINGLE_SEC = re.compile(r'single[- ]?crystal\s+(?:x-?ray|diffraction|structure|data|study)')
 
 def _section_mode(text, pos, reach=3000):
