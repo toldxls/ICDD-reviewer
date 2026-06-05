@@ -14,6 +14,12 @@ It is NOT a gate (no auto-fail): the human eyeball on the diff is the gate, same
 this just makes it one command and a readable log instead of a bespoke script. Reuses
 annotate_review.analyze() verbatim (the single source of truth) and never writes a docx.
 
+Point it at NEW-format ICDD batches only. An OLD Task-Group-format tree parses to empty
+structure — every entry lands in the report's 'old-template' column and its check results
+are meaningless — so do NOT use such a tree as a drift corpus. (Locally: the 'training/'
+corpus is a valid drift corpus; the sibling 'training 2/' is the old format, kept only as
+PDF-training material — do not sweep it.)
+
 Usage:
     python3 -m pxrd_review.sweep "<folder>"               # report + snapshot + diff vs last
     python3 -m pxrd_review.sweep "<folder>" --samples     # also show one example per check
