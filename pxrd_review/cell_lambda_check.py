@@ -873,8 +873,7 @@ def cell_source_finding(docx_abc, matched, cands):
     if pc is not None:
         return ('flag',
                 'docx cell is the single-crystal (SCXRD) cell, but the paper reports a refined '
-                'POWDER (PXRD) cell for this phase (a=%s b=%s c=%s) — ICDD entries use the PXRD '
-                'cell; flag that the powder cell was refined but the SCXRD cell was entered.'
+                'POWDER (PXRD) cell for this phase (a=%s b=%s c=%s).'
                 % (pc.a, pc.b, pc.c),
                 re.sub(r'\s+', ' ', (pc.snippet or '')).strip()[:160])
     return ('note',
