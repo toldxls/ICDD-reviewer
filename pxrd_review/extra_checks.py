@@ -1626,18 +1626,35 @@ def check12_analysis(e, text):
     n_pdf  = None
     pdf_phrase = None                      # the .pdf wording ('average of N analyses') for the GUI '? look'
     if text:
-        for pat in [
-            r'average\s+of\s+(\d+)\s*(?:analyses|points|spots|measurements|grains)',
-            r'(?<![.\d])(\d+)\s+(?:electron[-\s]?)?(?:micro)?probe\s+(?:point\s+)?anal',
-            r'(?<![.\d])(\d+)\s+(?:WDS|EDS|EPMA)\s+(?:anal|point|spot|meas)',
-        ]:
-            m = re.search(pat, text, re.I)
-            if m:
-                n = int(m.group(1))
-                if 2 <= n <= 50:   # sanity: typical microprobe session
+        # Multi-species papers pair each species with ITS OWN count: "<name> (average of N
+        # analyses)". Prefer the 'average of N' whose immediately-preceding text is THIS entry's
+        # species name, so a shared paper doesn't give every species the first count (the
+        # auropolybasite=11 / auropearceite=17 bug). Fall back to the first global match for
+        # single-species papers (where the count need not sit beside the name).
+        nm_root = re.sub(r'[^a-z]', '', (e.name or '').lower())[:8]
+        if len(nm_root) >= 5:
+            for am in re.finditer(r'average\s+of\s+(\d+)\s*(?:analyses|points|spots|measurements|grains)?', text, re.I):
+                n = int(am.group(1))
+                if not (2 <= n <= 50):
+                    continue
+                before = re.sub(r'[^a-z]', '', text[max(0, am.start() - 30):am.start()].lower())
+                if nm_root in before:          # this count sits right after THIS species' name
                     n_pdf = n
-                    pdf_phrase = re.sub(r'\s+', ' ', m.group(0)).strip()
-                break
+                    pdf_phrase = re.sub(r'\s+', ' ', am.group(0)).strip()
+                    break
+        if n_pdf is None:
+            for pat in [
+                r'average\s+of\s+(\d+)\s*(?:analyses|points|spots|measurements|grains)',
+                r'(?<![.\d])(\d+)\s+(?:electron[-\s]?)?(?:micro)?probe\s+(?:point\s+)?anal',
+                r'(?<![.\d])(\d+)\s+(?:WDS|EDS|EPMA)\s+(?:anal|point|spot|meas)',
+            ]:
+                m = re.search(pat, text, re.I)
+                if m:
+                    n = int(m.group(1))
+                    if 2 <= n <= 50:   # sanity: typical microprobe session
+                        n_pdf = n
+                        pdf_phrase = re.sub(r'\s+', ' ', m.group(0)).strip()
+                    break
     if n_pdf and not n_docx:
         out.append(Finding('analysis', 'flag',
                    "Analysis count missing — .pdf gives n=%d" % n_pdf, pdf_phrase, 'analysis'))

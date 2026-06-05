@@ -478,6 +478,11 @@ CASES = [
  ("I003704 analysis-count flag carries 'average of N' as look evidence",
   lambda: any(f.code == 'analysis' and (f.evidence or '').lower().startswith('average of 10')
               for f in (res_for('I003704') or {}).get('extra', []))),
+ # multi-species paper: each species' count comes from the 'average of N' beside ITS OWN name
+ # ("auropolybasite (average of 11 analyses) and auropearceite (average of 17 analyses)"), not
+ # the first global match — so auropearceite is 17, not auropolybasite's 11.
+ ("I003823 auropearceite analysis count = 17 (species-specific)", lambda: bool(extras('I003823', 'analysis', substr='n=17'))),
+ ("I003822 auropolybasite analysis count = 11 (species-specific)", lambda: bool(extras('I003822', 'analysis', substr='n=11'))),
  # --- density check is deregistered (never fires) ---
  ("No density flags anywhere",               lambda: not any(extras(e, 'density')
                                                    for e in ('I003704','I003448','I003562'))),
