@@ -69,6 +69,15 @@ def lam_verdict(eid):
     r = res_for(eid); return (r['lam'][0] if (r and r['lam']) else None)
 def params(eid):
     r = res_for(eid); return set((r.get('params') or {})) if r else set()
+def _ima_anchor_text(eid):
+    """Text of the docx cell the IMA finding would anchor its comment to."""
+    from docx import Document
+    dp = glob.glob(os.path.join(FOLDER, eid + '*.docx'))
+    if not dp:
+        return None
+    doc = Document(dp[0])
+    cell = A._anchor_cell(doc, doc.tables[0].rows[0], 'ima')   # ac_row unused for 'ima'
+    return cell.text.strip() if cell else None
 
 # (description, predicate) — predicate returns True when behaviour is correct
 CASES = [
@@ -399,6 +408,11 @@ CASES = [
  # --- IMA number (new mineral vs reinvestigation/reference) ---
  ("I003633 IMA flag (new mineral)",     lambda: bool(extras('I003633', 'ima'))),
  ("I003688 IMA flag (new mineral)",    lambda: bool(extras('I003688', 'ima'))),
+ # the IMA-missing comment must anchor in the Comments section (where IMA numbers live),
+ # not fall through to the Author's Cell label; entries WITH an 'IMA Number' row keep
+ # anchoring to its value cell. (moxuanxueite I003633 has no IMA Number row.)
+ ("I003633 IMA comment anchors to Comments section (no IMA Number row)", lambda: _ima_anchor_text('I003633') == 'Comments'),
+ ("I003246 IMA anchor stays on the value cell when an IMA Number row exists", lambda: _ima_anchor_text('I003246') not in (None, 'Comments')),
  ("I003687 NO IMA flag (reinvest.)",     lambda: not extras('I003687', 'ima')),
  ("I003511 NO IMA flag (reinvest.)",    lambda: not extras('I003511', 'ima')),
  # --- classification (docx already names the group) ---
