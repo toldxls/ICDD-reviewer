@@ -1,10 +1,17 @@
-# PXRD review tool — cell & wavelength comparator (prototype)
+# PXRD review tool
 
-Compares the **Author's Cell** (a, b, c, α, β, γ, space group, Z) and the
-**radiation/wavelength** entered in an ICDD pattern `.docx` against the values
-reported in the source `.pdf`, and flags discrepancies for review.
+Validates an ICDD pattern `.docx` (the transcription submitted to ICDD) against its
+sources — the paper `.pdf`, the author `.cif`, the ICDD `.dft`, and the Mindat API — and
+flags the recurring problems a reviewer would otherwise comb the files for. It writes Word
+comments + highlights into *copies* of each docx and never edits the source.
 
-It does **not** check diffractometer/camera type.
+The core is a **cell + wavelength** comparison: the Author's Cell (a, b, c, α, β, γ, space
+group, Z) and the radiation/wavelength vs the values reported in the `.pdf`. On top of that
+it runs the two-dozen "extra checks" listed below — including **instrument geometry and
+diffractometer/camera type** (Diffractometer / Film / Gandolfi / Calculated; and peak vs
+integrated vs visually-estimated intensities), analysis counts, IMA number, name↔formula
+consistency, Mindat classification/chemistry, cross-file cell/ESD agreement, and a light
+reflection-indexing consistency pass.
 
 ## Install / Quick start (`pxrd`)
 ```
@@ -14,8 +21,9 @@ pxrd gui "/path/to/entries"        # …or name the folder explicitly
 pxrd gui                           # reopens the last folder, on a free port, in the browser
 ```
 `pxrd` is a launcher so you don't type folder prefixes or ports. Sub-commands:
-`gui`, `review` (write comments/highlights), `lambda`, `extras`, `candidates`,
-`check` (regression), `refresh` (Mindat cache). For a data sub-command the folder is
+`gui`, `review` (write comments/highlights), `sweep` (corpus fire-rate/drift report),
+`lambda`, `extras`, `candidates`, `check` (regression), `refresh` (rebuild Mindat cache),
+`mindat` (Mindat passthrough). For a data sub-command the folder is
 **resolved as**: an explicit argument, else the current directory when it holds entry
 `.docx` files, else the folder **remembered per sub-command** (pass it once, omit
 after). The GUI **auto-picks a free port**, and extra flags (`--id`, `--port`, …) pass

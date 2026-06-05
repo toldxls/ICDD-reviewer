@@ -1,10 +1,10 @@
-PXRD review tool — third-party dependency notices
-==================================================
+PXRD review tool — NOTICE (third-party licenses & data provenance)
+=================================================================
 
-This project is licensed under the MIT License (see LICENSE). It depends on the
-following third-party packages, which carry their own licenses. They are NOT
-bundled with this repository; they are installed separately via pip
-(see requirements.txt).
+This project is licensed under the MIT License (see LICENSE). This NOTICE records the
+third-party dependency licenses and the data-provenance statement (below). The packages
+below carry their own licenses; they are NOT bundled with this repository — they are
+installed separately via pip (see requirements.txt).
 
   python-docx   MIT
   lxml          BSD-3-Clause
