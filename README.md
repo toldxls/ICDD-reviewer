@@ -30,6 +30,28 @@ after). The GUI **auto-picks a free port**, and extra flags (`--id`, `--port`, �
 through. Without installing, run `./pxrd <sub>` from a checkout (the dev launcher), or
 the explicit `python3 -m pxrd_review.<module>` forms shown below.
 
+### Setup notes (first run)
+**Requirements.** Python ≥ 3.9 and `pip`. `pip install -e .` pulls all three dependencies
+automatically — **PyMuPDF** (PDF text + page rendering, imported as `fitz`), `python-docx`
+(docx parsing + Word comments), and `Flask` (the GUI only). To install the libraries without
+the `pxrd` command, use `pip install -r requirements.txt`.
+
+**PyMuPDF.** Installed automatically by the line above (or on its own with `pip install
+PyMuPDF`). It ships prebuilt wheels for macOS, Linux, and Windows, so no compiler/toolchain is
+needed. **Licensing:** PyMuPDF is **AGPL-3.0 or commercial** (Artifex). Running it locally is
+unencumbered, but **read `NOTICE` before redistributing the tool or hosting the GUI as a shared
+network service** — that is the one case that brings AGPL source-availability obligations into
+play (the rest of this project is MIT). PyMuPDF is the only non-permissive dependency.
+
+**Mindat cross-checks are optional.** Everything else (cell/λ, instrument & camera type,
+intensities, analysis count, IMA, indexing, name↔formula) runs with no extra setup. The Mindat
+classification/chemistry checks stay **silently off** until you both (a) set an API key —
+`$MINDAT_API_KEY` or a `review_tool/.mindat_key` file — and (b) build the offline cache once
+with `pxrd refresh`. Until then they are skipped cleanly (no errors, no false flags). Details
+under **"Mindat"** below.
+
+**That's it:** `pip install -e .`, then `pxrd gui "/path/to/entries"`.
+
 ## Run
 ```
 python3 -m pxrd_review.cell_lambda_check /path/to/entries          # console report, whole folder
