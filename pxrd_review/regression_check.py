@@ -22,16 +22,26 @@ def _stub_entry(z, formula):   # 'testite' name so _cif_name_ok passes and the Z
     return type('S', (), {'cell': {'Z': str(z)}, 'formulas': {'Empirical': formula},
                           'name': 'testite', 'comments': {}})()
 
-FOLDER = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('PXRD_REGRESSION_DIR', '')
-if not FOLDER:
-    sys.exit("Regression fixtures not found. Pass the private review-batch folder as an "
-             "argument or set $PXRD_REGRESSION_DIR — it is private ICDD data and is "
-             "not included in this repository.")
-
-_idx = C.pdf_index(FOLDER)
-_cif = C.cif_index(FOLDER)
-_dft = C.dft_index(FOLDER)
+# Fixtures are private ICDD data, resolved at RUN time (in main), NOT at import: importing
+# this module must be side-effect-free and must not consume sys.argv — so it can be
+# introspected/unit-tested, and so a future importer is not silently handed our argv.
+FOLDER = ''
+_idx, _cif, _dft = {}, {}, {}
 _cache = {}
+
+def _init_fixtures(folder=None):
+    """Resolve the private review-batch fixtures (explicit arg > $PXRD_REGRESSION_DIR) and
+    build the docx/cif/dft indices. Called by main() before the suite runs; exits with a
+    clear message when the fixtures are absent (they are not shipped in this repo)."""
+    global FOLDER, _idx, _cif, _dft, _cache
+    FOLDER = folder or (sys.argv[1] if len(sys.argv) > 1 else os.environ.get('PXRD_REGRESSION_DIR', ''))
+    if not FOLDER:
+        sys.exit("Regression fixtures not found. Pass the private review-batch folder as an "
+                 "argument or set $PXRD_REGRESSION_DIR — it is private ICDD data and is "
+                 "not included in this repository.")
+    _idx, _cif, _dft = C.pdf_index(FOLDER), C.cif_index(FOLDER), C.dft_index(FOLDER)
+    _cache = {}
+    return FOLDER
 def res_for(eid):
     if eid not in _cache:
         dp = glob.glob(os.path.join(FOLDER, eid + '*.docx'))
@@ -454,6 +464,7 @@ CASES = [
 ]
 
 def main():
+    _init_fixtures()
     if not glob.glob(os.path.join(FOLDER, 'I*.docx')):
         print("!! batch not found at %r — pass the path as an argument" % FOLDER)
         return 2
