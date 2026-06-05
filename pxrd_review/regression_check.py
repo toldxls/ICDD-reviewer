@@ -484,6 +484,11 @@ CASES = [
  # the first global match — so auropearceite is 17, not auropolybasite's 11.
  ("I003823 auropearceite analysis count = 17 (species-specific)", lambda: bool(extras('I003823', 'analysis', substr='n=17'))),
  ("I003822 auropolybasite analysis count = 11 (species-specific)", lambda: bool(extras('I003822', 'analysis', substr='n=11'))),
+ # a spelled-out count tied to grains ("(five analyses on one grain)", keutschite I003806) is
+ # recognised; spelled-out numbers are allowed ONLY in this 'on … grain(s)' form (too ambiguous
+ # elsewhere — 'two grains', 'Table 3 analyses nos.').
+ ("I003806 keutschite analysis count = 5 ('five analyses on one grain')", lambda: bool(extras('I003806', 'analysis', substr='n=5'))),
+ ("analysis: _count_val parses spelled-out numbers", lambda: X._count_val('five') == 5 and X._count_val('12') == 12 and X._count_val('xyz') is None),
  # --- density check is deregistered (never fires) ---
  ("No density flags anywhere",               lambda: not any(extras(e, 'density')
                                                    for e in ('I003704','I003448','I003562'))),

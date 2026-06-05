@@ -1577,6 +1577,16 @@ _CALC_PDF2 = re.compile(
     r'(?:calculated|stoichiometr\w+)\s+[^.]{0,40}?(?:H2O|CO2|B2O3|water)',
     re.I)
 
+# Analysis counts are sometimes spelled out ("five analyses on one grain") or stated bare
+# ("(5 analyses)") rather than as "average of N" / "N probe analyses" — handle both.
+_NUMWORD = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8,
+            'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+            'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18, 'nineteen': 19, 'twenty': 20}
+_NUM = r'\d{1,3}|' + '|'.join(_NUMWORD)        # a digit or a spelled-out 2–20
+def _count_val(tok):
+    tok = (tok or '').strip().lower()
+    return int(tok) if tok.isdigit() else _NUMWORD.get(tok)
+
 def check12_analysis(e, text):
     out = []
     analysis = (e.comments.get('Analysis') or '').strip()
@@ -1647,11 +1657,15 @@ def check12_analysis(e, text):
                 r'average\s+of\s+(\d+)\s*(?:analyses|points|spots|measurements|grains)',
                 r'(?<![.\d])(\d+)\s+(?:electron[-\s]?)?(?:micro)?probe\s+(?:point\s+)?anal',
                 r'(?<![.\d])(\d+)\s+(?:WDS|EDS|EPMA)\s+(?:anal|point|spot|meas)',
+                # a count tied to grains, allowing a spelled-out number ("five analyses on one
+                # grain"): the 'on … grain(s)' tail keeps it off "Table 3 analyses nos. …" and a
+                # spelled-out number is too ambiguous to trust ANYWHERE else (two grains, etc.).
+                r'(?<![.\d])(' + _NUM + r')\s+(?:spot\s+|point\s+)?analyses\s+on\s+(?:\w+\s+){0,2}grains?',
             ]:
                 m = re.search(pat, text, re.I)
                 if m:
-                    n = int(m.group(1))
-                    if 2 <= n <= 50:   # sanity: typical microprobe session
+                    n = _count_val(m.group(1))
+                    if n and 2 <= n <= 50:   # sanity: typical microprobe session
                         n_pdf = n
                         pdf_phrase = re.sub(r'\s+', ' ', m.group(0)).strip()
                     break
