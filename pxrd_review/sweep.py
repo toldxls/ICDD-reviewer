@@ -34,11 +34,18 @@ SNAP = 'sweep_snapshot.json'
 REPORT = 'sweep_report.txt'
 
 # ----------------------------------------------------------------------------- discovery
+# A supplementary/table docx (Supp/Suppl/Supplementary, Table S2, _SI, _S1, additional)
+# is NOT the entry transcription. In trees that keep both beside the same id (e.g. the
+# training corpus's 'Files and Articles' subfolder), the supp file can sort first and win
+# the dedup — analysing a table instead of the entry. Rank it LAST so the real docx wins.
+_SUPP_DOCX = re.compile(r'supp|suppl|supplementary|sup\d|_sup\b|_si\b|_s\d|table\s*s|additional', re.I)
+
 def discover(folder):
     """Entry docx under `folder` (recursive), deduped by entry id. Skips the tool's own
     outputs (review_out / .edit_backup) and Word lock files, so the entry SET is stable
-    run-to-run (a meaningful diff needs a stable set)."""
-    out = {}
+    run-to-run (a meaningful diff needs a stable set). When an id has several docx, the
+    entry transcription wins over a supplementary/table docx (then stable path order)."""
+    cand = {}
     for dp in sorted(glob.glob(os.path.join(folder, '**', '*.docx'), recursive=True)):
         base = os.path.basename(dp)
         if base.startswith('~$'):
@@ -46,8 +53,19 @@ def discover(folder):
         if re.search(r'(?:^|/)(review_out|\.edit_backup)/', dp.replace(os.sep, '/')):
             continue
         eid = C.entry_id(dp)
-        if eid and eid not in out:        # first stable-sorted wins
-            out[eid] = dp
+        if eid:
+            cand.setdefault(eid, []).append(dp)
+    out = {}
+    for eid, ps in cand.items():
+        real = [p for p in ps if not _SUPP_DOCX.search(os.path.basename(p))]
+        if not real:                   # an id with ONLY supplementary docx is not a real entry
+            continue
+        # prefer the entry TRANSCRIPTION — its filename ends with a '(MineralName)'
+        # parenthetical (e.g. 'I003405(Ikorskyite).docx'); strays in a Files/ subfolder
+        # (e.g. 'I003405translation.docx', HKL tables) lack it and sort first by path
+        # otherwise. Then fall back to stable path order.
+        real.sort(key=lambda p: (not re.search(r'\(.+\)\.docx$', os.path.basename(p)), p))
+        out[eid] = real[0]
     return out
 
 # ----------------------------------------------------------------------------- per-entry analysis
