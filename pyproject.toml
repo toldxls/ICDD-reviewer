@@ -27,4 +27,3 @@ include = ["pxrd_review*"]
 
 [tool.setuptools.package-data]
 "pxrd_review.gui" = ["index.html", "static/*"]
-"pxrd_review" = ["assets/*"]
