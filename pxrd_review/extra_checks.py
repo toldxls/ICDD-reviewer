@@ -1611,6 +1611,7 @@ def check12_analysis(e, text):
     m_docx = re.search(r'(?:average|mean)\s+of\s+(\d+)', analysis, re.I)
     n_docx = int(m_docx.group(1)) if m_docx else None
     n_pdf  = None
+    pdf_phrase = None                      # the .pdf wording ('average of N analyses') for the GUI '? look'
     if text:
         for pat in [
             r'average\s+of\s+(\d+)\s*(?:analyses|points|spots|measurements|grains)',
@@ -1622,14 +1623,15 @@ def check12_analysis(e, text):
                 n = int(m.group(1))
                 if 2 <= n <= 50:   # sanity: typical microprobe session
                     n_pdf = n
+                    pdf_phrase = re.sub(r'\s+', ' ', m.group(0)).strip()
                 break
     if n_pdf and not n_docx:
         out.append(Finding('analysis', 'flag',
-                   "Analysis count missing — .pdf gives n=%d" % n_pdf, None, 'analysis'))
+                   "Analysis count missing — .pdf gives n=%d" % n_pdf, pdf_phrase, 'analysis'))
     elif n_pdf and n_docx and n_pdf != n_docx:
         out.append(Finding('analysis', 'flag',
                    "Analysis count mismatch: docx=%d, .pdf=%d" % (n_docx, n_pdf),
-                   None, 'analysis'))
+                   pdf_phrase, 'analysis'))
     elif n_docx is None and n_pdf is None and re.search(
             r'analys|wt\.?%|at\.?%|epma|eds|microprobe', analysis.lower()):
         # No count stated anywhere (formerly check6): confirm the analysis is an

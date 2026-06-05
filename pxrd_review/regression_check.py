@@ -462,6 +462,11 @@ CASES = [
  ("I003566 names esd to add",      lambda: bool(extras('I003566', 'precision', substr='.pdf gives'))),
  # --- analysis field ---
  ("I003510 misplaced-analysis flag",  lambda: bool(extras('I003510', 'analysis', substr='moved'))),
+ # the analysis-count flag carries the .pdf wording ('average of N …') as evidence so the GUI
+ # '? look' lands on that phrase, not a generic spot (gorbunovite I003704 -> 'Average of 10 analyses')
+ ("I003704 analysis-count flag carries 'average of N' as look evidence",
+  lambda: any(f.code == 'analysis' and (f.evidence or '').lower().startswith('average of 10')
+              for f in (res_for('I003704') or {}).get('extra', []))),
  # --- density check is deregistered (never fires) ---
  ("No density flags anywhere",               lambda: not any(extras(e, 'density')
                                                    for e in ('I003704','I003448','I003562'))),

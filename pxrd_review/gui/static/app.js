@@ -298,11 +298,15 @@ function termsFor(fkey, step = 0) {
   if (fkey === 'cell' || fkey.startsWith('param:')) {
     terms = (a.pdf && a.pdf.terms) || [];
     if (fkey.startsWith('param:')) {
-      // a single-axis flag (e.g. β differs): search the deviant axis VALUE so the
-      // exact cell parameter highlights in the .pdf table, not the whole cell
+      const key = fkey.slice(6), m = a.cell.matched;
       const AX = { a: 0, b: 1, c: 2, 'α': 3, 'β': 4, 'γ': 5 };
-      const i = AX[fkey.slice(6)], m = a.cell.matched;
-      if (i != null) {
+      if (key === 'Z' && m && m.Z != null && m.Z !== '') {
+        // a Z mismatch -> locate the .pdf 'Z = N' statement, not the a/b/c cell values
+        terms = [`Z = ${m.Z}`, `Z=${m.Z}`];
+      } else if (AX[key] != null) {
+        // a single-axis flag (e.g. β differs): search the deviant axis VALUE so the
+        // exact cell parameter highlights in the .pdf table, not the whole cell
+        const i = AX[key];
         const pdfv = m ? mantissa([m.a, m.b, m.c, m.al, m.be, m.ga][i]) : '';
         const docxv = mantissa((a.docx.authors_cell || [])[i]);
         terms = [...new Set([pdfv, docxv, ...terms].filter(Boolean))];   // deviant value first
