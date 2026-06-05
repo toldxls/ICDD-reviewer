@@ -288,6 +288,13 @@ table.kv td.k { color: var(--muted); white-space: nowrap; width: 1%; }
   border-bottom: 1px solid var(--line);
 }
 .pane-body > .sub:first-child { margin-top: 0; }
+/* reviewer's own marks in the reviewed copy (tracked changes / non-tool comments) */
+.reviewer-edits { margin: 6px 10px; }
+.reviewer-edits .redit {
+  font-size: .85em; padding: 4px 8px; margin-bottom: 4px; word-break: break-word;
+  border-left: 3px solid rgb(var(--accent-rgb) / .6);
+  background: rgb(var(--accent-rgb) / .08); border-radius: 0 4px 4px 0;
+}
 /* a b c on one row, α β γ on the next, SG Z on the third — wider cells so values
    (e.g. 9.1153(3)) are not truncated */
 .cellgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 6px 10px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--line); }

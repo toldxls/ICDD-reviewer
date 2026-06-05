@@ -437,6 +437,50 @@ def _has_tracked_changes(path):
     except Exception:
         return False
 
+def _extract_reviewer_edits(path):
+    """Human-readable summary of the reviewer's OWN marks in a hand-edited docx —
+    tracked changes (w:ins/w:del) and comments NOT authored by the tool. For the
+    annotation log only (so the reviewer's edits are visible alongside the tool's
+    findings); never used to modify a docx. Best-effort: returns [] on any error."""
+    out = []
+    try:
+        z = zipfile.ZipFile(path)
+        names = z.namelist()
+        droot = etree.fromstring(z.read('word/document.xml'))
+        # tracked changes, in document order; pair an adjacent del+ins (same author,
+        # either order) into a single 'old -> new' replacement.
+        revs = []
+        for el in droot.iter():
+            if el.tag == _q('ins'):
+                revs.append(('ins', el.get(_q('author')) or '?',
+                             ''.join(t.text or '' for t in el.iter(_q('t')))))
+            elif el.tag == _q('del'):
+                revs.append(('del', el.get(_q('author')) or '?',
+                             ''.join(t.text or '' for t in el.iter(_q('delText')))))
+        i = 0
+        while i < len(revs):
+            kind, auth, txt = revs[i]
+            nxt = revs[i + 1] if i + 1 < len(revs) else None
+            if nxt and nxt[1] == auth and {kind, nxt[0]} == {'ins', 'del'}:
+                old, new = (txt, nxt[2]) if kind == 'del' else (nxt[2], txt)
+                out.append("tracked change: '%s' -> '%s'  (%s)" % (old.strip(), new.strip(), auth))
+                i += 2
+            elif kind == 'ins':
+                out.append("inserted '%s'  (%s)" % (txt.strip(), auth)); i += 1
+            else:
+                out.append("deleted '%s'  (%s)" % (txt.strip(), auth)); i += 1
+        # comments authored by someone other than the tool
+        if 'word/comments.xml' in names:
+            croot = etree.fromstring(z.read('word/comments.xml'))
+            for c in croot:
+                if c.tag == _q('comment') and c.get(_q('author')) != AUTHOR:
+                    body = ''.join(t.text or '' for t in c.iter(_q('t'))).strip()
+                    out.append("comment (%s): %s" % (c.get(_q('author')) or '?', body))
+        z.close()
+    except Exception:
+        return out
+    return out
+
 def output_hand_edited(out_path, src_path):
     """The output docx was edited by a human since the tool wrote it — tracked
     changes, a non-tool comment, or body text differing from the source (beyond
@@ -726,6 +770,9 @@ def main():
         # re-annotate ONTO the edited file, keeping the human edits), or — under --force —
         # rebuild from source, with the backup as the safety net.
         hand_edited = (not args.inplace and os.path.exists(out) and output_hand_edited(out, dp))
+        # capture the reviewer's OWN marks (tracked changes / non-tool comments) from the
+        # still-hand-edited output, before annotate() refreshes it — for the log only.
+        user_edits = _extract_reviewer_edits(out) if hand_edited else []
         if hand_edited:
             _backup_edited(out)
             if args.force:
@@ -746,7 +793,8 @@ def main():
                 print('  !! %s: strip failed (%s) — left untouched' % (os.path.basename(dp), e))
                 records.append((os.path.basename(dp),
                                 {'status': 'preserved', 'highlights': [], 'comments': [],
-                                 'clean': False, 'accept': None, 'refreshed': True}))
+                                 'clean': False, 'accept': None, 'refreshed': True,
+                                 'user_edits': user_edits}))
                 continue
         try:
             tkey = os.path.splitext(os.path.basename(dp))[0]    # matches the GUI's triage key
@@ -760,6 +808,7 @@ def main():
                 os.remove(base)
         if refresh:
             rec['refreshed'] = True
+        rec['user_edits'] = user_edits
         rec['outfile'] = os.path.basename(out)
         # .dft cross-check notes are console/log only (the .dft is a co-equal proxy);
         # collect them for the log's 'verify' section — they are NOT written into the docx.
@@ -822,6 +871,17 @@ def main():
                                        initial_indent='  comment   : ',
                                        subsequent_indent=' ' * 14) + '\n')
         fh.write('\n' + '=' * 78 + '\n\n')
+        # Reviewer's OWN marks (tracked changes / non-tool comments): preserved across
+        # reruns but never written by the tool — surfaced here so they show in the log.
+        rev_recs = [(f, r) for f, r in records if r.get('user_edits')]
+        if rev_recs:
+            fh.write('REVIEWER EDITS (tracked changes / non-tool comments — preserved, NOT tool-written)\n'
+                     + '-' * 78 + '\n')
+            for f, r in rev_recs:
+                fh.write('\n  %s   (%s)\n' % ((C.entry_name(f) or C.entry_id(f) or f).upper(), C.entry_id(f) or '?'))
+                for e in r['user_edits']:
+                    fh.write(textwrap.fill(e, width=78, initial_indent='    - ', subsequent_indent=' ' * 6) + '\n')
+            fh.write('\n' + '=' * 78 + '\n\n')
         fh.write('CLEAN ENTRIES (no edits — copied unchanged)\n' + '-' * 78 + '\n')
         for f, r in records:
             if r['clean']:

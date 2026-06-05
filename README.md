@@ -153,24 +153,33 @@ parsers also collapse newlines, since PyMuPDF emits table cells one-per-line.
   techniques are a = …" describes the POWDER cell — e.g. 00-XXXXX
   #mineral). The printed evidence snippet supports confirmation.
 
-## Extra checks (`pxrd_review/extra_checks.py`) — my 10 most common review comments
-Mined from my own Word comments across past review batches, these are
+## Extra checks (`pxrd_review/extra_checks.py`) — the recurring review comments this tool automates
+Drawn from the reviewer's own past review notes, these are
 the recurring notes the cell/λ comparator did **not** cover. They run
 automatically at the end of every `pxrd_review/cell_lambda_check.py` report (and on the
 no-PDF path, since several are docx-internal). They live in a separate module on
-purpose: more heuristic, easy to tune or switch off per check as I refine them.
+purpose: more heuristic, easy to tune or switch off per check as they are refined.
 
 Each finding is graded **⚑ flag** (likely needs an edit/comment), **ℹ info**
 (surface for the reviewer to confirm — often acceptable), or **· note** (low
 confidence). The ten:
 
 1. **geometry / camera method** — surfaces the specific named method in the PDF
-   (Bragg-Brentano, Gandolfi, pseudo-Gandolfi, Debye-Scherrer, Guinier, image
-   plate, neutron TOF) when the docx `Spacing Instr.` is generic. Keyword must
-   share a sentence with a diffraction term. Also names the **specific instrument**
-   when recognised (Rigaku R-AXIS RAPID II, XtaLAB Synergy, SuperNova, MiniFlex,
-   SmartLab; Bruker D8/APEX; STOE; PANalytical Empyrean) to help confirm the
-   designators (ℹ info — the geometry goes in a comment, *not* into `Spacing Instr.`).
+   (Bragg-Brentano, Gandolfi, pseudo-Gandolfi / **crystal-rotation method**,
+   Debye-Scherrer, Guinier, image plate, neutron TOF) when the docx `Spacing Instr.`
+   is generic. Keyword must share a sentence with a diffraction term. Also names the
+   **specific instrument** when recognised (Rigaku R-AXIS RAPID II, XtaLAB Synergy,
+   SuperNova, MiniFlex, SmartLab; Bruker D8/APEX; STOE; PANalytical Empyrean) to help
+   confirm the designators (ℹ info — the geometry goes in a comment, *not* into
+   `Spacing Instr.`). When `Spacing/Intensity Instr.` is `Other`/blank and the PDF says
+   the powder pattern was *collected on a* diffractometer — whether a recognised model
+   in a powder sentence, **or just the bare word "diffractometer"** in a powder-
+   collection sentence (the model is often named only once, then referenced
+   anaphorically: "obtained using the same diffractometer", a pseudo-Gandolfi setup) —
+   it FLAGs `Spacing/Intensity Instr. → Diffractometer`. Whole-word only, so the dual-
+   use *micro*diffractometer (R-AXIS Rapid / D8 Discover) is left to the model path. The
+   model patterns tolerate a .pdf line-break hyphenation (`R-\nAxis` → "R- Axis": the
+   R-AXIS regex allows any hyphen/whitespace between 'r' and 'axis', `\b`-anchored).
 2. **cell not powder-refined** — suppressed when the paper says the cell was
    refined from the **powder** data; otherwise a strong phrasing ("not refined",
    "from single-crystal data", "cell from SAED") fires only when its sentence is
@@ -208,9 +217,9 @@ confidence). The ten:
 (Checks 11–15 add optical-sign, IMA-section, analysis-total/count, non-ambient
 temperature, and strongest-line cross-checks.)
 
-#### Corpus-curated checks (16, 18) — hardened instrumentation & naming
-Reference tables mined from the corrected corpus (ICDD/TAO/Tony's/2028) then
-hand-curated as small, editable constants at the bottom of `pxrd_review/extra_checks.py`
+#### Reference-table checks (16, 18) — hardened instrumentation & naming
+Reference tables encoding standard crystallographic conventions, hand-curated
+as small, editable constants at the bottom of `pxrd_review/extra_checks.py`
 (`VOCAB_CANON`, `VOCAB_FIX`, `KBETA_FILTER`, `MONO_MATERIALS`, `REE_ELEMENTS`,
 `POLYTYPE_SYS`). They **comment/suggest only** — the annotator highlights the cell
 and writes the suggested value; it never rewrites a field.
@@ -267,7 +276,7 @@ and writes the suggested value; it never rewrites a field.
 20. **Calculated pattern, λ not stated** — when the docx pattern is Calculated and its
     λ (and anode) appear nowhere in the paper, flag "confirm the wavelength used" (⚑).
     Catches default CuKα λ on synchrotron-derived calcs (Feiite/Liuite/Tschaunerite).
-21. **Primary (systematic) name normalization** — mechanical nomenclature fixes mined
+21. **Primary (systematic) name normalization** — mechanical nomenclature fixes derived
     from reviewer edits and validated to reproduce them with **zero** false positives:
     remove redundant **"Aqua"**, hyphenate **"Hydrogen-&lt;oxoanion&gt;"**, and put
     oxoanions **before** Hydroxide/Hydrate (⚑, suggests the corrected name). Composition-
@@ -286,7 +295,7 @@ arbiter), so every `check_dft` finding is **`note` severity — surfaced in the
 console and a dedicated "ICDD .dft CROSS-CHECK (verify…)" section of the log,
 and NEVER written into the docx.** It is deliberately limited to the reliable
 structured signals and stays quiet on agreement (Part 1: 8/62 entries;
-training: 18/168):
+validation set: 18/168):
 - **cell value divergence**, but only when it's the *same cell* with 1–2
   discrepant axes (transcription-level); when most axes differ (axis permutation /
   different setting — common between a powder docx and an SC `.dft`) it stays
@@ -396,7 +405,7 @@ Reporting is **member-centric**: it names the specific mineral matched (e.g.
 spans several space groups** (a chemically-defined group, so the strict match is
 to the member, not the whole group; this is why #mineral1 matches *#mineral2*,
 not *#mineral3*, even though the group is called "#mineral3-#mineral2"). A `★name
-echoes` marker flags my own heuristic — a name usually signals its relations
+echoes` marker flags an independent heuristic — a name usually signals its relations
 (it often embeds or echoes a known relative's name, or two analogues share a
 root) — as independent corroboration of the structural match.
 
@@ -603,8 +612,8 @@ Run it after touching `pxrd_review/extra_checks.py`, `pxrd_review/cell_lambda_ch
   crucially — the **Dcalc density-calculation** sentence ("calculated density, based
   on the empirical formula and the unit-cell refined from single-crystal data"),
   which is universal new-mineral boilerplate, not an actionable provenance issue (a
-  SC cell is acceptable). Validated on the larger training corpus: **Part 1 14→0,
-  training 8→1** (only a genuine non-density "cell determined from single-crystal"
+  SC cell is acceptable). Validated on a larger reference set: **Part 1 14→0,
+  validation set 8→1** (only a genuine non-density "cell determined from single-crystal"
   statement survives). *(I003562/I003599/I003600/I003750 = no flag.)*
 - **Cell source — PXRD vs SCXRD (`cell_source`).** ICDD entries carry the **powder**
   cell, so using the single-crystal cell is worth surfacing. A matched cell's source
@@ -616,7 +625,7 @@ Run it after touching `pxrd_review/extra_checks.py`, `pxrd_review/cell_lambda_ch
   cue) that ALSO has a same-phase powder cell reported (sorted-axis match within 10 %,
   differing >tol) — "used the SCXRD cell; powder cell a=… exists". Everything else
   SCXRD-looking is a console/GUI **note**, never a docx flag. Validated: Part 1 = 1
-  flag (I003632, "centroids of 1089 reflections" + a cubic powder cell), training = 2
+  flag (I003632, "centroids of 1089 reflections" + a cubic powder cell), validation set = 2
   (I003155 SCXRD-vs-PXRD-WPF table; I002960 "single-crystal techniques"); the powder/
   Rietveld/UnitCell cells (I003510/I003566/I003636) and Julgoldite (no same-phase
   powder cell) correctly do NOT flag.
@@ -666,7 +675,7 @@ Run it after touching `pxrd_review/extra_checks.py`, `pxrd_review/cell_lambda_ch
   Blank **anode**/**Intensity Type** are flagged ONLY for measured methods
   (`MEASURED_METHODS`), never for Calculated/Other. Do NOT prescribe Integrated vs
   Peak — the same instrument uses both. **Do NOT auto-fill filter/filtertype/anode
-  from an "instrument → canonical profile" table:** corpus mining showed the same
+  from an "instrument → canonical profile" table:** the reference set showed the same
   instrument runs different anodes, filter is blank ~67% of the time and accepted,
   PDF "X-filtered" mentions are mostly sample-prep noise, and instrument detection
   is confounded by the single-crystal source named on calculated patterns. Only the
@@ -680,8 +689,11 @@ Run it after touching `pxrd_review/extra_checks.py`, `pxrd_review/cell_lambda_ch
   ⇒ Peak; the detector keyword must be in a powder-context sentence. **Guard "Guinier"**
   with camera/method context — it is also the author surname (André Guinier), and a
   "Guinier et al." citation must NOT be read as the method. Do NOT teach the full
-  Integrated/Peak distinction from raw data — only the geometry rule. *(I003657 BB→Peak,
-  I003563 Gandolfi→Integrated; I003815 real via R-AXIS image-plate.)* **Skip
+  Integrated/Peak distinction from raw data — only the geometry rule. The **crystal-
+  rotation method** (`crystal[\s-]?rotation` + method/motion/technique/scan) is the same
+  pseudo-Gandolfi area-detector technique under a different name → Integrated. *(I003657
+  BB→Peak, I003563 Gandolfi→Integrated, I003548 crystal-rotation→Integrated; I003815 real
+  via R-AXIS image-plate.)* **Skip
   docx-Calculated patterns** — Intensity Type is meaningless for most calculated
   patterns; the ones where it matters are docx-marked measured (e.g. I002366 Kiryuite
   is Diffractometer though the paper calculated it). *(I003822/I002983 calc = no flag.)*

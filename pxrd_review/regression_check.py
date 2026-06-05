@@ -112,6 +112,28 @@ CASES = [
  ("I003414 Spacing Instr. -> Diffractometer flag",  lambda: bool(extras('I003414', 'instr_class', 'flag', 'Spacing Instr.'))),
  ("I003414 Intensity Instr. -> Diffractometer flag", lambda: bool(extras('I003414', 'instr_class', 'flag', 'Intensity Instr.'))),
  ("I003528 instr_class flag (powder on R-AXIS)",    lambda: bool(extras('I003528', 'instr_class', 'flag'))),
+ # anaphoric 'the same diffractometer' (a pseudo-Gandolfi crystal-rotation setup on a
+ # single-crystal area detector): the model is named only in the SC sentence, but the
+ # literal word 'diffractometer' in the powder-COLLECTION sentence still pins Spacing/
+ # Intensity Instr. -> Diffractometer, and the crystal-rotation method (= area detector)
+ # -> Intensity Type Integrated. The weak 'no named geometry' note must not co-fire.
+ ("I003548 Spacing Instr. -> Diffractometer flag (bare 'diffractometer')", lambda: bool(extras('I003548', 'instr_class', 'flag', 'Spacing Instr.'))),
+ ("I003548 Intensity Instr. -> Diffractometer flag (bare 'diffractometer')", lambda: bool(extras('I003548', 'instr_class', 'flag', 'Intensity Instr.'))),
+ ("I003548 Intensity Type Peak->Integrated (crystal rotation = pseudo-Gandolfi area detector)", lambda: bool(extras('I003548', 'intensity_type', 'flag'))),
+ ("I003548 no weak geometry note (superseded by instr_class flag)", lambda: not extras('I003548', 'geometry')),
+ # a .pdf line-break hyphenation ('R-\nAxis' -> 'R- Axis', yellowcatite/I003561) must still bind
+ # the R-AXIS Rapid as the powder diffractometer (regex tolerates hyphen+whitespace, \b-anchored);
+ # docx Other -> Diffractometer flag. \b stops 'polar axis rapid' matching. Unit-level (synthetic).
+ ("instr_class: 'R- Axis Rapid' line-break hyphen recognised (Other -> Diffractometer)",
+  lambda: bool([f for f in X.check1_geometry(
+      type('S', (), {'instr': {'spacing_instr': 'Other', 'intensity_instr': 'Other'}}),
+      'Powder X-ray diffraction data were collected on a Rigaku R- Axis Rapid II microdiffractometer.')
+      if f.code == 'instr_class'])),
+ ("instr_class: '...polar axis rapid...' must NOT match R-AXIS (\\b guard)",
+  lambda: not [f for f in X.check1_geometry(
+      type('S', (), {'instr': {'spacing_instr': 'Other', 'intensity_instr': 'Other'}}),
+      'Powder data were collected with the sample on the polar axis rapidly spinning.')
+      if f.code == 'instr_class']),
  ("I003745 no instr_class flag (D8 single-crystal only)", lambda: not extras('I003745', 'instr_class')),
  ("I003807 no instr_class flag (no powder instrument; 'expert' != Empyrean)", lambda: not extras('I003807', 'instr_class')),
  ("I003246 no instr_class flag (already Diffractometer)", lambda: not extras('I003246', 'instr_class')),
@@ -131,11 +153,13 @@ CASES = [
  ("I003636 no cell_source flag (UnitCell powder cell)", lambda: not extras('I003636', 'cell_source', 'flag')),
  ("I003562 no cell_source (powder cell)",            lambda: not extras('I003562', 'cell_source')),
  # --- instrument/geometry lexicon (classify_context fallback when no bare powder/
- #     single word sits near the cell). Mined from DC fields; mode-determining terms
+ #     single word sits near the cell). Derived from DC fields; mode-determining terms
  #     only. Unit-level (no fixture needed) so the contract is locked regardless of
  #     which private entries happen to exercise it. ---
  ("lexicon: Gandolfi geometry -> powder",   lambda: C._instr_mode('gandolfi-like geometry, recording') == 'powder'),
  ("lexicon: pseudo-Gandolfi motion -> powder", lambda: C._instr_mode('collected with pseudo-gandolfi motion') == 'powder'),
+ # 'crystal rotation' is the same pseudo-Gandolfi technique under a different name -> powder
+ ("lexicon: crystal-rotation method -> powder (pseudo-Gandolfi synonym)", lambda: C._instr_mode('obtained using the crystal rotation method') == 'powder'),
  ("lexicon: Debye-Scherrer -> powder",      lambda: C._instr_mode('in debye-scherrer geometry') == 'powder'),
  ("lexicon: kappa four-circle -> single",   lambda: C._instr_mode('bruker kappa four-circle goniometer') == 'single'),
  ("lexicon: three-circle goniometer -> single", lambda: C._instr_mode('a three-circle diffractometer') == 'single'),
@@ -159,7 +183,7 @@ CASES = [
  # both modes named -> one-sided rule returns None rather than guessing
  ("lexicon: both modes present -> None",    lambda: C._instr_mode('gandolfi motion on a kappa four-circle goniometer') is None),
  # refinement-software / method cues (Rietveld = powder by definition; SHELX/OLEX refine a
- # single-crystal STRUCTURE). Mined+validated against the paired PDFs.
+ # single-crystal STRUCTURE). Derived+validated against the paired PDFs.
  ("lexicon: Rietveld/GSAS software -> powder", lambda: C._instr_mode('refined by the rietveld method using gsas-ii') == 'powder'),
  ("lexicon: TOPAS/FullProf -> powder",      lambda: C._instr_mode('whole-pattern refinement in topas') == 'powder' and C._instr_mode('fullprof suite') == 'powder'),
  ("lexicon: SHELX/OLEX -> single",          lambda: C._instr_mode('structure refined with shelxl-2018') == 'single' and C._instr_mode('olex2 was used') == 'single'),
@@ -176,7 +200,7 @@ CASES = [
  # collision-safe rescues of versioned/suffixed names (snippet the collider can't contain)
  ("lexicon: JADE 2010 -> powder (not jadeite)", lambda: C._instr_mode('processed with MDI Jade 2010') == 'powder' and C._instr_mode('jadeite-bearing eclogite') is None),
  ("lexicon: SIR2011 -> single (not bare 'sir')", lambda: C._instr_mode('solved by direct methods in sir2011') == 'single'),
- # full-corpus (438-pair) re-mine additions: profile/whole-pattern fitting + 1D powder
+ # full-corpus (438-pair) re-scan additions: profile/whole-pattern fitting + 1D powder
  # detectors (LynxEye/MYTHEN are NOT dual-use area detectors)
  ("lexicon: whole-pattern/profile fit -> powder", lambda: C._instr_mode('whole-pattern profile fit refinement') == 'powder'),
  ("lexicon: LynxEye 1D detector -> powder",  lambda: C._instr_mode('d8 with a lynxeye detector') == 'powder'),
@@ -232,7 +256,7 @@ CASES = [
    lambda: X._candidate_hkls('1', '0', '14') == [(1, 0, 14)]),
  ("indexing: signed index falls through to literal",
    lambda: X._candidate_hkls('-2', '2', '4') == [(-2, 2, 4)]),
- # --- _norm_pdf font/glyph fixes (validated on the training-2 corpus) ---
+ # --- _norm_pdf font/glyph fixes (validated on the second reference set) ---
  ("norm: þ -> + (charge mojibake)",   lambda: C._norm_pdf('Fe3þ and [4þ1]') == 'Fe3+ and [4+1]'),
  ("norm: spaced angstrom A ˚ -> Å",   lambda: 'Å' in C._norm_pdf('a = 5.93 A˚')),
  # Osc2tab/Osc2xrd (Britvin) generate a POWDER pattern from single-crystal frames

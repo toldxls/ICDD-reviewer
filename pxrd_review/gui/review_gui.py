@@ -509,12 +509,30 @@ def api_entries():
     rows.sort(key=_eid_key)
     return jsonify({'folder': STATE['folder'], 'out_dir': STATE['out_dir'], 'entries': rows})
 
+def _entry_user_edits(d):
+    """The reviewer's OWN marks (tracked changes / non-tool comments) in this entry's
+    edited output, read LIVE from review_out. NOT folded into the cached analysis: the
+    cache fingerprint keys on the SOURCE docx, not the _edited.docx, so a cached copy
+    would go stale the moment the reviewer edits the output. Returns [] when no edited
+    output exists yet. Checks both naming twins (edited / clean) for robustness."""
+    base = d.get('docx_basename')
+    if not base:
+        return []
+    for name in (A.output_name(base, True), A.output_name(base, False)):
+        p = os.path.join(STATE['out_dir'], name)
+        if os.path.exists(p):
+            ue = A._extract_reviewer_edits(p)
+            if ue:
+                return ue
+    return []
+
 @app.route('/api/entry/<key>')
 def api_entry(key):
     if key not in STATE['docx']:
         abort(404)
     d = get_analysis(key)
-    return jsonify({'analysis': d, 'triage': STATE['triage'].get(key, {})})
+    return jsonify({'analysis': d, 'triage': STATE['triage'].get(key, {}),
+                    'user_edits': _entry_user_edits(d)})
 
 @app.route('/api/pdf/<key>/search')
 def api_pdf_search(key):

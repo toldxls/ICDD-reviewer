@@ -93,6 +93,7 @@ async function openEntry(key) {
   const r = await fetch('/api/entry/' + encodeURIComponent(key)).then(x => x.json());
   S.a = r.analysis;
   S.t = normalizeTriage(r.triage);
+  S.ue = r.user_edits || [];  // reviewer's own marks in the reviewed copy (live, not cached)
   S.lookStep = {};            // reset '? look' cycles for the new entry
   $('#empty').classList.add('hidden');
   $('#entry').classList.remove('hidden');
@@ -729,6 +730,14 @@ function renderDocx() {
   if (a.docx.comments && a.docx.comments.length) {
     body.append(el('div', { class: 'sub' }, 'existing reviewer comments'));
     body.append(kvTable(a.docx.comments.map(([au, tx]) => [au, tx])));
+  }
+  // the reviewer's OWN marks in the reviewed copy — tracked changes / non-tool
+  // comments the tool preserves but never writes. Read live (see _entry_user_edits).
+  if (S.ue && S.ue.length) {
+    body.append(el('div', { class: 'sub' }, 'your edits (reviewed copy)'));
+    const box = el('div', { class: 'reviewer-edits' });
+    for (const e of S.ue) box.append(el('div', { class: 'redit' }, e));
+    body.append(box);
   }
 }
 

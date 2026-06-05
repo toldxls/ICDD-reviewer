@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Extra review checks (prototype, additive) — the 10 most common reviewer comments
-that the cell/wavelength comparator does NOT yet cover, mined from the reviewer's
-own Word comments across TAO/MTG batches.
+that the cell/wavelength comparator does NOT yet cover, drawn from the reviewer's
+own past review notes across multiple batches.
 
 These are deliberately kept in a SEPARATE module from cell_lambda_check (the
 single source of truth for cell/λ matching). They are more heuristic, so they
@@ -188,7 +188,8 @@ def _find_sentences(text, must_all=(), any_of=(), exclude=()):
 # ----------------------------------------------------------------------------- 1. geometry / camera method
 GEOMETRY_KW = [
     'bragg-brentano', 'bragg–brentano', 'debye-scherrer', 'debye–scherrer',
-    'pseudo-gandolfi', 'gandolfi', 'guinier', 'image plate', 'image-plate',
+    'pseudo-gandolfi', 'gandolfi', 'crystal rotation method', 'crystal-rotation method',
+    'guinier', 'image plate', 'image-plate',
     'transmission geometry', 'reflection geometry', 'capillary',
     'time-of-flight', 'time of flight', 'neutron',
 ]
@@ -204,7 +205,9 @@ _HYPOTHETICAL = re.compile(r'\b(will|would|could|should|future|propos|recommend|
 # Specific instruments the reviewer recognises; naming one helps confirm the
 # designators (the geometry still goes in a comment, not the Spacing Instr.).
 INSTRUMENTS = [
-    ('Rigaku R-AXIS RAPID II', r'r-?axis\s*rapid'),
+    # tolerate a line-break hyphenation in the .pdf ('R-\nAxis' → 'R- Axis'): any mix of
+    # hyphens/whitespace between 'r' and 'axis'; \b-anchored so 'polar axis rapid' can't match.
+    ('Rigaku R-AXIS RAPID II', r'\br[-\s]*axis\s*rapid'),
     ('Rigaku XtaLAB Synergy',  r'xtalab\s*synergy|synergy[- ]?s\b'),
     ('Rigaku/Oxford SuperNova', r'supernova'),
     ('Rigaku MiniFlex',        r'miniflex'),
@@ -259,6 +262,32 @@ def check1_geometry(e, text):
                     break
             if powder_instrument:
                 break
+    # Fallback when no curated model matched in a powder sentence: the .pdf may state the
+    # powder pattern was collected on a bare "diffractometer" — the model is named only in
+    # the single-crystal sentence and referenced anaphorically here ("the same
+    # diffractometer", a pseudo-Gandolfi/crystal-rotation setup), or it is a model not in
+    # our table. The literal word 'diffractometer' in a powder-COLLECTION sentence is itself
+    # strong evidence the pattern was collected on one. Guard against single-crystal /
+    # calculated / comparison sentences where 'powder' + 'diffractometer' co-occur without a
+    # powder collection (e.g. "powder data calculated from the single-crystal diffractometer").
+    # Match the WHOLE word only: 'microdiffractometer' is the dual-use R-AXIS Rapid /
+    # D8 Discover (a single-crystal-capable instrument the task-group experts say must
+    # NOT force a mode from the model name) — let the named-INSTRUMENTS path handle those.
+    powder_diffractometer = None
+    if text and not powder_instrument:
+        for s in _sentences(text):
+            sl = s.lower()
+            if 'powder' not in sl and 'pxrd' not in sl:
+                continue
+            if not _COLLECTED.search(sl):
+                continue
+            if re.search(r'single[\s-]?crystal|calculat|derived|collaps|simulat', sl):
+                continue
+            mm = re.search(r'\bdiffractometer\b', s, re.I)
+            if not mm:
+                continue
+            powder_diffractometer = mm.group(0)
+            break
     # (1) Spacing/Intensity Instr. FIELD value: a recognised diffractometer named in a
     # POWDER-context sentence is high-confidence that the pattern was collected on a
     # diffractometer, so 'Other'/blank should be 'Diffractometer' (FLAG → highlight +
@@ -268,18 +297,20 @@ def check1_geometry(e, text):
     # single-crystal-only instrument (e.g. a D8 Venture used for SC-XRD) is NOT assumed.
     # Evidence = the instrument text as written in the .pdf (for the highlight).
     field_flagged = False
-    if powder_instrument and not is_calc:
+    if (powder_instrument or powder_diffractometer) and not is_calc:
+        pow_desc = ('%s (a diffractometer)' % powder_instrument) if powder_instrument else 'diffractometer'
+        pow_match = powder_match if powder_instrument else powder_diffractometer
         if spac.lower() in ('', 'other'):
             out.append(Finding('instr_class', 'flag',
                        "Spacing Instr. = %r, but the .pdf states the powder pattern was collected on a "
-                       "%s (a diffractometer) — set Spacing Instr. to 'Diffractometer'."
-                       % (spac or '(blank)', powder_instrument), powder_match, 'spacing_instr'))
+                       "%s — set Spacing Instr. to 'Diffractometer'."
+                       % (spac or '(blank)', pow_desc), pow_match, 'spacing_instr'))
             field_flagged = True
         if iinstr.lower() in ('', 'other'):
             out.append(Finding('instr_class', 'flag',
                        "Intensity Instr. = %r, but the powder pattern was collected on a "
-                       "%s (a diffractometer) — set Intensity Instr. to 'Diffractometer'."
-                       % (iinstr or '(blank)', powder_instrument), powder_match, 'intensity_instr'))
+                       "%s — set Intensity Instr. to 'Diffractometer'."
+                       % (iinstr or '(blank)', pow_desc), pow_match, 'intensity_instr'))
             field_flagged = True
     # (2) The SPECIFIC geometry/method (Debye-Scherrer, image-plate, Gandolfi) is
     # descriptive metadata, NOT a required ICDD field. Only nudge when the Spacing Instr.
@@ -324,7 +355,7 @@ _PROV_NONCELL = re.compile(r'extinction|displacement|thermal|occupanc|isotropic|
 # Routine "Dcalc was computed from the empirical formula and the (single-crystal)
 # unit-cell" boilerplate appears in nearly every new-mineral description — it is NOT
 # an actionable provenance problem (a single-crystal cell is acceptable), so a
-# density-calculation sentence does not count. (Corpus: this was 7 of 8 training fires.)
+# density-calculation sentence does not count. (Reference set: this was 7 of 8 fires.)
 _PROV_DENSITY = re.compile(r'densit|d[_\s-]?calc|d[_\s-]?x\b|d[_\s-]?meas|g\s*[^A-Za-z0-9]{0,2}\s*cm', re.I)
 
 def _sentence_around(text, i):
@@ -1862,8 +1893,8 @@ def check15_strongest_lines(e, text):
 # =============================================================================
 # 16/17. Instrumentation designators + 18. mineral naming
 # -----------------------------------------------------------------------------
-# Reference tables below were derived by mining the corrected corpus
-# (ICDD/TAO/Tony's/2028) and then hand-curated. They are deliberately small and
+# Reference tables below encode standard crystallographic conventions, hand-curated
+# from a private set of already-corrected entries. They are deliberately small and
 # editable. Per the project's convention these checks COMMENT/SUGGEST only — the
 # annotator highlights the cell and writes the suggested value; it never rewrites
 # a field. Note: the reviewer keeps 'Spacing Instr.' generic (Diffractometer/
@@ -2116,7 +2147,10 @@ def check18_name_formula(e, text):
 # mis-attributed.) This is the reviewer's single most frequent comment.
 # 'Guinier' is also a common author surname (André Guinier) — require camera/method
 # context so a "Guinier et al." citation isn't read as the diffraction method.
-AREA_DETECTOR  = (r'image[- ]?plate|imaging plate|gandolfi|r-?axis\s*rapid|curved imaging'
+AREA_DETECTOR  = (r'image[- ]?plate|imaging plate|gandolfi|\br[-\s]*axis\s*rapid|curved imaging'
+                  # the 'crystal rotation' MOTION is pseudo-Gandolfi: a grain is rotated in
+                  # the beam and the Debye rings are recorded on an area detector → Integrated.
+                  r'|crystal[\s-]?rotation\s+(?:method|motion|technique|scan)'
                   # modern 2D / area detectors — a PXRD pattern from one is Integrated
                   r'|pixel[- ]?array|hybrid[- ]?photon|photon[- ]?counting|pilatus|eiger|dectris'
                   r'|\bccd\b|\bcmos\b|area detector|2d detector')

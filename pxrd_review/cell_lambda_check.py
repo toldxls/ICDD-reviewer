@@ -179,14 +179,16 @@ CellCand = namedtuple('CellCand', 'a b c al be ga V Z context pos snippet phase'
 POWDER_KW = ['powder', 'pxrd']
 SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'singlecrystal', 'scxrd']
 
-# Instrument/geometry lexicon mined from 221 reviewer-written DC ('Data Collection')
+# Instrument/geometry lexicon derived from 221 reviewer-written DC ('Data Collection')
 # fields and validated against the paired PDFs: each term, when present, IMPLIES the
 # experiment mode even though the bare word 'powder'/'single-crystal' may be absent.
 # Restricted to MODE-DETERMINING terms only — the GEOMETRY/MOTION, never the instrument
 # MODEL, because nearly every modern area-detector diffractometer is DUAL-USE:
 #   • A Debye-Scherrer / Gandolfi / Bragg-Brentano (or pseudo-Gandolfi / Gandolfi-like
 #     MOTION) signature = powder; a kappa / four-circle goniometer = single-crystal.
-#   • 'gandolfi' (substring) already covers 'pseudo-Gandolfi' and 'Gandolfi-like'.
+#   • 'gandolfi' (substring) already covers 'pseudo-Gandolfi' and 'Gandolfi-like'; the
+#     'crystal rotation' MOTION is the same pseudo-Gandolfi technique under a different
+#     name (rotate a grain in the beam → Debye rings on the area detector → powder).
 #   • NO single-crystal MODEL names: Photon II/III, XtaLAB/Synergy, Xcalibur, Apex, D8
 #     Venture, R-AXIS Rapid II all run pseudo-Gandolfi/Gandolfi-like scans to collect
 #     POWDER on a traditionally single-crystal area-detector instrument (per the task-
@@ -198,7 +200,7 @@ SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'singlecrys
 #   • Excludes source terms 'rotating anode'/'microfocus' (moabite's POWDER used both).
 # Also REFINEMENT-SOFTWARE / METHOD cues, which (unlike the instruments) ARE mode-
 # determining — Rietveld is a powder method by definition, and SHELX/OLEX refine a
-# single-crystal STRUCTURE (no powder mode). Validated by mining the cue's context across
+# single-crystal STRUCTURE (no powder mode). Validated by checking the cue's context across
 # the paired PDFs. Excludes software that does BOTH powder & single (JANA — both
 # Jana2006 and Jana2020 — and SUPERFLIP) and SAINT (Bruker integration). Per the experts,
 # the CrysAlisPro and Bruker APEX SUITES primarily do single-crystal workup, so they ARE
@@ -211,7 +213,7 @@ SINGLE_KW = ['single-crystal', 'single crystal', 'single‑crystal', 'singlecrys
 # X'Celerator→'xceler' (not in 'accelerator'). Genuinely stuck (no distinguishing snippet,
 # so omitted): X'Pert ('expert' contains 'xpert'; empyrean covers PANalytical powder) and
 # 'unitcell' (canon == the phrase 'unit cell'). Matched separator-blind (see _instr_mode).
-POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'bragg-brentano', 'd8 advance', 'd8 discover', 'empyrean',
+POWDER_INSTR = ['debye-scherrer', 'gandolfi', 'crystal rotation', 'bragg-brentano', 'd8 advance', 'd8 discover', 'empyrean',
                 'rietveld', 'le bail', 'pawley', 'gsas', 'expgui', 'fullprof', 'rietan', 'topas',
                 'dicvol', 'chekcell', 'winxpow',   # STOE WinXPOW = powder suite (11/1 powder)
                 # profile/whole-pattern fitting (powder) + powder analysis software + 1D
