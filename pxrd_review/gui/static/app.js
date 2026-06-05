@@ -894,6 +894,22 @@ $('#pdf-q').addEventListener('keydown', e => {
 });
 $('#zoom-in').addEventListener('click', () => setZoom(S.pdfZoom + 0.25));
 $('#zoom-out').addEventListener('click', () => setZoom(S.pdfZoom - 0.25));
+// trackpad two-finger pinch (and ctrl+scroll) over the .pdf pane zooms the PDF ONLY, not the
+// whole window: browsers deliver a pinch as a wheel event with ctrlKey set, so we take it on a
+// NON-passive listener, preventDefault() to stop the page zoom, scale the PDF via setZoom, and
+// adjust scroll so the point under the cursor stays put (focal zoom). Per-event step is capped
+// so a coarse ctrl+mouse-wheel can't jump in one tick.
+$('#pdf-view').addEventListener('wheel', e => {
+  if (!e.ctrlKey || !S.a || !S.a.pdf) return;     // only a pinch/ctrl-scroll over a loaded PDF
+  e.preventDefault();
+  const v = $('#pdf-view'), r = v.getBoundingClientRect();
+  const cx = e.clientX - r.left, cy = e.clientY - r.top;   // cursor within the view
+  const before = S.pdfZoom;
+  const step = Math.max(0.8, Math.min(1.25, Math.exp(-e.deltaY * 0.01)));   // pinch out (Δy<0) → in
+  setZoom(before * step);
+  const f = S.pdfZoom / before;                   // actual factor after setZoom's 0.5–4 clamp
+  if (f !== 1) { v.scrollLeft = (v.scrollLeft + cx) * f - cx; v.scrollTop = (v.scrollTop + cy) * f - cy; }
+}, { passive: false });
 $('#zoom-hit').addEventListener('click', () => { if (S.focusKey) zoomToHighlight(S.focusKey); });
 $('#zoom-page').addEventListener('click', () => {
   S.pdfMode = 'page'; S.pdfZoom = 1; renderPdf(undefined);
