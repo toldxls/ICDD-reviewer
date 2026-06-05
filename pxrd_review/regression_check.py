@@ -516,6 +516,11 @@ CASES = [
  # saying so is its own signal (keutschite: Rigaku Rapid II d-spacings, Table-5 vs/s/ms/w Irel).
  ("I003806 keutschite: '.pdf visually estimated' -> Intensity Type Visual, not Peak",
   lambda: bool(extras('I003806', 'intensity_type', 'flag', 'Visual'))),
+ # the Visual flag must carry '?look' evidence (the 'visually estimated' phrase, at the PXRD-table
+ # legend) so the button lands on the table instead of going nowhere.
+ ("I003806 visual flag carries '?look' evidence",
+  lambda: any(f.code == 'intensity_type' and (f.evidence or '').lower().startswith('visual')
+              for f in (res_for('I003806') or {}).get('extra', []))),
  ("I003563 Gandolfi->Integrated not overridden (intensities not all-×10)",
   lambda: bool(extras('I003563', 'intensity_type', 'flag', 'Integrated')) and not extras('I003563', 'intensity_type', 'flag', 'Visual')),
  ("I003822 calc pattern -> no intensity_type", lambda: not extras('I003822', 'intensity_type')),

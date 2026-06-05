@@ -2236,11 +2236,17 @@ def check19_intensity_detector(e, text):
         r'intensit\w*[^.]{0,30}visual\w*\s+estimat|visual\w*\s+estimat\w*[^.]{0,30}intensit'
         r'|estimat\w*\s+visual\w*[^.]{0,30}intensit', text, re.I))
     if (allx10 or visually_estimated) and it.lower() != 'visual':
-        why = ("are all multiples of 10 (visually estimated from film)" if allx10
-               else "were visually estimated (per the .pdf)")
+        if allx10:
+            why, ev = "are all multiples of 10 (visually estimated from film)", None
+        else:
+            why = "were visually estimated (per the .pdf)"
+            # '?look' evidence: the 'visually estimated' phrase sits at the PXRD-table legend
+            # ('…visually estimated. Note that vs denotes very strong…'), so it lands on the table.
+            loc = re.search(r'visual\w*\s+estimat\w*|estimat\w*\s+visual\w*', text, re.I)
+            ev = loc.group(0) if loc else None
         out.append(Finding('intensity_type', 'flag',
                    "the powder pattern intensities %s, so Intensity Type should be Visual, "
-                   "not %s." % (why, it), None, 'instr'))
+                   "not %s." % (why, it), ev, 'instr'))
         return out
     if not text:
         return out
