@@ -978,6 +978,36 @@ def pdf_index(folder):
     return {k: sorted(ps, key=lambda p: (_is_supp(os.path.basename(p)), len(os.path.basename(p))))[0]
             for k, ps in cand.items()}
 
+# Entry-docx discovery, shared by the GUI, annotate_review, and sweep so the folder you point at
+# can hold the docx at ANY depth (e.g. entries at the top level with the PDFs in a Files/
+# subfolder, or everything nested). A supplementary/table docx (Supp/Suppl, Table S2, _SI, _S1,
+# additional) is NOT the entry transcription; in trees that keep both beside one id it can sort
+# first and win the dedup, so rank it LAST and let the real entry win.
+_SUPP_DOCX = re.compile(r'supp|suppl|supplementary|sup\d|_sup\b|_si\b|_s\d|table\s*s|additional', re.I)
+def discover(folder):
+    """{entry_id: docx_path} for the real entry transcriptions under `folder`, searched
+    RECURSIVELY. Skips Word lock files (~$), the tool's own outputs (review_out/, .edit_backup/),
+    and supplementary/table docx; when an id has several docx the '(MineralName)' transcription
+    wins, then stable path order."""
+    cand = {}
+    for dp in sorted(glob.glob(os.path.join(folder, '**', '*.docx'), recursive=True)):
+        base = os.path.basename(dp)
+        if base.startswith('~$'):
+            continue
+        if re.search(r'(?:^|/)(review_out|\.edit_backup)/', dp.replace(os.sep, '/')):
+            continue
+        eid = entry_id(dp)
+        if eid:
+            cand.setdefault(eid, []).append(dp)
+    out = {}
+    for eid, ps in cand.items():
+        real = [p for p in ps if not _SUPP_DOCX.search(os.path.basename(p))]
+        if not real:                   # an id with ONLY supplementary docx is not a real entry
+            continue
+        real.sort(key=lambda p: (not re.search(r'\(.+\)\.docx$', os.path.basename(p)), p))
+        out[eid] = real[0]
+    return out
+
 def _cif_has_name(p):
     """True if the CIF declares a _chemical_name_mineral (a proper, complete CIF). Used to
     prefer a named CIF over a garbage/incomplete one when an id has duplicate CIFs."""
@@ -1158,8 +1188,7 @@ def main():
     ap.add_argument('--id', help='only this entry id, e.g. Innnnnn')
     args = ap.parse_args()
     idx = pdf_index(args.folder)
-    docs = sorted(f for f in glob.glob(os.path.join(args.folder, '*.docx'))
-                  if not os.path.basename(f).startswith('~$'))
+    docs = sorted(discover(args.folder).values())     # recursive: docx at any depth under the root
     for dp in docs:
         if args.id and args.id not in os.path.basename(dp): continue
         eid = entry_id(dp)

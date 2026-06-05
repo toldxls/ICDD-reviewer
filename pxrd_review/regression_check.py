@@ -92,6 +92,20 @@ def _xxe_blocked():
             pass
     return ''.join(A._xml(dt).itertext()) == '&e;'   # lxml: entity left unresolved, no file read
 
+def _discover_recursive_ok():
+    """discover() finds entry docx at ANY depth under the root, skips the tool's own review_out/
+    output, and prefers the '(MineralName)' transcription over a supplementary docx of the same id."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        sub = os.path.join(td, 'sub'); os.makedirs(sub)
+        ro = os.path.join(td, 'review_out'); os.makedirs(ro)
+        open(os.path.join(sub, 'I999001(Test).docx'), 'w').close()        # nested real entry
+        open(os.path.join(sub, 'I999001_Supp.docx'), 'w').close()         # supp of same id -> not chosen
+        open(os.path.join(ro, 'I999002(Out)_edited.docx'), 'w').close()   # tool output -> skipped
+        got = C.discover(td)
+        return ('I999001' in got and got['I999001'].endswith('(Test).docx')
+                and 'I999002' not in got)
+
 # (description, predicate) — predicate returns True when behaviour is correct
 CASES = [
  # --- calculated-pattern false positives (measured/comparison, not calculated) ---
@@ -558,6 +572,8 @@ CASES = [
           and M._norm('Quartz') == 'quartz'),
  # security: docx XML parsing is not XXE-able (DTD rejected / external entity unresolved)
  ("docx XML parsers block XXE (DTD/external entity)", _xxe_blocked),
+ # discovery is recursive (docx at any depth), skips review_out/, prefers the transcription
+ ("discover() finds docx recursively, skips review_out/ + supp", _discover_recursive_ok),
  # --- 22. cross-source: synthetic skips Mindat (natural≠synthetic); agreeing entry clean ---
  ("I003599 synthetic -> Mindat cell skipped",  lambda: not extras('I003599', 'mindat_fix')),
  ("I003246 no cross-source flag (agrees)",   lambda: not extras('I003246', 'cell_cif') and not extras('I003246', 'mindat_fix')),

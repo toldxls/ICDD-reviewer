@@ -474,8 +474,7 @@ def build_index(folder, out_dir):
     STATE['pdf'] = C.pdf_index(folder)
     STATE['cif'] = C.cif_index(folder)
     STATE['dft'] = C.dft_index(folder)
-    docs = sorted(f for f in glob.glob(os.path.join(folder, '*.docx'))
-                  if not os.path.basename(f).startswith('~$'))
+    docs = sorted(C.discover(folder).values())     # recursive: docx at any depth under the root
     STATE['docx'] = {os.path.splitext(os.path.basename(d))[0]: d for d in docs}
     STATE['order'] = list(STATE['docx'].keys())
     _load_cache(); _load_triage()

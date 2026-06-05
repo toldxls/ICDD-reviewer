@@ -738,8 +738,7 @@ def main():
         from pxrd_review import mindat; mindat.refresh_struct_if_stale()
     except Exception:
         pass
-    docs = sorted(f for f in glob.glob(os.path.join(args.folder, '*.docx'))
-                  if not os.path.basename(f).startswith('~$'))
+    docs = sorted(C.discover(args.folder).values())   # recursive: docx at any depth under the root
     if args.id:
         docs = [d for d in docs if args.id in os.path.basename(d)]
     if args.limit:
