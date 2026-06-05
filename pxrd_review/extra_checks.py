@@ -2214,11 +2214,19 @@ def check19_intensity_detector(e, text):
         mm = re.match(r'\s*(\d{1,4})', I or '')
         if mm:
             ivals.append(int(mm.group(1)))
-    if len(ivals) >= 8 and len(set(ivals)) >= 3 and all(v % 10 == 0 for v in ivals) \
-            and it.lower() != 'visual':
+    allx10 = len(ivals) >= 8 and len(set(ivals)) >= 3 and all(v % 10 == 0 for v in ivals)
+    # the .pdf may say so outright ("(observed) intensities were visually estimated", or
+    # qualitative descriptors vs/s/ms/m/mw/w) — a measured diffractometer pattern can still have
+    # VISUALLY estimated intensities (keutschite: Rigaku Rapid II d-spacings, visual Table-5 Irel).
+    visually_estimated = bool(text and re.search(
+        r'intensit\w*[^.]{0,30}visual\w*\s+estimat|visual\w*\s+estimat\w*[^.]{0,30}intensit'
+        r'|estimat\w*\s+visual\w*[^.]{0,30}intensit', text, re.I))
+    if (allx10 or visually_estimated) and it.lower() != 'visual':
+        why = ("are all multiples of 10 (visually estimated from film)" if allx10
+               else "were visually estimated (per the .pdf)")
         out.append(Finding('intensity_type', 'flag',
-                   "the powder pattern intensities are all multiples of 10 (visually estimated "
-                   "from film), so Intensity Type should be Visual, not %s." % it, None, 'instr'))
+                   "the powder pattern intensities %s, so Intensity Type should be Visual, "
+                   "not %s." % (why, it), None, 'instr'))
         return out
     if not text:
         return out

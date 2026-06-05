@@ -506,6 +506,10 @@ CASES = [
  # measured film cameras (intensities not all-×10) and modern Gandolfi (I003563) are unaffected.
  ("I003807 visual: all-×10 intensities -> Intensity Type Visual, not Peak",
   lambda: bool(extras('I003807', 'intensity_type', 'flag', 'Visual'))),
+ # a measured (diffractometer) pattern can still carry VISUALLY-ESTIMATED intensities; the .pdf
+ # saying so is its own signal (keutschite: Rigaku Rapid II d-spacings, Table-5 vs/s/ms/w Irel).
+ ("I003806 keutschite: '.pdf visually estimated' -> Intensity Type Visual, not Peak",
+  lambda: bool(extras('I003806', 'intensity_type', 'flag', 'Visual'))),
  ("I003563 Gandolfi->Integrated not overridden (intensities not all-×10)",
   lambda: bool(extras('I003563', 'intensity_type', 'flag', 'Integrated')) and not extras('I003563', 'intensity_type', 'flag', 'Visual')),
  ("I003822 calc pattern -> no intensity_type", lambda: not extras('I003822', 'intensity_type')),
