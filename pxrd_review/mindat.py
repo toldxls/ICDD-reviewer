@@ -21,7 +21,7 @@ CLI:
     python3 -m pxrd_review.mindat --refresh            # (re)build the cache from the API
     python3 -m pxrd_review.mindat --lookup "#mineral"  # test a single name against the cache
 """
-import os, re, json, time, ssl, datetime, urllib.request, urllib.error
+import os, re, json, time, ssl, datetime, unicodedata, urllib.request, urllib.error
 
 # macOS python.org builds often ship without CA certs; use certifi's bundle when
 # present so HTTPS verification works. $MINDAT_INSECURE=1 disables verification
@@ -258,6 +258,12 @@ def _db():
         if os.path.exists(CACHE):
             with open(CACHE, encoding='utf-8') as f:
                 _DB = json.load(f)
+            # re-key the minerals through the CURRENT _norm, so a cache built by an older
+            # normaliser (e.g. one that didn't fold diacritics) still resolves today's
+            # queries — no network refresh needed ('Åsgruvanite-(Ce)' -> 'asgruvanite-(ce)').
+            mins = _DB.get('minerals')
+            if mins:
+                _DB['minerals'] = {_norm(v.get('name') or k): v for k, v in mins.items()}
         else:
             _DB = {}
     return _DB
@@ -266,10 +272,13 @@ def available():
     return os.path.exists(CACHE)
 
 def _norm(name):
-    """Normalise a mineral name for matching: lowercase, drop the '-syn' tag,
-    collapse spaces. Keep Levinson suffixes like '-(Ce)' (they are distinct
-    species)."""
-    s = (name or '').strip().lower()
+    """Normalise a mineral name for matching: FOLD DIACRITICS (Å→A, ö→o), lowercase,
+    drop the '-syn' tag, collapse spaces. Keep Levinson suffixes like '-(Ce)' (they are
+    distinct species). Diacritic folding is essential because Mindat keeps the accented
+    name (e.g. 'Åsgruvanite-(Ce)') while the docx uses the ASCII form ('Asgruvanite-(Ce)')."""
+    s = unicodedata.normalize('NFKD', name or '')
+    s = ''.join(c for c in s if not unicodedata.combining(c))   # Åsgruvanite -> Asgruvanite
+    s = s.strip().lower()
     s = re.sub(r'[\s,\-]*\bsyn\b\.?', '', s)      # synthetic tag: '-syn' or ', syn'
     s = re.sub(r'\s+', ' ', s).strip()
     return s.strip(' ,-')

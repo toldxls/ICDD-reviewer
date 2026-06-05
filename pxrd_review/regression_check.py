@@ -17,6 +17,7 @@ import sys, os, glob
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import annotate_review as A
 from pxrd_review import extra_checks as X
+from pxrd_review import mindat as M
 
 def _stub_entry(z, formula):   # 'testite' name so _cif_name_ok passes and the Z logic runs
     return type('S', (), {'cell': {'Z': str(z)}, 'formulas': {'Empirical': formula},
@@ -526,6 +527,13 @@ CASES = [
                 'the powder pattern was calculated from the single-crystal structure'))),
  # --- 21. Primary name normalization: corrected names must NOT flag ---
  ("I003523 primary name OK (no FP)",         lambda: not extras('I003523', 'primary_name')),
+ # mindat name matching folds diacritics: Mindat keeps the accented species name
+ # ('Åsgruvanite-(Ce)', 'Désorite') but the docx uses the ASCII form — they must match,
+ # else a real species reads as 'not found among IMA species'. (Cache-independent unit check.)
+ ("mindat _norm folds diacritics (Å/é/č/ě/š == ASCII)",
+  lambda: M._norm('Åsgruvanite-(Ce)') == M._norm('Asgruvanite-(Ce)')
+          and M._norm('Désorite') == M._norm('Desorite')
+          and M._norm('Quartz') == 'quartz'),
  # --- 22. cross-source: synthetic skips Mindat (natural≠synthetic); agreeing entry clean ---
  ("I003599 synthetic -> Mindat cell skipped",  lambda: not extras('I003599', 'mindat_fix')),
  ("I003246 no cross-source flag (agrees)",   lambda: not extras('I003246', 'cell_cif') and not extras('I003246', 'mindat_fix')),
