@@ -495,6 +495,14 @@ CASES = [
  # --- 19. Intensity Type follows the detector (area→Integrated, BB→Peak) ---
  ("I003657 Bragg-Brentano -> Peak flag",     lambda: bool(extras('I003657', 'intensity_type'))),
  ("I003563 Gandolfi/area -> Integrated flag", lambda: bool(extras('I003563', 'intensity_type'))),
+ # a powder pattern whose OBSERVED intensities are ALL multiples of 10 was visually estimated
+ # from film -> Intensity Type Visual. This OVERRIDES the Gandolfi/area rule (a Gandolfi FILM
+ # camera is not a digital detector): spaltiite (I003807, all-×10 Irel) -> Visual not Peak. The
+ # measured film cameras (intensities not all-×10) and modern Gandolfi (I003563) are unaffected.
+ ("I003807 visual: all-×10 intensities -> Intensity Type Visual, not Peak",
+  lambda: bool(extras('I003807', 'intensity_type', 'flag', 'Visual'))),
+ ("I003563 Gandolfi->Integrated not overridden (intensities not all-×10)",
+  lambda: bool(extras('I003563', 'intensity_type', 'flag', 'Integrated')) and not extras('I003563', 'intensity_type', 'flag', 'Visual')),
  ("I003822 calc pattern -> no intensity_type", lambda: not extras('I003822', 'intensity_type')),
  # --- 7. synthetic: the 'Synthetic Rock-forming minerals' subfile is a CATEGORY (a
  #     natural mineral is also filed there) — not a 'this sample is synthetic' flag ---

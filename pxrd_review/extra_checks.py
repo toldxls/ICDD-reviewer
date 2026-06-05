@@ -2175,7 +2175,7 @@ BRAGG_BRENTANO = r'bragg[\s–-]?brentano'
 def check19_intensity_detector(e, text):
     out = []
     it = (e.instr.get('intensity_type') or '').strip()
-    if not it or not text:
+    if not it:
         return out
     # Intensity Type is meaningless for most CALCULATED patterns (it's a modelling
     # choice, not a detector fact). The patterns where it does matter are recorded
@@ -2183,6 +2183,27 @@ def check19_intensity_detector(e, text):
     # the paper calculated the pattern), so they still reach this check.
     if (e.instr.get('spacing_instr') or '').strip().lower() == 'calculated' or \
        (e.instr.get('intensity_instr') or '').strip().lower() == 'calculated':
+        return out
+    # VISUAL (docx-internal): a powder pattern whose OBSERVED intensities are ALL multiples of
+    # 10 was visually estimated from film (the classic decile/visual scale) — so Intensity Type
+    # should be Visual, not Peak/Integrated. This OVERRIDES the detector rule below: a Gandolfi
+    # FILM camera (114.6 mm, visual Irel) is not a digital area detector, even though 'gandolfi'
+    # otherwise reads as Integrated. Requires enough varied reflections to be unambiguous (a
+    # short or constant list could be ×10 by chance). spaltiite (I003807, Peak) and
+    # ferriandrosite-(Ce) (I002387, Integrated) are the corpus cases; the densitometer/measured
+    # film cameras (kodamaite, ginelfite: 1,3,15,73,…) correctly do NOT trigger it.
+    ivals = []
+    for _d, I, _h, _k, _l in (e.refl or []):
+        mm = re.match(r'\s*(\d{1,4})', I or '')
+        if mm:
+            ivals.append(int(mm.group(1)))
+    if len(ivals) >= 8 and len(set(ivals)) >= 3 and all(v % 10 == 0 for v in ivals) \
+            and it.lower() != 'visual':
+        out.append(Finding('intensity_type', 'flag',
+                   "the powder pattern intensities are all multiples of 10 (visually estimated "
+                   "from film), so Intensity Type should be Visual, not %s." % it, None, 'instr'))
+        return out
+    if not text:
         return out
     area_kw = bb_kw = None                       # remember the matched phrase (for the GUI zoom)
     for s in _sentences(text):
