@@ -94,6 +94,29 @@ def axis_issues(dv, pv):
         out.append(('esd', 'docx (%s)  vs  pdf (%s)' % (desd, pesd)))
     return out
 
+def grouped_axis_issues(docx_p, pdf_p, keys=('a', 'b', 'c', 'α', 'β', 'γ')):
+    """axis_issues across the whole cell, with SYMMETRY-EQUIVALENT axes COLLAPSED: axes
+    that share the same docx AND pdf value (cubic a=b=c, uniaxial a=b) report each
+    sig-fig/esd/value issue ONCE under a combined label ('a=b=c'), instead of repeating
+    the identical error per axis. Symmetry-fixed angles (90/120) are skipped, as before.
+    Returns [(label, rep_axis, kind, note)] in cell order; rep_axis is the column to anchor."""
+    groups = []                                  # [[docx_val, pdf_val, [axes]], …]
+    for k in keys:
+        if k in ('α', 'β', 'γ') and num_val(docx_p.get(k)) in (90.0, 120.0):
+            continue
+        dv, pv = docx_p.get(k), pdf_p.get(k)
+        for g in groups:
+            if g[0] == dv and g[1] == pv:
+                g[2].append(k); break
+        else:
+            groups.append([dv, pv, [k]])
+    out = []
+    for dv, pv, axes in groups:
+        label = '='.join(axes)
+        for kind, note in axis_issues(dv, pv):
+            out.append((label, axes[0], kind, note))
+    return out
+
 def parse_comments(path):
     """Reviewer comments from word/comments.xml -> [(author, text)]."""
     z = zipfile.ZipFile(path)
@@ -1026,18 +1049,14 @@ def report(docx_path, pdf_path):
             # significant-figure & esd checks across every comparable parameter
             docx_p = dict(zip(['a','b','c','α','β','γ'], d.authors_cell[:6]))
             pdf_p  = dict(zip(['a','b','c','α','β','γ'], [cd.a,cd.b,cd.c,cd.al,cd.be,cd.ga]))
+            # symmetry-equivalent axes (cubic a=b=c, uniaxial a=b) are collapsed so the
+            # same sig-fig/esd error reports ONCE under a combined label, not per axis.
             any_issue = False
-            for k in ['a','b','c','α','β','γ']:
-                # symmetry-fixed angles (90, 120) are constrained, not transcribed
-                # from the paper, and inline grabs of α/γ often catch a stray
-                # number from another phase — so skip them.
-                if k in ('α','β','γ') and num_val(docx_p[k]) in (90.0, 120.0):
-                    continue
-                for kind, note in axis_issues(docx_p[k], pdf_p[k]):
-                    any_issue = True
-                    label = {'value':'VALUE MISMATCH','precision':'sig-figs differ',
-                             'esd':'error (esd) differs'}[kind]
-                    print('          ↳ %s: %s — %s' % (k, label, note))
+            for axlabel, _rep, kind, note in grouped_axis_issues(docx_p, pdf_p):
+                any_issue = True
+                label = {'value':'VALUE MISMATCH','precision':'sig-figs differ',
+                         'esd':'error (esd) differs'}[kind]
+                print('          ↳ %s: %s — %s' % (axlabel, label, note))
             if not any_issue:
                 print('          ↳ numbers, significant figures and esds all match')
             if cd.context == 'single':

@@ -77,7 +77,7 @@ def _is_clean(res):
 def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
     """Return a structured verdict mirroring cell_lambda_check.report()."""
     d = C.parse_docx(docx_path)
-    res = {'docx': d, 'cell': ('nopdf',), 'params': {}, 'lam': None, 'extra': []}
+    res = {'docx': d, 'cell': ('nopdf',), 'params': {}, 'param_labels': {}, 'lam': None, 'extra': []}
     text = C.pdf_text(pdf_path) if pdf_path else None
     cif_data = X.parse_cif(cif_path) if cif_path else {}
     dft_data = X.parse_dft(dft_path) if dft_path else {}
@@ -104,12 +104,11 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
             keys = ['a', 'b', 'c', 'α', 'β', 'γ']
             docx_p = dict(zip(keys, d.authors_cell[:6]))
             pdf_p = dict(zip(keys, [cd.a, cd.b, cd.c, cd.al, cd.be, cd.ga]))
-            for k in keys:
-                if k in ('α', 'β', 'γ') and C.num_val(docx_p[k]) in (90.0, 120.0):
-                    continue                       # symmetry-fixed angle, not transcribed
-                iss = C.axis_issues(docx_p[k], pdf_p[k])
-                if iss:
-                    res['params'][k] = iss
+            # collapse symmetry-equivalent axes (cubic a=b=c, uniaxial a=b) so the same
+            # sig-fig/esd error flags ONCE, on the representative axis, under a combined label
+            for label, rep, kind, note in C.grouped_axis_issues(docx_p, pdf_p, keys):
+                res['params'].setdefault(rep, []).append((kind, note))
+                res['param_labels'][rep] = label
             # Z (formula units): a/b/c match, so this IS the same cell — a different Z is a
             # real inconsistency. Compare the docx Z to an EXPLICIT 'Z = N' in the matched
             # cell's own sentence (the '=' form, so a digit in the space-group symbol, e.g.
@@ -625,7 +624,7 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=Non
             _highlight(cell)
             runs = _cell_runs(cell) or _cell_runs(ac_row.cells[0])
             body = '; '.join('%s — %s' % (KIND_LABEL[kind], note) for kind, note in issues)
-            text = _with_note(_tidy('PXRD check — %s: %s' % (k, body)), triage, 'param:%s' % k)
+            text = _with_note(_tidy('PXRD check — %s: %s' % (res.get('param_labels', {}).get(k, k), body)), triage, 'param:%s' % k)
             doc.add_comment(runs, text=text, author=AUTHOR, initials=INITIALS)
             rec['highlights'].append("Author's Cell:%s" % k)
             rec['comments'].append(text)

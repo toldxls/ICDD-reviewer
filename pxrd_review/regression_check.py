@@ -384,6 +384,17 @@ CASES = [
  # --- cell parsing (cubic / uniaxial / rounded-table) ---
  ("I003634 cubic cell matches",         lambda: cell_verdict('I003634') == 'match'),
  ("I003751 uniaxial: only c flagged",        lambda: params('I003751') == {'c'}),
+ # symmetry-equivalent axes (cubic a=b=c, uniaxial a=b) collapse so an identical sig-fig/esd
+ # error flags ONCE on the representative axis, not per axis (jonlarsenite I003697 is cubic).
+ ("I003697 cubic precision collapses to one axis", lambda: params('I003697') == {'a'}),
+ ("grouped_axis_issues: cubic a=b=c collapses each issue to one label",
+  lambda: [l for l, r, k, n in C.grouped_axis_issues(
+      {'a': '8.701(10)', 'b': '8.701(10)', 'c': '8.701(10)', 'α': '90', 'β': '90', 'γ': '90'},
+      {'a': '8.70(1)', 'b': '8.70(1)', 'c': '8.70(1)', 'α': '90', 'β': '90', 'γ': '90'})] == ['a=b=c', 'a=b=c']),
+ ("grouped_axis_issues: distinct axes stay separate",
+  lambda: sorted(set(l for l, r, k, n in C.grouped_axis_issues(
+      {'a': '5.00(1)', 'b': '6.00(1)', 'c': '7.00(2)', 'α': '90', 'β': '90', 'γ': '90'},
+      {'a': '5.0(1)', 'b': '6.0(1)', 'c': '7.00(1)', 'α': '90', 'β': '90', 'γ': '90'}))) == ['a', 'b', 'c']),
  # Z (formula units): a/b/c match but the .pdf explicitly states a different 'Z = N'
  # (grokhovskyite: docx Z=2, paper 'Z = 3'); a docx-Z == paper-Z entry must NOT flag
  ("I003744 Z mismatch flagged (docx 2 vs .pdf Z=3)", lambda: 'Z' in params('I003744')),
