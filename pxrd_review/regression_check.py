@@ -80,6 +80,18 @@ def _anchor_text(eid, anchor):
     cell = A._anchor_cell(doc, doc.tables[0].rows[0], anchor)   # ac_row unused for ima/analysis
     return cell.text.strip() if cell else None
 
+def _xxe_blocked():
+    """Security invariant: the docx XML parsers must not be XXE-able. The stdlib-ET parsers
+    reject a DTD/DOCTYPE outright; the lxml parser refuses to resolve an external entity."""
+    dt = b'<!DOCTYPE a [<!ENTITY e SYSTEM "file:///etc/hostname">]><a>&e;</a>'
+    for mod in (C, X):                       # cell_lambda_check + extra_checks (stdlib ET)
+        try:
+            mod._xml_fromstring(dt)
+            return False                     # should have raised on the DTD
+        except ValueError:
+            pass
+    return ''.join(A._xml(dt).itertext()) == '&e;'   # lxml: entity left unresolved, no file read
+
 # (description, predicate) — predicate returns True when behaviour is correct
 CASES = [
  # --- calculated-pattern false positives (measured/comparison, not calculated) ---
@@ -544,6 +556,8 @@ CASES = [
   lambda: M._norm('Åsgruvanite-(Ce)') == M._norm('Asgruvanite-(Ce)')
           and M._norm('Désorite') == M._norm('Desorite')
           and M._norm('Quartz') == 'quartz'),
+ # security: docx XML parsing is not XXE-able (DTD rejected / external entity unresolved)
+ ("docx XML parsers block XXE (DTD/external entity)", _xxe_blocked),
  # --- 22. cross-source: synthetic skips Mindat (natural≠synthetic); agreeing entry clean ---
  ("I003599 synthetic -> Mindat cell skipped",  lambda: not extras('I003599', 'mindat_fix')),
  ("I003246 no cross-source flag (agrees)",   lambda: not extras('I003246', 'cell_cif') and not extras('I003246', 'mindat_fix')),

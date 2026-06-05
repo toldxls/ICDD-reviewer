@@ -48,6 +48,27 @@ app = Flask(__name__, static_folder=os.path.join(HERE, 'static'),
             static_url_path='/static')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0      # don't let the browser cache app.js/css/index
 
+# Security guard for a localhost-only server (no authentication by design):
+#  - Host-header allowlist defeats DNS-rebinding — a malicious domain pointed at 127.0.0.1
+#    still sends its OWN Host header, not ours, so it's rejected.
+#  - For state-changing requests, an Origin/Referer check blocks cross-site POSTs (CSRF) —
+#    a page on another site can't silently drive /api/rerun (regenerate docx) or /api/triage.
+# Populated at launch once the port is known (see main()); empty => not yet configured (allow).
+_ALLOWED_HOSTS = set()
+
+@app.before_request
+def _guard_localhost():
+    if not _ALLOWED_HOSTS:
+        return                                       # pre-launch / unconfigured
+    if (request.host or '').lower() not in _ALLOWED_HOSTS:
+        abort(403)                                   # wrong Host -> DNS-rebinding / off-host
+    if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+        src = request.headers.get('Origin') or request.headers.get('Referer') or ''
+        if src:                                      # cross-site state change -> CSRF
+            netloc = src.split('://', 1)[-1].split('/', 1)[0].lower()
+            if netloc not in _ALLOWED_HOSTS:
+                abort(403)
+
 @app.after_request
 def _no_cache_ui(resp):
     """A localhost dev tool: never cache the UI assets, so edits show on a plain
@@ -716,6 +737,8 @@ def main():
     port = _pick_port(args.port)
     if port != args.port:
         print('[review_gui] port %d busy — using %d' % (args.port, port))
+    global _ALLOWED_HOSTS
+    _ALLOWED_HOSTS = {'127.0.0.1:%d' % port, 'localhost:%d' % port}   # Host/CSRF allowlist
     url = 'http://127.0.0.1:%d/' % port
     print('\n[review_gui] serving on %s  (localhost only — Ctrl-C to stop)' % url)
     if not args.no_browser:

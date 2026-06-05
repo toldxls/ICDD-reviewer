@@ -32,6 +32,15 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from lxml import etree
 
+# Hardened XML parser for docx XML: a crafted .docx could carry a DTD with external/local-file
+# entities (XXE) or an entity bomb. docx OOXML never legitimately uses a DTD, so disable DTD
+# loading + entity resolution + any network access. The 5 predefined entities (&amp; etc.) still
+# work, so real documents are unaffected. Use this everywhere instead of bare etree.fromstring().
+_SAFE_XML = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False,
+                            dtd_validation=False, huge_tree=False)
+def _xml(data):
+    return etree.fromstring(data, _SAFE_XML)
+
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 AUTHOR, INITIALS = 'PXRD Review Tool', 'PXRD'
 def _q(tag): return W + tag
@@ -452,7 +461,7 @@ def _extract_reviewer_edits(path):
     try:
         z = zipfile.ZipFile(path)
         names = z.namelist()
-        droot = etree.fromstring(z.read('word/document.xml'))
+        droot = _xml(z.read('word/document.xml'))
         # tracked changes, in document order; pair an adjacent del+ins (same author,
         # either order) into a single 'old -> new' replacement.
         revs = []
@@ -477,7 +486,7 @@ def _extract_reviewer_edits(path):
                 out.append("deleted '%s'  (%s)" % (txt.strip(), auth)); i += 1
         # comments authored by someone other than the tool
         if 'word/comments.xml' in names:
-            croot = etree.fromstring(z.read('word/comments.xml'))
+            croot = _xml(z.read('word/comments.xml'))
             for c in croot:
                 if c.tag == _q('comment') and c.get(_q('author')) != AUTHOR:
                     body = ''.join(t.text or '' for t in c.iter(_q('t'))).strip()
@@ -508,14 +517,14 @@ def _strip_tool_annotations(path):
     z.close()
     tool_ids = set()
     if 'word/comments.xml' in parts:
-        croot = etree.fromstring(parts['word/comments.xml'])
+        croot = _xml(parts['word/comments.xml'])
         for c in list(croot):
             if c.tag == _q('comment') and c.get(_q('author')) == AUTHOR:
                 tool_ids.add(c.get(_q('id')))
                 croot.remove(c)
         parts['word/comments.xml'] = etree.tostring(croot, xml_declaration=True,
                                                     encoding='UTF-8', standalone=True)
-    droot = etree.fromstring(parts['word/document.xml'])
+    droot = _xml(parts['word/document.xml'])
     # Identify the tool's OWN yellow highlights BEFORE the comment ranges are removed.
     # The annotator highlights a cell and comments the SAME runs, so every tool
     # highlight sits inside that finding's comment range; a yellow highlight that is

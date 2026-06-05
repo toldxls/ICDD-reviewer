@@ -36,6 +36,14 @@ import re, zipfile, math, html
 from collections import namedtuple
 from xml.etree import ElementTree as ET
 
+def _xml_fromstring(data):
+    """Parse docx XML defensively: reject a DTD/DOCTYPE (docx never carries one) to block XXE
+    external/local-file entities and entity-expansion ('billion laughs') DoS. &amp; etc. unaffected."""
+    blob = data if isinstance(data, (bytes, bytearray)) else (data or '').encode('utf-8', 'replace')
+    if b'<!DOCTYPE' in blob:
+        raise ValueError('refusing to parse docx XML with a DOCTYPE/DTD (possible XXE/entity bomb)')
+    return ET.fromstring(data)
+
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 def _t(e): return e.tag.replace(W, '')
 
@@ -53,7 +61,7 @@ def _cell_text(tc):
     return ''.join(el.text or '' for el in tc.iter() if _t(el) == 't')
 
 def _rows(path):
-    root = ET.fromstring(zipfile.ZipFile(path).read('word/document.xml'))
+    root = _xml_fromstring(zipfile.ZipFile(path).read('word/document.xml'))
     out = []
     for tr in root.iter(W + 'tr'):
         out.append([_cell_text(tc) for tc in tr.findall(W + 'tc')])

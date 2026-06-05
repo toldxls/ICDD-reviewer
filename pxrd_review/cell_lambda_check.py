@@ -28,6 +28,16 @@ import sys, os, re, glob, zipfile, argparse
 from xml.etree import ElementTree as ET
 from collections import namedtuple
 
+def _xml_fromstring(data):
+    """Parse docx XML defensively. docx OOXML never carries a DTD/DOCTYPE, so reject one —
+    that blocks XXE external/local-file entities and entity-expansion ('billion laughs') DoS,
+    both of which require a DTD. (stdlib ElementTree doesn't fetch external entities anyway, but
+    this also stops the expansion bomb.) Predefined entities (&amp; etc.) are unaffected."""
+    blob = data if isinstance(data, (bytes, bytearray)) else (data or '').encode('utf-8', 'replace')
+    if b'<!DOCTYPE' in blob:
+        raise ValueError('refusing to parse docx XML with a DOCTYPE/DTD (possible XXE/entity bomb)')
+    return ET.fromstring(data)
+
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 def _t(e): return e.tag.replace(W, '')
 
@@ -47,7 +57,7 @@ def cell_value(tc):
     return s
 
 def docx_rows(path):
-    root = ET.fromstring(zipfile.ZipFile(path).read('word/document.xml'))
+    root = _xml_fromstring(zipfile.ZipFile(path).read('word/document.xml'))
     rows = []
     for tr in root.iter(W + 'tr'):
         rows.append([cell_value(tc) for tc in tr.findall(W + 'tc')])
@@ -121,7 +131,7 @@ def parse_comments(path):
     """Reviewer comments from word/comments.xml -> [(author, text)]."""
     z = zipfile.ZipFile(path)
     if 'word/comments.xml' not in z.namelist(): return []
-    root = ET.fromstring(z.read('word/comments.xml'))
+    root = _xml_fromstring(z.read('word/comments.xml'))
     out = []
     for c in root.iter(W + 'comment'):
         txt = ''.join(t.text or '' for t in c.iter() if _t(t) == 't').strip()
