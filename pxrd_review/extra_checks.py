@@ -1960,16 +1960,22 @@ def check15_strongest_lines(e, text):
 # --- controlled vocabularies: canonical spellings seen in corrected entries ---
 VOCAB_CANON = {
     'spacing_instr':   {'Diffractometer', 'Calculated', 'Film', 'Camera', 'Gandolfi',
-                        'Guinier', 'Debye-Scherrer', 'Visual', 'Image plate', 'Other'},
+                        'Guinier', 'Visual', 'Image plate', 'Other'},
     'intensity_instr': {'Diffractometer', 'Calculated', 'Film', 'Gandolfi', 'Guinier',
-                        'Debye-Scherrer', 'Visual', 'Image plate', 'Other'},
+                        'Visual', 'Image plate', 'Other'},
     'intensity_type':  {'Integrated', 'Peak', 'Visual'},
     'filter':          {'Monochromator Crystal', 'Beta-Filter', 'None'},
 }
-# observed misspellings / casing variants -> canonical (lowercased keys)
+# observed misspellings / casing variants -> canonical (lowercased keys).
+# 'Debye-Scherrer' is a GEOMETRY, not an instrument-class value: reviewers move it to
+# 'Diffractometer' (15× in the training corpus — the papers describe a Rigaku R-AXIS Rapid II
+# image-plate *diffractometer* used in Debye-Scherrer geometry); it never survives review in
+# either field, so it is treated as a fix, not a canonical value.
 VOCAB_FIX = {
-    'spacing_instr':   {'diffractomter': 'Diffractometer', 'diffractomer': 'Diffractometer'},
-    'intensity_instr': {'diffractomter': 'Diffractometer', 'diffractomer': 'Diffractometer'},
+    'spacing_instr':   {'diffractomter': 'Diffractometer', 'diffractomer': 'Diffractometer',
+                        'debye-scherrer': 'Diffractometer'},
+    'intensity_instr': {'diffractomter': 'Diffractometer', 'diffractomer': 'Diffractometer',
+                        'debye-scherrer': 'Diffractometer'},
     'intensity_type':  {'visual?': 'Visual'},
     'filter':          {'monochromator crystal': 'Monochromator Crystal',
                         'monochromator': 'Monochromator Crystal',

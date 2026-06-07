@@ -547,6 +547,14 @@ CASES = [
  ("I003246 no geometry nag (Spacing Instr. already Diffractometer)", lambda: not extras('I003246', 'geometry')),
  ("I003747 no instr_vocab flag (clean)",     lambda: not extras('I003747', 'instr_vocab', 'flag')),
  ("I003698 no instr_vocab flag (clean)",     lambda: not extras('I003698', 'instr_vocab', 'flag')),
+ # 'Debye-Scherrer' is a geometry, not an instrument class -> normalize to 'Diffractometer'
+ # (reviewers did this 15x; the value never survives review). Diffractometer itself stays clean.
+ ("instr_vocab: Debye-Scherrer -> Diffractometer", lambda: any(
+     f.code == 'instr_vocab' and 'Diffractometer' in (f.msg or '')
+     for f in X.check16_instr_vocab(type('S', (), {'instr': {'intensity_instr': 'Debye-Scherrer'}})(), None))),
+ ("instr_vocab: Diffractometer is clean", lambda: not [
+     f for f in X.check16_instr_vocab(type('S', (), {'instr': {'intensity_instr': 'Diffractometer'}})(), None)
+     if f.sev == 'flag']),
  # --- 16b. measured-data completeness (blank anode/intensity-type) ---
  ("I003600 blank anode -> derive Sync (synch λ)", lambda: bool(extras('I003600', 'instr_vocab', substr='set the anode to Sync'))),
  ("I003246 no blank-field flag",             lambda: not extras('I003246', 'instr_vocab', substr='blank')),
