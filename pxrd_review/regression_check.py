@@ -106,6 +106,31 @@ def _discover_recursive_ok():
         return ('I999001' in got and got['I999001'].endswith('(Test).docx')
                 and 'I999002' not in got)
 
+def _docx_with(td, rel, body):
+    """Write a minimal valid .docx (zip) at td/rel whose word/document.xml contains `body`.
+    Enough for discover()/_review_activity to read it (they only need the zip + document.xml)."""
+    import zipfile
+    p = os.path.join(td, rel); os.makedirs(os.path.dirname(p), exist_ok=True)
+    with zipfile.ZipFile(p, 'w') as z:
+        z.writestr('word/document.xml',
+                   '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                   '<w:body>%s</w:body></w:document>' % body)
+    return p
+
+def _discover_prefers_reviewed_ok():
+    """When an id has several parallel '(MineralName)' transcriptions (the multi-reviewer training
+    tree), discover() picks the MOST-REVIEWED copy (tracked changes/comments), not the alphabetically
+    first RAW copy. Guards the Andy-Roberts-raw-copy bug (the 'primary_name 9/9 FP' false alarm)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        # 'A_raw' sorts before 'Z_reviewed' alphabetically, so the old tiebreak picked A_raw.
+        _docx_with(td, 'A_raw/I999004(Test).docx', '<w:p><w:r><w:t>clean</w:t></w:r></w:p>')
+        _docx_with(td, 'Z_reviewed/I999004(Test).docx',
+                   '<w:ins w:id="1" w:author="R"><w:r><w:t>fix</w:t></w:r></w:ins>'
+                   '<w:del w:id="2" w:author="R"><w:r><w:delText>old</w:delText></w:r></w:del>')
+        got = C.discover(td)
+        return 'I999004' in got and 'Z_reviewed' in got['I999004']
+
 # (description, predicate) — predicate returns True when behaviour is correct
 CASES = [
  # --- calculated-pattern false positives (measured/comparison, not calculated) ---
@@ -574,6 +599,7 @@ CASES = [
  ("docx XML parsers block XXE (DTD/external entity)", _xxe_blocked),
  # discovery is recursive (docx at any depth), skips review_out/, prefers the transcription
  ("discover() finds docx recursively, skips review_out/ + supp", _discover_recursive_ok),
+ ("discover() picks the most-reviewed copy, not the raw transcription", _discover_prefers_reviewed_ok),
  # --- 22. cross-source: synthetic skips Mindat (natural≠synthetic); agreeing entry clean ---
  ("I003599 synthetic -> Mindat cell skipped",  lambda: not extras('I003599', 'mindat_fix')),
  ("I003246 no cross-source flag (agrees)",   lambda: not extras('I003246', 'cell_cif') and not extras('I003246', 'mindat_fix')),

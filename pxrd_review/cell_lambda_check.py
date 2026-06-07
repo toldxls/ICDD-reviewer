@@ -984,11 +984,30 @@ def pdf_index(folder):
 # additional) is NOT the entry transcription; in trees that keep both beside one id it can sort
 # first and win the dedup, so rank it LAST and let the real entry win.
 _SUPP_DOCX = re.compile(r'supp|suppl|supplementary|sup\d|_sup\b|_si\b|_s\d|table\s*s|additional', re.I)
+def _review_activity(p):
+    """Crude count of tracked-change + comment markers in a docx — a content signal for the
+    MOST-REVIEWED copy when one id has several parallel transcriptions (e.g. the training tree's
+    Andy/Tony/Travis reviewer folders, where the raw transcription has zero edits and the reviewed
+    copies carry the corrections). Only consulted to break a multi-copy tie, so the common
+    single-copy case never opens the file. Returns 0 on any read error (treated as un-reviewed)."""
+    try:
+        with zipfile.ZipFile(p) as z:
+            xml = z.read('word/document.xml').decode('utf-8', 'ignore')
+            n = xml.count('<w:ins ') + xml.count('<w:del ')
+            try:
+                n += z.read('word/comments.xml').decode('utf-8', 'ignore').count('<w:comment ')
+            except KeyError:
+                pass
+            return n
+    except Exception:
+        return 0
+
 def discover(folder):
     """{entry_id: docx_path} for the real entry transcriptions under `folder`, searched
     RECURSIVELY. Skips Word lock files (~$), the tool's own outputs (review_out/, .edit_backup/),
-    and supplementary/table docx; when an id has several docx the '(MineralName)' transcription
-    wins, then stable path order."""
+    and supplementary/table docx; when an id has several '(MineralName)' transcriptions (parallel
+    reviewer copies) the MOST-REVIEWED one wins (most tracked changes/comments — so a sweep reads
+    the corrected copy, not a raw transcription), then stable path order."""
     cand = {}
     for dp in sorted(glob.glob(os.path.join(folder, '**', '*.docx'), recursive=True)):
         base = os.path.basename(dp)
@@ -1004,8 +1023,13 @@ def discover(folder):
         real = [p for p in ps if not _SUPP_DOCX.search(os.path.basename(p))]
         if not real:                   # an id with ONLY supplementary docx is not a real entry
             continue
-        real.sort(key=lambda p: (not re.search(r'\(.+\)\.docx$', os.path.basename(p)), p))
-        out[eid] = real[0]
+        named = [p for p in real if re.search(r'\(.+\)\.docx$', os.path.basename(p))]
+        pool = named or real           # a '(MineralName)' transcription beats a bare-id docx
+        if len(pool) > 1:              # parallel reviewer copies: take the most-reviewed (then path)
+            pool = sorted(pool, key=lambda p: (-_review_activity(p), p))
+        else:
+            pool = sorted(pool, key=lambda p: p)
+        out[eid] = pool[0]
     return out
 
 def _cif_has_name(p):
