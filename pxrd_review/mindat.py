@@ -15,10 +15,11 @@ geomaterial flagged `ima_notes=GROUP`, and a group needs ~3 isostructural
 members). So `groupid → name` is ground truth.
 
 Key: read from $MINDAT_API_KEY or review_tool/.mindat_key (untracked).
-Cache: review_tool/.cache/mindat_ima.json
+Caches (separate files, both built from ONE pull): review_tool/.cache/mindat_ima.json
+(group lookup) + mindat_struct.json (cell/SG/elements).
 
 CLI:
-    python3 -m pxrd_review.mindat --refresh            # (re)build the cache from the API
+    python3 -m pxrd_review.mindat --refresh            # (re)build both caches from the API
     python3 -m pxrd_review.mindat --lookup "#mineral"  # test a single name against the cache
 """
 import os, re, json, time, ssl, datetime, unicodedata, urllib.request, urllib.error
@@ -69,17 +70,19 @@ def _fetch(url, key, max_retries=4):
         time.sleep(2 ** i + 0.3)
     raise RuntimeError('Mindat fetch failed after %d retries: %s' % (max_retries, url))
 
-def _pull(key, **params):
-    """Paginate a geomaterials query into one list of result dicts."""
+def _pull(key, page_size=2000, **params):
+    """Paginate a geomaterials query into one list of result dicts. page-size is
+    well under any server cap (2000 rows ≈ 0.8 s, same as 500) so the whole IMA
+    corpus is ~4 pages, not ~13 — fewer round-trips is gentler on the API too."""
     q = '&'.join('%s=%s' % (k, v) for k, v in params.items())
-    url = '%s/geomaterials/?%s&page-size=500&format=json' % (BASE, q)
+    url = '%s/geomaterials/?%s&page-size=%d&format=json' % (BASE, q, page_size)
     rows = []
     while url:
         data = _fetch(url, key)
         rows.extend(data.get('results', []))
         url = data.get('next')
         if url:
-            time.sleep(0.5)
+            time.sleep(0.2)
     return rows
 
 # ----------------------------------------------------------------------------- structural cache (for the candidate-group scan)
@@ -90,18 +93,20 @@ def _pull(key, **params):
 STRUCT_FIELDS = 'id,name,groupid,spacegroup,a,b,c,alpha,beta,gamma,elements,ima_formula,ima_status'
 STRUCT_CACHE = os.path.join(_paths.cache_dir(), 'mindat_struct.json')
 
+# One pull feeds BOTH caches: the struct fields already carry groupid/ima_status,
+# so adding the four Strunz codes is everything the group cache needs too. The two
+# caches stay SEPARATE files (a normal review only loads the small group cache) but
+# share a single network pass — no second walk over the same 6224 IMA minerals.
+COMBINED_FIELDS = STRUCT_FIELDS + ',strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4'
+
 def _f(x):
     try:
         v = float(str(x).strip()); return v
     except Exception:
         return 0.0
 
-def refresh_struct(verbose=True):
-    key = api_key()
-    if not key:
-        raise RuntimeError('No API key for struct refresh')
-    if verbose: print('pulling IMA structural data (cell/SG/elements)…')
-    rows = _pull(key, ima='true', fields=STRUCT_FIELDS)
+def _struct_out(rows):
+    """Build the structural cache dict from already-pulled mineral rows."""
     recs = []
     for m in rows:
         recs.append({'name': m.get('name', ''), 'norm': _norm(m.get('name', '')),
@@ -109,12 +114,13 @@ def refresh_struct(verbose=True):
                      'a': _f(m.get('a')), 'b': _f(m.get('b')), 'c': _f(m.get('c')),
                      'al': _f(m.get('alpha')), 'be': _f(m.get('beta')), 'ga': _f(m.get('gamma')),
                      'elements': m.get('elements') or [], 'formula': m.get('ima_formula', '')})
-    out = {'fetched': time.strftime('%Y-%m-%d'), 'recs': recs}
-    os.makedirs(os.path.dirname(STRUCT_CACHE), exist_ok=True)
-    with open(STRUCT_CACHE, 'w', encoding='utf-8') as f:
-        json.dump(out, f)
-    if verbose: print('cached -> %s  (%d records)' % (STRUCT_CACHE, len(recs)))
-    return out
+    return {'fetched': time.strftime('%Y-%m-%d'), 'recs': recs}
+
+def refresh_struct(verbose=True):
+    """The structural cache is now built as part of the single unified pull, so
+    this just delegates to refresh() (kept for the --refresh-struct CLI entry)."""
+    refresh(verbose=verbose)
+    return struct_db()
 
 _SDB = None
 def struct_db():
@@ -130,29 +136,17 @@ def struct_db():
 def struct_available():
     return os.path.exists(STRUCT_CACHE)
 
-def refresh_struct_if_stale(max_age_days=14):
-    """Same staleness policy as the group cache, for the structural pull."""
-    global _SDB
-    if not api_key():
-        return
-    db = struct_db()
-    age = None
+def _struct_age_days():
+    """Age of the structural cache in days, or None if undated/missing."""
     try:
-        age = (datetime.date.today() - datetime.date.fromisoformat(db.get('fetched'))).days
+        return (datetime.date.today() - datetime.date.fromisoformat(struct_db().get('fetched'))).days
     except Exception:
-        pass
-    if struct_available() and age is not None and age < max_age_days:
-        return
-    if not _reachable():
-        if struct_available():
-            print('[mindat] offline — using cached structural data')
-        return
-    print('[mindat] structural cache %s — refreshing…' % ('missing' if not struct_available() else '%s days old' % age))
-    try:
-        refresh_struct(verbose=False); _SDB = None
-        print('[mindat] structural cache refreshed (%d records)' % len(struct_db().get('recs', [])))
-    except Exception as ex:
-        print('[mindat] struct refresh failed (%s) — using existing cache' % ex)
+        return None
+
+def refresh_struct_if_stale(max_age_days=14):
+    """Both caches share one staleness check + one network pull now, so this just
+    routes to the unified auto-refresh (see _auto_refresh)."""
+    _auto_refresh(max_age_days)
 
 # ----------------------------------------------------------------------------- cache build
 def _strunz(rec):
@@ -161,28 +155,47 @@ def _strunz(rec):
     # group containers store all-zero / empty Strunz ('0.00.') — treat as none
     return code if re.search(r'[1-9A-Za-z]', ''.join(s)) else ''
 
+def _group_names(key, referenced, verbose=False):
+    """Resolve {groupid -> {name, strunz}} for the referenced group ids with a
+    couple of BULK queries instead of one request per id. Mindat files group
+    containers two ways: most as entrytype=5 ('grouplist'); ~120 older ones as a
+    plain mineral (entrytype=0) named '… Group/Subgroup'. The old ima_notes=GROUP
+    query returned only ~150, leaving ~470 ids to fetch one-by-one — that serial
+    loop was the real bottleneck (~110 s). We pull the two slices once and keep
+    only the referenced ids, so the cache stays lean and the per-id fallback in
+    refresh() almost never fires."""
+    lut = {}
+    for g in _pull(key, entrytype=5, fields=FIELDS):                  # grouplists (one query)
+        lut[str(g['id'])] = g
+    if referenced - set(lut):                                         # only if some are still unresolved
+        if verbose: print('  pulling entrytype=0 group parents…')
+        for g in _pull(key, entrytype=0, name__icontains='group', fields=FIELDS):
+            gid = str(g['id'])
+            if gid in referenced and gid not in lut:
+                lut[gid] = g
+    return {gid: {'name': lut[gid].get('name', ''), 'strunz': _strunz(lut[gid])}
+            for gid in referenced if gid in lut}
+
 def refresh(verbose=True):
+    """Single network pull of all IMA minerals → writes BOTH the group cache
+    (mindat_ima.json) and the structural cache (mindat_struct.json). One pass over
+    the corpus feeds both; the files stay separate on disk so a normal review still
+    loads only the small group cache."""
+    global _DB, _SDB
     key = api_key()
     if not key:
         raise RuntimeError('No API key. Set $MINDAT_API_KEY or write %s' % KEYFILE)
-    if verbose: print('pulling IMA minerals…')
-    minerals = _pull(key, ima='true', fields=FIELDS)
+    if verbose: print('pulling IMA minerals (cell + group + Strunz, one pass)…')
+    minerals = _pull(key, ima='true', fields=COMBINED_FIELDS)
     if verbose: print('  %d minerals' % len(minerals))
-    # group container entries (a group is a geomaterial flagged GROUP). Resolve
-    # their names so a mineral's groupid → readable group name.
-    if verbose: print('pulling group entries…')
-    try:
-        groups_raw = _pull(key, ima_notes='GROUP', fields=FIELDS)
-    except Exception as e:
-        if verbose: print('  (ima_notes=GROUP query failed: %s — resolving groupids individually)' % e)
-        groups_raw = []
-    groups = {}
-    for g in groups_raw:
-        groups[str(g['id'])] = {'name': g.get('name', ''), 'strunz': _strunz(g)}
-    # any groupids not covered: fetch individually (cached, usually few)
-    need = {str(m['groupid']) for m in minerals if m.get('groupid')} - set(groups)
-    need.discard('0'); need.discard('None')
-    for gid in sorted(need):
+    # resolve every referenced group container's name (bulk; a geomaterial is a
+    # group when it is a grouplist or a '… Group'-named parent).
+    referenced = {str(m['groupid']) for m in minerals if m.get('groupid')}
+    referenced.discard('0'); referenced.discard('None')
+    if verbose: print('resolving %d group containers…' % len(referenced))
+    groups = _group_names(key, referenced, verbose)
+    # rare straggler a referenced id neither slice returned: one-off fallback
+    for gid in sorted(referenced - set(groups)):
         try:
             d = _fetch('%s/geomaterials/%s/?fields=id,name,strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4'
                        % (BASE, gid), key)
@@ -195,12 +208,20 @@ def refresh(verbose=True):
             'name': m.get('name', ''), 'groupid': m.get('groupid'),
             'strunz': _strunz(m), 'ima_status': m.get('ima_status'),
         }
-    out = {'fetched': time.strftime('%Y-%m-%d'), 'minerals': index, 'groups': groups}
+    grp = {'fetched': time.strftime('%Y-%m-%d'), 'minerals': index, 'groups': groups}
     os.makedirs(os.path.dirname(CACHE), exist_ok=True)
     with open(CACHE, 'w', encoding='utf-8') as f:
-        json.dump(out, f)
-    if verbose: print('cached -> %s  (%d minerals, %d groups)' % (CACHE, len(index), len(groups)))
-    return out
+        json.dump(grp, f)
+    # structural cache — built from the SAME rows, written to its own file
+    st = _struct_out(minerals)
+    os.makedirs(os.path.dirname(STRUCT_CACHE), exist_ok=True)
+    with open(STRUCT_CACHE, 'w', encoding='utf-8') as f:
+        json.dump(st, f)
+    _DB = None; _SDB = None                  # force reload of both fresh caches
+    if verbose:
+        print('cached -> %s (%d minerals, %d groups) + %s (%d records)'
+              % (CACHE, len(index), len(groups), STRUCT_CACHE, len(st['recs'])))
+    return grp
 
 # ----------------------------------------------------------------------------- staleness-aware auto-refresh
 def cache_age_days():
@@ -222,33 +243,43 @@ def _reachable():
         return False
 
 _AUTO_TRIED = False
-def refresh_if_stale(max_age_days=14):
-    """Refresh the cache when it is missing or older than max_age_days — so the
-    review tools always see ~current IMA data without anyone remembering to run
-    --refresh. Safe and quiet: no key or no network → keep using the existing
-    cache; attempted at most once per process. Prints one line only when it
-    actually pulls (the user sees why there's a brief pause)."""
-    global _AUTO_TRIED, _DB
+def _auto_refresh(max_age_days=14):
+    """Unified staleness-aware auto-refresh for BOTH caches. They are now built from
+    one pull, so a single staleness check + single network pass keeps them current —
+    review tools always see ~current IMA data without anyone running --refresh. Safe
+    and quiet: no key or no network → keep using whatever exists; attempted at most
+    once per process; prints only when it actually pulls (so the user sees why there
+    is a brief pause). Both refresh_if_stale and refresh_struct_if_stale route here,
+    so whichever the run touches first does the single pull and the other is a no-op."""
+    global _AUTO_TRIED
     if _AUTO_TRIED:
         return
     _AUTO_TRIED = True
     if not api_key():
         return                                  # can't refresh; use whatever exists
-    age = cache_age_days()
-    if available() and age is not None and age < max_age_days:
-        return                                  # fresh enough
+    gage, sage = cache_age_days(), _struct_age_days()
+    group_ok  = available() and gage is not None and gage < max_age_days
+    struct_ok = struct_available() and sage is not None and sage < max_age_days
+    if group_ok and struct_ok:
+        return                                  # both fresh enough
     if not _reachable():
-        if available():
-            print('[mindat] offline — using cached IMA data (%s days old)' % (age if age is not None else '?'))
+        if available() or struct_available():
+            print('[mindat] offline — using cached IMA data (%s days old)' % (gage if gage is not None else '?'))
         return
-    why = 'missing' if not available() else '%d days old' % (age if age is not None else -1)
-    print('[mindat] cache %s — refreshing IMA/group data…' % why)
+    stale = []
+    if not group_ok:  stale.append('group %s'  % ('missing' if not available()        else '%dd' % (gage if gage is not None else -1)))
+    if not struct_ok: stale.append('struct %s' % ('missing' if not struct_available() else '%dd' % (sage if sage is not None else -1)))
+    print('[mindat] cache %s — refreshing IMA group + structural data (single pull)…' % ', '.join(stale))
     try:
-        out = refresh(verbose=False)
-        _DB = None                              # force reload of the fresh cache
-        print('[mindat] refreshed: %d minerals, %d groups' % (len(out['minerals']), len(out['groups'])))
+        grp = refresh(verbose=False)
+        print('[mindat] refreshed: %d minerals, %d groups, %d structural records'
+              % (len(grp['minerals']), len(grp['groups']), len(struct_db().get('recs', []))))
     except Exception as ex:
         print('[mindat] refresh failed (%s) — using existing cache' % ex)
+
+def refresh_if_stale(max_age_days=14):
+    """Back-compat entry (called from the checks); routes to the unified refresh."""
+    _auto_refresh(max_age_days)
 
 # ----------------------------------------------------------------------------- lookup (offline)
 _DB = None
@@ -318,14 +349,12 @@ def group_of(name):
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument('--refresh', action='store_true')
-    ap.add_argument('--refresh-struct', action='store_true', help='build the structural cache (candidate-group scan)')
+    ap.add_argument('--refresh', action='store_true', help='(re)build both caches (group + structural) from one API pull')
+    ap.add_argument('--refresh-struct', action='store_true', help='alias for --refresh (both caches are built from one pull now)')
     ap.add_argument('--lookup')
     a = ap.parse_args()
-    if a.refresh:
+    if a.refresh or getattr(a, 'refresh_struct', False):
         refresh()
-    if getattr(a, 'refresh_struct', False):
-        refresh_struct()
     if a.lookup:
         if not available():
             print('no cache — run --refresh first'); raise SystemExit(1)
