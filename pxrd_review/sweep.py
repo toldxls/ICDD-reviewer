@@ -270,6 +270,12 @@ def main():
 
     if not os.path.isdir(args.folder):
         sys.exit('not a folder: %s' % args.folder)
+    # A review_out/.edit_backup root holds the tool's own outputs, not source transcriptions —
+    # sweeping one produces a nonsense report (and a nested review_out/review_out). Same guard
+    # as annotate_review; the GUI is the one caller that deliberately opens a review_out folder.
+    if os.path.basename(os.path.abspath(args.folder)) in ('review_out', '.edit_backup'):
+        sys.exit("refusing to sweep the tool's own output folder (%s) — run on its parent instead"
+                 % args.folder)
     out_dir = args.out or os.path.join(args.folder, 'review_out')
     snap_path = os.path.join(out_dir, SNAP)
     report_path = os.path.join(out_dir, REPORT)

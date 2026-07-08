@@ -996,18 +996,26 @@ def pdf_index(folder):
 # additional) is NOT the entry transcription; in trees that keep both beside one id it can sort
 # first and win the dedup, so rank it LAST and let the real entry win.
 _SUPP_DOCX = re.compile(r'supp|suppl|supplementary|sup\d|_sup\b|_si\b|_s\d|table\s*s|additional', re.I)
+TOOL_AUTHOR = 'PXRD Review Tool'   # author string on the tool's own comments (annotate_review
+                                   # aliases this — defined here so discover() can exclude them
+                                   # without a circular import)
 def _review_activity(p):
-    """Crude count of tracked-change + comment markers in a docx — a content signal for the
+    """Crude count of HUMAN tracked-change + comment markers in a docx — a content signal for the
     MOST-REVIEWED copy when one id has several parallel transcriptions (e.g. the training tree's
     Andy/Tony/Travis reviewer folders, where the raw transcription has zero edits and the reviewed
-    copies carry the corrections). Only consulted to break a multi-copy tie, so the common
-    single-copy case never opens the file. Returns 0 on any read error (treated as un-reviewed)."""
+    copies carry the corrections). The tool's OWN comments (TOOL_AUTHOR) do not count: a stray
+    copy of a tool '_edited' output must not outrank the clean source it was generated from.
+    Tracked changes always count — the tool is comment-only, so ins/del marks are human. Only
+    consulted to break a multi-copy tie, so the common single-copy case never opens the file.
+    Returns 0 on any read error (treated as un-reviewed)."""
     try:
         with zipfile.ZipFile(p) as z:
             xml = z.read('word/document.xml').decode('utf-8', 'ignore')
             n = xml.count('<w:ins ') + xml.count('<w:del ')
             try:
-                n += z.read('word/comments.xml').decode('utf-8', 'ignore').count('<w:comment ')
+                cxml = z.read('word/comments.xml').decode('utf-8', 'ignore')
+                n += sum(1 for m in re.finditer(r'<w:comment\s[^>]*?w:author="([^"]*)"', cxml)
+                         if m.group(1) != TOOL_AUTHOR)
             except KeyError:
                 pass
             return n
@@ -1046,8 +1054,12 @@ def discover(folder):
         # '.docx$' keeps arbitrary-suffix strays ('(Name)_translation.docx') out of the pool.
         named = [p for p in real if re.search(r'\(.+\)(?:_edited)?\.docx$', os.path.basename(p))]
         pool = named or real
-        if len(pool) > 1:              # parallel reviewer copies: take the most-reviewed (then path)
-            pool = sorted(pool, key=lambda p: (-_review_activity(p), p))
+        if len(pool) > 1:              # parallel reviewer copies: the most HUMAN-reviewed wins; on a
+            # tie (e.g. a stray copy of a pure tool output beside its clean source — both count 0
+            # human marks) the clean '(Name).docx' beats an '_edited' one, so the tool never
+            # analyzes its own annotated output over the true source. Then stable path order.
+            pool = sorted(pool, key=lambda p: (-_review_activity(p),
+                                               os.path.basename(p).lower().endswith('_edited.docx'), p))
         else:
             pool = sorted(pool, key=lambda p: p)
         out[eid] = pool[0]

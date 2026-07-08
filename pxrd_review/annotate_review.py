@@ -42,7 +42,7 @@ def _xml(data):
     return etree.fromstring(data, _SAFE_XML)
 
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
-AUTHOR, INITIALS = 'PXRD Review Tool', 'PXRD'
+AUTHOR, INITIALS = C.TOOL_AUTHOR, 'PXRD'               # 'PXRD Review Tool' — single source in C
 def _q(tag): return W + tag
 PARAM_COL = {'a': 1, 'b': 2, 'c': 3, 'α': 4, 'β': 5, 'γ': 6,
              'SG': 7, 'Z': 8}                                  # Author's-Cell column per parameter
@@ -722,6 +722,14 @@ def main():
                     help='skip the folder-level annotation_log.txt / mindat_discrepancies.txt writes '
                          '(used by the GUI single-entry rerun so it does not clobber the batch logs)')
     args = ap.parse_args()
+
+    # Refuse to run ON the tool's own output tree. discover() can now index a review_out folder
+    # (the GUI opens one to view/resume a review), so without this guard a mistyped path — e.g.
+    # tab-completing one level too deep — would re-annotate the outputs: duplicate comments, and
+    # with --inplace written straight INTO the reviewer's hand-edited copies.
+    if os.path.basename(os.path.abspath(args.folder)) in ('review_out', '.edit_backup'):
+        sys.exit("refusing to annotate the tool's own output folder (%s) — run on its parent instead"
+                 % args.folder)
 
     triage = {}
     if args.triage and os.path.exists(args.triage):
