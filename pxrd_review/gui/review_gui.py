@@ -654,9 +654,25 @@ def _docx_html(path):
         return ''
 
     esc = html.escape
+    # a stable, distinct colour per author (the tool muted grey; each human reviewer a colour from
+    # a legible palette, assigned in sorted order so overlapping reviewers never share one). Drives
+    # the per-author highlighting + the legend at the top of the view.
+    authors = set()
+    for e in droot.iter():
+        if _ln(e.tag) in ('ins', 'del'):
+            authors.add(e.get(q('author')) or '?')
+    for au, _b in comments.values():
+        authors.add(au)
+    _PAL = ['#ffb454', '#5aa9ff', '#57c98a', '#c58aff', '#6cc4ff', '#ff8f6b', '#ffd86b', '#ff9db1', '#8ad6c0', '#b0a8ff']
+    colormap = {A.AUTHOR: 'hsl(0,0%,60%)'}                 # the tool: muted grey (de-emphasised)
+    for i, au in enumerate(sorted(a for a in authors if a != A.AUTHOR)):
+        colormap[au] = _PAL[i % len(_PAL)]
+    def col(au):
+        return colormap.get(au, '#8b93a3')
     def cmt_chip(cid):
         au, cbody = comments.get(cid, ('?', ''))
-        return '<span class="cmt" title="%s">\U0001f4ac %s</span>' % (esc(cbody), esc(au))
+        return ('<span class="cmt" data-author="%s" style="--au:%s" title="%s">\U0001f4ac %s</span>'
+                % (esc(au), col(au), esc(cbody), esc(au)))
     def inline(node):
         buf = []
         for ch in node:
@@ -671,9 +687,13 @@ def _docx_html(path):
                     elif rt == 'commentReference':
                         buf.append(cmt_chip(rc.get(q('id'))))
             elif t == 'ins':
-                buf.append('<ins title="inserted by %s">%s</ins>' % (esc(ch.get(q('author')) or '?'), inline(ch)))
+                au = ch.get(q('author')) or '?'
+                buf.append('<ins style="--au:%s" title="inserted by %s">%s</ins>'
+                           % (col(au), esc(au), inline(ch)))
             elif t == 'del':
-                buf.append('<del title="deleted by %s">%s</del>' % (esc(ch.get(q('author')) or '?'), inline(ch)))
+                au = ch.get(q('author')) or '?'
+                buf.append('<del style="--au:%s" title="deleted by %s">%s</del>'
+                           % (col(au), esc(au), inline(ch)))
             elif t == 'commentReference':
                 buf.append(cmt_chip(ch.get(q('id'))))
             elif len(ch):                       # hyperlink / smartTag / sdt / other container
@@ -697,7 +717,12 @@ def _docx_html(path):
     body = next((ch for ch in droot if _ln(ch.tag) == 'body'), None)
     if body is None:
         return ''
-    return ''.join(block(ch) for ch in body)
+    doc_html = ''.join(block(ch) for ch in body)
+    if authors:                                            # colour legend, pinned to the top
+        chips = ''.join('<span class="au" style="--au:%s"><span class="sw"></span>%s</span>'
+                        % (col(au), esc(au)) for au in sorted(authors))
+        return '<div class="docx-authors">%s</div>%s' % (chips, doc_html)
+    return doc_html
 
 @app.route('/api/entry/<key>')
 def api_entry(key):

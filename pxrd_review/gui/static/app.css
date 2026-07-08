@@ -347,9 +347,27 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 #docx-view .docxtbl td {
   border: 1px solid var(--line); padding: 3px 6px; vertical-align: top; font-size: .95em;
 }
-#docx-view ins { text-decoration: underline; text-decoration-color: var(--ok); color: var(--ok); }
-#docx-view del { text-decoration: line-through; color: var(--danger); }
-#docx-view .cmt {
-  display: inline-block; font-size: .82em; color: var(--info); cursor: help;
-  border-bottom: 1px dotted var(--info); margin: 0 2px;
+/* tracked changes + comments are coloured by AUTHOR (--au, set inline per mark), enlarged and
+   highlighted so overlapping reviewers are easy to tell apart. ins = underline, del = strike. */
+#docx-view ins, #docx-view del {
+  color: var(--au, var(--text)); font-size: 1.06em; font-weight: 600;
+  background: color-mix(in srgb, var(--au, #888) 16%, transparent);
+  border-radius: 3px; padding: 0 2px;
 }
+#docx-view ins { text-decoration: underline; text-decoration-color: var(--au, var(--ok)); }
+#docx-view del { text-decoration: line-through; text-decoration-color: var(--au, var(--danger)); }
+#docx-view .cmt {
+  display: inline-block; font-size: .95em; font-weight: 600; cursor: help;
+  color: var(--au, var(--info));
+  background: color-mix(in srgb, var(--au, var(--info)) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--au, var(--info)) 45%, transparent);
+  border-radius: 4px; padding: 0 5px; margin: 0 2px;
+}
+/* author colour legend, pinned to the top of the docx view */
+.docx-authors {
+  position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 12px;
+  margin: -12px -14px 12px; padding: 9px 14px; border-bottom: 1px solid var(--line);
+  background: rgb(0 0 0 / .55); backdrop-filter: blur(6px);
+}
+.docx-authors .au { display: inline-flex; align-items: center; gap: 6px; font-size: .86em; color: var(--text); }
+.docx-authors .au .sw { width: 12px; height: 12px; border-radius: 3px; background: var(--au); flex: none; }
