@@ -1008,16 +1008,16 @@ def api_pick_folder():
         if sys.platform == 'darwin':
             # 'tell me to activate' brings the dialog frontmost WITH keyboard focus — without it
             # ⌘↑ (up one folder), ⌘⇧G (go to a typed path) and the arrow keys land in the browser
-            # instead of the panel, leaving mouse-only drill-DOWN navigation (the panel has no
-            # visible 'up' button). Open INSIDE the current entries folder; the prompt carries the
-            # ⌘↑ hint since that shortcut is the panel's way back up.
+            # instead of the panel. Open INSIDE the current entries folder. NOTE the panel's ‹ ›
+            # arrows are HISTORY buttons (greyed until you navigate) — the mouse route UP is the
+            # folder-name dropdown in the toolbar, so the prompt spells that out.
             start = STATE.get('folder')
             if not (start and os.path.isdir(start)):
                 start = os.path.expanduser('~')
             loc = start.replace('\\', '\\\\').replace('"', '\\"')
             script = ('tell me to activate\n'
                       'set f to choose folder with prompt '
-                      '"Choose the entries folder   (⌘↑ = up one folder)" '
+                      '"Choose the entries folder — go UP via the folder-name menu below (or ⌘↑)" '
                       'default location (POSIX file "%s")\n'
                       'POSIX path of f' % loc)
             r = subprocess.run(['osascript', '-e', script],
