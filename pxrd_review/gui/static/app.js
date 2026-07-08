@@ -56,9 +56,44 @@ async function loadEntries() {
   const r = await fetch('/api/entries').then(x => x.json());
   const parts = (r.folder || '').split('/').filter(Boolean);
   $('#folder').textContent = (parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/');
-  $('#folder').title = r.folder || '';
+  $('#folder').title = (r.folder || '') + '  — click to change folder';
   S.entries = r.entries;
   renderList();
+}
+
+// ---- folder picker: re-point the tool at a different entries folder, live ---
+function openFolderPanel() {
+  $('#settings').classList.add('hidden');
+  $('#folderpanel').classList.remove('hidden');
+  browseFolder($('#folder').title || '');                 // start at the current folder
+}
+async function browseFolder(path) {
+  let r;
+  try { r = await fetch('/api/browse?path=' + enc(path)).then(x => x.json()); } catch (_) { return; }
+  $('#folder-path').value = r.path;
+  $('#folder-hint').innerHTML = `<b>${r.docx}</b> docx · <b>${r.pdf}</b> .pdf here`
+    + (r.docx && !r.pdf ? ' — no .pdf beside them; the GUI will look up a level' : '')
+    + (!r.docx ? ' — no entries here; drill into a subfolder' : '');
+  const list = $('#folder-list'); list.innerHTML = '';
+  if (r.parent) list.append(el('div', { class: 'fp-item fp-up', onclick: () => browseFolder(r.parent) }, '⬆  ..'));
+  for (const d of r.dirs)
+    list.append(el('div', { class: 'fp-item', title: d,
+      onclick: () => browseFolder(r.path.replace(/\/+$/, '') + '/' + d) }, '📁  ' + d));
+}
+async function openFolder(path) {
+  path = (path || '').trim();
+  if (!path) return;
+  $('#folder-hint').textContent = 'opening…';
+  let r;
+  try {
+    r = await fetch('/api/folder', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder: path }) }).then(x => x.json());
+  } catch (_) { r = { ok: false, error: 'request failed' }; }
+  if (!r.ok) { $('#folder-hint').textContent = '⚠ ' + (r.error || 'could not open'); return; }
+  $('#folderpanel').classList.add('hidden');
+  S.key = null; S.a = null; S.docxHtml = {}; S.docxHidden = new Set();     // reset per-entry view + caches
+  $('#entry').classList.add('hidden'); $('#empty').classList.remove('hidden');
+  await loadEntries();                                     // reload the dashboard for the new folder
 }
 
 function hasAttn(e) { return e.badges.some(b => b.level === 'danger' || b.level === 'warn'); }
@@ -1160,6 +1195,14 @@ function initAppearance() {
   document.addEventListener('click', e => {
     if (!$('#settings').classList.contains('hidden') &&
         !e.target.closest('#settings') && e.target !== $('#gear')) $('#settings').classList.add('hidden');
+  });
+  // folder picker: click the header path to open it; close on click-away
+  $('#folder').addEventListener('click', e => { e.stopPropagation(); openFolderPanel(); });
+  $('#folder-open').addEventListener('click', () => openFolder($('#folder-path').value));
+  $('#folder-path').addEventListener('keydown', e => { if (e.key === 'Enter') openFolder(e.target.value); });
+  document.addEventListener('click', e => {
+    if (!$('#folderpanel').classList.contains('hidden') &&
+        !e.target.closest('#folderpanel') && e.target !== $('#folder')) $('#folderpanel').classList.add('hidden');
   });
   document.querySelectorAll('#theme-picker button').forEach(b => b.addEventListener('click', () => {
     CFG.theme = b.getAttribute('data-theme');

@@ -51,6 +51,19 @@
     </div>
   </div>
 
+  <!-- folder picker: re-point the tool at a different entries folder, live -->
+  <div id="folderpanel" class="panel hidden">
+    <div class="set-row">
+      <span class="set-label">Folder</span>
+      <input type="text" id="folder-path" placeholder="/path/to/entries" spellcheck="false" autocomplete="off">
+      <button id="folder-open">Open</button>
+    </div>
+    <div id="folder-hint" class="muted"></div>
+    <div id="folder-list" class="fp-list"></div>
+    <div class="fp-tip muted">Pick the folder that holds the entry <code>.docx</code> <b>and</b> the
+      <code>.pdf</code> files — subfolders are searched.</div>
+  </div>
+
   <div id="app">
     <!-- dashboard / entry list -->
     <aside id="sidebar">

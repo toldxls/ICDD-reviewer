@@ -486,6 +486,7 @@ def _source_pool(folder, explicit=None):
 def build_index(folder, out_dir, pdf_root=None):
     STATE['folder'] = os.path.abspath(folder)
     STATE['out_dir'] = os.path.abspath(out_dir or os.path.join(folder, 'review_out'))
+    STATE['pdf_root'] = None                            # cleared; set below only if the pool kicks in
     try:
         from pxrd_review import mindat; mindat.refresh_struct_if_stale()
     except Exception:
@@ -785,6 +786,48 @@ def api_log():
         abort(404)
     with open(path, encoding='utf-8', errors='replace') as f:
         return Response(f.read(), mimetype='text/plain; charset=utf-8')
+
+@app.route('/api/browse')
+def api_browse():
+    """List a directory's subfolders + a docx/.pdf content hint, so the GUI folder picker can
+    walk the local filesystem. Read-only listing; localhost only. Defaults to the current folder."""
+    path = request.args.get('path') or STATE['folder'] or os.path.expanduser('~')
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isdir(path):
+        path = os.path.dirname(path) or os.path.abspath(os.sep)
+    try:
+        dirs = sorted((e.name for e in os.scandir(path)
+                       if e.is_dir() and not e.name.startswith('.')), key=str.lower)
+    except OSError:
+        dirs = []
+    d = p = seen = 0                                    # bounded content hint (stop after ~5000 files)
+    for _dp, dns, fns in os.walk(path):
+        dns[:] = [x for x in dns if not x.startswith('.')]
+        for fn in fns:
+            seen += 1
+            low = fn.lower()
+            if low.endswith('.docx') and not fn.startswith('~$'): d += 1
+            elif low.endswith('.pdf'): p += 1
+        if seen > 5000:
+            break
+    parent = os.path.dirname(path)
+    return jsonify({'path': path, 'parent': parent if parent != path else None,
+                    'dirs': dirs, 'docx': d, 'pdf': p})
+
+@app.route('/api/folder', methods=['POST'])
+def api_set_folder():
+    """Re-point the GUI at a different entries folder WITHOUT restarting: rebuild the docx/pdf/
+    cif/dft indexes, load that folder's sidecars, and re-analyze. Localhost only."""
+    data = request.get_json(silent=True) or {}
+    folder = os.path.expanduser((data.get('folder') or '').strip())
+    if not folder or not os.path.isdir(folder):
+        return jsonify({'ok': False, 'error': 'not a folder: %s' % (folder or '(empty)')}), 400
+    build_index(folder, None)
+    if not STATE['order']:
+        return jsonify({'ok': False, 'error': 'no .docx entries found under %s' % folder}), 400
+    analyze_all()
+    return jsonify({'ok': True, 'folder': STATE['folder'], 'out_dir': STATE['out_dir'],
+                    'pdf_root': STATE.get('pdf_root'), 'count': len(STATE['order'])})
 
 @app.route('/api/pdf/<key>/search')
 def api_pdf_search(key):

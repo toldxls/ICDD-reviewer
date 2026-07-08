@@ -69,7 +69,7 @@ body {
 code { background: rgb(0 0 0 / .35); padding: 0 .3em; border-radius: 3px; }
 
 /* frosted surfaces */
-#topbar, #sidebar, .pane, #settings {
+#topbar, #sidebar, .pane, #settings, #folderpanel {
   background: rgb(var(--panel-rgb) / var(--panel-alpha));
   -webkit-backdrop-filter: blur(var(--blur)) saturate(1.3);
   backdrop-filter: blur(var(--blur)) saturate(1.3);
@@ -389,3 +389,25 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 }
 .cmt-pop-au { font-weight: 700; font-size: .82em; color: var(--au, var(--info)); margin-bottom: 3px; }
 .cmt-pop-body { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+
+/* ---- folder picker (re-point the tool at a different entries folder, live) --- */
+#folder { cursor: pointer; }
+#folder:hover { color: var(--text); text-decoration: underline dotted; }
+#folderpanel {
+  position: fixed; top: 46px; right: 10px; width: 460px; max-width: calc(100vw - 20px); z-index: 60;
+  border: 1px solid var(--line); border-radius: 12px; padding: 14px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / .5);
+}
+#folder-path { flex: 1; min-width: 0; font-family: inherit; }
+#folder-hint { font-size: .85em; margin-bottom: 8px; min-height: 1em; }
+.fp-list { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.fp-list:empty { display: none; }
+.fp-item {
+  padding: 5px 10px; cursor: pointer; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; border-bottom: 1px solid var(--line); font-size: .9em;
+}
+.fp-item:last-child { border-bottom: none; }
+.fp-item:hover { background: rgb(var(--accent-rgb) / .14); }
+.fp-up { color: var(--muted); }
+.fp-tip { font-size: .82em; margin-top: 9px; }
+.fp-tip code { background: rgb(0 0 0 / .35); border-radius: 3px; padding: 0 .3em; }
