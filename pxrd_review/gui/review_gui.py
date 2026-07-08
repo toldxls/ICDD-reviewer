@@ -29,7 +29,7 @@ browser only ever sends an entry KEY that the server maps to a file it indexed a
 startup — no raw paths from the page, so no path traversal. No data leaves the
 machine.
 """
-import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil
+import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
@@ -67,8 +67,13 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0      # don't let the browser cache a
 # Populated at launch once the port is known (see main()); empty => not yet configured (allow).
 _ALLOWED_HOSTS = set()
 
+_last_seen = None                                    # monotonic time of the most recent client request
+_closing_at = None                                   # monotonic time a tab reported it is unloading
+
 @app.before_request
 def _guard_localhost():
+    global _last_seen
+    _last_seen = time.monotonic()                    # heartbeat: any request means a tab is open
     if not _ALLOWED_HOSTS:
         return                                       # pre-launch / unconfigured
     if (request.host or '').lower() not in _ALLOWED_HOSTS:
@@ -602,6 +607,18 @@ def start_analysis():
 def index():
     return send_file(os.path.join(HERE, 'index.html'))
 
+@app.route('/api/ping')
+def api_ping():
+    return jsonify({'ok': True})                     # heartbeat target (the before_request refreshes _last_seen)
+
+@app.route('/api/closing', methods=['POST'])
+def api_closing():
+    """A tab is unloading (close / navigate / reload). Arm the auto-exit grace; a reload or another
+    open tab reconnects within it and cancels (see _auto_exit_watchdog). Beacon target."""
+    global _closing_at
+    _closing_at = time.monotonic()
+    return ('', 204)
+
 def _eid_key(r):
     """Sort key for ascending ICDD id: prefix letters first, then the number
     (e.g. I003599 < I003600 < O002127), tolerant of any digit width."""
@@ -1105,6 +1122,30 @@ def _export_report():
     return path
 
 # ------------------------------------------------------------------ main
+def _auto_exit_watchdog(grace=30):
+    """Shut the server down shortly after the browser tab is CLOSED — NOT on idle. A tab beacons
+    /api/closing as it unloads (close / navigate / reload); the watchdog then waits `grace` seconds
+    and exits only if no further request arrives. A reload or another open tab reconnects within the
+    grace and cancels it, so reloading never kills the server. Crucially, a tab that is merely open —
+    idle, backgrounded, or with the laptop asleep — sends no beacon, so the server stays up
+    indefinitely. Disable entirely with --no-auto-exit; tune the grace with $PXRD_GUI_EXIT_GRACE."""
+    global _closing_at
+    step = min(5.0, max(0.5, grace / 4.0))               # poll finer for a short grace (keeps tests fast)
+    while True:
+        time.sleep(step)
+        if _closing_at is None:
+            continue
+        if _last_seen is not None and _last_seen > _closing_at:
+            _closing_at = None                       # a client came back (reload / another tab) — cancel
+            continue
+        if time.monotonic() - _closing_at > grace:
+            print('\n[review_gui] browser closed — shutting down.')
+            try:
+                PW.shutdown()                        # stop the MuPDF worker subprocesses too
+            except Exception:
+                pass
+            os._exit(0)
+
 def _pick_port(pref, tries=25):
     """First bindable localhost port at/after `pref`. Default 8000 sidesteps the
     macOS AirPlay Receiver (which squats on 5000 and returns 403); the fallback
@@ -1126,6 +1167,8 @@ def main():
     ap.add_argument('--pdf-root', help='folder holding the source .pdf/.cif/.dft files when the '
                     'entries folder has none (default: auto-detect the nearest ancestor with .pdf)')
     ap.add_argument('--no-browser', action='store_true', help='do not auto-open the browser')
+    ap.add_argument('--no-auto-exit', action='store_true',
+                    help='keep serving after the browser tab is closed (default: auto-shutdown when idle)')
     args = ap.parse_args()
 
     if not os.path.isdir(args.folder):
@@ -1141,9 +1184,16 @@ def main():
     global _ALLOWED_HOSTS
     _ALLOWED_HOSTS = {'127.0.0.1:%d' % port, 'localhost:%d' % port}   # Host/CSRF allowlist
     url = 'http://127.0.0.1:%d/' % port
-    print('\n[review_gui] serving on %s  (localhost only — Ctrl-C to stop)' % url)
+    exit_note = '' if args.no_auto_exit else ' — closes itself when the browser does'
+    print('\n[review_gui] serving on %s  (localhost only — Ctrl-C to stop%s)' % (url, exit_note))
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    if not args.no_auto_exit:                        # auto-shutdown once the last tab closes
+        try:
+            _grace = float(os.environ.get('PXRD_GUI_EXIT_GRACE') or 30)
+        except ValueError:
+            _grace = 30
+        threading.Thread(target=lambda: _auto_exit_watchdog(_grace), daemon=True).start()
     # 127.0.0.1 bind keeps it off the network; debug OFF (no code-exec debugger).
     app.run(host='127.0.0.1', port=port, debug=False)
 

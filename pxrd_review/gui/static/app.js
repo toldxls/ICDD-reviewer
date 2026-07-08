@@ -1270,3 +1270,11 @@ function initAppearance() {
 
 initAppearance();
 loadEntries();
+
+// Auto-shutdown: the server exits shortly after this tab CLOSES — never on idle.
+// - on unload (close / navigate / reload) beacon the server so it starts a short grace;
+// - a light heartbeat lets a still-open tab (or a reload) reconnect within that grace and cancel
+//   the shutdown. An open tab — idle, backgrounded, or asleep — is never shut down.
+window.addEventListener('pagehide', () => { try { navigator.sendBeacon('/api/closing'); } catch (_) {} });
+setInterval(() => fetch('/api/ping').catch(() => {}), 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) fetch('/api/ping').catch(() => {}); });
