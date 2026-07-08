@@ -31,6 +31,7 @@ const S = {
   cmtPop: null,       // the pinned comment popover element, if any
   ue: [],             // current entry's reviewer marks [{author,kind,text}]
   ueAuthor: 'All',    // reviewer-edits author filter (persists across entries when present)
+  pollTimer: null,    // re-poll /api/entries while entries are still analysing in the background
   saveTimer: null,
 };
 const enc = encodeURIComponent;
@@ -53,12 +54,15 @@ const mantissa = s => (s == null ? '' : String(s).replace(/\(.*$/, '').trim()); 
 
 // ---- dashboard -------------------------------------------------------------
 async function loadEntries() {
+  clearTimeout(S.pollTimer);
   const r = await fetch('/api/entries').then(x => x.json());
   const parts = (r.folder || '').split('/').filter(Boolean);
   $('#folder').textContent = (parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/');
   $('#folder').title = (r.folder || '') + '  — click to change folder';
   S.entries = r.entries;
   renderList();
+  // analysis runs in the background — poll until every entry's badges are in
+  if (r.pending > 0) S.pollTimer = setTimeout(loadEntries, 1200);
 }
 
 // ---- folder picker: re-point the tool at a different entries folder, live ---
@@ -96,7 +100,7 @@ async function openFolder(path) {
   if (!path) return;
   const btns = ['#folder-open', '#folder-browse'].map($).filter(Boolean);
   btns.forEach(b => b.disabled = true);
-  $('#folder-hint').textContent = 'opening & analyzing…  (a fresh folder can take ~15s)';
+  $('#folder-hint').textContent = 'opening…';
   let r;
   try {
     r = await fetch('/api/folder', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -134,10 +138,13 @@ function renderList() {
         e.reviewed ? el('span', { class: 'reviewed-tick' }, '✓') : null,
         el('span', { class: 'nm' }, e.name || e.key),
         el('span', { class: 'id' }, e.eid || '')),
-      el('div', { class: 'row2' }, ...e.badges.map(badgeEl)));
+      e.pending ? el('div', { class: 'row2' }, el('span', { class: 'pending muted' }, 'analyzing…'))
+                : el('div', { class: 'row2' }, ...e.badges.map(badgeEl)));
     ul.append(li);
   }
-  $('#counts').textContent = `${shown} shown · ${fixes}/${S.entries.length} with fixes`;
+  const pend = S.entries.filter(e => e.pending).length;
+  $('#counts').textContent = `${shown} shown · ${fixes}/${S.entries.length} with fixes`
+    + (pend ? ` · analyzing ${pend}…` : '');
 }
 
 function badgeEl(b) { return el('span', { class: 'badge ' + b.level }, b.label); }

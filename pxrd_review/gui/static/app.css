@@ -411,3 +411,6 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 .fp-up { color: var(--muted); }
 .fp-tip { font-size: .82em; margin-top: 9px; }
 .fp-tip code { background: rgb(0 0 0 / .35); border-radius: 3px; padding: 0 .3em; }
+
+/* dashboard row while its analysis is still running in the background */
+.row2 .pending { font-style: italic; font-size: .85em; }

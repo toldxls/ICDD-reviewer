@@ -103,6 +103,7 @@ STATE = {
     'pdf': {}, 'cif': {}, 'dft': {},   # eid -> path
     'cache': {},                   # key -> {'fp': fingerprint, 'data': serialized}
     'triage': {},                  # key -> reviewer verdicts (separate sidecar)
+    'gen': 0,                      # folder generation — bumped on each (re)index; aborts stale bg analysis
     'lock': threading.RLock(),
 }
 
@@ -524,15 +525,17 @@ def build_index(folder, out_dir, pdf_root=None):
     STATE['order'] = list(STATE['docx'].keys())
     _load_cache(); _load_triage()
 
-def analyze_all():
-    """Eager pass at launch so the dashboard's attention badges are populated the
-    moment it opens (the badges ARE the silent-failure surfacing — they must not
-    wait for per-entry visits). Cached results are reused; only changed entries
-    re-run."""
+def analyze_all(gen=None):
+    """Analyze every entry so the dashboard's attention badges populate. Runs in a BACKGROUND
+    thread (see start_analysis) so opening or switching a folder shows the entry list instantly
+    and the badges fill in progressively — the checks never block navigation. Aborts early if a
+    newer folder switch has superseded this run (gen mismatch). Cached results are reused."""
     n = len(STATE['order'])
-    print('[review_gui] analyzing %d entr%s in %s'
+    print('[review_gui] analyzing %d entr%s in %s (background)'
           % (n, 'y' if n == 1 else 'ies', STATE['folder']))
     for i, key in enumerate(STATE['order'], 1):
+        if gen is not None and STATE.get('gen') != gen:
+            print('  (superseded by a newer folder — stopping this pass)'); return
         try:
             data = get_analysis(key)
             tags = ' '.join('[%s]' % x['label'] for x in data['badges']
@@ -542,7 +545,15 @@ def analyze_all():
         print('  [%2d/%2d] %-9s %-34s %s'
               % (i, n, C.entry_id(STATE['docx'][key]) or '?',
                  (STATE['cache'].get(key, {}).get('data', {}).get('name') or key)[:34], tags))
-    _save_cache()
+    if gen is None or STATE.get('gen') == gen:
+        _save_cache()
+
+def start_analysis():
+    """Kick a background pass over the current folder. Bumps the generation counter so any
+    in-flight pass over a previous folder aborts; the dashboard polls /api/entries until the
+    badges are in. Returns immediately — navigation never waits on the check suite."""
+    STATE['gen'] = STATE.get('gen', 0) + 1
+    threading.Thread(target=analyze_all, args=(STATE['gen'],), daemon=True).start()
 
 # ------------------------------------------------------------------ routes
 @app.route('/')
@@ -556,23 +567,42 @@ def _eid_key(r):
     m = re.search(r'\d+', eid)
     return (re.sub(r'\d+', '', eid), int(m.group()) if m else 0, eid)
 
+def _light_row(key):
+    """A dashboard row for an entry not analysed yet: name/id from the filename, file presence
+    from the indexes, no badges. Lets the list render instantly while analysis runs in the
+    background (the badges fill in as the dashboard polls /api/entries)."""
+    path = STATE['docx'][key]
+    eid = C.entry_id(path) or key
+    return {'key': key, 'eid': eid, 'name': C.entry_name(path) or eid,
+            'files': {k: bool(STATE[k].get(eid)) for k in ('pdf', 'cif', 'dft')},
+            'badges': [], 'status': 'pending', 'fixes': 0, 'attention': False,
+            'reviewed': bool(STATE['triage'].get(key, {}).get('reviewed')), 'pending': True}
+
 @app.route('/api/entries')
+
 def api_entries():
-    rows = []
+    """Non-blocking: analysed entries return a full row from cache; not-yet-analysed ones return
+    a lightweight row (name/id/files, no badges) so the list renders instantly. `pending` counts
+    the un-analysed ones — the dashboard polls until it reaches 0."""
+    rows, pending = [], 0
     for key in STATE['order']:
-        d = get_analysis(key)
-        badges = d['badges']
-        rows.append({'key': key, 'eid': d['eid'], 'name': d['name'],
-                     'files': d['files'], 'badges': badges,
-                     'status': d['cell']['status'],
-                     'fixes': d.get('fixes', 0),
-                     'attention': _attention(badges),
-                     'reviewed': bool(STATE['triage'].get(key, {}).get('reviewed'))})
+        c = STATE['cache'].get(key)
+        if c and c.get('fp') == _fingerprint(key):      # already analysed (source unchanged)
+            d = c['data']; badges = d['badges']
+            rows.append({'key': key, 'eid': d['eid'], 'name': d['name'],
+                         'files': d['files'], 'badges': badges,
+                         'status': d['cell']['status'], 'fixes': d.get('fixes', 0),
+                         'attention': _attention(badges),
+                         'reviewed': bool(STATE['triage'].get(key, {}).get('reviewed')),
+                         'pending': False})
+        else:
+            rows.append(_light_row(key)); pending += 1
     # list in ascending ICDD-id order (earlier I-numbers first) — a stable, predictable
     # order to work through the batch. The per-view filter (Fixes/Attention/Clean) picks
     # WHICH entries show; the id orders them.
     rows.sort(key=_eid_key)
-    return jsonify({'folder': STATE['folder'], 'out_dir': STATE['out_dir'], 'entries': rows})
+    return jsonify({'folder': STATE['folder'], 'out_dir': STATE['out_dir'],
+                    'pending': pending, 'entries': rows})
 
 def _ln(tag):
     """local-name of a namespaced lxml tag ('{…}ins' -> 'ins')."""
@@ -811,15 +841,15 @@ def api_browse():
                        if e.is_dir() and not e.name.startswith('.')), key=str.lower)
     except OSError:
         dirs = []
-    d = p = seen = 0                                    # bounded content hint (stop after ~5000 files)
+    d = p = seen = 0                                    # bounded content hint — keep navigation snappy
     for _dp, dns, fns in os.walk(path):
-        dns[:] = [x for x in dns if not x.startswith('.')]
+        dns[:] = [x for x in dns if not x.startswith('.') and x not in ('review_out', '.edit_backup')]
         for fn in fns:
             seen += 1
             low = fn.lower()
             if low.endswith('.docx') and not fn.startswith('~$'): d += 1
             elif low.endswith('.pdf'): p += 1
-        if seen > 5000:
+        if seen > 1500:
             break
     parent = os.path.dirname(path)
     return jsonify({'path': path, 'parent': parent if parent != path else None,
@@ -836,7 +866,7 @@ def api_set_folder():
     build_index(folder, None)
     if not STATE['order']:
         return jsonify({'ok': False, 'error': 'no .docx entries found under %s' % folder}), 400
-    analyze_all()
+    start_analysis()                                    # background; return at once so the switch is instant
     return jsonify({'ok': True, 'folder': STATE['folder'], 'out_dir': STATE['out_dir'],
                     'pdf_root': STATE.get('pdf_root'), 'count': len(STATE['order'])})
 
@@ -853,6 +883,16 @@ def api_pick_folder():
             if r.returncode != 0:
                 return jsonify({'ok': False, 'cancelled': True})     # user hit Cancel
             return jsonify({'ok': True, 'folder': r.stdout.strip()})
+        if os.name == 'nt':                                          # Windows: Shell folder dialog
+            ps = ('$s = New-Object -ComObject Shell.Application; '
+                  '$f = $s.BrowseForFolder(0, "Choose the entries folder", 0); '
+                  'if ($f -ne $null) { [Console]::Out.Write($f.Self.Path) }')
+            r = subprocess.run(['powershell', '-NoProfile', '-Command', ps],
+                               capture_output=True, text=True, timeout=300)
+            path = (r.stdout or '').strip()
+            if not path:
+                return jsonify({'ok': False, 'cancelled': True})     # user hit Cancel / no selection
+            return jsonify({'ok': True, 'folder': path})
         if shutil.which('zenity'):
             r = subprocess.run(['zenity', '--file-selection', '--directory',
                                 '--title=Choose the entries folder'], capture_output=True, text=True, timeout=300)
@@ -1042,7 +1082,7 @@ def main():
     build_index(args.folder, args.out, args.pdf_root)
     if not STATE['order']:
         sys.exit('no .docx entries found in %s' % args.folder)
-    analyze_all()
+    start_analysis()                                    # background; the server comes up at once
 
     port = _pick_port(args.port)
     if port != args.port:
