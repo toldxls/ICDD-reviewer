@@ -25,6 +25,10 @@ const S = {
   pageSizes: null,    // [[w,h], …] every page's size — reserves slot heights (no scroll-shift)
   pageSizesKey: null, // which entry pageSizes belongs to
   sizesPromise: null, // in-flight sizes fetch
+  midMode: 'pdf',     // middle pane: 'pdf' (paper render) | 'docx' (transcription + tracked changes)
+  docxHtml: {},       // key -> rendered docx HTML (cached; live from /api/docx)
+  ue: [],             // current entry's reviewer marks [{author,kind,text}]
+  ueAuthor: 'All',    // reviewer-edits author filter (persists across entries when present)
   saveTimer: null,
 };
 const enc = encodeURIComponent;
@@ -108,6 +112,7 @@ async function openEntry(key) {
   $('#pdf-hits').textContent = '';
   document.querySelectorAll('.finding').forEach(d => d.classList.toggle('focus', d.getAttribute('data-fkey') === 'cell'));
   renderPdf('', '', []);
+  setMidMode('pdf');            // every entry opens on the paper; the toggle flips to the docx
   renderList();
 }
 
@@ -437,6 +442,44 @@ async function lookInPage(fkey) {
 }
 
 // ---- pdf pane --------------------------------------------------------------
+// ---- middle pane: swap between the .pdf render and the docx transcription ----
+function setMidMode(mode) {
+  S.midMode = mode;
+  document.querySelectorAll('#mid-toggle button').forEach(b => b.classList.toggle('on', b.dataset.mid === mode));
+  const docx = mode === 'docx';
+  $('#pdf-view').classList.toggle('hidden', docx);
+  $('#pdf-snippet').classList.toggle('hidden', docx);
+  const search = $('.pdf-search'); if (search) search.classList.toggle('hidden', docx);
+  const pager = $('#pdf-pager'); if (pager) pager.style.visibility = docx ? 'hidden' : '';
+  $('#docx-view').classList.toggle('hidden', !docx);
+  if (docx) loadDocxView();
+}
+
+async function loadDocxView() {
+  const key = S.key, view = $('#docx-view');
+  if (!key || !view) return;
+  if (S.docxHtml[key] != null) { view.innerHTML = S.docxHtml[key]; return; }
+  view.innerHTML = '<div class="empty muted">rendering docx…</div>';
+  let h = '';
+  try {
+    const r = await fetch('/api/docx/' + enc(key) + '.html').then(x => x.json());
+    h = r.html || '';
+  } catch (_) { h = ''; }
+  if (!h) h = '<div class="empty muted">could not render this docx</div>';
+  S.docxHtml[key] = h;
+  if (S.midMode === 'docx' && S.key === key) view.innerHTML = h;   // still on this entry/view
+}
+
+async function openDocxInWord() {
+  if (!S.key) return;
+  const b = $('#open-docx'), old = b.textContent;
+  b.textContent = 'opening…';
+  let ok = false;
+  try { ok = (await fetch('/api/open/' + enc(S.key), { method: 'POST' }).then(x => x.json())).ok; } catch (_) {}
+  b.textContent = ok ? 'opened ✓' : 'open failed';
+  setTimeout(() => { b.textContent = old; }, 1600);
+}
+
 function renderPdf(snippet, snipLabel, hlTerms) {
   const a = S.a, view = $('#pdf-view');
   $('#pdf-name').textContent = a.pdf ? a.pdf.name : '';
@@ -735,14 +778,43 @@ function renderDocx() {
     body.append(el('div', { class: 'sub' }, 'existing reviewer comments'));
     body.append(kvTable(a.docx.comments.map(([au, tx]) => [au, tx])));
   }
-  // the reviewer's OWN marks in the reviewed copy — tracked changes / non-tool
-  // comments the tool preserves but never writes. Read live (see _entry_user_edits).
-  if (S.ue && S.ue.length) {
-    body.append(el('div', { class: 'sub' }, 'your edits (reviewed copy)'));
-    const box = el('div', { class: 'reviewer-edits' });
-    for (const e of S.ue) box.append(el('div', { class: 'redit' }, e));
-    body.append(box);
+  // the reviewer's OWN marks — tracked changes / non-tool comments the tool preserves but
+  // never writes (from the reviewed copy, or the source docx when pointed at a reviewer's own
+  // folder). Filterable by author; each item is kind + text + author. Read live.
+  renderReviewerEdits(body);
+}
+
+const REKIND = { change: 'change', ins: 'insert', del: 'delete', comment: 'comment' };
+function renderReviewerEdits(body) {
+  const ue = S.ue || [];
+  if (!ue.length) return;
+  const authors = [...new Set(ue.map(m => m.author))];
+  if (S.ueAuthor !== 'All' && !authors.includes(S.ueAuthor)) S.ueAuthor = 'All';  // stale filter -> reset
+  const shown = ue.filter(m => S.ueAuthor === 'All' || m.author === S.ueAuthor);
+
+  const head = el('div', { class: 'sub re-sub' },
+    el('span', {}, 'reviewer edits'),
+    el('span', { class: 'muted' }, ` ${shown.length}${shown.length !== ue.length ? '/' + ue.length : ''}`));
+  // author filter — one chip per distinct author (+ All). Persists across entries when the
+  // author is present, so paging through one reviewer's folder keeps their marks in view.
+  if (authors.length > 1 || S.ueAuthor !== 'All') {
+    const filt = el('span', { class: 're-filter' });
+    const chip = (val, lbl) => el('button', {
+      class: 're-chip' + (S.ueAuthor === val ? ' on' : ''),
+      onclick: () => { S.ueAuthor = val; renderDocx(); }
+    }, lbl);
+    filt.append(chip('All', 'All'), ...authors.map(a => chip(a, a)));
+    head.append(el('span', { class: 'spacer' }), filt);
   }
+  body.append(head);
+
+  const box = el('div', { class: 'reviewer-edits' });
+  for (const m of shown)
+    box.append(el('div', { class: 'redit' },
+      el('span', { class: 're-kind k-' + m.kind }, REKIND[m.kind] || m.kind),
+      el('span', { class: 're-text' }, m.text || ''),
+      el('span', { class: 're-auth' }, m.author || '')));
+  body.append(box);
 }
 
 const AXES = ['a', 'b', 'c', 'α', 'β', 'γ', 'SG', 'Z'];   // laid out 3-per-row: abc / αβγ / SG Z
@@ -888,6 +960,9 @@ $('#rerun-entry').addEventListener('click', () =>
         'Rerunning…', 'regenerated this docx ✓'));
 $('#rerun-all').addEventListener('click', () =>
   rerun('/api/rerun', $('#rerun-all'), 'Rerunning all…', 'regenerated all docx ✓'));
+document.querySelectorAll('#mid-toggle button').forEach(b =>
+  b.addEventListener('click', () => setMidMode(b.dataset.mid)));
+$('#open-docx').addEventListener('click', openDocxInWord);
 $('#prev').addEventListener('click', () => step(-1));
 $('#next').addEventListener('click', () => step(1));
 $('#pdf-q').addEventListener('keydown', e => {

@@ -29,7 +29,7 @@ browser only ever sends an entry KEY that the server maps to a file it indexed a
 startup — no raw paths from the page, so no path traversal. No data leaves the
 machine.
 """
-import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess, hashlib
+import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
@@ -86,6 +86,7 @@ def _no_cache_ui(resp):
 # only identifier the browser ever sends back.
 STATE = {
     'folder': None, 'out_dir': None,
+    'pdf_root': None,              # source pool for PDFs/CIFs/DFTs when the entries folder has none
     'docx': {},                    # key -> docx path
     'order': [],                   # keys, sorted
     'pdf': {}, 'cif': {}, 'dft': {},   # eid -> path
@@ -464,7 +465,25 @@ def _save_triage():
             json.dump(STATE['triage'], f, indent=1)
 
 # ------------------------------------------------------------------ indexing / launch
-def build_index(folder, out_dir):
+def _source_pool(folder, explicit=None):
+    """Locate a 'source pool' of .pdf/.cif/.dft files when the entries folder itself holds none —
+    e.g. a reviewer's own docx-only folder (Tony2028Part1/…) whose papers live up in a shared
+    sibling Files/. An explicit --pdf-root wins; otherwise walk up to 5 ancestors and take the
+    nearest that contains any .pdf (checked lazily, so we stop at the first hit). Returns None
+    when nothing is found — the paper pane just stays empty, as before."""
+    if explicit:
+        return os.path.abspath(explicit)
+    cur = os.path.abspath(folder)
+    for _ in range(5):
+        parent = os.path.dirname(cur)
+        if parent == cur:                                # reached the filesystem root
+            break
+        cur = parent
+        if next(glob.iglob(os.path.join(cur, '**', '*.[pP][dD][fF]'), recursive=True), None):
+            return cur
+    return None
+
+def build_index(folder, out_dir, pdf_root=None):
     STATE['folder'] = os.path.abspath(folder)
     STATE['out_dir'] = os.path.abspath(out_dir or os.path.join(folder, 'review_out'))
     try:
@@ -474,6 +493,20 @@ def build_index(folder, out_dir):
     STATE['pdf'] = C.pdf_index(folder)
     STATE['cif'] = C.cif_index(folder)
     STATE['dft'] = C.dft_index(folder)
+    # A reviewer's own folder may hold only docx (the .pdf/.cif/.dft files sit up in a shared
+    # Files/ pool). When no .pdf is found beside the entries, pull the paper/CIF/DFT panes from
+    # an ancestor 'source pool' (explicit --pdf-root, else the nearest ancestor with .pdf files)
+    # so the source-comparison panes still populate. docx discovery stays on `folder` — we show
+    # THIS folder's copies (e.g. Tony's); only the read-only source indexes fall back.
+    if not STATE['pdf']:
+        pool = _source_pool(folder, pdf_root)
+        if pool and os.path.abspath(pool) != STATE['folder']:
+            STATE['pdf'] = C.pdf_index(pool)
+            STATE['cif'] = STATE['cif'] or C.cif_index(pool)
+            STATE['dft'] = STATE['dft'] or C.dft_index(pool)
+            STATE['pdf_root'] = pool
+            print('[review_gui] no .pdf beside the entries — pulling paper/CIF/DFT from %s '
+                  '(%d found)' % (pool, len(STATE['pdf'])))
     docs = sorted(C.discover(folder).values())     # recursive: docx at any depth under the root
     STATE['docx'] = {os.path.splitext(os.path.basename(d))[0]: d for d in docs}
     STATE['order'] = list(STATE['docx'].keys())
@@ -529,22 +562,142 @@ def api_entries():
     rows.sort(key=_eid_key)
     return jsonify({'folder': STATE['folder'], 'out_dir': STATE['out_dir'], 'entries': rows})
 
-def _entry_user_edits(d):
-    """The reviewer's OWN marks (tracked changes / non-tool comments) in this entry's
-    edited output, read LIVE from review_out. NOT folded into the cached analysis: the
-    cache fingerprint keys on the SOURCE docx, not the _edited.docx, so a cached copy
-    would go stale the moment the reviewer edits the output. Returns [] when no edited
-    output exists yet. Checks both naming twins (edited / clean) for robustness."""
+def _ln(tag):
+    """local-name of a namespaced lxml tag ('{…}ins' -> 'ins')."""
+    return tag.rsplit('}', 1)[-1]
+
+def _reviewer_marks_from(path):
+    """Structured reviewer marks in `path`: [{'author','kind','text'}] with kind in
+    {'change','ins','del','comment'}. Same content as A._extract_reviewer_edits (tracked
+    changes + non-tool comments, an adjacent del+ins paired into one 'old → new' change),
+    but returned as FIELDS so the GUI can filter by author and render richly. Kept separate
+    here so the shared annotation-log helper stays byte-identical. Best-effort -> []."""
+    q, xml = A._q, A._xml
+    out = []
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            droot = xml(z.read('word/document.xml'))
+            revs = []
+            for e in droot.iter():
+                if e.tag == q('ins'):
+                    revs.append(('ins', e.get(q('author')) or '?',
+                                 ''.join(t.text or '' for t in e.iter(q('t')))))
+                elif e.tag == q('del'):
+                    revs.append(('del', e.get(q('author')) or '?',
+                                 ''.join(t.text or '' for t in e.iter(q('delText')))))
+            i = 0
+            while i < len(revs):
+                kind, auth, txt = revs[i]
+                nxt = revs[i + 1] if i + 1 < len(revs) else None
+                if nxt and nxt[1] == auth and {kind, nxt[0]} == {'ins', 'del'}:
+                    old, new = (txt, nxt[2]) if kind == 'del' else (nxt[2], txt)
+                    old, new = old.strip(), new.strip()
+                    if old or new:
+                        out.append({'author': auth, 'kind': 'change',
+                                    'text': '%s → %s' % (old or '∅', new or '∅')})
+                    i += 2
+                else:
+                    t = txt.strip()
+                    if t:
+                        out.append({'author': auth, 'kind': kind, 'text': t})
+                    i += 1
+            if 'word/comments.xml' in names:
+                for c in xml(z.read('word/comments.xml')):
+                    if c.tag == q('comment') and c.get(q('author')) != A.AUTHOR:
+                        body = ' '.join(t.text or '' for t in c.iter(q('t'))).strip()
+                        out.append({'author': c.get(q('author')) or '?', 'kind': 'comment', 'text': body})
+    except Exception:
+        return out
+    return out
+
+def _entry_user_edits(d, src_path=None):
+    """The reviewer's OWN marks (tracked changes / non-tool comments) for this entry, read
+    LIVE (never folded into the cached analysis — the cache keys on the SOURCE docx, so a
+    cached copy would go stale the moment the output is edited). Two sources, in order:
+      1. the edited output in review_out (the normal review workflow — the reviewer's marks
+         live in the _edited.docx twin, checked in both naming variants);
+      2. otherwise the SOURCE docx itself — for a reviewer's own folder (e.g. Tony's copies,
+         which carry his tracked changes/comments directly, with no review_out twin).
+    The tool's own comments are excluded (author != AUTHOR), so only human marks show."""
+    marks = []
     base = d.get('docx_basename')
-    if not base:
-        return []
-    for name in (A.output_name(base, True), A.output_name(base, False)):
-        p = os.path.join(STATE['out_dir'], name)
-        if os.path.exists(p):
-            ue = A._extract_reviewer_edits(p)
-            if ue:
-                return ue
-    return []
+    if base:
+        for name in (A.output_name(base, True), A.output_name(base, False)):
+            p = os.path.join(STATE['out_dir'], name)
+            if os.path.exists(p):
+                marks = _reviewer_marks_from(p)
+                if marks:
+                    break
+    if not marks and src_path and os.path.exists(src_path):
+        marks = _reviewer_marks_from(src_path)   # reviewer marks embedded in the source docx
+    return marks
+
+def _docx_html(path):
+    """Render a docx BODY to a lightweight HTML fragment for the in-app 'docx' view —
+    paragraphs and tables in document order, with tracked changes shown inline (w:ins as
+    <ins>, w:del as <del>, both author-titled) and comment anchors as chips carrying the
+    comment text. python-docx silently drops tracked changes/comments, so we walk the XML
+    directly. Best-effort -> '' on any error (the pane just shows a fallback)."""
+    q, xml = A._q, A._xml
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            droot = xml(z.read('word/document.xml'))
+            comments = {}
+            if 'word/comments.xml' in names:
+                for c in xml(z.read('word/comments.xml')):
+                    if _ln(c.tag) == 'comment':
+                        body = ' '.join(t.text or '' for t in c.iter(q('t'))).strip()
+                        comments[c.get(q('id'))] = (c.get(q('author')) or '?', body)
+    except Exception:
+        return ''
+
+    esc = html.escape
+    def cmt_chip(cid):
+        au, cbody = comments.get(cid, ('?', ''))
+        return '<span class="cmt" title="%s">\U0001f4ac %s</span>' % (esc(cbody), esc(au))
+    def inline(node):
+        buf = []
+        for ch in node:
+            t = _ln(ch.tag)
+            if t in ('pPr', 'rPr'):
+                continue
+            if t == 'r':                         # a run: text (w:t / w:delText) + any inline comment ref
+                for rc in ch:
+                    rt = _ln(rc.tag)
+                    if rt in ('t', 'delText'):
+                        buf.append(esc(rc.text or ''))
+                    elif rt == 'commentReference':
+                        buf.append(cmt_chip(rc.get(q('id'))))
+            elif t == 'ins':
+                buf.append('<ins title="inserted by %s">%s</ins>' % (esc(ch.get(q('author')) or '?'), inline(ch)))
+            elif t == 'del':
+                buf.append('<del title="deleted by %s">%s</del>' % (esc(ch.get(q('author')) or '?'), inline(ch)))
+            elif t == 'commentReference':
+                buf.append(cmt_chip(ch.get(q('id'))))
+            elif len(ch):                       # hyperlink / smartTag / sdt / other container
+                buf.append(inline(ch))
+        return ''.join(buf)
+    def block(node):
+        t = _ln(node.tag)
+        if t == 'p':
+            h = inline(node)
+            return '<p>%s</p>' % (h if h.strip() else '&nbsp;')
+        if t == 'tbl':
+            rows = []
+            for tr in node:
+                if _ln(tr.tag) != 'tr':
+                    continue
+                cells = ''.join('<td>%s</td>' % ''.join(block(x) for x in tc if _ln(x.tag) in ('p', 'tbl'))
+                                for tc in tr if _ln(tc.tag) == 'tc')
+                rows.append('<tr>%s</tr>' % cells)
+            return '<table class="docxtbl">%s</table>' % ''.join(rows)
+        return ''
+    body = next((ch for ch in droot if _ln(ch.tag) == 'body'), None)
+    if body is None:
+        return ''
+    return ''.join(block(ch) for ch in body)
 
 @app.route('/api/entry/<key>')
 def api_entry(key):
@@ -552,7 +705,35 @@ def api_entry(key):
         abort(404)
     d = get_analysis(key)
     return jsonify({'analysis': d, 'triage': STATE['triage'].get(key, {}),
-                    'user_edits': _entry_user_edits(d)})
+                    'user_edits': _entry_user_edits(d, STATE['docx'].get(key))})
+
+@app.route('/api/docx/<key>.html')
+def api_docx_html(key):
+    """The entry docx rendered to an HTML fragment (tracked changes + comments inline) for
+    the middle pane's 'docx' view — an in-app alternative to flipping to Word."""
+    path = STATE['docx'].get(key)
+    if not path or not os.path.exists(path):
+        abort(404)
+    return jsonify({'html': _docx_html(path), 'name': os.path.basename(path)})
+
+@app.route('/api/open/<key>', methods=['POST'])
+def api_open_docx(key):
+    """Open this entry's docx in the OS default app (Word) so the reviewer can inspect the
+    tracked changes/comments in place. Localhost-only tool; opens only a docx the GUI has
+    already indexed (never an arbitrary path)."""
+    path = STATE['docx'].get(key)
+    if not path or not os.path.exists(path):
+        abort(404)
+    try:
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', path])
+        elif os.name == 'nt':
+            os.startfile(path)                       # type: ignore[attr-defined]  # noqa
+        else:
+            subprocess.Popen(['xdg-open', path])
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 500
+    return jsonify({'ok': True, 'name': os.path.basename(path)})
 
 @app.route('/api/pdf/<key>/search')
 def api_pdf_search(key):
@@ -723,12 +904,14 @@ def main():
     ap.add_argument('folder', help='the entries folder (same one passed to annotate_review.py)')
     ap.add_argument('--port', type=int, default=8000, help='preferred port (auto-falls back to the next free one)')
     ap.add_argument('--out', help='sidecar/output folder (default <folder>/review_out)')
+    ap.add_argument('--pdf-root', help='folder holding the source .pdf/.cif/.dft files when the '
+                    'entries folder has none (default: auto-detect the nearest ancestor with .pdf)')
     ap.add_argument('--no-browser', action='store_true', help='do not auto-open the browser')
     args = ap.parse_args()
 
     if not os.path.isdir(args.folder):
         sys.exit('not a folder: %s' % args.folder)
-    build_index(args.folder, args.out)
+    build_index(args.folder, args.out, args.pdf_root)
     if not STATE['order']:
         sys.exit('no .docx entries found in %s' % args.folder)
     analyze_all()

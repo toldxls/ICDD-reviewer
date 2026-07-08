@@ -308,3 +308,48 @@ table.kv td.k { color: var(--muted); white-space: nowrap; width: 1%; }
 .cellcell.miss { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
 .formula sub, .formula sup { font-size: .75em; }
 .note-line { margin: 6px 10px; font-size: .85em; color: var(--warn); }
+
+/* ---- middle-pane toggle + open-docx button ------------------------------- */
+#mid-toggle { flex: none; width: auto; }
+#mid-toggle button { padding: 3px 10px; font-size: .85em; }
+button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
+
+/* ---- reviewer-edits panel (author-filterable list) ----------------------- */
+.re-sub { display: flex; align-items: center; gap: 6px; }
+.re-filter { display: flex; flex-wrap: wrap; gap: 3px; }
+.re-chip {
+  padding: 1px 7px; font-size: .78em; border: 1px solid var(--line); border-radius: 10px;
+  background: transparent; color: var(--muted); cursor: pointer; max-width: 160px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.re-chip:hover { border-color: var(--accent); }
+.re-chip.on { background: rgb(var(--accent-rgb) / .18); border-color: var(--accent); color: var(--accent); }
+.reviewer-edits .redit { display: flex; gap: 8px; align-items: baseline; }
+.re-kind {
+  flex: none; font-size: .72em; text-transform: uppercase; letter-spacing: .03em;
+  padding: 0 5px; border-radius: 3px; background: rgb(255 255 255 / .08); color: var(--muted);
+}
+.re-kind.k-ins { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+.re-kind.k-del { color: var(--danger); background: color-mix(in srgb, var(--danger) 15%, transparent); }
+.re-kind.k-comment { color: var(--info); background: color-mix(in srgb, var(--info) 15%, transparent); }
+.re-kind.k-change { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.re-text { flex: 1; min-width: 0; }
+.re-auth { flex: none; color: var(--muted); font-size: .78em; }
+
+/* ---- in-app docx view (transcription + tracked changes) ------------------ */
+#docx-view {
+  flex: 1; overflow: auto; min-height: 0; padding: 12px 14px;
+  background: rgb(0 0 0 / .14); font-size: .9em; line-height: 1.5; color: var(--text);
+}
+#docx-view.hidden { display: none; }
+#docx-view p { margin: 0 0 .5em; }
+#docx-view .docxtbl { border-collapse: collapse; width: 100%; margin: 6px 0; }
+#docx-view .docxtbl td {
+  border: 1px solid var(--line); padding: 3px 6px; vertical-align: top; font-size: .95em;
+}
+#docx-view ins { text-decoration: underline; text-decoration-color: var(--ok); color: var(--ok); }
+#docx-view del { text-decoration: line-through; color: var(--danger); }
+#docx-view .cmt {
+  display: inline-block; font-size: .82em; color: var(--info); cursor: help;
+  border-bottom: 1px dotted var(--info); margin: 0 2px;
+}

@@ -117,7 +117,11 @@
 
           <section id="pdf" class="pane">
             <div class="pane-title">
-              <span class="ptitle">.pdf evidence</span>
+              <div id="mid-toggle" class="seg" title="show the source paper or the docx transcription">
+                <button data-mid="pdf" class="on">.pdf</button>
+                <button data-mid="docx">docx</button>
+              </div>
+              <button id="open-docx" class="ghost mini" title="open this docx in Word to see the tracked changes">open ↗</button>
               <span class="muted ellip" id="pdf-name"></span>
               <span class="spacer"></span>
               <span id="pdf-pager" class="pager"></span>
@@ -136,6 +140,7 @@
             </div>
             <div id="pdf-view"><div class="empty muted">no .pdf paired</div></div>
             <div id="pdf-snippet" class="snippet"></div>
+            <div id="docx-view" class="hidden"></div>
           </section>
 
           <div class="splitter v" data-resize="side"></div>
