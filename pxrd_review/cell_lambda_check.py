@@ -1025,7 +1025,10 @@ def discover(folder):
         base = os.path.basename(dp)
         if base.startswith('~$'):
             continue
-        if re.search(r'(?:^|/)(review_out|\.edit_backup)/', dp.replace(os.sep, '/')):
+        # skip the tool's own outputs — but only as SUBfolders of the root, tested on the path
+        # RELATIVE to `folder`, so pointing the GUI directly AT a review_out folder still works.
+        rel = os.path.relpath(dp, folder).replace(os.sep, '/')
+        if re.search(r'(?:^|/)(review_out|\.edit_backup)/', rel):
             continue
         eid = entry_id(dp)
         if eid:

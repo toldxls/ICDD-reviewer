@@ -863,9 +863,10 @@ def api_set_folder():
     folder = os.path.expanduser((data.get('folder') or '').strip())
     if not folder or not os.path.isdir(folder):
         return jsonify({'ok': False, 'error': 'not a folder: %s' % (folder or '(empty)')}), 400
+    if not C.discover(folder):                          # validate BEFORE build_index mutates STATE, so a
+        return jsonify({'ok': False,                    # rejected switch can't strand the tool on an empty
+                        'error': 'no .docx entries found under %s' % folder}), 400   # folder
     build_index(folder, None)
-    if not STATE['order']:
-        return jsonify({'ok': False, 'error': 'no .docx entries found under %s' % folder}), 400
     start_analysis()                                    # background; return at once so the switch is instant
     return jsonify({'ok': True, 'folder': STATE['folder'], 'out_dir': STATE['out_dir'],
                     'pdf_root': STATE.get('pdf_root'), 'count': len(STATE['order'])})

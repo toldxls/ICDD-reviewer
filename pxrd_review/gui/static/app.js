@@ -33,6 +33,7 @@ const S = {
   ueAuthor: 'All',    // reviewer-edits author filter (persists across entries when present)
   pollTimer: null,    // re-poll /api/entries while entries are still analysing in the background
   saveTimer: null,
+  pendingSave: null,  // {key,payload} of a debounced triage write not yet sent (flushed on navigate)
 };
 const enc = encodeURIComponent;
 
@@ -98,6 +99,7 @@ async function pickFolderNative() {
 async function openFolder(path) {
   path = (path || '').trim();
   if (!path) return;
+  flushTriage();                    // persist any pending triage before re-pointing the tool
   const btns = ['#folder-open', '#folder-browse'].map($).filter(Boolean);
   btns.forEach(b => b.disabled = true);
   $('#folder-hint').textContent = 'opening…';
@@ -151,6 +153,7 @@ function badgeEl(b) { return el('span', { class: 'badge ' + b.level }, b.label);
 
 // ---- open an entry ---------------------------------------------------------
 async function openEntry(key) {
+  flushTriage();                    // persist the previous entry's triage before switching
   S.key = key;
   const r = await fetch('/api/entry/' + encodeURIComponent(key)).then(x => x.json());
   S.a = r.analysis;
@@ -1003,13 +1006,19 @@ function renderMindat() {
 // ---- triage save (debounced) ----------------------------------------------
 function saveTriage() {
   clearTimeout(S.saveTimer);
-  const key = S.key, payload = JSON.stringify(S.t);   // capture NOW — the entry may change before the timer fires
-  S.saveTimer = setTimeout(() => {
-    fetch('/api/triage/' + encodeURIComponent(key), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: payload,
-    });
-  }, 350);
+  S.pendingSave = { key: S.key, payload: JSON.stringify(S.t) };   // capture NOW (entry may change first)
+  S.saveTimer = setTimeout(flushTriage, 350);
+}
+// write any debounced triage IMMEDIATELY — called before we open another entry, switch folder, or
+// close the tab, so a confirm/dismiss can never be lost to the debounce window or a folder change.
+function flushTriage() {
+  clearTimeout(S.saveTimer);
+  const p = S.pendingSave; S.pendingSave = null;
+  if (!p) return;
+  fetch('/api/triage/' + encodeURIComponent(p.key), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: p.payload, keepalive: true,   // keepalive => still sent if the page is unloading
+  });
 }
 
 // flush any pending debounced triage save so a rerun reads the latest sidecar
@@ -1068,6 +1077,7 @@ $('#rerun-all').addEventListener('click', () =>
 document.querySelectorAll('#mid-toggle button').forEach(b =>
   b.addEventListener('click', () => setMidMode(b.dataset.mid)));
 $('#open-docx').addEventListener('click', openDocxInWord);
+window.addEventListener('beforeunload', flushTriage);                           // don't lose a triage click on tab close
 document.addEventListener('click', hideCmtPopover);                              // click-away closes the comment popover
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCmtPopover(); });
 // dashboard 'Log' button: open the tool's change log (annotation_log.txt) in a new tab,
