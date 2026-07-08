@@ -688,12 +688,12 @@ def _docx_html(path):
                         buf.append(cmt_chip(rc.get(q('id'))))
             elif t == 'ins':
                 au = ch.get(q('author')) or '?'
-                buf.append('<ins style="--au:%s" title="inserted by %s">%s</ins>'
-                           % (col(au), esc(au), inline(ch)))
+                buf.append('<ins data-author="%s" style="--au:%s" title="inserted by %s">%s</ins>'
+                           % (esc(au), col(au), esc(au), inline(ch)))
             elif t == 'del':
                 au = ch.get(q('author')) or '?'
-                buf.append('<del style="--au:%s" title="deleted by %s">%s</del>'
-                           % (col(au), esc(au), inline(ch)))
+                buf.append('<del data-author="%s" style="--au:%s" title="deleted by %s">%s</del>'
+                           % (esc(au), col(au), esc(au), inline(ch)))
             elif t == 'commentReference':
                 buf.append(cmt_chip(ch.get(q('id'))))
             elif len(ch):                       # hyperlink / smartTag / sdt / other container
@@ -718,9 +718,10 @@ def _docx_html(path):
     if body is None:
         return ''
     doc_html = ''.join(block(ch) for ch in body)
-    if authors:                                            # colour legend, pinned to the top
-        chips = ''.join('<span class="au" style="--au:%s"><span class="sw"></span>%s</span>'
-                        % (col(au), esc(au)) for au in sorted(authors))
+    if authors:                                            # colour legend = per-author toggle buttons
+        chips = ''.join('<button type="button" class="au" data-author="%s" style="--au:%s" '
+                        'title="show / hide this author\'s edits"><span class="sw"></span>%s</button>'
+                        % (esc(au), col(au), esc(au)) for au in sorted(authors))
         return '<div class="docx-authors">%s</div>%s' % (chips, doc_html)
     return doc_html
 

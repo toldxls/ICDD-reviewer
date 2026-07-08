@@ -27,6 +27,8 @@ const S = {
   sizesPromise: null, // in-flight sizes fetch
   midMode: 'pdf',     // middle pane: 'pdf' (paper render) | 'docx' (transcription + tracked changes)
   docxHtml: {},       // key -> rendered docx HTML (cached; live from /api/docx)
+  docxHidden: new Set(), // authors toggled OFF in the docx view (persists across entries)
+  cmtPop: null,       // the pinned comment popover element, if any
   ue: [],             // current entry's reviewer marks [{author,kind,text}]
   ueAuthor: 'All',    // reviewer-edits author filter (persists across entries when present)
   saveTimer: null,
@@ -458,7 +460,7 @@ function setMidMode(mode) {
 async function loadDocxView() {
   const key = S.key, view = $('#docx-view');
   if (!key || !view) return;
-  if (S.docxHtml[key] != null) { view.innerHTML = S.docxHtml[key]; return; }
+  if (S.docxHtml[key] != null) { view.innerHTML = S.docxHtml[key]; wireDocxView(); return; }
   view.innerHTML = '<div class="empty muted">rendering docx…</div>';
   let h = '';
   try {
@@ -467,8 +469,50 @@ async function loadDocxView() {
   } catch (_) { h = ''; }
   if (!h) h = '<div class="empty muted">could not render this docx</div>';
   S.docxHtml[key] = h;
-  if (S.midMode === 'docx' && S.key === key) view.innerHTML = h;   // still on this entry/view
+  if (S.midMode === 'docx' && S.key === key) { view.innerHTML = h; wireDocxView(); }  // still on this entry/view
 }
+
+// wire the docx view after its HTML is injected: legend = per-author toggle buttons,
+// comment chips = click-to-pin their text (no more hover-only tooltips).
+function wireDocxView() {
+  const view = $('#docx-view');
+  view.querySelectorAll('.docx-authors .au').forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      const au = btn.dataset.author;
+      S.docxHidden.has(au) ? S.docxHidden.delete(au) : S.docxHidden.add(au);
+      applyDocxAuthorFilter();
+    };
+  });
+  view.querySelectorAll('.cmt').forEach(chip => {
+    chip.onclick = e => { e.stopPropagation(); showCmtPopover(chip); };
+  });
+  applyDocxAuthorFilter();
+}
+
+// hide/show each author's marks per S.docxHidden; reflect state on the legend buttons.
+function applyDocxAuthorFilter() {
+  $('#docx-view').querySelectorAll('[data-author]').forEach(elm => {
+    const off = S.docxHidden.has(elm.dataset.author);
+    if (elm.classList.contains('au')) elm.classList.toggle('off', off);   // legend button
+    else elm.style.display = off ? 'none' : '';                           // a mark (ins/del/comment)
+  });
+}
+
+// a pinned popover with a comment's full text (click a chip; click-away / Esc dismisses)
+function showCmtPopover(chip) {
+  hideCmtPopover();
+  const pop = el('div', { class: 'cmt-pop', style: '--au:' + chip.style.getPropertyValue('--au'),
+      onclick: e => e.stopPropagation() },
+    el('div', { class: 'cmt-pop-au' }, chip.dataset.author || ''),
+    el('div', { class: 'cmt-pop-body' }, chip.getAttribute('title') || '(empty comment)'));
+  document.body.append(pop);
+  const r = chip.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12)) + 'px';
+  pop.style.top = Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 8) + 'px';
+  S.cmtPop = pop;
+}
+function hideCmtPopover() { if (S.cmtPop) { S.cmtPop.remove(); S.cmtPop = null; } }
 
 async function openDocxInWord() {
   if (!S.key) return;
@@ -963,6 +1007,8 @@ $('#rerun-all').addEventListener('click', () =>
 document.querySelectorAll('#mid-toggle button').forEach(b =>
   b.addEventListener('click', () => setMidMode(b.dataset.mid)));
 $('#open-docx').addEventListener('click', openDocxInWord);
+document.addEventListener('click', hideCmtPopover);                              // click-away closes the comment popover
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCmtPopover(); });
 $('#prev').addEventListener('click', () => step(-1));
 $('#next').addEventListener('click', () => step(1));
 $('#pdf-q').addEventListener('keydown', e => {
