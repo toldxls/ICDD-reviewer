@@ -9,6 +9,7 @@ const S = {
   a: null,            // current analysis
   t: null,            // current triage object
   view: 'fixes',      // dashboard lens: fixes | attention | clean | all
+  sort: 'id',         // list order: id | id-desc | az | za | fixes | clean (see SORTS)
   pdfPage: 0,
   pdfTerms: [],
   pdfMode: 'page',    // 'page' = scrollable full pages | 'region' = zoomed crop around the hit
@@ -126,11 +127,36 @@ function matchesView(e) {
   return true;
 }
 
+// ---- list ordering ----------------------------------------------------------
+// ascending ICDD id: prefix letters first, then the number (I003599 < I003600 < O002127) —
+// mirrors the server's _eid_key so 'id' order matches what /api/entries sends.
+function cmpEid(a, b) {
+  const ea = a.eid || '', eb = b.eid || '';
+  const pa = ea.replace(/\d+/g, ''), pb = eb.replace(/\d+/g, '');
+  if (pa !== pb) return pa < pb ? -1 : 1;
+  const na = (ea.match(/\d+/) || [0])[0], nb = (eb.match(/\d+/) || [0])[0];
+  return (parseInt(na, 10) - parseInt(nb, 10)) || ea.localeCompare(eb);
+}
+const nameOf = e => (e.name || e.key || '').toLowerCase();
+const SORTS = {
+  'id':      cmpEid,
+  'id-desc': (a, b) => cmpEid(b, a),
+  'az':      (a, b) => nameOf(a).localeCompare(nameOf(b)) || cmpEid(a, b),
+  'za':      (a, b) => nameOf(b).localeCompare(nameOf(a)) || cmpEid(a, b),
+  'fixes':   (a, b) => (b.fixes - a.fixes) || (hasAttn(b) - hasAttn(a)) || cmpEid(a, b),
+  'clean':   (a, b) => (a.fixes - b.fixes) || (hasAttn(a) - hasAttn(b)) || cmpEid(a, b),
+};
+// the list in its display order — renderList AND prev/next navigation both use this,
+// so stepping through entries always follows what's on screen.
+function sortedEntries() {
+  return [...S.entries].sort(SORTS[S.sort] || SORTS.id);
+}
+
 function renderList() {
   const ul = $('#entry-list'); ul.innerHTML = '';
   const q = $('#filter').value.toLowerCase();
   let shown = 0, fixes = 0;
-  for (const e of S.entries) {
+  for (const e of sortedEntries()) {
     if (e.fixes > 0) fixes++;
     if (!matchesView(e)) continue;
     if (q && !((e.name || '').toLowerCase().includes(q) || (e.eid || '').toLowerCase().includes(q))) continue;
@@ -1041,7 +1067,7 @@ async function rerun(url, btn, busyLabel, doneLabel) {
 // ---- navigation ------------------------------------------------------------
 function step(delta) {
   // navigate within the currently-visible (filtered/sorted) order
-  const keys = S.entries.filter(e => visibleKey(e)).map(e => e.key);
+  const keys = sortedEntries().filter(e => visibleKey(e)).map(e => e.key);
   const i = keys.indexOf(S.key);
   if (i === -1) return;
   const j = i + delta;
@@ -1056,6 +1082,7 @@ function visibleKey(e) {
 
 // ---- wire up ---------------------------------------------------------------
 $('#filter').addEventListener('input', renderList);
+$('#sort').addEventListener('change', ev => { S.sort = ev.target.value; renderList(); });
 document.querySelectorAll('#views button').forEach(b =>
   b.addEventListener('click', () => {
     S.view = b.getAttribute('data-view');

@@ -77,7 +77,17 @@
           <button data-view="clean">Clean</button>
           <button data-view="all">All</button>
         </div>
-        <input type="search" id="filter" placeholder="filter entries…" autocomplete="off">
+        <div class="filter-row">
+          <input type="search" id="filter" placeholder="filter entries…" autocomplete="off">
+          <select id="sort" title="order the entry list">
+            <option value="id">id ↑</option>
+            <option value="id-desc">id ↓</option>
+            <option value="az">name A→Z</option>
+            <option value="za">name Z→A</option>
+            <option value="fixes">most fixes</option>
+            <option value="clean">cleanest first</option>
+          </select>
+        </div>
         <div id="counts" class="muted"></div>
       </div>
       <ul id="entry-list"></ul>

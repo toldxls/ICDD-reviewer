@@ -137,6 +137,12 @@ input[type=range] { accent-color: var(--accent); }
 /* sidebar */
 .side-head { padding: 10px; border-bottom: 1px solid var(--line); }
 .side-head .seg { margin-bottom: 8px; }
+.filter-row { display: flex; gap: 6px; }
+.filter-row select {
+  flex: none; max-width: 46%;
+  background: rgb(0 0 0 / .3); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 4px; font-size: .88em;
+}
 #counts { margin-top: 6px; font-size: .85em; }
 #entry-list { list-style: none; margin: 0; padding: 0; overflow: auto; }
 #entry-list li { padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }

@@ -9,6 +9,12 @@ package version in `pyproject.toml`.
 Fixes from a full-day code review of the 0.2.0 work (10 confirmed defects + 5
 cleanups). Regression 204/204; triage-merge behavior covered by new sanity checks.
 
+### Added
+- **Entry-list sort options** — a dropdown beside the filter box orders the list by
+  ICDD id (↑/↓), mineral name (A→Z / Z→A), most fixes first, or cleanest first.
+  Applies within every view (Fixes/Attention/Clean/All); the ‹ › prev/next entry
+  navigation follows the displayed order.
+
 ### Fixed
 - **Triage can no longer be silently lost or corrupted** — a duplicate `flushTriage`
   declaration shadowed the keepalive flush (a confirm/dismiss inside the 350 ms
