@@ -863,6 +863,14 @@ def api_set_folder():
     folder = os.path.expanduser((data.get('folder') or '').strip())
     if not folder or not os.path.isdir(folder):
         return jsonify({'ok': False, 'error': 'not a folder: %s' % (folder or '(empty)')}), 400
+    folder = folder.rstrip('/\\') or folder
+    # Picking a bare 'review_out' sidecar folder (its own triage.json / cache, but no entry docx of
+    # its own) means "resume the review this belongs to" — open the PARENT that owns it, whose
+    # review_out is exactly this folder, so their triage loads.
+    if os.path.basename(folder) == 'review_out' and not C.discover(folder):
+        parent = os.path.dirname(folder)
+        if parent and C.discover(parent):
+            folder = parent
     if not C.discover(folder):                          # validate BEFORE build_index mutates STATE, so a
         return jsonify({'ok': False,                    # rejected switch can't strand the tool on an empty
                         'error': 'no .docx entries found under %s' % folder}), 400   # folder
