@@ -37,10 +37,16 @@ from pxrd_review import annotate_review as A
 from pxrd_review import paths as P
 from pxrd_review.gui import _pdf_worker as PW   # MuPDF ops run in a subprocess (crash isolation)
 
-# analyze()'s PDF text parse (cell_lambda_check.pdf_text) uses fitz — route it through the MuPDF
-# worker too, so it never runs on a Flask request thread (fitz is not thread-safe; a concurrent
-# call during a live folder re-point would otherwise segfault the whole server).
-C.set_pdf_reader(lambda p: PW.run(PW.full_text, p, default=''))
+# analyze()'s PDF text parse uses fitz, which is not thread-safe — two request threads calling it
+# at once (e.g. during a live folder re-point) could corrupt libmupdf and crash the server. Unlike
+# the render path (get_pixmap can segfault on a JPEG-2000 decode, so it MUST run in the isolating
+# subprocess), get_text() has no such crash on the corpus — so we keep it IN-PROCESS for speed
+# (~0.06 s/pdf; a subprocess round-trip per entry is far slower) and just SERIALISE it under a lock.
+_pdf_read_lock = threading.Lock()
+def _serial_pdf_reader(path):
+    with _pdf_read_lock:
+        return C._pdf_text_fitz(path)
+C.set_pdf_reader(_serial_pdf_reader)
 
 try:
     from flask import Flask, jsonify, request, send_file, abort, Response

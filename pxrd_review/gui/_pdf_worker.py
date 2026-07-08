@@ -129,14 +129,6 @@ def scan(pdf, terms):
     return [n, (best_pg if best_hits > 0 else 0)]
 
 
-def full_text(pdf):
-    """Concatenated text of every page (raw; the caller normalises). Runs in the worker so
-    analyze()'s PDF parse never touches fitz on a Flask thread — safe under concurrency."""
-    import fitz
-    with fitz.open(pdf) as doc:
-        return '\n'.join(p.get_text() for p in doc)
-
-
 def sizes(pdf):
     """[[w, h], …] point size of every page — lets the UI reserve each page slot's true height
     so lazy-loaded images cause no layout shift (accurate scroll-to-hit). No rendering."""
