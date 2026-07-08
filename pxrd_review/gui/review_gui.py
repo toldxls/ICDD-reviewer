@@ -1007,15 +1007,19 @@ def api_pick_folder():
     try:
         if sys.platform == 'darwin':
             # 'tell me to activate' brings the dialog frontmost WITH keyboard focus — without it
-            # the panel can't take ⌘↑ (up a folder), ⌘⇧G (go to path) or arrow keys. Start at the
-            # HOME folder: the panel has no reliable MOUSE affordance for going UP (sidebar / path
-            # popup vary by macOS version), so every location must be reachable by drilling DOWN.
-            # Near-current-folder moves are the in-app list's job (it starts at the current folder).
+            # ⌘↑ (up one folder), ⌘⇧G (go to a typed path) and the arrow keys land in the browser
+            # instead of the panel, leaving mouse-only drill-DOWN navigation (the panel has no
+            # visible 'up' button). Open INSIDE the current entries folder; the prompt carries the
+            # ⌘↑ hint since that shortcut is the panel's way back up.
+            start = STATE.get('folder')
+            if not (start and os.path.isdir(start)):
+                start = os.path.expanduser('~')
+            loc = start.replace('\\', '\\\\').replace('"', '\\"')
             script = ('tell me to activate\n'
                       'set f to choose folder with prompt '
                       '"Choose the entries folder   (⌘↑ = up one folder)" '
-                      'default location (path to home folder)\n'
-                      'POSIX path of f')
+                      'default location (POSIX file "%s")\n'
+                      'POSIX path of f' % loc)
             r = subprocess.run(['osascript', '-e', script],
                                capture_output=True, text=True, timeout=300)
             if r.returncode != 0:

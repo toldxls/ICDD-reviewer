@@ -25,12 +25,13 @@ cleanups). Regression 204/204; triage-merge behavior covered by new sanity check
   (e.g. a long rerun) is still being served.
 - **Dashboard rows that go stale later re-analyze** — editing a docx in Word (or
   touching a paired source) no longer leaves the row on "analyzing…" forever.
-- **Folder picker** — the native macOS dialog now opens frontmost with keyboard
-  focus (⌘↑ / ⌘⇧G work; the prompt carries the ⌘↑ hint) and starts at the home
-  folder so any batch is reachable by drilling down — the panel has no reliable
-  mouse affordance for going up; the in-app browser starts from the real path (not
-  the decorated tooltip text, which had opened one level up) and covers the
-  near-current-folder moves; the path box gets its own full-width row in a wider panel;
+- **Folder picker** — the native macOS dialog now opens frontmost **with keyboard
+  focus** and starts in the current entries folder. Going up is ⌘↑ (the prompt
+  carries the hint), ⌘⇧G to type a path, or the sidebar — those keys used to land
+  in the browser because the dialog opened unfocused, leaving mouse-only
+  drill-down. The in-app browser starts from the real path (not the decorated
+  tooltip text, which had opened one level up); the path box gets its own
+  full-width row in a wider panel;
   the ancestor `.pdf`-pool probe is bounded (no more minutes-long disk walk when no
   papers exist nearby); a failed docx render is no longer cached for the session.
 - **Output-folder guards** — `annotate_review` and `sweep` refuse to run on a
