@@ -1023,8 +1023,13 @@ def discover(folder):
         real = [p for p in ps if not _SUPP_DOCX.search(os.path.basename(p))]
         if not real:                   # an id with ONLY supplementary docx is not a real entry
             continue
-        named = [p for p in real if re.search(r'\(.+\)\.docx$', os.path.basename(p))]
-        pool = named or real           # a '(MineralName)' transcription beats a bare-id docx
+        # a '(MineralName)' transcription beats a bare-id/stray docx. Match the parenthetical
+        # ANYWHERE in the name (not only right before .docx) so a suffixed copy — e.g. a
+        # hand-reviewed '(Keutschite)_edited.docx' — still counts as a real transcription.
+        # Otherwise the clean '(Name).docx' alone fills the pool and the most-reviewed tiebreak
+        # below never runs, so discover opens the UN-edited copy over the reviewer's edited one.
+        named = [p for p in real if re.search(r'\(.+\)', os.path.basename(p))]
+        pool = named or real
         if len(pool) > 1:              # parallel reviewer copies: take the most-reviewed (then path)
             pool = sorted(pool, key=lambda p: (-_review_activity(p), p))
         else:
