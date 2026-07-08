@@ -198,10 +198,22 @@ def _norm_pdf(s):
     s = re.sub(r'(?<=\d)\s+\((\d{1,3})\)', r'(\1)', s)   # '8.8593 (2)' -> '8.8593(2)'
     return s
 
-def pdf_text(path):
+def _pdf_text_fitz(path):
+    """Raw concatenated PDF text via in-process MuPDF — the default reader (CLI / regression)."""
     import fitz
     with fitz.open(path) as doc:                  # close the handle (was leaked)
-        return _norm_pdf('\n'.join(p.get_text() for p in doc))
+        return '\n'.join(p.get_text() for p in doc)
+
+_pdf_reader = _pdf_text_fitz                      # override point: the GUI routes this through a
+                                                  # MuPDF worker subprocess (fitz is NOT thread-safe,
+                                                  # so it must never run on a Flask request thread)
+def set_pdf_reader(fn):
+    """Swap the raw PDF-text reader (fn(path)->raw text); None restores in-process fitz."""
+    global _pdf_reader
+    _pdf_reader = fn or _pdf_text_fitz
+
+def pdf_text(path):
+    return _norm_pdf(_pdf_reader(path))
 
 # `phase` tags a cell with the mineral name it sits under (multi-phase papers list
 # several cells; the phase name disambiguates which belongs to the entry under

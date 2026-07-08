@@ -29,13 +29,18 @@ browser only ever sends an entry KEY that the server maps to a file it indexed a
 startup — no raw paths from the page, so no path traversal. No data leaves the
 machine.
 """
-import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile
+import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
 from pxrd_review import annotate_review as A
 from pxrd_review import paths as P
 from pxrd_review.gui import _pdf_worker as PW   # MuPDF ops run in a subprocess (crash isolation)
+
+# analyze()'s PDF text parse (cell_lambda_check.pdf_text) uses fitz — route it through the MuPDF
+# worker too, so it never runs on a Flask request thread (fitz is not thread-safe; a concurrent
+# call during a live folder re-point would otherwise segfault the whole server).
+C.set_pdf_reader(lambda p: PW.run(PW.full_text, p, default=''))
 
 try:
     from flask import Flask, jsonify, request, send_file, abort, Response
@@ -828,6 +833,29 @@ def api_set_folder():
     analyze_all()
     return jsonify({'ok': True, 'folder': STATE['folder'], 'out_dir': STATE['out_dir'],
                     'pdf_root': STATE.get('pdf_root'), 'count': len(STATE['order'])})
+
+@app.route('/api/pick-folder', methods=['POST'])
+def api_pick_folder():
+    """Pop the OS-native folder chooser and return the chosen path (macOS: AppleScript
+    'choose folder'; Linux: zenity when present). The dialog appears on the machine hosting
+    the GUI — localhost only. {cancelled:true} if the user dismisses it."""
+    try:
+        if sys.platform == 'darwin':
+            r = subprocess.run(['osascript', '-e',
+                                'POSIX path of (choose folder with prompt "Choose the entries folder")'],
+                               capture_output=True, text=True, timeout=300)
+            if r.returncode != 0:
+                return jsonify({'ok': False, 'cancelled': True})     # user hit Cancel
+            return jsonify({'ok': True, 'folder': r.stdout.strip()})
+        if shutil.which('zenity'):
+            r = subprocess.run(['zenity', '--file-selection', '--directory',
+                                '--title=Choose the entries folder'], capture_output=True, text=True, timeout=300)
+            if r.returncode != 0:
+                return jsonify({'ok': False, 'cancelled': True})
+            return jsonify({'ok': True, 'folder': r.stdout.strip()})
+        return jsonify({'ok': False, 'error': 'no native folder picker on this platform — type the path'}), 400
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 500
 
 @app.route('/api/pdf/<key>/search')
 def api_pdf_search(key):

@@ -80,15 +80,29 @@ async function browseFolder(path) {
     list.append(el('div', { class: 'fp-item', title: d,
       onclick: () => browseFolder(r.path.replace(/\/+$/, '') + '/' + d) }, '📁  ' + d));
 }
+// pop the OS-native folder chooser (Finder), then open the chosen folder
+async function pickFolderNative() {
+  $('#folder-hint').textContent = 'waiting for the Finder dialog…';
+  let r;
+  try { r = await fetch('/api/pick-folder', { method: 'POST' }).then(x => x.json()); }
+  catch (_) { r = { ok: false, error: 'request failed' }; }
+  if (r && r.cancelled) { $('#folder-hint').textContent = ''; return; }
+  if (!r || !r.ok) { $('#folder-hint').textContent = '⚠ ' + ((r && r.error) || 'picker failed'); return; }
+  $('#folder-path').value = r.folder;
+  openFolder(r.folder);
+}
 async function openFolder(path) {
   path = (path || '').trim();
   if (!path) return;
-  $('#folder-hint').textContent = 'opening…';
+  const btns = ['#folder-open', '#folder-browse'].map($).filter(Boolean);
+  btns.forEach(b => b.disabled = true);
+  $('#folder-hint').textContent = 'opening & analyzing…  (a fresh folder can take ~15s)';
   let r;
   try {
     r = await fetch('/api/folder', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder: path }) }).then(x => x.json());
   } catch (_) { r = { ok: false, error: 'request failed' }; }
+  btns.forEach(b => b.disabled = false);
   if (!r.ok) { $('#folder-hint').textContent = '⚠ ' + (r.error || 'could not open'); return; }
   $('#folderpanel').classList.add('hidden');
   S.key = null; S.a = null; S.docxHtml = {}; S.docxHidden = new Set();     // reset per-entry view + caches
@@ -1198,6 +1212,7 @@ function initAppearance() {
   });
   // folder picker: click the header path to open it; close on click-away
   $('#folder').addEventListener('click', e => { e.stopPropagation(); openFolderPanel(); });
+  $('#folder-browse').addEventListener('click', pickFolderNative);
   $('#folder-open').addEventListener('click', () => openFolder($('#folder-path').value));
   $('#folder-path').addEventListener('keydown', e => { if (e.key === 'Enter') openFolder(e.target.value); });
   document.addEventListener('click', e => {
