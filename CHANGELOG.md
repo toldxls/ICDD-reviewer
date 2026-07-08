@@ -4,6 +4,47 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.2.1] — 2026-07-08
+
+Fixes from a full-day code review of the 0.2.0 work (10 confirmed defects + 5
+cleanups). Regression 204/204; triage-merge behavior covered by new sanity checks.
+
+### Fixed
+- **Triage can no longer be silently lost or corrupted** — a duplicate `flushTriage`
+  declaration shadowed the keepalive flush (a confirm/dismiss inside the 350 ms
+  debounce was dropped on tab close); the self-heal merge now recognises lowercase
+  entry ids via the shared `ID_RE` (they previously pooled together and cross-merged
+  verdicts between unrelated entries) and carries **every** saved field (entry notes,
+  per-finding labels, timestamps) instead of stripping them.
+- **Folder switch is race-free** — `/api/folder` rebuilds the index under the state
+  lock, so an in-flight analysis can neither crash an entry request nor write a stale
+  foreign row into the new folder's `gui_cache.json`.
+- **Server lifecycle** — auto-exit grace default is now 90 s (Chrome throttles a
+  backgrounded tab's heartbeat to once per minute, so closing one tab could kill the
+  server under another still-open tab), and the watchdog never exits while a request
+  (e.g. a long rerun) is still being served.
+- **Dashboard rows that go stale later re-analyze** — editing a docx in Word (or
+  touching a paired source) no longer leaves the row on "analyzing…" forever.
+- **Folder picker** — the native macOS dialog now opens frontmost with keyboard
+  focus (⌘↑ / ⌘⇧G work; the prompt carries the ⌘↑ hint) and starts at the home
+  folder so any batch is reachable by drilling down — the panel has no reliable
+  mouse affordance for going up; the in-app browser starts from the real path (not
+  the decorated tooltip text, which had opened one level up) and covers the
+  near-current-folder moves; the path box gets its own full-width row in a wider panel;
+  the ancestor `.pdf`-pool probe is bounded (no more minutes-long disk walk when no
+  papers exist nearby); a failed docx render is no longer cached for the session.
+- **Output-folder guards** — `annotate_review` and `sweep` refuse to run on a
+  `review_out` / `.edit_backup` root (discover() can index one since 0.2.0 for the
+  GUI's resume feature; annotating one would double-comment the outputs).
+
+### Changed
+- **discover() tiebreak counts only human marks** — the tool's own comments no
+  longer count as review activity, and on a tie the clean `(Name).docx` beats an
+  `_edited` name. A stray copy of a tool output can no longer outrank the true
+  source; reviewer copies whose only content is tool comments now resolve to the
+  clean copy (Part1: 3 of 37 entries — checks are unaffected, comments never
+  change field cells).
+
 ## [0.2.0] — 2026-07-08
 
 Review-mode GUI overhaul: inspect the tool's findings **and** reviewers' edits side

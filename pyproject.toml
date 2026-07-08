@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pxrd-review"
-version = "0.2.0"
+version = "0.2.1"
 description = "PXRD mineral-review tool — validate an ICDD entry .docx against the paper (.pdf), author .cif, ICDD .dft and the Mindat API; write Word comments + highlights into copies."
 readme = "README.md"
 requires-python = ">=3.9"
