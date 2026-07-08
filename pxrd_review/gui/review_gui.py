@@ -477,6 +477,35 @@ def _save_triage():
             json.dump(STATE['triage'], f, indent=1)
 
 # ------------------------------------------------------------------ indexing / launch
+def _reconcile_triage_keys():
+    """Self-heal: triage is keyed by the docx basename STEM, but which copy discover picks for an
+    entry id can change (e.g. a clean '(Name).docx' vs a reviewed '(Name)_edited.docx'). If a
+    current entry has no triage under its own stem but triage exists for the SAME entry id under a
+    different stem, alias it onto the current key — so a reviewer's confirms survive a change in
+    copy selection. In-memory (persisted on the next save); never deletes the original keys."""
+    tri = STATE['triage']
+    if not tri:
+        return
+    def idof(s):
+        m = re.search(r'[IO]\d+', s or '')
+        return m.group(0) if m else None
+    def score(v):                                       # prefer an entry that actually carries triage
+        if not isinstance(v, dict):
+            return (0, 0)
+        has = 1 if (v.get('accept') or any((v.get('findings') or {}).values())) else 0
+        return (has, len(v.get('findings') or {}))
+    best = {}                                           # id -> value of the richest triage seen for it
+    for k, v in tri.items():
+        i = idof(k)
+        if i and score(v) > score(best.get(i)):
+            best[i] = v
+    for key in STATE['order']:
+        if key in tri:
+            continue
+        v = best.get(idof(key))
+        if v:
+            tri[key] = v                                # alias same-id triage onto the current entry
+
 def _source_pool(folder, explicit=None):
     """Locate a 'source pool' of .pdf/.cif/.dft files when the entries folder itself holds none —
     e.g. a reviewer's own docx-only folder (Tony2028Part1/…) whose papers live up in a shared
@@ -523,7 +552,7 @@ def build_index(folder, out_dir, pdf_root=None):
     docs = sorted(C.discover(folder).values())     # recursive: docx at any depth under the root
     STATE['docx'] = {os.path.splitext(os.path.basename(d))[0]: d for d in docs}
     STATE['order'] = list(STATE['docx'].keys())
-    _load_cache(); _load_triage()
+    _load_cache(); _load_triage(); _reconcile_triage_keys()
 
 def analyze_all(gen=None):
     """Analyze every entry so the dashboard's attention badges populate. Runs in a BACKGROUND
