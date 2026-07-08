@@ -717,7 +717,10 @@ def _docx_html(path):
     body = next((ch for ch in droot if _ln(ch.tag) == 'body'), None)
     if body is None:
         return ''
-    doc_html = ''.join(block(ch) for ch in body)
+    try:                                                   # honour the best-effort contract: the
+        doc_html = ''.join(block(ch) for ch in body)       # block/inline recursion could overflow on
+    except Exception:                                      # a pathological/corrupt docx -> '' not a 500
+        return ''
     if authors:                                            # colour legend = per-author toggle buttons
         chips = ''.join('<button type="button" class="au" data-author="%s" style="--au:%s" '
                         'title="show / hide this author\'s edits"><span class="sw"></span>%s</button>'

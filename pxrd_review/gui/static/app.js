@@ -491,11 +491,16 @@ function wireDocxView() {
 }
 
 // hide/show each author's marks per S.docxHidden; reflect state on the legend buttons.
+// "hide author" = show the document as if they never edited it: drop their insertions and
+// comments, but for a DELETION keep its ORIGINAL (struck) text and merely un-strike it —
+// removing a <del> would delete the base text and read as if the deletion were accepted.
 function applyDocxAuthorFilter() {
   $('#docx-view').querySelectorAll('[data-author]').forEach(elm => {
     const off = S.docxHidden.has(elm.dataset.author);
-    if (elm.classList.contains('au')) elm.classList.toggle('off', off);   // legend button
-    else elm.style.display = off ? 'none' : '';                           // a mark (ins/del/comment)
+    if (elm.classList.contains('au')) { elm.classList.toggle('off', off); return; }   // legend button
+    const keepText = off && elm.tagName === 'DEL';                        // a hidden deletion: keep text
+    elm.style.display = (off && !keepText) ? 'none' : '';                 // ins / comment: remove
+    elm.classList.toggle('au-off', keepText);                            // del: neutralise to plain text
   });
 }
 
