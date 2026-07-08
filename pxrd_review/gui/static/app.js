@@ -319,20 +319,20 @@ function triageControls(fkey, t) {
     class: 'tbtn ' + v + (t.verdict === v ? ' on' : ''),
     onclick: ev => {
       ev.stopPropagation();
-      // '? look' ALWAYS scrolls the PDF to this finding's evidence (not gated on the
-      // toggle state) — and locate first, before the list re-render, so the first
-      // click takes effect immediately. Lands in the live page + flashes the hit.
-      if (v === 'look') lookInPage(fkey);
-      t.verdict = (t.verdict === v ? null : v);
+      t.verdict = (t.verdict === v ? null : v);       // confirm / dismiss are the only verdicts
       saveTriage(); renderFindings();
     }
   }, lbl);
+  // '? look' is pure NAVIGATION — it jumps the .pdf to this finding's evidence and does NOT set a
+  // verdict, so investigating a flag can never overwrite a confirm/dismiss. Lands in the live page.
+  const look = el('button', { class: 'tbtn look',
+    onclick: ev => { ev.stopPropagation(); lookInPage(fkey); } }, '? look');
   const note = el('input', { class: 'tnote', type: 'text', placeholder: 'note…',
     value: t.note || '',
     onclick: ev => ev.stopPropagation(),
     oninput: ev => { t.note = ev.target.value; saveTriage(); } });
   return el('div', { class: 'triage' }, mk('confirm', '✓ confirm'),
-    mk('dismiss', '✗ dismiss'), mk('look', '? look'), note);
+    mk('dismiss', '✗ dismiss'), look, note);
 }
 
 // Some findings have no number/keyword in their message to search, but the reviewer

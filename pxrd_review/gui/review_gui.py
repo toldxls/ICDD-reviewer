@@ -477,34 +477,47 @@ def _save_triage():
             json.dump(STATE['triage'], f, indent=1)
 
 # ------------------------------------------------------------------ indexing / launch
+_VERDICT_RANK = {'confirm': 2, 'dismiss': 1}            # 'look' / None -> 0 (look is navigation, not a verdict)
 def _reconcile_triage_keys():
-    """Self-heal: triage is keyed by the docx basename STEM, but which copy discover picks for an
-    entry id can change (e.g. a clean '(Name).docx' vs a reviewed '(Name)_edited.docx'). If a
-    current entry has no triage under its own stem but triage exists for the SAME entry id under a
-    different stem, alias it onto the current key — so a reviewer's confirms survive a change in
-    copy selection. In-memory (persisted on the next save); never deletes the original keys."""
+    """Self-heal the triage. Triage is keyed by the docx basename STEM, but which copy discover
+    picks for an entry id can change mid-review (a clean '(Name).docx' vs a reviewed
+    '(Name)_edited.docx'), and '? look' is no longer a verdict. For each CURRENT entry, merge every
+    triage record saved for its id under ANY stem — taking the strongest real verdict per finding
+    (confirm > dismiss > none), dropping stale 'look' marks, and keeping notes / accept / reviewed.
+    Recovers confirms orphaned by a copy-selection change or shadowed by an accidental 'look'. A
+    normal folder (one stem per id) merges a single record → just drops any 'look'. In-memory,
+    persisted on the next save; the original per-stem keys are left untouched."""
     tri = STATE['triage']
     if not tri:
         return
     def idof(s):
         m = re.search(r'[IO]\d+', s or '')
         return m.group(0) if m else None
-    def score(v):                                       # prefer an entry that actually carries triage
-        if not isinstance(v, dict):
-            return (0, 0)
-        has = 1 if (v.get('accept') or any((v.get('findings') or {}).values())) else 0
-        return (has, len(v.get('findings') or {}))
-    best = {}                                           # id -> value of the richest triage seen for it
+    groups = {}                                         # entry id -> [triage records under any stem]
     for k, v in tri.items():
-        i = idof(k)
-        if i and score(v) > score(best.get(i)):
-            best[i] = v
+        if isinstance(v, dict):
+            groups.setdefault(idof(k), []).append(v)
     for key in STATE['order']:
-        if key in tri:
+        recs = groups.get(idof(key))
+        if not recs:
             continue
-        v = best.get(idof(key))
-        if v:
-            tri[key] = v                                # alias same-id triage onto the current entry
+        merged = {'findings': {}}
+        for r in recs:
+            if r.get('accept') and not merged.get('accept'):
+                merged['accept'] = r['accept']
+            if r.get('reviewed'):
+                merged['reviewed'] = True
+            for fk, fv in (r.get('findings') or {}).items():
+                if not isinstance(fv, dict):
+                    continue
+                cur = merged['findings'].setdefault(fk, {'verdict': None})
+                ver = fv.get('verdict')
+                ver = ver if ver in _VERDICT_RANK else None     # retire 'look' -> no verdict
+                if _VERDICT_RANK.get(ver, 0) > _VERDICT_RANK.get(cur.get('verdict'), 0):
+                    cur['verdict'] = ver
+                if fv.get('note') and not cur.get('note'):
+                    cur['note'] = fv['note']
+        tri[key] = merged
 
 def _source_pool(folder, explicit=None):
     """Locate a 'source pool' of .pdf/.cif/.dft files when the entries folder itself holds none —
