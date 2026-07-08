@@ -1014,6 +1014,20 @@ document.querySelectorAll('#mid-toggle button').forEach(b =>
 $('#open-docx').addEventListener('click', openDocxInWord);
 document.addEventListener('click', hideCmtPopover);                              // click-away closes the comment popover
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCmtPopover(); });
+// dashboard 'Log' button: open the tool's change log (annotation_log.txt) in a new tab,
+// falling back to whatever review-out log exists (triage_report / mindat_discrepancies / sweep).
+$('#open-log').addEventListener('click', async () => {
+  let logs = [];
+  try { logs = (await fetch('/api/logs').then(x => x.json())).logs || []; } catch (_) {}
+  const pick = logs.includes('annotation_log.txt') ? 'annotation_log.txt' : logs[0];
+  if (!pick) {
+    const s = $('#rerun-status');
+    s.textContent = "no log yet — run 'Rerun all' (annotation_log) or 'Export triage'";
+    setTimeout(() => { s.textContent = ''; }, 4000);
+    return;
+  }
+  window.open('/api/log?name=' + enc(pick), '_blank');
+});
 $('#prev').addEventListener('click', () => step(-1));
 $('#next').addEventListener('click', () => step(1));
 $('#pdf-q').addEventListener('keydown', e => {

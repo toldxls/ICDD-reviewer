@@ -764,6 +764,28 @@ def api_open_docx(key):
         return jsonify({'ok': False, 'error': str(ex)}), 500
     return jsonify({'ok': True, 'name': os.path.basename(path)})
 
+# the review-out logs the dashboard 'Log' button can open (whitelist — never an arbitrary path)
+_LOG_FILES = ('annotation_log.txt', 'triage_report.txt', 'mindat_discrepancies.txt', 'sweep_report.txt')
+
+@app.route('/api/logs')
+def api_logs():
+    """Which whitelisted review-out logs currently exist (drives the dashboard 'Log' button)."""
+    od = STATE['out_dir'] or ''
+    return jsonify({'out_dir': od, 'logs': [n for n in _LOG_FILES if os.path.exists(os.path.join(od, n))]})
+
+@app.route('/api/log')
+def api_log():
+    """Serve one review-out log inline as plain text (the 'Log' button opens it in a new tab).
+    Whitelisted filename only, always resolved under out_dir — no arbitrary path / traversal."""
+    name = request.args.get('name') or 'annotation_log.txt'
+    if name not in _LOG_FILES:
+        abort(404)
+    path = os.path.join(STATE['out_dir'] or '', name)
+    if not os.path.exists(path):
+        abort(404)
+    with open(path, encoding='utf-8', errors='replace') as f:
+        return Response(f.read(), mimetype='text/plain; charset=utf-8')
+
 @app.route('/api/pdf/<key>/search')
 def api_pdf_search(key):
     pdf = _pdf_path(key)
