@@ -60,6 +60,7 @@ async function loadEntries() {
   const parts = (r.folder || '').split('/').filter(Boolean);
   $('#folder').textContent = (parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/');
   $('#folder').title = (r.folder || '') + '  — click to change folder';
+  $('#folder').dataset.path = r.folder || '';             // the bare path (the title is decorated)
   S.entries = r.entries;
   renderList();
   // analysis runs in the background — poll until every entry's badges are in
@@ -70,7 +71,7 @@ async function loadEntries() {
 function openFolderPanel() {
   $('#settings').classList.add('hidden');
   $('#folderpanel').classList.remove('hidden');
-  browseFolder($('#folder').title || '');                 // start at the current folder
+  browseFolder($('#folder').dataset.path || '');          // start at the current folder
 }
 async function browseFolder(path) {
   let r;
@@ -526,8 +527,8 @@ async function loadDocxView() {
     const r = await fetch('/api/docx/' + enc(key) + '.html').then(x => x.json());
     h = r.html || '';
   } catch (_) { h = ''; }
-  if (!h) h = '<div class="empty muted">could not render this docx</div>';
-  S.docxHtml[key] = h;
+  if (h) S.docxHtml[key] = h;                  // cache only a successful render — a failure
+  else h = '<div class="empty muted">could not render this docx</div>';   // retries on next open
   if (S.midMode === 'docx' && S.key === key) { view.innerHTML = h; wireDocxView(); }  // still on this entry/view
 }
 
@@ -1009,26 +1010,18 @@ function saveTriage() {
   S.pendingSave = { key: S.key, payload: JSON.stringify(S.t) };   // capture NOW (entry may change first)
   S.saveTimer = setTimeout(flushTriage, 350);
 }
-// write any debounced triage IMMEDIATELY — called before we open another entry, switch folder, or
-// close the tab, so a confirm/dismiss can never be lost to the debounce window or a folder change.
+// write any debounced triage IMMEDIATELY — called before we open another entry, switch folder,
+// rerun, or close the tab, so a confirm/dismiss can never be lost to the debounce window or a
+// folder change. Returns the save's promise (a rerun awaits it so it reads the latest sidecar);
+// no-op when nothing is pending — the server already has the latest state.
 function flushTriage() {
   clearTimeout(S.saveTimer);
   const p = S.pendingSave; S.pendingSave = null;
-  if (!p) return;
-  fetch('/api/triage/' + encodeURIComponent(p.key), {
+  if (!p) return Promise.resolve();
+  return fetch('/api/triage/' + encodeURIComponent(p.key), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: p.payload, keepalive: true,   // keepalive => still sent if the page is unloading
-  });
-}
-
-// flush any pending debounced triage save so a rerun reads the latest sidecar
-async function flushTriage() {
-  clearTimeout(S.saveTimer);
-  if (!S.key) return;
-  await fetch('/api/triage/' + encodeURIComponent(S.key), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(S.t),
-  });
+  }).catch(() => {});
 }
 
 // ---- rerun (regenerate docx with triage applied) ---------------------------

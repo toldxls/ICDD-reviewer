@@ -394,11 +394,12 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 #folder { cursor: pointer; }
 #folder:hover { color: var(--text); text-decoration: underline dotted; }
 #folderpanel {
-  position: fixed; top: 46px; right: 10px; width: 460px; max-width: calc(100vw - 20px); z-index: 60;
+  position: fixed; top: 46px; right: 10px; width: 640px; max-width: calc(100vw - 20px); z-index: 60;
   border: 1px solid var(--line); border-radius: 12px; padding: 14px;
   box-shadow: 0 12px 40px rgb(0 0 0 / .5);
 }
-#folder-path { flex: 1; min-width: 0; font-family: inherit; }
+#folder-path { flex: 1; min-width: 0; font-family: inherit; }  /* own full-width row — long paths stay readable */
+#folder-open { margin-left: auto; }                            /* Browse… left, Open right */
 #folder-hint { font-size: .85em; margin-bottom: 8px; min-height: 1em; }
 .fp-list { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 .fp-list:empty { display: none; }

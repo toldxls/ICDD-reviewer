@@ -29,7 +29,7 @@ browser only ever sends an entry KEY that the server maps to a file it indexed a
 startup — no raw paths from the page, so no path traversal. No data leaves the
 machine.
 """
-import sys, os, re, io, json, html, glob, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time
+import sys, os, re, io, json, html, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
@@ -69,11 +69,15 @@ _ALLOWED_HOSTS = set()
 
 _last_seen = None                                    # monotonic time of the most recent client request
 _closing_at = None                                   # monotonic time a tab reported it is unloading
+_inflight = 0                                        # requests currently being served (auto-exit gate)
+_inflight_lock = threading.Lock()
 
 @app.before_request
 def _guard_localhost():
-    global _last_seen
+    global _last_seen, _inflight
     _last_seen = time.monotonic()                    # heartbeat: any request means a tab is open
+    with _inflight_lock:
+        _inflight += 1
     if not _ALLOWED_HOSTS:
         return                                       # pre-launch / unconfigured
     if (request.host or '').lower() not in _ALLOWED_HOSTS:
@@ -84,6 +88,12 @@ def _guard_localhost():
             netloc = src.split('://', 1)[-1].split('/', 1)[0].lower()
             if netloc not in _ALLOWED_HOSTS:
                 abort(403)
+
+@app.teardown_request
+def _request_done(exc=None):
+    global _inflight
+    with _inflight_lock:
+        _inflight = max(0, _inflight - 1)
 
 @app.after_request
 def _no_cache_ui(resp):
@@ -438,6 +448,8 @@ def _fingerprint(key):
 
 def get_analysis(key, force=False):
     with STATE['lock']:
+        if key not in STATE['docx']:                 # the folder switched mid-request — entry gone
+            raise KeyError(key)
         fp = _fingerprint(key)
         c = STATE['cache'].get(key)
         if not force and c and c.get('fp') == fp:
@@ -490,28 +502,37 @@ def _reconcile_triage_keys():
     triage record saved for its id under ANY stem — taking the strongest real verdict per finding
     (confirm > dismiss > none), dropping stale 'look' marks, and keeping notes / accept / reviewed.
     Recovers confirms orphaned by a copy-selection change or shadowed by an accidental 'look'. A
-    normal folder (one stem per id) merges a single record → just drops any 'look'. In-memory,
+    normal folder (one stem per id) merges a single record → just drops any 'look'. Every OTHER
+    saved field (entry note, per-finding label, timestamps, …) is carried over verbatim, with the
+    current stem's own values taking priority — the merge never discards data. In-memory,
     persisted on the next save; the original per-stem keys are left untouched."""
     tri = STATE['triage']
     if not tri:
         return
     def idof(s):
-        m = re.search(r'[IO]\d+', s or '')
-        return m.group(0) if m else None
+        m = re.search(C.ID_RE, s or '')                 # shared id regex — 5/6 digits, I/O/i/o
+        return (m.group(1).upper() + m.group(2)) if m else None
     groups = {}                                         # entry id -> [triage records under any stem]
     for k, v in tri.items():
-        if isinstance(v, dict):
-            groups.setdefault(idof(k), []).append(v)
+        eid = idof(k)
+        if eid and isinstance(v, dict):                 # id-less stems never cross-merge
+            groups.setdefault(eid, []).append(v)
     for key in STATE['order']:
-        recs = groups.get(idof(key))
+        eid = idof(key)
+        recs = groups.get(eid) if eid else None
         if not recs:
             continue
+        own = tri.get(key)                              # the current stem's own record wins gap-fills
+        ordered = ([own] if isinstance(own, dict) else []) + [r for r in recs if r is not own]
         merged = {'findings': {}}
-        for r in recs:
-            if r.get('accept') and not merged.get('accept'):
-                merged['accept'] = r['accept']
-            if r.get('reviewed'):
-                merged['reviewed'] = True
+        for r in ordered:
+            for k2, v2 in r.items():                    # carry every entry-level field (accept, note, …)
+                if k2 == 'findings':
+                    continue
+                if k2 == 'reviewed':
+                    merged['reviewed'] = bool(merged.get('reviewed')) or bool(v2)
+                elif merged.get(k2) is None and v2 is not None:
+                    merged[k2] = v2
             for fk, fv in (r.get('findings') or {}).items():
                 if not isinstance(fv, dict):
                     continue
@@ -520,26 +541,49 @@ def _reconcile_triage_keys():
                 ver = ver if ver in _VERDICT_RANK else None     # retire 'look' -> no verdict
                 if _VERDICT_RANK.get(ver, 0) > _VERDICT_RANK.get(cur.get('verdict'), 0):
                     cur['verdict'] = ver
-                if fv.get('note') and not cur.get('note'):
-                    cur['note'] = fv['note']
+                for k2, v2 in fv.items():               # keep label / note / any other finding field
+                    if k2 != 'verdict' and cur.get(k2) is None and v2 is not None:
+                        cur[k2] = v2
         tri[key] = merged
+
+def _has_pdf_below(root, max_dirs=3000, max_depth=4):
+    """True if any .pdf lives within `max_depth` levels below `root`, visiting at most
+    `max_dirs` directories. The bound matters: the ancestor probe below can reach very
+    large trees (a home directory), and an unbounded recursive glob there walks the
+    whole disk before giving up — the folder switch would hang for minutes."""
+    base = root.rstrip(os.sep).count(os.sep)
+    seen = 0
+    for dp, dns, fns in os.walk(root):
+        seen += 1
+        if seen > max_dirs:
+            return False
+        if dp.rstrip(os.sep).count(os.sep) - base >= max_depth:
+            dns[:] = []
+        else:
+            dns[:] = [d for d in dns if not d.startswith('.') and d not in ('review_out', '.edit_backup')]
+        if any(f.lower().endswith('.pdf') for f in fns):
+            return True
+    return False
 
 def _source_pool(folder, explicit=None):
     """Locate a 'source pool' of .pdf/.cif/.dft files when the entries folder itself holds none —
     e.g. a reviewer's own docx-only folder (Tony2028Part1/…) whose papers live up in a shared
-    sibling Files/. An explicit --pdf-root wins; otherwise walk up to 5 ancestors and take the
-    nearest that contains any .pdf (checked lazily, so we stop at the first hit). Returns None
-    when nothing is found — the paper pane just stays empty, as before."""
+    sibling Files/. An explicit --pdf-root wins; otherwise walk up to 5 ancestors (never above the
+    home directory) and take the nearest whose bounded scan finds any .pdf. Returns None when
+    nothing is found — the paper pane just stays empty, as before."""
     if explicit:
         return os.path.abspath(explicit)
+    home = os.path.expanduser('~')
     cur = os.path.abspath(folder)
     for _ in range(5):
         parent = os.path.dirname(cur)
         if parent == cur:                                # reached the filesystem root
             break
         cur = parent
-        if next(glob.iglob(os.path.join(cur, '**', '*.[pP][dD][fF]'), recursive=True), None):
+        if _has_pdf_below(cur):
             return cur
+        if cur == home:                                  # never probe above the home directory
+            break
     return None
 
 def build_index(folder, out_dir, pdf_root=None):
@@ -600,7 +644,9 @@ def start_analysis():
     in-flight pass over a previous folder aborts; the dashboard polls /api/entries until the
     badges are in. Returns immediately — navigation never waits on the check suite."""
     STATE['gen'] = STATE.get('gen', 0) + 1
-    threading.Thread(target=analyze_all, args=(STATE['gen'],), daemon=True).start()
+    t = threading.Thread(target=analyze_all, args=(STATE['gen'],), daemon=True)
+    STATE['athread'] = t                                # so /api/entries can tell a pass is live
+    t.start()
 
 # ------------------------------------------------------------------ routes
 @app.route('/')
@@ -626,19 +672,24 @@ def _eid_key(r):
     m = re.search(r'\d+', eid)
     return (re.sub(r'\d+', '', eid), int(m.group()) if m else 0, eid)
 
-def _light_row(key):
-    """A dashboard row for an entry not analysed yet: name/id from the filename, file presence
-    from the indexes, no badges. Lets the list render instantly while analysis runs in the
-    background (the badges fill in as the dashboard polls /api/entries)."""
+def _row(key, d=None):
+    """One dashboard row. With `d` (cached analysis data) the row is complete; without it, a
+    lightweight pending row — name/id from the filename, file presence from the indexes, no
+    badges — so the list renders instantly while analysis runs in the background (the badges
+    fill in as the dashboard polls /api/entries)."""
+    reviewed = bool(STATE['triage'].get(key, {}).get('reviewed'))
+    if d:
+        return {'key': key, 'eid': d['eid'], 'name': d['name'], 'files': d['files'],
+                'badges': d['badges'], 'status': d['cell']['status'], 'fixes': d.get('fixes', 0),
+                'attention': _attention(d['badges']), 'reviewed': reviewed, 'pending': False}
     path = STATE['docx'][key]
     eid = C.entry_id(path) or key
     return {'key': key, 'eid': eid, 'name': C.entry_name(path) or eid,
             'files': {k: bool(STATE[k].get(eid)) for k in ('pdf', 'cif', 'dft')},
             'badges': [], 'status': 'pending', 'fixes': 0, 'attention': False,
-            'reviewed': bool(STATE['triage'].get(key, {}).get('reviewed')), 'pending': True}
+            'reviewed': reviewed, 'pending': True}
 
 @app.route('/api/entries')
-
 def api_entries():
     """Non-blocking: analysed entries return a full row from cache; not-yet-analysed ones return
     a lightweight row (name/id/files, no badges) so the list renders instantly. `pending` counts
@@ -647,15 +698,18 @@ def api_entries():
     for key in STATE['order']:
         c = STATE['cache'].get(key)
         if c and c.get('fp') == _fingerprint(key):      # already analysed (source unchanged)
-            d = c['data']; badges = d['badges']
-            rows.append({'key': key, 'eid': d['eid'], 'name': d['name'],
-                         'files': d['files'], 'badges': badges,
-                         'status': d['cell']['status'], 'fixes': d.get('fixes', 0),
-                         'attention': _attention(badges),
-                         'reviewed': bool(STATE['triage'].get(key, {}).get('reviewed')),
-                         'pending': False})
+            rows.append(_row(key, c['data']))
         else:
-            rows.append(_light_row(key)); pending += 1
+            rows.append(_row(key)); pending += 1
+    # Rows can go stale AFTER the launch/switch pass finished (e.g. the docx was edited in Word
+    # via the 'open' button, or a paired source file changed). Kick a fresh background pass so
+    # the badges come back — without this they would stay 'analyzing…' forever. Throttled so a
+    # permanently-failing entry cannot spin analysis on every poll.
+    alive = STATE.get('athread') is not None and STATE['athread'].is_alive()
+    now = time.monotonic()
+    if pending and not alive and now - STATE.get('rekick_at', 0) > 30:
+        STATE['rekick_at'] = now
+        start_analysis()
     # list in ascending ICDD-id order (earlier I-numbers first) — a stable, predictable
     # order to work through the batch. The per-view filter (Fixes/Attention/Clean) picks
     # WHICH entries show; the id orders them.
@@ -833,7 +887,10 @@ def _docx_html(path):
 def api_entry(key):
     if key not in STATE['docx']:
         abort(404)
-    d = get_analysis(key)
+    try:
+        d = get_analysis(key)
+    except KeyError:                                 # folder switched between the check and the lock
+        abort(404)
     return jsonify({'analysis': d, 'triage': STATE['triage'].get(key, {}),
                     'user_edits': _entry_user_edits(d, STATE['docx'].get(key))})
 
@@ -923,17 +980,21 @@ def api_set_folder():
     if not folder or not os.path.isdir(folder):
         return jsonify({'ok': False, 'error': 'not a folder: %s' % (folder or '(empty)')}), 400
     folder = folder.rstrip('/\\') or folder
+    found = C.discover(folder)
     # Picking a bare 'review_out' sidecar folder (its own triage.json / cache, but no entry docx of
     # its own) means "resume the review this belongs to" — open the PARENT that owns it, whose
     # review_out is exactly this folder, so their triage loads.
-    if os.path.basename(folder) == 'review_out' and not C.discover(folder):
+    if not found and os.path.basename(folder) == 'review_out':
         parent = os.path.dirname(folder)
-        if parent and C.discover(parent):
-            folder = parent
-    if not C.discover(folder):                          # validate BEFORE build_index mutates STATE, so a
+        pfound = C.discover(parent) if parent else {}
+        if pfound:
+            folder, found = parent, pfound
+    if not found:                                       # validate BEFORE build_index mutates STATE, so a
         return jsonify({'ok': False,                    # rejected switch can't strand the tool on an empty
                         'error': 'no .docx entries found under %s' % folder}), 400   # folder
-    build_index(folder, None)
+    with STATE['lock']:                                 # serialize with get_analysis: an in-flight
+        STATE['gen'] += 1                               # analysis completes first, later ones see the
+        build_index(folder, None)                       # bumped gen (or a KeyError) and stand down
     start_analysis()                                    # background; return at once so the switch is instant
     return jsonify({'ok': True, 'folder': STATE['folder'], 'out_dir': STATE['out_dir'],
                     'pdf_root': STATE.get('pdf_root'), 'count': len(STATE['order'])})
@@ -945,8 +1006,17 @@ def api_pick_folder():
     the GUI — localhost only. {cancelled:true} if the user dismisses it."""
     try:
         if sys.platform == 'darwin':
-            r = subprocess.run(['osascript', '-e',
-                                'POSIX path of (choose folder with prompt "Choose the entries folder")'],
+            # 'tell me to activate' brings the dialog frontmost WITH keyboard focus — without it
+            # the panel can't take ⌘↑ (up a folder), ⌘⇧G (go to path) or arrow keys. Start at the
+            # HOME folder: the panel has no reliable MOUSE affordance for going UP (sidebar / path
+            # popup vary by macOS version), so every location must be reachable by drilling DOWN.
+            # Near-current-folder moves are the in-app list's job (it starts at the current folder).
+            script = ('tell me to activate\n'
+                      'set f to choose folder with prompt '
+                      '"Choose the entries folder   (⌘↑ = up one folder)" '
+                      'default location (path to home folder)\n'
+                      'POSIX path of f')
+            r = subprocess.run(['osascript', '-e', script],
                                capture_output=True, text=True, timeout=300)
             if r.returncode != 0:
                 return jsonify({'ok': False, 'cancelled': True})     # user hit Cancel
@@ -1122,13 +1192,17 @@ def _export_report():
     return path
 
 # ------------------------------------------------------------------ main
-def _auto_exit_watchdog(grace=30):
+def _auto_exit_watchdog(grace=90):
     """Shut the server down shortly after the browser tab is CLOSED — NOT on idle. A tab beacons
     /api/closing as it unloads (close / navigate / reload); the watchdog then waits `grace` seconds
     and exits only if no further request arrives. A reload or another open tab reconnects within the
     grace and cancels it, so reloading never kills the server. Crucially, a tab that is merely open —
     idle, backgrounded, or with the laptop asleep — sends no beacon, so the server stays up
-    indefinitely. Disable entirely with --no-auto-exit; tune the grace with $PXRD_GUI_EXIT_GRACE."""
+    indefinitely. The default grace must exceed a browser's background-tab timer throttling
+    (Chrome runs a hidden tab's 15 s heartbeat at most once per MINUTE), or closing one tab
+    would kill the server under another still-open, backgrounded tab. Never exits while a
+    request is still being served (e.g. a long rerun). Disable entirely with --no-auto-exit;
+    tune the grace with $PXRD_GUI_EXIT_GRACE."""
     global _closing_at
     step = min(5.0, max(0.5, grace / 4.0))               # poll finer for a short grace (keeps tests fast)
     while True:
@@ -1139,6 +1213,8 @@ def _auto_exit_watchdog(grace=30):
             _closing_at = None                       # a client came back (reload / another tab) — cancel
             continue
         if time.monotonic() - _closing_at > grace:
+            if _inflight > 0:                        # a request is mid-flight (a rerun can run for
+                continue                             # minutes) — never yank the process under it
             print('\n[review_gui] browser closed — shutting down.')
             try:
                 PW.shutdown()                        # stop the MuPDF worker subprocesses too
@@ -1168,7 +1244,8 @@ def main():
                     'entries folder has none (default: auto-detect the nearest ancestor with .pdf)')
     ap.add_argument('--no-browser', action='store_true', help='do not auto-open the browser')
     ap.add_argument('--no-auto-exit', action='store_true',
-                    help='keep serving after the browser tab is closed (default: auto-shutdown when idle)')
+                    help='keep serving after the browser tab is closed (default: auto-shutdown '
+                         'shortly after the last tab closes — never while one is open)')
     args = ap.parse_args()
 
     if not os.path.isdir(args.folder):
@@ -1190,9 +1267,9 @@ def main():
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     if not args.no_auto_exit:                        # auto-shutdown once the last tab closes
         try:
-            _grace = float(os.environ.get('PXRD_GUI_EXIT_GRACE') or 30)
+            _grace = float(os.environ.get('PXRD_GUI_EXIT_GRACE') or 90)
         except ValueError:
-            _grace = 30
+            _grace = 90
         threading.Thread(target=lambda: _auto_exit_watchdog(_grace), daemon=True).start()
     # 127.0.0.1 bind keeps it off the network; debug OFF (no code-exec debugger).
     app.run(host='127.0.0.1', port=port, debug=False)
