@@ -4,6 +4,82 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.2.2] — 2026-07-09
+
+Full-codebase review (five parallel reviewers + adversarial verification): 1
+critical, 10 major, ~24 minor defects found and fixed. Regression 230/230 (25 new
+cases); validated by an analyze()-level A/B diff over the full corpus (1612 docx —
+fixtures + all training/ICDD trees): 39 entries changed, every change an intended
+fix (31 false `calculated` flags removed, 2 scanned .pdfs now report `notext`
+instead of a false anode flag, 1 entry's cell match improved), zero new findings.
+
+### Fixed — data loss / reviewer-work safety
+- **Formatting-only manual edits survive reruns** — `output_hand_edited` now does a
+  formatting-level compare (highlight/bold/italic/…, via a stripped temp copy), so a
+  reviewer highlight with no text change is refreshed-in-place with a backup instead
+  of silently rebuilt from source; a corrupt output reads as hand-edited (preserved),
+  and a stale twin is never deleted on formatting evidence alone.
+- **Backup failures abort, loudly** — when `.edit_backup/` can't be written, the
+  entry is left untouched with a `!!` warning instead of proceeding after a false
+  "your edits were saved" message.
+- **Filtered runs keep batch logs** — `--id`/`--limit` no longer rewrite
+  `annotation_log.txt` scoped to the subset or delete `mindat_discrepancies.txt`.
+- **Triage can't land on the wrong entry/finding** — content-stable finding keys
+  (`f:<hash>`, was positional `f0/f1…` that drifted when the list changed) shared by
+  the GUI and `--triage`, with unambiguous-only migration of old keys; the GUI's
+  `openEntry` is race-guarded (a failed/out-of-order load can no longer save entry
+  A's triage under entry B's key); `triage.json` writes are atomic (tmp+rename) with
+  corrupt-file quarantine; rerun endpoints are mutually excluded (409) so two
+  `annotate_review` subprocesses can't interleave writes to the same docx.
+- **Mindat caches are crash-safe** — atomic writes, unreadable caches self-heal via
+  re-fetch instead of crashing every run, and `refresh()` refuses to overwrite a
+  populated cache with a drastically smaller pull.
+
+### Fixed — false positives / missed catches (checks)
+- **check4 (calculated) is species-scoped** — another species' "could not be
+  collected / was calculated" sentences no longer flag a measured entry (removed 31
+  corpus false flags, e.g. the camanchacaite-paper quintet, grguricite, dienerite).
+- **Scanned .pdf (no text layer) → `notext`** — reported as "no extractable text"
+  instead of a written "docx anode NOT found in .pdf" false flag.
+- **Cell parsing hardening** — vertical-table label rows cluster per table block and
+  the inline grab window truncates at a second `a =` (no more chimeric candidates
+  mixing two species' axes — also upgraded one real match, I002381); EPMA rows
+  (`Point Ca 3.45 …`) no longer mint phantom cells; esd rejoin can't fuse a
+  footnote `(3)` across a newline but still recovers a line-wrapped esd with a unit;
+  a docx angle mistyped 90↔120 is now compared instead of skipped; `best_match`
+  never zips unequal axis lists; a merged/short Author's-Cell row pads instead of
+  crashing the batch; `.PDF` (uppercase) articles pair.
+- **λ capture** — nm-quoted wavelengths convert to Å; nearby cell parameters and
+  out-of-band numbers are never read as λ.
+- **check8/check10/check18 misfires** — esd suggestions can't match inside a longer
+  number (112.219(5) vs c=12.219); a prose dash after "biaxial" is not an optic
+  sign; a flattened charge digit (Ce3+) is not a REE coefficient (no more wrong
+  Levinson rename suggestions).
+- **candidate_groups** — axis ratios compare sorted lengths (a setting-swapped cell
+  is "similar", not a phantom super-cell); volumes carry the angle term (γ=0
+  uniaxial reads as 90°), fixing inverted cation-size verdicts.
+- **Accept override works on refresh** — triage `disagree` now clears a previously
+  stamped 'x'; repeated `--inplace` runs strip the tool's own annotations first
+  instead of duplicating every comment.
+
+### Fixed — trustworthy gates & tooling
+- **Regression suite can't vacuously pass** — a missing fixture docx is a loud FAIL
+  (was: every negative assertion silently passed); errored checks file under their
+  real code and a corpus-wide case asserts none exist; fixture discovery is
+  recursive and skips `review_out/`.
+- **sweep** — digit-bearing codes aggregate in the fire table; an explicit
+  `--baseline` that can't be read exits with an error instead of silently reporting
+  "no previous snapshot".
+- **CLI** — `pxrd extras I003448` passes the id through instead of remembering it as
+  a folder; a stray docx in the cwd can't hijack folder resolution; `pxrd check`
+  honors `$PXRD_REGRESSION_DIR`.
+- **GUI robustness** — triage export survives a corrupt entry (per-entry error line,
+  atomic write, visible JS failure status); the analysis-cache fingerprint includes
+  mindat.py + both Mindat caches (a cache refresh invalidates stale panes); label-only
+  records are no longer created on render (no `[?]` noise in `triage_report.txt`);
+  wedged PDF-worker processes are hard-killed and failed page images retry once;
+  stale async PDF-pane continuations are generation-guarded.
+
 ## [0.2.1] — 2026-07-08
 
 Fixes from a full-day code review of the 0.2.0 work (10 confirmed defects + 5
