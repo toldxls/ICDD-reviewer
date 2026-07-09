@@ -18,10 +18,16 @@ from pxrd_review import cell_lambda_check as C
 from pxrd_review import annotate_review as A
 from pxrd_review import extra_checks as X
 from pxrd_review import mindat as M
+from pxrd_review import candidate_groups as G
 
 def _stub_entry(z, formula):   # 'testite' name so _cif_name_ok passes and the Z logic runs
     return type('S', (), {'cell': {'Z': str(z)}, 'formulas': {'Empirical': formula},
                           'name': 'testite', 'comments': {}})()
+
+def _stub(**kw):               # minimal parse_entry stand-in for single-check unit cases
+    base = {'instr': {}, 'name': 'testite', 'primary': '', 'comments': {}, 'cell': {}, 'formulas': {}}
+    base.update(kw)
+    return type('S', (), base)()
 
 # Fixtures are private ICDD data, resolved at RUN time (in main), NOT at import: importing
 # this module must be side-effect-free and must not consume sys.argv — so it can be
@@ -43,13 +49,31 @@ def _init_fixtures(folder=None):
     _idx, _cif, _dft = C.pdf_index(FOLDER), C.cif_index(FOLDER), C.dft_index(FOLDER)
     _cache = {}
     return FOLDER
+class FixtureMissing(Exception):
+    """A case references an entry the fixture batch doesn't contain."""
+
+def _find_docx(eid):
+    """Locate the fixture docx for an entry id: a root-level match is preferred;
+    otherwise search recursively, skipping the tool's own outputs (review_out/,
+    .edit_backup/) so an _edited copy is never analyzed as the fixture."""
+    hits = sorted(glob.glob(os.path.join(FOLDER, eid + '*.docx')))
+    if hits:
+        return hits[0]
+    for root, dirs, files in os.walk(FOLDER):
+        dirs[:] = sorted(d for d in dirs if d not in ('review_out', '.edit_backup'))
+        for f in sorted(files):
+            if f.startswith(eid) and f.endswith('.docx'):
+                return os.path.join(root, f)
+    return None
+
 def res_for(eid):
     if eid not in _cache:
-        dp = glob.glob(os.path.join(FOLDER, eid + '*.docx'))
+        dp = _find_docx(eid)
         if not dp:
-            _cache[eid] = None
-        else:
-            _cache[eid] = A.analyze(dp[0], _idx.get(eid), _cif.get(eid), _dft.get(eid))
+            # a missing fixture must be LOUD: caching None here would turn every
+            # negative assertion ("must NOT flag") for the entry into a vacuous PASS
+            raise FixtureMissing('fixture missing: %s' % eid)
+        _cache[eid] = A.analyze(dp, _idx.get(eid), _cif.get(eid), _dft.get(eid))
     return _cache[eid]
 
 def extras(eid, code=None, sev=None, substr=None):
@@ -73,10 +97,10 @@ def params(eid):
 def _anchor_text(eid, anchor):
     """Text of the docx cell a finding with the given anchor would comment on."""
     from docx import Document
-    dp = glob.glob(os.path.join(FOLDER, eid + '*.docx'))
+    dp = _find_docx(eid)
     if not dp:
-        return None
-    doc = Document(dp[0])
+        raise FixtureMissing('fixture missing: %s' % eid)
+    doc = Document(dp)
     cell = A._anchor_cell(doc, doc.tables[0].rows[0], anchor)   # ac_row unused for ima/analysis
     return cell.text.strip() if cell else None
 
@@ -130,6 +154,64 @@ def _discover_prefers_reviewed_ok():
                    '<w:del w:id="2" w:author="R"><w:r><w:delText>old</w:delText></w:r></w:del>')
         got = C.discover(td)
         return 'I999004' in got and 'Z_reviewed' in got['I999004']
+
+def _no_errored_checks():
+    """Corpus-wide: no check may ERROR on any fixture entry (an errored check silently
+    skips its assertions; run_all surfaces it as a finding whose msg says so). Matched
+    on the MESSAGE substring, not the finding code, so it holds however the errored
+    finding is filed."""
+    bad = []
+    for eid, dp in sorted(C.discover(FOLDER).items()):
+        try:
+            r = _cache.get(eid) or A.analyze(dp, _idx.get(eid), _cif.get(eid), _dft.get(eid))
+        except Exception as ex:
+            bad.append('%s (analyze crashed: %s)' % (eid, ex)); continue
+        for f in r.get('extra', []):
+            m = (f.msg or '').lower()
+            if 'check errored' in m or 'errored:' in m:
+                bad.append('%s [%s] %s' % (eid, f.code, (f.msg or '')[:80]))
+    if bad:
+        print('      errored findings: ' + '; '.join(bad[:8]) + (' …' if len(bad) > 8 else ''))
+    return not bad
+
+def _errored_check_filed_under_real_code():
+    """run_all files a CRASHED check under the code its findings actually carry
+    (check19_intensity_detector -> 'intensity_type'), not the raw function name —
+    so sweep's fire table and code-filtered lookups can see a broken check."""
+    def check19_intensity_detector(e, text):
+        raise NameError('regression probe')
+    saved = X.CHECKS
+    try:
+        X.CHECKS = [check19_intensity_detector]
+        fs = X.run_all(_stub(), '')
+    finally:
+        X.CHECKS = saved
+    return any(f.code == 'intensity_type' and 'check errored:' in (f.msg or '') for f in fs)
+
+def _pdf_index_uppercase_ok():
+    """pdf_index pairs publisher-style '.PDF' (uppercase) files like cif/dft_index do."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        open(os.path.join(td, 'I999003(Test).PDF'), 'w').close()
+        return 'I999003' in C.pdf_index(td)
+
+def _no_two_species_chimera():
+    """The inline grab window must truncate at a second 'a =': a two-mineral sentence
+    (I003403 ferriphoxite / carboferriphoxite class) must not dress the first species'
+    cell in the neighbour's α/γ."""
+    t = ('Ferriphoxite is triclinic with a = 10.318(3), b = 7.395(5), c = 8.842(2), '
+         'while carboferriphoxite has a = 10.402(4), alpha = 95.950(7), gamma = 100.525(8).')
+    ours = [c for c in C.find_cells(t) if c.a == '10.318(3)']
+    return bool(ours) and all(c.al is None and c.ga is None for c in ours)
+
+def _vertical_tables_stay_separate():
+    """Distant vertical-table label blocks yield one candidate EACH — never a single
+    document-wide chimera mixing axes from different tables."""
+    t = ('a (Å)\n5.100\nc (Å)\n10.200\n' + 'filler line\n' * 15
+         + 'a (Å)\n7.300\nb (Å)\n8.400\nc (Å)\n9.500\n')
+    got = {(c.a, c.b, c.c) for c in C.find_cells(t)}
+    return (('7.300', '8.400', '9.500') in got
+            and not any(c.a == '5.100' and c.b == '8.400' for c in C.find_cells(t)))
 
 # (description, predicate) — predicate returns True when behaviour is correct
 CASES = [
@@ -619,11 +701,83 @@ CASES = [
  ("I003511 Allanite-(Y) name OK",            lambda: not extras('I003511', 'name_formula', 'flag')),
  ("I003523 Parisite-(Nd) name OK",           lambda: not extras('I003523', 'name_formula', 'flag')),
  ("I003521 Marsaalamite-(Y) name OK",        lambda: not extras('I003521', 'name_formula', 'flag')),
+ # --- 2026-07 fix batch: errored-check filing, parser hardening, misfire guards ---
+ ("run_all files an errored check under its real code", _errored_check_filed_under_real_code),
+ ("pdf_index pairs uppercase '.PDF'", _pdf_index_uppercase_ok),
+ ("esd rejoin: a reference '(3)' line-opener never fuses across the newline",
+  lambda: C._norm_pdf('value 112\n(3) Smith ref') == 'value 112\n(3) Smith ref'),
+ ("esd rejoin: line-wrapped esd with a unit still fuses (I002066 class)",
+  lambda: '5.2783(3)' in C._norm_pdf('a = 5.2783\n(3) Å')),
+ ("find_radiation: nm-quoted λ converted to Å",
+  lambda: any(r[1] == '1.54178' for r in C.find_radiation(
+      'The powder pattern was collected with CuKα radiation, λ = 0.154178 nm.'))),
+ ("find_radiation: a nearby cell parameter is not read as λ",
+  lambda: all(r[1] is None for r in C.find_radiation(
+      'Powder data were collected with CuKα radiation. Unit-cell parameter a = 5.4602 Å.'))),
+ ("best_match: a partial candidate is never zip-mispaired (mode stays direct)",
+  lambda: C.best_match(['5.0', '7.0', '10.0'],
+      [C.CellCand('7.0', None, '10.0', None, None, None, None, None, 'powder', 0, '', None)])[4] == 'direct'),
+ ("parse_docx pads a short (merged) Author's-Cell row to 8",
+  lambda: C._pad8(['1', '2']) == ['1', '2', '', '', '', '', '', '']),
+ ("fixed-angle skip: docx γ=90 vs .pdf 120 now compares",
+  lambda: any(k == 'value' for _, _, k, _ in C.grouped_axis_issues({'γ': '90'}, {'γ': '120'}, ['γ']))),
+ ("fixed-angle skip: docx 120 with a silent .pdf still skipped",
+  lambda: C.grouped_axis_issues({'γ': '120'}, {'γ': None}, ['γ']) == []),
+ ("find_cells: two-species sentence never chimeras α/γ (I003403 class)", _no_two_species_chimera),
+ ("find_cells: distant vertical tables stay separate candidates", _vertical_tables_stay_separate),
+ ("named rows: EPMA 'Point Ca …' is not a cell; a mineral row with a 2-char SG survives",
+  lambda: C.find_cells('Point Ca 3.45 2.98 4.01') == []
+          and any(c.phase == 'Whatzite' for c in C.find_cells('Whatzite Cc 5.20 9.00 10.40'))),
+ ("I003523 polytype-table paper still cell-matches",
+  lambda: cell_verdict('I003523') == 'match'),
+ ("check4: another species' not-collected/calculated does not flag a measured entry",
+  lambda: X.check4_calculated(_stub(name='alphaite', primary='Alphaite',
+                                    instr={'spacing_instr': 'Diffractometer'}),
+      'Powder X-ray diffraction data for betaite could not be collected owing to the paucity of '
+      'material. The powder X-ray diffraction pattern of betaite was calculated from the '
+      'single-crystal structure model.') == []),
+ ("check4: the not-collected species itself still flags",
+  lambda: [f for f in X.check4_calculated(_stub(name='betaite', primary='Betaite',
+                                                instr={'spacing_instr': 'Diffractometer'}),
+      'Powder X-ray diffraction data for betaite could not be collected. The powder X-ray '
+      'diffraction pattern of betaite was calculated from the single-crystal structure model.')
+      if f.sev == 'flag'] != []),
+ ("check4: English -ite words are not species (stoplist)",
+  lambda: [f for f in X.check4_calculated(_stub(instr={'spacing_instr': 'Diffractometer'}),
+      'Despite the composite satellite reflections, the powder pattern was calculated from the '
+      'structure model.') if f.sev == 'flag'] != []),
+ ("_ree_coeffs: a flattened charge digit is not a coefficient",
+  lambda: X._ree_coeffs('(La0.6Ce3+0.4)PO4') == {'La': 0.6, 'Ce': 0.4}
+          and X._ree_coeffs('Ce3+') == {'Ce': 1.0}),
+ ("check18: charge-digit formula no longer suggests a wrong rename",
+  lambda: X.check18_name_formula(_stub(primary='Testite-(La)', name='Testite-(La)',
+      formulas={'Empirical': '(La0.6Ce3+0.4)PO4'}), '') == []),
+ ("check18: a genuine wrong Levinson suffix still flags",
+  lambda: bool(X.check18_name_formula(_stub(primary='Testite-(Ce)', name='Testite-(Ce)',
+      formulas={'Empirical': '(La0.6Ce3+0.4)PO4'}), ''))),
+ ("_pdf_esd_for: no suffix match inside a longer number",
+  lambda: X._pdf_esd_for('12.219', 'beta = 112.219(5)') is None
+          and X._pdf_esd_for('12.219', 'c = 12.219(3)') == '3'),
+ ("check10: a prose dash after 'biaxial' is not an optic sign",
+  lambda: X.check10_optical(_stub(comments={'Optical Data': 'Sign=+'}),
+      'The mineral is biaxial – the sign could not be measured.') == []),
+ ("check10: a parenthesized sign still reads ('biaxial (–)' flags vs docx '+')",
+  lambda: bool(X.check10_optical(_stub(comments={'Optical Data': 'Sign=+'}),
+      'Optically it is biaxial (–), 2V = 60 degrees.'))),
+ ("candidate_groups: setting-swapped cell reads similar, not sub/super-cell",
+  lambda: G.cell_relation({'a': 5, 'b': 7, 'c': 10}, {'a': 10, 'b': 7, 'c': 5}, 0.04)[0] == 'similar'
+          and G.cell_relation({'a': 5, 'b': 7, 'c': 10}, {'a': 10, 'b': 14, 'c': 20}, 0.04)[0] == 'sub/super-cell'),
+ ("candidate_groups: volume carries the angle term; γ=0 (Mindat uniaxial) reads as 90°",
+  lambda: G._vol({'a': 10, 'b': 10, 'c': 10, 'be': 125}) < G._vol({'a': 9.8, 'b': 9.8, 'c': 9.8, 'be': 91})
+          and G._vol({'a': 5, 'b': 5, 'c': 5, 'ga': 0}) == G._vol({'a': 5, 'b': 5, 'c': 5})),
+ # --- corpus-wide: no check may error on any fixture entry (kept LAST so it reuses
+ #     the analyses the pointwise cases already cached) ---
+ ("No errored checks across the fixture corpus", _no_errored_checks),
 ]
 
 def main():
     _init_fixtures()
-    if not glob.glob(os.path.join(FOLDER, 'I*.docx')):
+    if not glob.glob(os.path.join(FOLDER, 'I*.docx')) and not C.discover(FOLDER):
         print("!! batch not found at %r — pass the path as an argument" % FOLDER)
         return 2
     fails = 0
