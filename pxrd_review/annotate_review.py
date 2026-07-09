@@ -23,7 +23,7 @@ Usage:
     python3 -m pxrd_review.annotate_review "/path/to/Part 1" --out DIR
     python3 -m pxrd_review.annotate_review "/path/to/Part 1" --inplace       # edit originals (asks nothing)
 """
-import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime, json
+import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime, json, hashlib
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
@@ -88,6 +88,11 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
     d = C.parse_docx(docx_path)
     res = {'docx': d, 'cell': ('nopdf',), 'params': {}, 'param_labels': {}, 'lam': None, 'extra': []}
     text = C.pdf_text(pdf_path) if pdf_path else None
+    # a scanned .pdf has NO extractable text layer — pdf_text comes back blank; treat
+    # it as no text at all (the checks already tolerate None, the no-pdf path), so the
+    # radiation check can't emit a false 'anode NOT found in .pdf' flag on blank text.
+    if text is not None and not text.strip():
+        text = None
     cif_data = X.parse_cif(cif_path) if cif_path else {}
     dft_data = X.parse_dft(dft_path) if dft_path else {}
     # extra checks run regardless of a PDF (symmetry/indexing/calculated are
@@ -102,6 +107,12 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
     # such as PLATON commonly defaults to CuKα), not the experimental radiation
     is_calc = bool(entry and (entry.instr.get('spacing_instr') or '').strip().lower() == 'calculated')
     if not pdf_path:
+        return res
+    if text is None:
+        # .pdf present but no extractable text layer (scanned images): nothing to
+        # compare against — a distinct verdict so the GUI/console can say so instead
+        # of reporting a bogus no-match cell / missing anode.
+        res['cell'] = ('notext',)
         return res
     cands = C.find_cells(text)
     if d.authors_cell and any(d.authors_cell[:3]):
@@ -330,6 +341,35 @@ def _anchor_cell(doc, ac_row, anchor):
 # Accept decision can be overridden. The tool still NEVER rewrites a field cell.
 # All of this is gated on a non-empty `triage`; with triage=None the output is
 # byte-for-byte the same as before (regression depends on this).
+def finding_key(f):
+    """Content-stable triage key for an extra finding (positional keys drift when the list changes)."""
+    return 'f:' + hashlib.sha1(('%s|%s|%s' % (f.code, f.anchor or '', (f.msg or '')[:120]))
+                               .encode('utf-8')).hexdigest()[:10]
+
+def finding_keys(findings):
+    """Keys for a findings list, '#2'/'#3' suffixes de-duplicating identical findings in order."""
+    keys, seen = [], {}
+    for f in findings:
+        k = finding_key(f)
+        seen[k] = seen.get(k, 0) + 1
+        keys.append(k if seen[k] == 1 else '%s#%d' % (k, seen[k]))
+    return keys
+
+_OLD_FKEY = re.compile(r'^f\d+$')
+
+def _legacy_fkey(triage, f, label_counts):
+    """Old positional triage key ('f0'/'f1'/…) for this finding, recovered via the
+    GUI's saved label ('code: msg[:80]') when the content-stable key misses. Only
+    honoured when the label is unambiguous on BOTH sides — one saved record, one
+    current finding — because a lost dismissal merely re-surfaces a comment, while
+    a wrong match would suppress the wrong one. Returns the old key or None."""
+    label = '%s: %s' % (f.code, (f.msg or '')[:80])
+    if label_counts.get(label, 0) != 1:
+        return None
+    hits = [k for k, v in (triage.get('findings') or {}).items()
+            if _OLD_FKEY.match(k) and isinstance(v, dict) and v.get('label') == label]
+    return hits[0] if len(hits) == 1 else None
+
 def _t_dismissed(triage, fkey):
     return bool(triage and (triage.get('findings') or {}).get(fkey, {}).get('verdict') == 'dismiss')
 
@@ -347,10 +387,20 @@ def _write_extras(doc, ac_row, res, rec, triage=None):
     apart from human reviewers'. `triage` (optional) suppresses dismissed
     findings and folds reviewer notes into the comment text."""
     writable_ids = {id(f) for f in _writable_extras(res)}
-    for i, f in enumerate(res.get('extra', [])):
+    extras = res.get('extra', [])
+    fkeys = finding_keys(extras)                       # content-stable (positional keys drift)
+    label_counts = {}                                  # for the old-key fallback's ambiguity guard
+    for f in extras:
+        lab = '%s: %s' % (f.code, (f.msg or '')[:80])
+        label_counts[lab] = label_counts.get(lab, 0) + 1
+    for i, f in enumerate(extras):
         if id(f) not in writable_ids:
             continue
-        fkey = 'f%d' % i
+        fkey = fkeys[i]
+        # backward compat: a triage.json saved before content-stable keys still uses
+        # positional 'f0'/'f1' keys — recover the record via its saved label.
+        if triage and fkey not in (triage.get('findings') or {}):
+            fkey = _legacy_fkey(triage, f, label_counts) or fkey
         if _t_dismissed(triage, fkey):
             rec.setdefault('suppressed', []).append(f.code)
             continue
@@ -395,6 +445,29 @@ def _mark_accept(doc):
             return True
     return False
 
+def _clear_accept(doc):
+    """Empty the Accept checkbox cell, but ONLY when it holds exactly the tool's own
+    'x' (case/whitespace-insensitive). A triage 'disagree' must actively remove the
+    mark on the refresh path — the base there is a previous output where an earlier
+    run already stamped Accept, so merely skipping _mark_accept leaves it standing.
+    Anything else in the box is the reviewer's decision and is never touched."""
+    for t in doc.tables:
+        for row in t.rows:
+            cells = row.cells
+            idx = {c.text.strip().lower(): i for i, c in enumerate(cells)}
+            if not ({'accept', 'reject', 'replace'} <= set(idx)):
+                continue
+            if idx['accept'] + 1 >= len(cells):
+                return False
+            acc = cells[idx['accept'] + 1]
+            if acc.text.strip().lower() != 'x':
+                return False                      # not the tool's mark — don't touch
+            for p in acc.paragraphs:
+                for r in p.runs:
+                    r.text = ''
+            return True
+    return False
+
 def _is_severe(res):
     """Withhold auto-Accept ONLY when the cell is fundamentally wrong ('way off').
     Per the reviewer, essentially every new mineral is an Accept — minor cell /
@@ -432,6 +505,34 @@ def _body_signature(doc):
                     parts.append(c.text)
     return '\n'.join(parts)
 
+def _format_signature(doc):
+    """Per-run FORMATTING signature over the same scope as _body_signature (body
+    paragraphs + top-level table cells, excluding the Accept checkbox cell): a hash
+    of (text, highlight, bold, italic, underline, strike, font colour) for every
+    run, read through the python-docx API so an absent rPr normalises to None and
+    round-trip serialisation differences can't false-positive. Catches formatting-
+    only reviewer edits (e.g. a manual highlight) that leave the body TEXT alone."""
+    h = hashlib.sha1()
+    def add(paragraphs):
+        for p in paragraphs:
+            for r in p.runs:
+                f = r.font
+                color = f.color.rgb if (f.color is not None and f.color.type is not None) else None
+                h.update(repr((r.text, f.highlight_color, f.bold, f.italic,
+                               f.underline, f.strike, color)).encode('utf-8'))
+    add(doc.paragraphs)
+    for t in doc.tables:
+        for row in t.rows:
+            cells = row.cells
+            idx = {c.text.strip().lower(): i for i, c in enumerate(cells)}
+            skip = set()
+            if {'accept', 'reject', 'replace'} <= set(idx) and idx['accept'] + 1 < len(cells):
+                skip.add(idx['accept'] + 1)         # the tool's own auto-Accept 'x' only
+            for i, c in enumerate(cells):
+                if i not in skip:
+                    add(c.paragraphs)
+    return h.hexdigest()
+
 def _has_foreign_comment(path):
     """True if the docx carries a comment authored by someone other than the tool."""
     try:
@@ -440,6 +541,19 @@ def _has_foreign_comment(path):
             return False
         cx = z.read('word/comments.xml').decode('utf-8', 'replace')
         return any(a != AUTHOR for a in re.findall(r'w:author="([^"]*)"', cx))
+    except Exception:
+        return False
+
+def _has_tool_comment(path):
+    """True if the docx carries a comment authored by the tool itself — i.e. a
+    previous run already annotated it (an --inplace rerun must strip those first,
+    or every comment/highlight would be added a second time)."""
+    try:
+        z = zipfile.ZipFile(path)
+        if 'word/comments.xml' not in z.namelist():
+            return False
+        cx = z.read('word/comments.xml').decode('utf-8', 'replace')
+        return AUTHOR in re.findall(r'w:author="([^"]*)"', cx)
     except Exception:
         return False
 
@@ -498,14 +612,31 @@ def _extract_reviewer_edits(path):
 
 def output_hand_edited(out_path, src_path):
     """The output docx was edited by a human since the tool wrote it — tracked
-    changes, a non-tool comment, or body text differing from the source (beyond
-    the Accept checkbox). Such edits must be preserved across reruns."""
+    changes, a non-tool comment, body text differing from the source (beyond the
+    Accept checkbox), or a formatting-only edit (e.g. a manual highlight) the text
+    compare can't see. Such edits must be preserved across reruns, so on ANY doubt
+    (an unreadable/corrupt output included) err toward hand-edited: that path backs
+    up + refreshes, whereas a False here rebuilds from source and destroys work."""
     try:
         if _has_tracked_changes(out_path) or _has_foreign_comment(out_path):
             return True
-        return _body_signature(Document(out_path)) != _body_signature(Document(src_path))
+        if _body_signature(Document(out_path)) != _body_signature(Document(src_path)):
+            return True
+        # text-identical: strip the tool's own comments/highlights off a TEMP copy
+        # and compare run-level FORMATTING against the source — a reviewer's manual
+        # highlight/bold with no text change must still register as a hand edit.
+        bdir = os.path.join(os.path.dirname(out_path), '.edit_backup')
+        os.makedirs(bdir, exist_ok=True)
+        tmp = os.path.join(bdir, '~sig_' + os.path.basename(out_path))
+        try:
+            shutil.copy(out_path, tmp)
+            _strip_tool_annotations(tmp)
+            return _format_signature(Document(tmp)) != _format_signature(Document(src_path))
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
     except Exception:
-        return False
+        return True
 
 def _strip_tool_annotations(path):
     """Remove the tool's OWN comments (author == AUTHOR) and its yellow highlights
@@ -612,9 +743,12 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=Non
         if not inplace:
             os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
         doc = Document(base)
-        # clean entry is never severe → auto-Accept, unless the reviewer disagreed.
+        # clean entry is never severe → auto-Accept, unless the reviewer disagreed
+        # (then also UNDO a previous run's 'x' — refresh/inplace bases carry it).
         if not (triage and triage.get('accept') == 'disagree'):
             rec['accept'] = _mark_accept(doc)
+        else:
+            _clear_accept(doc)
         doc.save(out)
         return rec
 
@@ -693,6 +827,8 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=Non
     _severe = (not _tool_severe) if (triage and triage.get('accept') == 'disagree') else _tool_severe
     if not _severe:
         rec['accept'] = _mark_accept(doc)
+    elif triage and triage.get('accept') == 'disagree':
+        _clear_accept(doc)     # refresh/inplace base carries a previous run's 'x' — undo it
 
     os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
     doc.save(out_path)
@@ -765,6 +901,25 @@ def main():
         # source, so the path is stable across reruns (refresh below still works).
         if args.inplace:
             out = dp
+            # An --inplace RERUN would stack a second copy of every comment/highlight on
+            # top of the first: if the source already carries the tool's own comments,
+            # strip them first. Strip a TEMP copy and swap it in atomically (os.replace)
+            # so a crash mid-strip can never leave a half-written source.
+            if _has_tool_comment(dp):
+                bdir = os.path.join(os.path.dirname(dp), '.edit_backup')
+                tmp = os.path.join(bdir, '~strip_' + os.path.basename(dp))
+                try:
+                    os.makedirs(bdir, exist_ok=True)
+                    shutil.copy(dp, tmp)
+                    _strip_tool_annotations(tmp)
+                    os.replace(tmp, dp)
+                except Exception as e:
+                    print('  !! %s: could not strip the previous run\'s annotations (%s) '
+                          '— left untouched' % (os.path.basename(dp), e))
+                    continue
+                finally:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
         else:
             edited = not _is_clean(res)
             out = os.path.join(out_dir, output_name(os.path.basename(dp), edited))
@@ -796,7 +951,16 @@ def main():
         # still-hand-edited output, before annotate() refreshes it — for the log only.
         user_edits = _extract_reviewer_edits(out) if hand_edited else []
         if hand_edited:
-            _backup_edited(out)
+            # No backup means NO safety net — do not touch the entry at all (neither the
+            # refresh nor a --force rebuild), or the reviewer's edits could be lost.
+            if _backup_edited(out) is None:
+                print('  !! %s: BACKUP FAILED — could not copy the hand-edited %s to '
+                      '.edit_backup/; left untouched' % (os.path.basename(dp), os.path.basename(out)))
+                records.append((os.path.basename(dp),
+                                {'status': 'preserved', 'highlights': [], 'comments': [],
+                                 'clean': False, 'accept': None, 'refreshed': True,
+                                 'user_edits': user_edits}))
+                continue
             if args.force:
                 print('  !! %s: --force rebuilt a HAND-EDITED output from source; your edits were '
                       'saved to .edit_backup/ first' % os.path.basename(dp))
@@ -854,6 +1018,17 @@ def main():
     # (which, scoped to one entry, would otherwise clobber the full-folder files).
     if args.no_logs:
         return
+
+    # A filtered run (--id / --limit) covers only a subset: rewriting the batch logs
+    # would scope annotation_log.txt to that subset and delete a full-folder
+    # mindat_discrepancies.txt whose entries simply weren't rerun. Leave both alone;
+    # an EXPLICIT --log path is still honoured (scoped to the subset).
+    filtered = bool(args.id or args.limit)
+    if filtered:
+        print('(filtered run — batch logs left untouched%s)'
+              % ('; explicit --log written, scoped to this subset' if args.log else ''))
+        if not args.log:
+            return
 
     # --- write the run log -------------------------------------------------
     log_path = args.log or os.path.join(out_dir if not args.inplace else args.folder, 'annotation_log.txt')
@@ -923,6 +1098,9 @@ def main():
                     fh.write(textwrap.fill(c, width=78, initial_indent='    - ',
                                            subsequent_indent=' ' * 6) + '\n')
     print('\nlog written -> %s' % log_path)
+
+    if filtered:
+        return          # never rewrite/remove mindat_discrepancies.txt for a subset
 
     # --- separate Mindat cross-check feedback log -------------------------
     # Mindat is a co-equal proxy (its data is transcribed from delayed CNMNC
