@@ -13,13 +13,15 @@ long module paths, or ports.
     pxrd refresh [--refresh-struct] refresh the Mindat cache
     pxrd mindat [args…]            call mindat.py directly (e.g. --lookup Quartz)
 
-Folder resolution for the data sub-commands: an explicit folder argument wins;
-otherwise the current directory is used when it contains entry .docx files (so a
-bare `pxrd gui` from inside a data folder just works); otherwise the folder you
-last passed for that sub-command is reused. Extra flags pass straight through.
-(`check` ignores the cwd default — it uses the fixtures folder you pass / remember.)
+Folder resolution for the data sub-commands: an explicit folder argument wins; a
+leading entry id (e.g. `pxrd extras I003448`) is passed through to the module, not
+taken as a folder; otherwise the current directory is used when it contains entry
+.docx files (so a bare `pxrd gui` from inside a data folder just works); otherwise
+the folder you last passed for that sub-command is reused. Extra flags pass straight
+through. (`check` ignores the cwd default — explicit arg > $PXRD_REGRESSION_DIR >
+the fixtures folder you last passed.)
 """
-import os, sys, json, glob
+import os, re, sys, json, glob
 from pxrd_review import paths as P
 
 MODULE = {
@@ -53,15 +55,30 @@ def _save(sub, folder):
         pass
 
 def _has_entry_docx(folder):
-    return any(glob.glob(os.path.join(folder, pat)) for pat in ('I*.docx', 'O*.docx', '*.docx'))
+    # entry docx only (I*/O*) — a random .docx in the cwd must not hijack resolution
+    return any(glob.glob(os.path.join(folder, pat)) for pat in ('I*.docx', 'O*.docx'))
+
+ENTRY_ID = re.compile(r'[A-Za-z]\d{4,6}')      # e.g. I003448 / O12345 — an id, not a folder
 
 def _resolve_folder(sub, rest):
-    """explicit arg > cwd-with-docx (not for `check`) > remembered."""
+    """explicit arg > cwd-with-docx (not for `check`) > remembered
+    (`check` slots $PXRD_REGRESSION_DIR between the explicit arg and the memory)."""
     if rest and not rest[0].startswith('-'):
-        _save(sub, rest[0]); return rest[0], rest[1:]
+        if os.path.isdir(rest[0]):
+            _save(sub, rest[0]); return rest[0], rest[1:]
+        if not ENTRY_ID.fullmatch(rest[0]):
+            raise SystemExit("pxrd %s: not a folder: %s" % (sub, rest[0]))
+        # an entry id: leave it in rest (passes through to the module) and resolve
+        # the folder as usual below
     cwd = os.getcwd()
     if sub != 'check' and _has_entry_docx(cwd):
         _save(sub, cwd); return cwd, rest
+    if sub == 'check':
+        env = os.environ.get('PXRD_REGRESSION_DIR')
+        if env:
+            if not os.path.isdir(env):
+                raise SystemExit("pxrd check: $PXRD_REGRESSION_DIR is not a folder: %s" % env)
+            return env, rest                    # env-derived: use, but never remember
     folder = _load().get(sub)
     if not folder:
         raise SystemExit("pxrd %s: no folder given and none remembered — pass the entries "

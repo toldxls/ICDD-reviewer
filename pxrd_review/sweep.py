@@ -127,7 +127,7 @@ def _fire_table(recs):
     tab = defaultdict(lambda: [0, 0, 0, 0])
     for r in recs.values():
         for tok in r['findings']:
-            m = re.match(r'^([a-z_]+)/(\w+)', tok)
+            m = re.match(r'^([a-z0-9_]+)/(\w+)', tok)
             if not m:
                 continue                         # skip cell=/lam=/param:/severe/error
             code, sev = m.group(1), m.group(2)
@@ -251,6 +251,7 @@ def _diff_block(baseline, snap, cap=60):
 
 # ----------------------------------------------------------------------------- io
 def _load(path):
+    # None when missing/unparseable; the explicit --baseline caller escalates that
     try:
         with open(path, encoding='utf-8') as f:
             return json.load(f)
@@ -280,12 +281,19 @@ def main():
     snap_path = os.path.join(out_dir, SNAP)
     report_path = os.path.join(out_dir, REPORT)
 
-    print('[sweep] analyzing %s …' % os.path.abspath(args.folder))
-    snap = build(args.folder)
-
     baseline = None
     if not args.no_diff:
-        baseline = _load(args.baseline) if args.baseline else _load(snap_path)
+        if args.baseline:
+            # explicit baseline: fail FAST (before the sweep) on a missing/unparseable
+            # file — the silent 'no previous snapshot' would hide a typo'd path
+            baseline = _load(args.baseline)
+            if baseline is None:
+                sys.exit('--baseline: snapshot missing or unreadable: %s' % args.baseline)
+        else:
+            baseline = _load(snap_path)     # auto-discovery: absent is fine (first run)
+
+    print('[sweep] analyzing %s …' % os.path.abspath(args.folder))
+    snap = build(args.folder)
 
     text = write_report(report_path, snap, baseline, samples=args.samples)
 

@@ -22,7 +22,7 @@ CLI:
     python3 -m pxrd_review.mindat --refresh            # (re)build both caches from the API
     python3 -m pxrd_review.mindat --lookup "#mineral"  # test a single name against the cache
 """
-import os, re, json, time, ssl, datetime, unicodedata, urllib.request, urllib.error
+import os, re, sys, json, time, ssl, datetime, unicodedata, urllib.request, urllib.error
 
 # macOS python.org builds often ship without CA certs; use certifi's bundle when
 # present so HTTPS verification works. $MINDAT_INSECURE=1 disables verification
@@ -43,6 +43,29 @@ from pxrd_review import paths as _paths
 CACHE = os.path.join(_paths.cache_dir(), 'mindat_ima.json')
 KEYFILE = _paths.keyfile()
 FIELDS = 'id,name,groupid,strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4,ima_status'
+
+# ----------------------------------------------------------------------------- cache io
+def _read_cache(path):
+    """Guarded cache read: a corrupt/truncated file is treated as ABSENT (one-line
+    stderr warning) so the staleness logic self-heals by re-fetching, instead of
+    every consumer crashing on json.load."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        print('mindat: cache file unreadable — treating as absent (%s)' % path, file=sys.stderr)
+        return {}
+
+def _write_cache(path, obj):
+    """Atomic JSON write (same-dir temp + os.replace) so a Ctrl-C / disk-full
+    mid-write can never leave a truncated cache behind."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
 
 # ----------------------------------------------------------------------------- auth
 def api_key():
@@ -126,11 +149,7 @@ _SDB = None
 def struct_db():
     global _SDB
     if _SDB is None:
-        if os.path.exists(STRUCT_CACHE):
-            with open(STRUCT_CACHE, encoding='utf-8') as f:
-                _SDB = json.load(f)
-        else:
-            _SDB = {}
+        _SDB = _read_cache(STRUCT_CACHE)
     return _SDB
 
 def struct_available():
@@ -188,6 +207,14 @@ def refresh(verbose=True):
     if verbose: print('pulling IMA minerals (cell + group + Strunz, one pass)…')
     minerals = _pull(key, ima='true', fields=COMBINED_FIELDS)
     if verbose: print('  %d minerals' % len(minerals))
+    # sanity guard: a partial/failed pull must never clobber a good cache. The IMA
+    # corpus is ~6200 species, so refuse an implausibly small pull (under 1000 rows,
+    # or under half of what the existing cache already holds). A corrupt/absent
+    # existing cache reads as 0 minerals, so a fresh install still refreshes.
+    have = len(_read_cache(CACHE).get('minerals') or {})
+    if len(minerals) < max(1000, have // 2):
+        raise RuntimeError('Mindat pull returned only %d minerals (existing cache has %d) '
+                           '— refusing to overwrite the caches' % (len(minerals), have))
     # resolve every referenced group container's name (bulk; a geomaterial is a
     # group when it is a grouplist or a '… Group'-named parent).
     referenced = {str(m['groupid']) for m in minerals if m.get('groupid')}
@@ -209,14 +236,10 @@ def refresh(verbose=True):
             'strunz': _strunz(m), 'ima_status': m.get('ima_status'),
         }
     grp = {'fetched': time.strftime('%Y-%m-%d'), 'minerals': index, 'groups': groups}
-    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-    with open(CACHE, 'w', encoding='utf-8') as f:
-        json.dump(grp, f)
+    _write_cache(CACHE, grp)
     # structural cache — built from the SAME rows, written to its own file
     st = _struct_out(minerals)
-    os.makedirs(os.path.dirname(STRUCT_CACHE), exist_ok=True)
-    with open(STRUCT_CACHE, 'w', encoding='utf-8') as f:
-        json.dump(st, f)
+    _write_cache(STRUCT_CACHE, st)
     _DB = None; _SDB = None                  # force reload of both fresh caches
     if verbose:
         print('cached -> %s (%d minerals, %d groups) + %s (%d records)'
@@ -286,17 +309,13 @@ _DB = None
 def _db():
     global _DB
     if _DB is None:
-        if os.path.exists(CACHE):
-            with open(CACHE, encoding='utf-8') as f:
-                _DB = json.load(f)
-            # re-key the minerals through the CURRENT _norm, so a cache built by an older
-            # normaliser (e.g. one that didn't fold diacritics) still resolves today's
-            # queries — no network refresh needed ('Åsgruvanite-(Ce)' -> 'asgruvanite-(ce)').
-            mins = _DB.get('minerals')
-            if mins:
-                _DB['minerals'] = {_norm(v.get('name') or k): v for k, v in mins.items()}
-        else:
-            _DB = {}
+        _DB = _read_cache(CACHE)
+        # re-key the minerals through the CURRENT _norm, so a cache built by an older
+        # normaliser (e.g. one that didn't fold diacritics) still resolves today's
+        # queries — no network refresh needed ('Åsgruvanite-(Ce)' -> 'asgruvanite-(ce)').
+        mins = _DB.get('minerals')
+        if mins:
+            _DB['minerals'] = {_norm(v.get('name') or k): v for k, v in mins.items()}
     return _DB
 
 def available():
