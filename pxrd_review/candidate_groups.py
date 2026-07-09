@@ -28,7 +28,7 @@ Never writes into the docx. Console report only.
 Usage:
     python3 -m pxrd_review.candidate_groups <folder> [--id Innnnnn] [--tol 0.04]
 """
-import os, re, glob, argparse
+import os, re, glob, math, argparse
 
 from pxrd_review import mindat
 from pxrd_review import extra_checks as X
@@ -73,8 +73,10 @@ def _fillb(r):
     return a, b, c
 
 def cell_relation(P, Cc, tol):
-    a1, b1, c1 = _fillb(P); a2, b2, c2 = _fillb(Cc)
-    if min(a1, c1, a2, c2) <= 0:
+    # SORTED axis lengths (the repo-wide rule): compared positionally, a setting-swapped
+    # identical cell (a↔c interchange) reads as a phantom ½/2 sub/super-cell relation.
+    a1, b1, c1 = sorted(_fillb(P)); a2, b2, c2 = sorted(_fillb(Cc))
+    if min(a1, a2) <= 0:                  # a1/a2 are each triple's minimum after sorting
         return None
     ra, rb, rc = a2/a1, b2/b1, c2/c1
     if all(abs(r - 1) <= tol for r in (ra, rb, rc)):
@@ -163,7 +165,15 @@ def group_sgcodes(gid, recs):
     return {r['sg'] for r in recs if r['groupid'] == gid and r['sg']}
 
 def _vol(r):
-    return r['a'] * (r['b'] or r['a']) * r['c']
+    """Unit-cell volume WITH the angle term (triclinic formula). Bare a·b·c inverted
+    the 'cell tracks cation size' direction for monoclinic pairs with different β.
+    A missing/insane angle (None, 0 — Mindat stores γ=0 for uniaxial cells — or
+    outside ~30–150°) is treated as 90°, never as a degenerate volume."""
+    def _cos(v):
+        return math.cos(math.radians(v)) if v and 30.0 <= v <= 150.0 else 0.0
+    ca, cb, cg = _cos(r.get('al')), _cos(r.get('be')), _cos(r.get('ga'))
+    disc = 1.0 - ca*ca - cb*cb - cg*cg + 2.0*ca*cb*cg
+    return r['a'] * (r['b'] or r['a']) * r['c'] * math.sqrt(max(disc, 0.0))
 
 def size_consistency(P, Cc, sub):
     """Compare the swapped cations' radii against the observed cell change. P
@@ -188,9 +198,10 @@ def size_consistency(P, Cc, sub):
     return s
 
 def rel_pct(P, Cc):
-    a1, b1, c1 = (P['a'], P['b'] or P['a'], P['c'])
-    a2, b2, c2 = (Cc['a'], Cc['b'] or Cc['a'], Cc['c'])
-    if min(a1, c1, a2, c2) <= 0:
+    # sorted axes for the same reason as cell_relation: a setting swap must not
+    # read as a large per-axis change
+    a1, b1, c1 = sorted(_fillb(P)); a2, b2, c2 = sorted(_fillb(Cc))
+    if min(a1, a2) <= 0:
         return None
     return max(abs(a2/a1 - 1), abs(b2/b1 - 1), abs(c2/c1 - 1)) * 100
 

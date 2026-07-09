@@ -598,6 +598,48 @@ def check3_classification(e, text):
     return out
 
 # ----------------------------------------------------------------------------- 4. PXRD calculated, not measured
+# '-ite' words that are NOT mineral species: common English words plus rock /
+# meteorite-class / oxyanion / group vocabulary that appears in powder-data prose.
+# check4's other-species guard treats any OTHER '-ite' token as a possible
+# co-described mineral. Genuine species (calcite, graphite, dolomite …) must NOT
+# be listed here.
+_NON_SPECIES_ITE = frozenset((
+    'despite', 'definite', 'indefinite', 'composite', 'opposite', 'satellite',
+    'favorite', 'favourite', 'website', 'appetite', 'requisite', 'prerequisite',
+    'expedite',
+    # rocks / meteorite classes / textures — geology terms, not species
+    'pegmatite', 'granite', 'meteorite', 'chondrite', 'achondrite', 'carbonatite',
+    'kimberlite', 'rhyolite', 'andesite', 'evaporite', 'peridotite', 'lamproite',
+    'ophiolite', 'dendrite', 'stalactite', 'stalagmite', 'tektite',
+    # oxyanion chemistry vocabulary
+    'sulfite', 'sulphite', 'nitrite',
+    # generic framework/group terms used for a family, not a species
+    'zeolite',
+))
+
+def _names_other_species(s, nm):
+    """True when sentence s names a mineral species OTHER than the entry name nm.
+    Heuristic: a '-ite' token (≥4 letters before the suffix) that is not a
+    stoplisted English/geology word, not the entry's own name/name-root (Levinson
+    suffix stripped), and not an attributive family reference ('…-ite group')."""
+    nm = (nm or '').strip().lower()
+    own = re.sub(r'[^a-z]', '', nm)
+    root = own[:6]
+    base = re.sub(r'[^a-z]', '', re.sub(r'-\([a-z]+\)\s*$', '', nm))  # Levinson base
+    low = s.lower()
+    for m in re.finditer(r'\b([a-z]{4,}ite)\b', low):
+        tok = m.group(1)
+        if tok in _NON_SPECIES_ITE:
+            continue
+        if root and tok.startswith(root):
+            continue                     # the entry itself (any suffix form)
+        if tok in (own, base):
+            continue
+        if re.match(r'[\s-]*(?:super)?group\b|[\s-]*type\b', low[m.end():]):
+            continue                     # 'zircon-group', 'apatite-type' — a family
+        return True
+    return False
+
 def check4_calculated(e, text):
     out = []
     spac = (e.instr.get('spacing_instr') or '').strip().lower()
@@ -648,12 +690,25 @@ def check4_calculated(e, text):
         # diffraction data were not collected", "theoretical powder … pattern was calculated" — but
         # the docx wrongly marks it a measured Diffractometer. When present, accept any calc-powder
         # sentence (still gated below by 'docx not already Calculated', so correctly-Calculated
-        # entries — e.g. the akasakaite group — stay silent).
-        not_collected = bool(re.search(
+        # entries — e.g. the akasakaite group — stay silent). SCOPED to its own sentence: in a
+        # multi-species paper "data for <other species> could not be collected" must not unlock
+        # the relaxation for THIS (measured) entry — the statement only counts when its sentence
+        # names this entry or names no other mineral species at all (grokhovskyite's names none).
+        nm = (e.name or e.primary or '').strip().lower()
+        nm_root = re.sub(r'[^a-z]', '', nm)[:6]
+        def _mentions_entry(s):
+            return bool(nm_root) and nm_root in re.sub(r'[^a-z]', '', s.lower())
+        _nc = re.compile(
             r'(?:powder|pxrd)[^.]{0,45}\b(?:was|were|could)\s+not\s+(?:be\s+)?'
-            r'(?:collected|measured|obtained|recorded|acquired)', text, re.I))
+            r'(?:collected|measured|obtained|recorded|acquired)', re.I)
+        not_collected = any(
+            _nc.search(s) and (_mentions_entry(s) or not _names_other_species(s, nm))
+            for s in _sentences(text))
         sents = [s for s in sents
                  if re.search(r'powder|pxrd|x-ray diffraction pattern|diffraction pattern', s.lower())
+                 # a sentence naming a DIFFERENT co-described species (and not this entry)
+                 # describes THAT entry's pattern — never evidence for this one
+                 and not (_names_other_species(s, nm) and not _mentions_entry(s))
                  and (not_collected
                       or (re.search(r'structure|single-crystal|cif|refinement|atomic', s.lower())
                           and not re.search(r'\bcompar', s.lower())
@@ -661,8 +716,6 @@ def check4_calculated(e, text):
         # Multi-species papers often say "for all species EXCEPT <name>, … were
         # calculated". If THIS entry is the excepted species, its pattern was
         # measured, not calculated — don't flag it.
-        nm = (e.name or e.primary or '').strip().lower()
-        nm_root = re.sub(r'[^a-z]', '', nm)[:6]
         def _excepted(s):
             if not nm_root:
                 return False
@@ -879,7 +932,9 @@ def _pdf_esd_for(value, text):
     if not text or not value:
         return None
     num = re.sub(r'\(\d+\)', '', value).strip()
-    m = re.search(re.escape(num) + r'\s*\((\d+)\)', re.sub(r'\s+', ' ', text))
+    # left boundary: '12.219' must not match the tail of '112.219(5)' (a suffix
+    # match would suggest ANOTHER parameter's esd for this one)
+    m = re.search(r'(?<![\d.])' + re.escape(num) + r'\s*\((\d+)\)', re.sub(r'\s+', ' ', text))
     return m.group(1) if m else None
 
 def check8_precision_symmetry(e, text):
@@ -1035,7 +1090,12 @@ def check10_optical(e, text):
     # sign may belong to a DIFFERENT mineral — if the paper gives more than one distinct
     # sign we cannot attribute it to THIS mineral, so leave it undetermined (no flag).
     signs = set()
-    for pm in re.finditer(r'(?:optically\s+)?(?:uniaxial|biaxial)\s*[\(]?\s*([+-])', norm, re.I):
+    # parenthesised sign — 'biaxial (+)', 'uniaxial (–)' — is unambiguous
+    for pm in re.finditer(r'(?:optically\s+)?(?:uniaxial|biaxial)\s*\(\s*([+-])\s*\)', norm, re.I):
+        signs.add(pm.group(1))
+    # bare sign: only when NOT followed by a word — a dash-folded dash before prose
+    # ('biaxial – the sign could not be measured') is punctuation, not a sign
+    for pm in re.finditer(r'(?:optically\s+)?(?:uniaxial|biaxial)\s*([+-])(?!\s*\w)', norm, re.I):
         signs.add(pm.group(1))
     for pm in re.finditer(r'optically\s+(positive|negative)', norm, re.I):
         signs.add('+' if pm.group(1).lower() == 'positive' else '-')
@@ -2149,13 +2209,20 @@ REE_ELEMENTS = ['La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho'
 POLYTYPE_SYS = {'A': {'a'}, 'M': {'m'}, 'O': {'o'}, 'Q': {'t'},
                 'T': {'h', 'r'}, 'H': {'h', 'r'}, 'R': {'r', 'h'}, 'C': {'c'}}
 
+# A superscript charge flattened by text extraction ('Ce3+', 'Fe2+') sits between the
+# element and any real coefficient — consume it so its digit is not read as a
+# coefficient ('Ce3+0.4' → 0.4; bare 'Ce3+' → no coefficient). '3-x'-style solid-
+# solution algebra is NOT a charge (a letter variable follows the sign) and still
+# counts as the coefficient. The leading lookahead avoids matching 'Y' inside 'Yb'.
+_REE_COEFF = r'(?![a-z])(?:\s*[1-9]\s*[+\-−](?![a-z]))?\s*([0-9]+\.?[0-9]*)?'
+
 def _ree_coeffs(formula):
     """{REE element: max numeric coefficient seen} from a formula string. A REE
-    with no explicit number counts as 1.0 (lookahead avoids matching e.g. 'Y'
-    inside 'Yb')."""
+    with no explicit number (including a bare charged form like 'Ce3+') counts
+    as 1.0."""
     out = {}
     for el in REE_ELEMENTS:
-        for m in re.finditer(el + r'(?![a-z])\s*([0-9]+\.?[0-9]*)?', formula or ''):
+        for m in re.finditer(el + _REE_COEFF, formula or ''):
             v = float(m.group(1)) if m.group(1) else 1.0
             out[el] = max(out.get(el, 0.0), v)
     return out
@@ -2172,7 +2239,9 @@ def check18_name_formula(e, text):
         formula = (e.formulas.get('Empirical') or e.formulas.get('Structural')
                    or e.formulas.get('Chemical') or e.formulas.get('General') or '')
         coeffs = _ree_coeffs(formula)
-        numbered = {el: v for el, v in coeffs.items() if re.search(el + r'(?![a-z])\s*[0-9]', formula or '')}
+        # 'numbered' = an EXPLICIT coefficient (charge digits don't count: 'Ce3+' is bare)
+        numbered = {el: v for el, v in coeffs.items()
+                    if any(m.group(1) for m in re.finditer(el + _REE_COEFF, formula or ''))}
         base = re.sub(r'-\([A-Za-z]+\)\s*$', '', nm)
         if len(numbered) >= 2:
             top = max(numbered.values())
@@ -2487,13 +2556,25 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check19_intensity_detector, check20_calc_wavelength, check21_primary_name,
           check23_sg_system, check24_optical_2v, check25_reflection_geometry]
 
+# An errored check must file under the CODE its findings normally carry (regression /
+# sweep lookups filter by code, and the raw function name would hide it from them).
+# Usually that's the function name minus the 'checkN_' prefix; these are the exceptions.
+_ERR_CODE = {
+    'check8_precision_symmetry': 'precision',        # also emits 'symmetry'
+    'check17_pdf_filter': 'instr_filter',
+    'check19_intensity_detector': 'intensity_type',
+    'check24_optical_2v': 'optical',
+    'check25_reflection_geometry': 'reflection_geom',
+}
+
 def run_all(e, text, cif_data=None, dft_data=None):
     findings = []
     for fn in CHECKS:
         try:
             findings.extend(fn(e, text))
         except Exception as ex:
-            findings.append(Finding(fn.__name__, 'note', 'check errored: %s' % ex, None))
+            code = _ERR_CODE.get(fn.__name__) or re.sub(r'^check\d+_', '', fn.__name__)
+            findings.append(Finding(code, 'note', 'check errored: %s' % ex, None))
     try:
         findings.extend(check_cif(e, cif_data or {}))
     except Exception as ex:

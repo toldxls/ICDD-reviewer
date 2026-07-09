@@ -108,13 +108,18 @@ def grouped_axis_issues(docx_p, pdf_p, keys=('a', 'b', 'c', 'α', 'β', 'γ')):
     """axis_issues across the whole cell, with SYMMETRY-EQUIVALENT axes COLLAPSED: axes
     that share the same docx AND pdf value (cubic a=b=c, uniaxial a=b) report each
     sig-fig/esd/value issue ONCE under a combined label ('a=b=c'), instead of repeating
-    the identical error per axis. Symmetry-fixed angles (90/120) are skipped, as before.
+    the identical error per axis. Symmetry-fixed angles (90/120) are skipped when the .pdf
+    omits or agrees with them — but a DIFFERING .pdf value still compares (a docx γ mistyped
+    90 vs the paper's 120 must not hide behind the skip).
     Returns [(label, rep_axis, kind, note)] in cell order; rep_axis is the column to anchor."""
     groups = []                                  # [[docx_val, pdf_val, [axes]], …]
     for k in keys:
-        if k in ('α', 'β', 'γ') and num_val(docx_p.get(k)) in (90.0, 120.0):
-            continue
         dv, pv = docx_p.get(k), pdf_p.get(k)
+        if k in ('α', 'β', 'γ') and num_val(dv) in (90.0, 120.0):
+            # papers legitimately omit a symmetry-fixed angle; only skip while the
+            # .pdf side is absent or carries the same value
+            if num_val(pv) is None or num_val(pv) == num_val(dv):
+                continue
         for g in groups:
             if g[0] == dv and g[1] == pv:
                 g[2].append(k); break
@@ -140,6 +145,14 @@ def parse_comments(path):
 
 DocxData = namedtuple('DocxData', 'authors_cell crystal_cell radiation lam raw_cell raw_lam comments')
 
+def _pad8(xs):
+    """Pad a cell-row slice to the 8 Author's-Cell fields (a b c α β γ SG Z) with ''.
+    A merged/short table row otherwise yields <8 items, and downstream positional
+    indexing / 8-value %-formatting crashes the whole batch; padded-empty fields
+    behave exactly like genuinely empty cells."""
+    xs = list(xs)[:8]
+    return xs + [''] * (8 - len(xs))
+
 def parse_docx(path):
     rows = docx_rows(path)
     ac = cc = None; anode = None; lam = None; raw_cell = raw_lam = None
@@ -148,9 +161,9 @@ def parse_docx(path):
         if not cells: continue
         head = cells[0]
         if head.startswith("Author'sCell") or head.startswith("Author"):
-            ac = cells[1:9]; raw_cell = r[1:9]
+            ac = _pad8(cells[1:9]); raw_cell = _pad8(r[1:9])
         elif head.startswith('CrystalCell'):
-            cc = cells[1:9]
+            cc = _pad8(cells[1:9])
         if 'Radiation=' in head or head == 'Radiation':
             # row: Radiation = | FeKa | l = | 1.54184 | ...
             joined = r
@@ -195,7 +208,14 @@ def _norm_pdf(s):
     # 'X-\nray' and line-broken proper nouns keep their hyphen.
     s = re.sub(r'([a-z])-\n[ \t]*([a-z])', r'\1\2', s)
     s = _WORD_DASH.sub('-', s)
-    s = re.sub(r'(?<=\d)\s+\((\d{1,3})\)', r'(\1)', s)   # '8.8593 (2)' -> '8.8593(2)'
+    # '8.8593 (2)' -> '8.8593(2)' — SAME LINE only ([ \t], never \n): a '(3)' opening the
+    # next line is usually a footnote/reference marker, not an esd, and fusing it across
+    # the newline fabricated phantom esds.
+    s = re.sub(r'(?<=\d)[ \t]+\((\d{1,3})\)', r'(\1)', s)
+    # …except a line-WRAPPED esd whose own line carries the unit ('a = 5.2783\n(3) Å',
+    # I002066): a footnote/reference line-opener is never followed by Å/°, so the unit
+    # binds the parenthesis to the preceding number and the rejoin stays safe.
+    s = re.sub(r'(?<=\d)[ \t]*\n[ \t]*\((\d{1,3})\)(?=[ \t]*[Å°])', r'(\1)', s)
     return s
 
 def _pdf_text_fitz(path):
@@ -462,48 +482,65 @@ def find_cells_table(text):
     parser finds nothing.  Handles the 'β' → 'b'/'ß' mojibake: β is often
     re-labelled 'b (Å)' a second time and recognised here as the off-90 angle.
     Strict labels (single letter + parenthesised unit) keep it from firing on
-    atom-coordinate or composition tables."""
+    atom-coordinate or composition tables. Label rows are clustered by proximity,
+    one candidate per table block, so a multi-table paper can't chimera axes."""
     lines = text.splitlines()
     LBL = re.compile(r'^\s*([abcαβγß])\s*\(\s*(?:Å|°)\s*\)\s*$', re.I)
     VAL = re.compile(r'^\s*(-?\d+(?:\.\d+)?(?:\s*\(\d+\))?)\s*(?:°|Å3?)?\s*$')
     # Record values BY their axis label (not positionally): trigonal/hexagonal
     # tables omit the 'b (Å)' row since b=a, so a positional a/b/c assignment
     # would wrongly put c's value into b. Keep every occurrence per letter.
-    occ = {}                                   # letter -> [(value_str, line_index), …]
+    # Cluster label rows by PROXIMITY into contiguous table blocks: pooling them
+    # document-wide let a candidate mix axes from DIFFERENT tables (a from table 1,
+    # b from a later comparison table — a chimeric cell). A label within ~10 lines
+    # of the previous LABEL row shares its block (gap measured label-to-label, so a
+    # non-numeric value line like 'b (Å)' → '= a' can't split a real table); a
+    # bigger gap starts a new block, and each block yields its own candidate.
+    blocks = []; prev_lbl = None               # blocks of (line_index, letter, value_str)
     for i, ln in enumerate(lines):
         mlbl = LBL.match(ln)
         if not mlbl:
             continue
+        if prev_lbl is None or i - prev_lbl > 10:
+            blocks.append([])
+        prev_lbl = i
         letter = mlbl.group(1).lower().replace('ß', 'β')
         for j in range(i + 1, min(i + 3, len(lines))):   # next bare-number line
             v = VAL.match(lines[j])
             if v:
-                occ.setdefault(letter, []).append((v.group(1).replace(' ', ''), i))
+                blocks[-1].append((i, letter, v.group(1).replace(' ', '')))
                 break
+    blocks = [b for b in blocks if b]
     def _len(v): vv = num_val(v); return vv is not None and 2.5 <= vv <= 80
     def _ang(v): vv = num_val(v); return vv is not None and 80 < vv <= 180
-    def first_len(letter):                     # first length-valued entry for a letter
+    def first_len(occ, letter):                # first length-valued entry for a letter
         for v, li in occ.get(letter, []):
             if _len(v): return v, li
         return None, None
-    def first_ang(letters):                    # first angle-valued entry across letters
+    def first_ang(occ, letters):               # first angle-valued entry across letters
         for L in letters:
             for v, li in occ.get(L, []):
                 if _ang(v): return v
         return None
-    a, ali = first_len('a'); b, _ = first_len('b'); c, _ = first_len('c')
-    if a is None or c is None:                 # need at least a and c to be a real cell
-        return []
-    if b is None:                              # uniaxial/cubic: b-row omitted, b = a
-        b = a
-    # angles: α/β/γ, plus the 'b (°)' β-mojibake captured as an angle-valued 'b'
-    al = first_ang(['α']); be = first_ang(['β', 'b']); ga = first_ang(['γ'])
-    if be and not al and not ga:               # only β present → monoclinic
-        al = ga = '90'
-    pos = sum(len(l) + 1 for l in lines[:ali])
-    snippet = re.sub(r'\s+', ' ', ' '.join(lines[ali:ali + 8])).strip()
-    return [CellCand(a, b, c, al, be, ga, None, None,
-                     classify_context(text, pos), pos, snippet)]
+    out = []
+    for block in blocks:
+        occ = {}                               # letter -> [(value_str, line_index), …]
+        for i, letter, v in block:
+            occ.setdefault(letter, []).append((v, i))
+        a, ali = first_len(occ, 'a'); b, _ = first_len(occ, 'b'); c, _ = first_len(occ, 'c')
+        if a is None or c is None:             # need at least a and c to be a real cell
+            continue
+        if b is None:                          # uniaxial/cubic: b-row omitted, b = a
+            b = a
+        # angles: α/β/γ, plus the 'b (°)' β-mojibake captured as an angle-valued 'b'
+        al = first_ang(occ, ['α']); be = first_ang(occ, ['β', 'b']); ga = first_ang(occ, ['γ'])
+        if be and not al and not ga:           # only β present → monoclinic
+            al = ga = '90'
+        pos = sum(len(l) + 1 for l in lines[:ali])
+        snippet = re.sub(r'\s+', ' ', ' '.join(lines[ali:ali + 8])).strip()
+        out.append(CellCand(a, b, c, al, be, ga, None, None,
+                            classify_context(text, pos), pos, snippet))
+    return out
 
 # ---- multi-phase table parsers (so a paper describing several minerals exposes
 #      EACH phase's cell, tagged with its name, not just the first one found) ----
@@ -523,6 +560,15 @@ def find_cells_named_rows(text):
                      r'((?:' + NUM + r'[ ,]*){3,8})')
     out = []
     for m in pat.finditer(flat):
+        # SG_TOK also matches bare element symbols ('Ca', 'Cd', 'Pb'), minting phantom
+        # phase-tagged cells from analysis-table rows ('Point Ca 3.45 2.98 4.01'). A real
+        # space group carries a digit / '/' / '-' or runs ≥3 chars ('Pnma'); accept a
+        # 2-letter token ('Cc', 'Cm') only when the leading name reads like a mineral
+        # species (root ends in 'ite'), which an EPMA row label never does.
+        sg = m.group(2)
+        if not (re.search(r'[\d/\-]', sg) or len(sg) >= 3
+                or re.sub(r'-\(?[A-Za-z0-9+]+\)?$', '', m.group(1)).lower().endswith('ite')):
+            continue
         nums = re.findall(NUM, m.group(3))
         vals = [num_val(x) for x in nums]
         axes = [nums[i] for i in range(len(nums)) if vals[i] is not None and 2.5 <= vals[i] <= 80]
@@ -569,6 +615,13 @@ def find_cells(text):
     for m in re.finditer(r'\ba\s*=\s*(' + NUM + r')', flat):
         pos = m.start()
         window = flat[pos:pos + 220]
+        # a SECOND 'a =' inside the window opens ANOTHER cell (two-mineral sentence,
+        # I003403 ferriphoxite/carboferriphoxite); cut the window there so the grabs
+        # below can't chimera the neighbour's α/β/γ/V/Z onto this cell (that cell
+        # gets its own finditer pass)
+        nx = re.search(r'\ba\s*=', window[1:])
+        if nx:
+            window = window[:1 + nx.start()]
         def grab(letter, alt=None):
             pat = r'\b' + letter + r'\s*=\s*(' + NUM + r')'
             mm = re.search(pat, window)
@@ -752,9 +805,28 @@ def find_radiation(text):
     for m in re.finditer(r'(Cu|Mo|Fe|Co|Cr|Ag)\s?K(?=[αa\d\s)\].,;）]|$)', flat):
         pos = m.start()
         lam = None
-        mm = re.search(r'λ\s*=?\s*(\d\.\d{3,5})', flat[pos:pos + 60]) \
-            or re.search(r'(\d\.\d{3,5})\s*Å', flat[pos:pos + 60])
-        if mm: lam = mm.group(1)
+        win = flat[pos:pos + 60]
+        # λ-bound number first. An explicit 'nm' unit ('λ = 0.154178 nm') converts to Å
+        # (read as Å it was a guaranteed false mismatch); an nm value outside the
+        # plausible 0.05–0.32 nm band is dropped rather than guessed at.
+        mm = re.search(r'λ\s*=?\s*(\d\.\d{3,5})(\d*)\s*(nm\b)?', win)
+        if mm:
+            if mm.group(3):
+                v = num_val(mm.group(1) + mm.group(2))
+                lam = ('%g' % (v * 10)) if v is not None and 0.05 <= v <= 0.32 else None
+            else:
+                lam = mm.group(1)
+        else:
+            # Loose Å fallback: the context window can hold a nearby CELL parameter
+            # ('a = 5.4602 Å'), so skip any number bound to an a/b/c '=' token — a
+            # wrong λ is a false mismatch, a missing one only a 'verify'.
+            for m2 in re.finditer(r'(\d\.\d{3,5})\s*Å', win):
+                if re.search(r'\b[abc]\s*=\s*$', win[:m2.start()]):
+                    continue
+                lam = m2.group(1); break
+        # keep only plausible diffraction wavelengths (~0.3–3.1 Å spans AgKα…CrKβ)
+        if lam is not None and not (0.3 <= (num_val(lam) or 0) <= 3.1):
+            lam = None
         # Skip electron-microprobe STANDARD emission lines, which are written as
         # 'mineral (FeKα)' inside a parenthesised enumeration — not the diffraction
         # source. Recognise them as: element-K opening/continuing a parenthetical
@@ -836,6 +908,8 @@ def best_match(docx_abc, cands, prefer_phase=None):
         for mode, order in (('direct', A), ('reordered', sorted([v for v in A if v]))):
             if mode == 'reordered':
                 cc = sorted([v for v in cabc if v]); aa = order
+                if len(aa) != len(cc):   # unequal axis counts: zip would silently
+                    continue             # truncate and mispair (docx a vs cand b, …)
                 pairs = list(zip(aa, cc))
             else:
                 pairs = [(A[i], cabc[i]) for i in range(3)]
@@ -984,7 +1058,8 @@ def _is_supp(name):
 
 def pdf_index(folder):
     cand = {}                                        # id -> [paths]
-    for p in glob.glob(os.path.join(folder, '**', '*.pdf'), recursive=True):
+    # case-insensitive extension (publisher downloads arrive as '.PDF'), like cif/dft_index
+    for p in glob.glob(os.path.join(folder, '**', '*.[pP][dD][fF]'), recursive=True):
         for k in _id_keys(os.path.basename(p)): cand.setdefault(k, []).append(p)
     # prefer the primary article PDF (no supp/table marker), then the shorter name
     return {k: sorted(ps, key=lambda p: (_is_supp(os.path.basename(p)), len(os.path.basename(p))))[0]
@@ -1127,6 +1202,13 @@ def report(docx_path, pdf_path):
         _run_extra(docx_path, None)        # docx-internal checks still apply (symmetry, indexing, …)
         return
     text = pdf_text(pdf_path)
+    if not text.strip():
+        # scanned/image-only .pdf: nothing was searchable, so a hard 'NOT found in .pdf'
+        # verdict would be false. Say so neutrally and skip the cell/λ comparisons;
+        # the docx-internal extras still run (as when no .pdf is paired at all).
+        print('  (.pdf has no extractable text layer — cell/λ not checked)')
+        _run_extra(docx_path, None)
+        return
     cands = find_cells(text)
 
     # --- cell comparison.  Priorities (per reviewer): a matching cell exists;
