@@ -101,7 +101,8 @@ async function pickFolderNative() {
 async function openFolder(path) {
   path = (path || '').trim();
   if (!path) return;
-  flushTriage();                    // persist any pending triage before re-pointing the tool
+  await flushTriage();              // persist any pending triage BEFORE re-pointing the tool
+                                    // (un-awaited, the POST could land in the new folder's sidecar)
   const btns = ['#folder-open', '#folder-browse'].map($).filter(Boolean);
   btns.forEach(b => b.disabled = true);
   $('#folder-hint').textContent = 'opening…';
@@ -181,8 +182,24 @@ function badgeEl(b) { return el('span', { class: 'badge ' + b.level }, b.label);
 // ---- open an entry ---------------------------------------------------------
 async function openEntry(key) {
   flushTriage();                    // persist the previous entry's triage before switching
-  S.key = key;
-  const r = await fetch('/api/entry/' + encodeURIComponent(key)).then(x => x.json());
+  S.key = key;                      // selection intent — stale responses check against it
+  let r;
+  try {
+    const resp = await fetch('/api/entry/' + encodeURIComponent(key));
+    r = await resp.json().catch(() => null);            // 404/500 HTML would throw here
+    if (!r || !r.analysis) throw new Error((r && r.error) || ('HTTP ' + resp.status));
+  } catch (ex) {
+    if (S.key !== key) return;      // a newer selection superseded this one — its owner reports
+    // surface the failure and clear the half-open state so triage can't save under this key
+    S.key = null; S.a = null; S.t = null;
+    $('#entry').classList.add('hidden'); $('#empty').classList.remove('hidden');
+    const st = $('#rerun-status');
+    st.textContent = 'could not open entry: ' + ((ex && ex.message) || ex);
+    setTimeout(() => { st.textContent = ''; }, 6000);
+    renderList();                   // un-stick the selected row
+    return;
+  }
+  if (S.key !== key) return;        // out-of-order response — a newer entry owns the panes now
   S.a = r.analysis;
   S.t = normalizeTriage(r.triage);
   S.ue = r.user_edits || [];  // reviewer's own marks in the reviewed copy (live, not cached)
@@ -208,6 +225,14 @@ function normalizeTriage(t) {
   t = t || {};
   t.findings = t.findings || {};
   return t;
+}
+
+// a finding's triage key: the server's content-stable fkey, falling back to the old
+// index key for an analysis served from a stale gui_cache (pre-fkey)
+function fkeyOf(f) { return f.fkey || ('f' + f.idx); }
+function findingOf(fkey) {
+  if (!S.a || !fkey) return null;
+  return S.a.findings.find(f => fkeyOf(f) === fkey) || null;
 }
 
 // ---- head ------------------------------------------------------------------
@@ -252,7 +277,7 @@ function postTriagePreview() {
   if (cs === 'match') { for (const ax in a.params) tally('param:' + ax); }
   else tally('cell');                                   // investigate / no-match comment
   if (a.lam && a.lam[0] === 'flag') tally('lam');       // anode mismatch
-  for (const f of a.findings) if (f.written) tally('f' + f.idx);
+  for (const f of a.findings) if (f.written) tally(fkeyOf(f));
   return { write, suppress };
 }
 
@@ -281,6 +306,9 @@ function renderFindings() {
   } else if (cs === 'nopdf') {
     cellMsg = 'no .pdf paired — the cell cannot be validated';
     cellLevel = 'flag'; cellWritten = true;
+  } else if (cs === 'notext') {
+    cellMsg = '.pdf has no text layer (scanned image?) — cell/λ not checked';
+    cellLevel = 'flag'; cellWritten = true;
   } else { cellMsg = cs; cellLevel = 'note'; cellWritten = false; }
   if (m.provenance) {
     // on an INVESTIGATE the docx did NOT match — say "closest is", not "matches"
@@ -307,7 +335,7 @@ function renderFindings() {
   // extra-check findings
   for (const f of a.findings) {
     const level = f.sev === 'flag' ? 'flag' : (f.sev === 'info' ? 'check' : 'note');
-    rows.push({ fkey: 'f' + f.idx, level, code: f.code, msg: f.msg, written: f.written, anchor: f.anchor, minor: !f.major });
+    rows.push({ fkey: fkeyOf(f), level, code: f.code, msg: f.msg, written: f.written, anchor: f.anchor, minor: !f.major });
   }
 
   // promote by severity: FLAG (real problems) first, then CHECK (confirm), then OK,
@@ -327,8 +355,8 @@ function renderFindings() {
 }
 
 function fRow(r) {
-  const t = (S.t.findings[r.fkey] = S.t.findings[r.fkey] || {});
-  t.label = `${r.code}: ${(r.msg || '').slice(0, 80)}`;
+  const t = S.t.findings[r.fkey] || {};       // READ-ONLY — rendering must never mutate triage
+  const label = `${r.code}: ${(r.msg || '').slice(0, 80)}`;
   const top = el('div', { class: 'f-top' }, el('span', { class: 'sev ' + r.level }, SEV_LABEL[r.level] || r.level));
   if (r.level !== 'ok')                       // an 'OK' result writes nothing — no tag needed
     top.append(r.written ? el('span', { class: 'wtag written' }, 'written to docx')
@@ -338,15 +366,24 @@ function fRow(r) {
     top,
     el('div', { class: 'f-msg' }, r.msg || ''),
     r.anchor ? el('div', { class: 'f-anchor' }, '↳ docx anchor: ' + r.anchor) : null,
-    triageControls(r.fkey, t));
+    triageControls(r.fkey, t, label));
 }
 
-function triageControls(fkey, t) {
+function triageControls(fkey, t, label) {
+  // create-and-label the stored record only when the reviewer actually ACTS — a
+  // label-only record for every rendered finding used to persist on any save and
+  // fill triage_report.txt with [?] lines.
+  const rec = () => {
+    const x = (S.t.findings[fkey] = S.t.findings[fkey] || {});
+    x.label = label;
+    return x;
+  };
   const mk = (v, lbl) => el('button', {
     class: 'tbtn ' + v + (t.verdict === v ? ' on' : ''),
     onclick: ev => {
       ev.stopPropagation();
-      t.verdict = (t.verdict === v ? null : v);       // confirm / dismiss are the only verdicts
+      const x = rec();
+      x.verdict = (x.verdict === v ? null : v);       // confirm / dismiss are the only verdicts
       saveTriage(); renderFindings();
     }
   }, lbl);
@@ -357,7 +394,7 @@ function triageControls(fkey, t) {
   const note = el('input', { class: 'tnote', type: 'text', placeholder: 'note…',
     value: t.note || '',
     onclick: ev => ev.stopPropagation(),
-    oninput: ev => { t.note = ev.target.value; saveTriage(); } });
+    oninput: ev => { rec().note = ev.target.value; saveTriage(); } });
   return el('div', { class: 'triage' }, mk('confirm', '✓ confirm'),
     mk('dismiss', '✗ dismiss'), look, note);
 }
@@ -419,8 +456,8 @@ function termsFor(fkey, step = 0) {
       const docxrad = /([A-Za-z]{1,2})\s*K/.exec(a.docx.radiation || '');
       if (docxrad) terms = [docxrad[1] + 'K'];
     }
-  } else if (fkey.startsWith('f')) {
-    const f = a.findings[parseInt(fkey.slice(1), 10)];
+  } else {
+    const f = findingOf(fkey);
     if (f) {
       const groups = lookGroups(f);
       if (groups) {
@@ -471,6 +508,7 @@ function focusFinding(fkey) {
 // finding has many terms (e.g. an indexing finding's reflection d-spacings), find the
 // page where they CLUSTER (the powder table) and let the region crop expand to it.
 async function zoomToHighlight(fkey) {
+  const key = S.key;                 // bail after any await if the entry changed under us
   S.focusKey = fkey;
   const step = S.lookStep[fkey] || 0;
   const t = termsFor(fkey, step);
@@ -488,6 +526,7 @@ async function zoomToHighlight(fkey) {
     const best = Object.keys(pageHits).sort((a, b) => pageHits[b] - pageHits[a])[0];
     if (best !== undefined) page = +best;
   } catch (e) { /* keep evidence page */ }
+  if (S.key !== key) return;         // stale continuation — a different entry owns the pane
   S.pdfHits = []; S.pdfQuery = ''; S.hitIdx = -1; $('#pdf-hits').textContent = '';   // not a search context
   S.pdfTerms = t.terms.slice(0, 20); S.pdfPage = page; S.pdfMode = 'region'; S.pdfZoom = 1;
   renderPdf(t.snippet, t.label, S.pdfTerms);
@@ -498,6 +537,7 @@ async function zoomToHighlight(fkey) {
 // terms so the ‹ › stepper can walk them; lands on the page where they cluster. Repeated '? look'
 // clicks still cycle a multi-group finding's look-groups (via lookStep).
 async function lookInPage(fkey) {
+  const key = S.key;                 // bail after any await if the entry changed under us
   S.focusKey = fkey;
   const step = S.lookStep[fkey] || 0;
   const t = termsFor(fkey, step);
@@ -513,6 +553,7 @@ async function lookInPage(fkey) {
       fetch(`/api/pdf/${enc(S.a.key)}/search?q=${enc(term)}`).then(x => x.json()).catch(() => ({ hits: [], sizes: {} }))));
     for (const r of res) { for (const h of (r.hits || [])) hits.push(h); Object.assign(sizes, r.sizes || {}); }
   } catch (e) { /* fall through to evidence page */ }
+  if (S.key !== key) return;         // stale continuation — a different entry owns the pane
   if (!hits.length) {                            // terms didn't match -> just open the evidence page
     S.pdfHits = []; S.hitIdx = -1; S.pdfQuery = ''; S.pdfPage = t.page; $('#pdf-hits').textContent = '';
     renderPdf(t.snippet, t.label, S.pdfTerms); return;
@@ -626,8 +667,8 @@ function renderPdf(snippet, snipLabel, hlTerms) {
   }
   const find = (S.pdfTerms || []).join('|');
   if (S.pdfMode === 'region') {
-    const img = el('img', { src: `/api/pdf/${enc(a.key)}/region/${S.pdfPage}.png?find=${enc(find)}`,
-                            alt: 'highlight region' });
+    const img = wireImgRetry(el('img', { src: `/api/pdf/${enc(a.key)}/region/${S.pdfPage}.png?find=${enc(find)}`,
+                                         alt: 'highlight region' }));
     img.style.width = (S.pdfZoom * 100) + '%';
     view.replaceChildren(img);
   } else {
@@ -657,6 +698,22 @@ function applyPageAspects() {
   });
 }
 
+// One automatic retry for a page render that failed (a 404 while the crashed MuPDF
+// worker pool rebuilds, a dropped connection): without it the failed <img> keeps its
+// src, so the `!img.src` lazy-load guard never re-requests it and the slot stays
+// blank forever. Retries once after ~1.5 s (dataset attempt counter, max 2).
+function wireImgRetry(img) {
+  img.addEventListener('error', () => {
+    const attempt = +(img.dataset.attempt || 1);
+    const src = img.getAttribute('src');
+    if (attempt >= 2 || !src) return;                  // one retry only
+    img.dataset.attempt = String(attempt + 1);
+    img.removeAttribute('src');
+    setTimeout(() => { if (img.isConnected && !img.getAttribute('src')) img.src = src; }, 1500);
+  });
+  return img;
+}
+
 // a continuously-scrollable stack of all pages, lazy-loaded as they approach view
 function buildPageStack(a, find) {
   const view = $('#pdf-view');
@@ -664,7 +721,7 @@ function buildPageStack(a, find) {
   const wrap = el('div', { class: 'pdf-pages' });
   const slots = [];
   for (let i = 0; i < a.pdf.pages; i++) {
-    const img = el('img', { alt: 'page ' + (i + 1) });
+    const img = wireImgRetry(el('img', { alt: 'page ' + (i + 1) }));
     const tl = el('div', { class: 'text-layer' });        // selectable text overlay (copy + native find)
     const inner = el('div', { class: 'page-inner' }, img, tl);   // shrink-wraps the img; the text layer aligns to it
     inner.style.width = (S.pdfZoom * 100) + '%';                 // zoom lives on the wrapper so the overlay tracks the img
@@ -752,7 +809,7 @@ function renderPager() {
     p.append(el('span', { class: 'muted' }, crop),
       el('button', { onclick: () => { S.pdfMode = 'page'; S.pdfZoom = 1; renderPdf(undefined); } }, 'full page'));
     // hint that another '? look' cycles to the next target (multi-group findings only)
-    const f = S.focusKey && S.focusKey.startsWith('f') ? S.a.findings[parseInt(S.focusKey.slice(1), 10)] : null;
+    const f = findingOf(S.focusKey);      // null for the cell/param/lam pseudo-keys
     const g = lookGroups(f);
     if (g && g.length > 1) {
       const next = g[(S.lookStep[S.focusKey] || 0) % g.length].label;
@@ -1032,6 +1089,7 @@ function renderMindat() {
 
 // ---- triage save (debounced) ----------------------------------------------
 function saveTriage() {
+  if (!S.key || !S.t) return;       // no entry cleanly open — nothing to save under
   clearTimeout(S.saveTimer);
   S.pendingSave = { key: S.key, payload: JSON.stringify(S.t) };   // capture NOW (entry may change first)
   S.saveTimer = setTimeout(flushTriage, 350);
@@ -1053,12 +1111,18 @@ function flushTriage() {
 // ---- rerun (regenerate docx with triage applied) ---------------------------
 async function rerun(url, btn, busyLabel, doneLabel) {
   await flushTriage();
+  // both buttons off while ANY rerun is in flight — the server 409s a concurrent
+  // rerun anyway (two subprocesses would race on the same output docx)
+  const btns = ['#rerun-entry', '#rerun-all'].map($).filter(Boolean);
+  if (btns.some(b => b.disabled)) return;
+  btns.forEach(b => { b.disabled = true; });
   const orig = btn.textContent;
   btn.classList.add('busy'); btn.textContent = busyLabel;
   $('#rerun-status').textContent = busyLabel;
   let r;
   try { r = await fetch(url, { method: 'POST' }).then(x => x.json()); }
   catch (ex) { r = { ok: false, error: String(ex) }; }
+  btns.forEach(b => { b.disabled = false; });
   btn.classList.remove('busy'); btn.textContent = orig;
   $('#rerun-status').textContent = r.ok ? doneLabel : ('rerun failed' + (r.error ? ': ' + r.error : ''));
   setTimeout(() => { $('#rerun-status').textContent = ''; }, 5000);
@@ -1089,9 +1153,11 @@ document.querySelectorAll('#views button').forEach(b =>
     document.querySelectorAll('#views button').forEach(x => x.classList.toggle('on', x === b));
     renderList();
   }));
-$('#rerun-entry').addEventListener('click', () =>
+$('#rerun-entry').addEventListener('click', () => {
+  if (!S.key) return;               // no entry cleanly open
   rerun('/api/rerun/' + encodeURIComponent(S.key), $('#rerun-entry'),
-        'Rerunning…', 'regenerated this docx ✓'));
+        'Rerunning…', 'regenerated this docx ✓');
+});
 $('#rerun-all').addEventListener('click', () =>
   rerun('/api/rerun', $('#rerun-all'), 'Rerunning all…', 'regenerated all docx ✓'));
 document.querySelectorAll('#mid-toggle button').forEach(b =>
@@ -1145,8 +1211,15 @@ $('#zoom-page').addEventListener('click', () => {
   S.pdfMode = 'page'; S.pdfZoom = 1; renderPdf(undefined);
 });
 $('#export').addEventListener('click', async () => {
-  const r = await fetch('/api/triage/export', { method: 'POST' }).then(x => x.json());
-  $('#export').textContent = 'Exported ✓';
+  let r;
+  try { r = await fetch('/api/triage/export', { method: 'POST' }).then(x => x.json()); }
+  catch (ex) { r = { ok: false, error: String(ex) }; }
+  $('#export').textContent = r && r.ok ? 'Exported ✓' : 'Export failed';
+  if (!(r && r.ok)) {
+    const st = $('#rerun-status');
+    st.textContent = 'triage export failed' + (r && r.error ? ': ' + r.error : '');
+    setTimeout(() => { st.textContent = ''; }, 5000);
+  }
   setTimeout(() => $('#export').textContent = 'Export triage', 1800);
 });
 document.addEventListener('keydown', e => {

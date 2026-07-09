@@ -25,6 +25,24 @@ def _pool_get():
     return _pool
 
 
+def _kill_pool(pool):
+    """Tear a pool down HARD. shutdown() alone cannot stop a worker wedged inside
+    native MuPDF code (it only stops feeding the queue), so the stuck process would
+    leak — and keep the CPU — behind the rebuilt pool. Kill the workers outright."""
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+    try:
+        for p in (getattr(pool, '_processes', None) or {}).values():
+            try:
+                p.kill()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def run(fn, *args, default=None, timeout=40):
     """Run `fn(*args)` in the worker pool; return its result, or `default` if the worker
     crashed (native segfault), timed out, or raised. A crash poisons the pool, so it is
@@ -36,11 +54,8 @@ def run(fn, *args, default=None, timeout=40):
         return pool.submit(fn, *args).result(timeout=timeout)
     except (BrokenProcessPool, _Timeout):
         with _lock:                     # worker died / hung -> the pool is unusable; rebuild
-            try:
-                if _pool is not None:
-                    _pool.shutdown(wait=False, cancel_futures=True)
-            except Exception:
-                pass
+            if _pool is not None:
+                _kill_pool(_pool)
             _pool = None
         return default
     except Exception:
@@ -51,10 +66,7 @@ def shutdown():
     global _pool
     with _lock:
         if _pool is not None:
-            try:
-                _pool.shutdown(wait=False, cancel_futures=True)
-            except Exception:
-                pass
+            _kill_pool(_pool)
             _pool = None
 
 

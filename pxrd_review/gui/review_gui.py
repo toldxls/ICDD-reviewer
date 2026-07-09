@@ -210,6 +210,22 @@ def _mindat_block(name):
     return block
 
 # ------------------------------------------------------------------ serialization
+def _finding_keys(findings):
+    """Content-stable triage keys for the extra findings — annotate_review.finding_keys
+    ('f:' + sha1('code|anchor|msg[:120]')[:10], '#2'/'#3' suffixes on identical
+    duplicates), so a verdict survives findings being added/removed/reordered.
+    Local fallback implements the same contract for a not-yet-updated annotate_review."""
+    fk = getattr(A, 'finding_keys', None)
+    if fk is not None:
+        return fk(findings)
+    keys, seen = [], {}
+    for f in findings:
+        raw = '%s|%s|%s' % (f.code, f.anchor or '', (f.msg or '')[:120])
+        k = 'f:' + hashlib.sha1(raw.encode('utf-8')).hexdigest()[:10]
+        seen[k] = seen.get(k, 0) + 1
+        keys.append(k if seen[k] == 1 else '%s#%d' % (k, seen[k]))
+    return keys
+
 def _compound_names(entry):
     """The reviewer-relevant identifiers from the docx 'Compound Names' section —
     the Mineral name, the Primary (Warr) symbol, and the Primary systematic name —
@@ -272,11 +288,13 @@ def _serialize(key):
     # which extra findings actually get written into the docx (same gate the
     # annotator uses); everything else is console-only.
     writable = {id(f) for f in A._writable_extras(res)}
-    findings = [{'idx': i, 'code': f.code, 'sev': f.sev, 'anchor': f.anchor,
+    extras = res.get('extra', [])
+    fkeys = _finding_keys(extras)               # content-stable triage keys ('idx' kept for display)
+    findings = [{'idx': i, 'fkey': fkeys[i], 'code': f.code, 'sev': f.sev, 'anchor': f.anchor,
                  'msg': _u(f.msg), 'written': id(f) in writable,
                  'major': f.code not in LOW_PRIORITY_CODES,
                  'evidence': _u(f.evidence) if f.evidence else None}   # short keyword -> GUI 'look' zoom
-                for i, f in enumerate(res.get('extra', []))]
+                for i, f in enumerate(extras)]
 
     ent = None
     if entry:
@@ -349,7 +367,7 @@ def _serialize(key):
     # (investigate / no-match), an anode-mismatch λ flag, and each written extra
     # finding that is NOT a low-priority wavelength note.
     fixes = len(out['params'])
-    if status in ('investigate', 'nocell', 'nopdf'):
+    if status in ('investigate', 'nocell', 'nopdf', 'notext'):
         fixes += 1
     if out['lam'] and out['lam'][0] == 'flag':
         fixes += 1
@@ -375,6 +393,8 @@ def _badges(s):
     status = s['cell']['status']
     if status == 'nopdf' or not s['files']['pdf']:
         add('no-pdf', 'no .pdf', 'danger')
+    if status == 'notext':
+        add('no-text', '.pdf: no text layer', 'danger')   # scanned image — cell/λ not checked
     if status == 'nocell':
         add('no-cell', 'no cell parsed', 'danger')
     if status == 'investigate':
@@ -424,9 +444,16 @@ def _attention(badges):
 # editing a check (or the serializer) AUTO-invalidates the on-disk cache. Replaces the
 # old manual 'bump CACHE_VERSION on every change' ritual (easy to forget → stale cache).
 def _code_fingerprint():
+    files = [getattr(mod, '__file__', None) for mod in (C, X, A, sys.modules[__name__])]
+    try:
+        from pxrd_review import mindat as _mindat
+        # the Mindat module + its two offline caches: a --refresh (new cell/SG/
+        # formula data) must invalidate cached analyses just like a code edit does
+        files += [getattr(_mindat, '__file__', None), _mindat.CACHE, _mindat.STRUCT_CACHE]
+    except Exception:
+        pass
     h = hashlib.md5()
-    for mod in (C, X, A, sys.modules[__name__]):
-        f = getattr(mod, '__file__', None)
+    for f in files:
         try:
             h.update(('%s:%d;' % (f, int(os.path.getmtime(f)))).encode())
         except (OSError, TypeError):
@@ -481,17 +508,29 @@ def _triage_path():
     return os.path.join(STATE['out_dir'], 'triage.json')
 
 def _load_triage():
+    path = _triage_path()
     try:
-        with open(_triage_path(), encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             STATE['triage'] = json.load(f)
-    except Exception:
-        STATE['triage'] = {}
+        return
+    except OSError:
+        pass                                    # no sidecar yet — a fresh folder
+    except Exception as ex:                     # present but unparseable — keep the evidence
+        try:
+            shutil.copyfile(path, path + '.corrupt')
+            print('  !! triage.json is unreadable (%s) — copied aside to triage.json.corrupt' % ex)
+        except OSError:
+            print('  !! triage.json is unreadable (%s); could not copy it aside' % ex)
+    STATE['triage'] = {}
 
 def _save_triage():
     with STATE['lock']:
         os.makedirs(STATE['out_dir'], exist_ok=True)
-        with open(_triage_path(), 'w', encoding='utf-8') as f:
+        path = _triage_path()
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(STATE['triage'], f, indent=1)
+        os.replace(tmp, path)   # atomic: the rerun subprocess never sees a half-written file
 
 # ------------------------------------------------------------------ indexing / launch
 _VERDICT_RANK = {'confirm': 2, 'dismiss': 1}            # 'look' / None -> 0 (look is navigation, not a verdict)
@@ -594,6 +633,8 @@ def build_index(folder, out_dir, pdf_root=None):
         from pxrd_review import mindat; mindat.refresh_struct_if_stale()
     except Exception:
         pass
+    global CODE_FP
+    CODE_FP = _code_fingerprint()               # the Mindat caches may have just refreshed
     STATE['pdf'] = C.pdf_index(folder)
     STATE['cif'] = C.cif_index(folder)
     STATE['dft'] = C.dft_index(folder)
@@ -883,6 +924,31 @@ def _docx_html(path):
         return '<div class="docx-authors">%s</div>%s' % (chips, doc_html)
     return doc_html
 
+_FIDX_RE = re.compile(r'^f\d+$')
+def _migrate_triage_fkeys(key, d):
+    """One-time move of this entry's OLD index-keyed triage records ('f0', 'f1', …)
+    to the content-stable fkeys. Matched via the saved label ('CODE: msg[:80]') —
+    only when it matches exactly ONE current finding, and never clobbering a record
+    already saved under the new key. Persisted immediately."""
+    with STATE['lock']:
+        fnd = (STATE['triage'].get(key) or {}).get('findings')
+        if not fnd:
+            return
+        labels = {}
+        for f in d.get('findings', []):
+            if f.get('fkey'):
+                lab = '%s: %s' % (f['code'], (f['msg'] or '')[:80])
+                labels.setdefault(lab, []).append(f['fkey'])
+        moved = False
+        for old in [k for k in fnd if _FIDX_RE.match(k)]:
+            rec = fnd[old]
+            targets = labels.get(rec.get('label')) if isinstance(rec, dict) else None
+            if targets and len(targets) == 1 and targets[0] not in fnd:
+                fnd[targets[0]] = fnd.pop(old)
+                moved = True
+        if moved:
+            _save_triage()
+
 @app.route('/api/entry/<key>')
 def api_entry(key):
     if key not in STATE['docx']:
@@ -891,6 +957,9 @@ def api_entry(key):
         d = get_analysis(key)
     except KeyError:                                 # folder switched between the check and the lock
         abort(404)
+    except Exception as ex:                          # analysis crash -> clean JSON, not an HTML 500
+        return jsonify({'ok': False, 'error': '%s: %s' % (type(ex).__name__, ex)}), 500
+    _migrate_triage_fkeys(key, d)
     return jsonify({'analysis': d, 'triage': STATE['triage'].get(key, {}),
                     'user_edits': _entry_user_edits(d, STATE['docx'].get(key))})
 
@@ -1107,18 +1176,24 @@ def api_triage_get():
 
 @app.route('/api/triage/<key>', methods=['POST'])
 def api_triage_set(key):
-    if key not in STATE['docx']:
-        abort(404)
     data = request.get_json(force=True, silent=True) or {}
     data['ts'] = datetime.datetime.now().isoformat(timespec='seconds')
+    # key check + write + save under ONE lock hold: a folder switch (which swaps
+    # STATE['docx']/'triage'/'out_dir' under the same lock) can't interleave, so a
+    # decision can never land in another folder's triage.json.
     with STATE['lock']:
+        if key not in STATE['docx']:
+            abort(404)
         STATE['triage'][key] = data
-    _save_triage()
+        _save_triage()
     return jsonify({'ok': True})
 
 @app.route('/api/triage/export', methods=['POST'])
 def api_triage_export():
-    path = _export_report()
+    try:
+        path = _export_report()
+    except Exception as ex:                          # keep the failure a clean JSON, not an HTML 500
+        return jsonify({'ok': False, 'error': str(ex)}), 500
     return jsonify({'ok': True, 'path': path})
 
 # ------------------------------------------------------------------ rerun (regenerate docx)
@@ -1129,19 +1204,28 @@ def _annotate_cmd(extra):
     return [sys.executable, '-m', 'pxrd_review.annotate_review', STATE['folder'],
             '--triage', _triage_path()] + extra
 
+# one rerun at a time — Flask serves requests on threads, and two concurrent
+# annotate_review subprocesses would race on the same output docx / logs
+_rerun_lock = threading.Lock()
+
 def _run_annotate(cmd):
-    # ensure the sidecar the rerun consumes is on disk
-    _save_triage()
-    # the subprocess is a fresh interpreter: put the repo root on PYTHONPATH so
-    # `-m pxrd_review.annotate_review` resolves even when not pip-installed (dev)
-    env = {**os.environ, 'PYTHONPATH': P.repo_root() + os.pathsep + os.environ.get('PYTHONPATH', '')}
+    if not _rerun_lock.acquire(blocking=False):
+        return jsonify({'ok': False, 'error': 'a rerun is already in progress'}), 409
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=P.repo_root(), env=env, timeout=1800)
-    except Exception as ex:
-        return jsonify({'ok': False, 'error': str(ex)}), 500
-    tail = '\n'.join((r.stdout or '').strip().splitlines()[-12:])
-    return jsonify({'ok': r.returncode == 0, 'returncode': r.returncode,
-                    'stdout': tail, 'stderr': (r.stderr or '')[-600:]})
+        # ensure the sidecar the rerun consumes is on disk
+        _save_triage()
+        # the subprocess is a fresh interpreter: put the repo root on PYTHONPATH so
+        # `-m pxrd_review.annotate_review` resolves even when not pip-installed (dev)
+        env = {**os.environ, 'PYTHONPATH': P.repo_root() + os.pathsep + os.environ.get('PYTHONPATH', '')}
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, cwd=P.repo_root(), env=env, timeout=1800)
+        except Exception as ex:
+            return jsonify({'ok': False, 'error': str(ex)}), 500
+        tail = '\n'.join((r.stdout or '').strip().splitlines()[-12:])
+        return jsonify({'ok': r.returncode == 0, 'returncode': r.returncode,
+                        'stdout': tail, 'stderr': (r.stderr or '')[-600:]})
+    finally:
+        _rerun_lock.release()
 
 @app.route('/api/rerun/<key>', methods=['POST'])
 def api_rerun_entry(key):
@@ -1161,37 +1245,49 @@ VERDICT_LABEL = {'confirm': 'CONFIRMED', 'dismiss': 'dismissed', 'look': 'NEEDS 
 def _export_report():
     os.makedirs(STATE['out_dir'], exist_ok=True)
     path = os.path.join(STATE['out_dir'], 'triage_report.txt')
-    with open(path, 'w', encoding='utf-8') as fh:
-        fh.write('PXRD review — triage report\n')
-        fh.write('source folder : %s\n' % STATE['folder'])
-        fh.write('generated     : %s\n' % datetime.datetime.now().isoformat(timespec='seconds'))
-        reviewed = [k for k in STATE['order'] if STATE['triage'].get(k, {}).get('reviewed')]
-        fh.write('entries       : %d total | %d marked reviewed\n'
-                 % (len(STATE['order']), len(reviewed)))
-        fh.write('=' * 78 + '\n')
-        for key in STATE['order']:
-            t = STATE['triage'].get(key)
-            if not t:
-                continue
-            verdicts = t.get('findings', {})
-            note_entry = t.get('note')
-            if not verdicts and not note_entry and not t.get('reviewed') and t.get('accept') is None:
-                continue
+    fh = io.StringIO()                          # build in memory; tmp + os.replace below, so one
+    fh.write('PXRD review — triage report\n')   # failing entry can't truncate a good report
+    fh.write('source folder : %s\n' % STATE['folder'])
+    fh.write('generated     : %s\n' % datetime.datetime.now().isoformat(timespec='seconds'))
+    reviewed = [k for k in STATE['order'] if STATE['triage'].get(k, {}).get('reviewed')]
+    fh.write('entries       : %d total | %d marked reviewed\n'
+             % (len(STATE['order']), len(reviewed)))
+    fh.write('=' * 78 + '\n')
+    for key in STATE['order']:
+        t = STATE['triage'].get(key)
+        if not t:
+            continue
+        # only records the reviewer actually acted on — a bare label (no verdict,
+        # no note) is rendering residue, not a decision
+        verdicts = {fk: v for fk, v in (t.get('findings') or {}).items()
+                    if isinstance(v, dict) and (v.get('verdict') or v.get('note'))}
+        note_entry = t.get('note')
+        if not verdicts and not note_entry and not t.get('reviewed') and t.get('accept') is None:
+            continue
+        try:
             d = get_analysis(key)
-            fh.write('\n%s   (%s)%s\n'
-                     % ((d['name'] or key).upper(), d['eid'] or '?',
-                        '   [REVIEWED]' if t.get('reviewed') else ''))
-            fh.write('-' * 78 + '\n')
+            ent = io.StringIO()                 # per-entry buffer: all-or-nothing lines
+            ent.write('\n%s   (%s)%s\n'
+                      % ((d['name'] or key).upper(), d['eid'] or '?',
+                         '   [REVIEWED]' if t.get('reviewed') else ''))
+            ent.write('-' * 78 + '\n')
             if t.get('accept') is not None:
-                fh.write('  Accept decision : %s\n' % t.get('accept'))
+                ent.write('  Accept decision : %s\n' % t.get('accept'))
             for fkey, v in verdicts.items():
                 label = VERDICT_LABEL.get(v.get('verdict'), v.get('verdict') or '?')
                 line = '  [%-12s] %s' % (label, v.get('label', fkey))
-                fh.write(line + '\n')
+                ent.write(line + '\n')
                 if v.get('note'):
-                    fh.write('       note: %s\n' % v['note'])
+                    ent.write('       note: %s\n' % v['note'])
             if note_entry:
-                fh.write('  entry note: %s\n' % note_entry)
+                ent.write('  entry note: %s\n' % note_entry)
+            fh.write(ent.getvalue())
+        except Exception as ex:                 # one broken entry must not sink the report
+            fh.write('\n!! %s: analysis failed (%s)\n' % (key, ex))
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(fh.getvalue())
+    os.replace(tmp, path)
     print('[review_gui] triage report -> %s' % path)
     return path
 
