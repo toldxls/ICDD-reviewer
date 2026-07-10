@@ -54,7 +54,15 @@ release.
    **<https://github.com/toldxls/ICDD-reviewer/releases>**
 2. Under the newest release, in **Assets**, download the file that looks like
    `pxrd_review-0.2.2-py3-none-any.whl` (the version number will differ).
-3. Open a Command Prompt and run — **note the `--upgrade`**:
+3. **Check the file is genuine.** Every release lists the file's `SHA-256`
+   fingerprint in its notes. In a Command Prompt:
+   ```
+   certutil -hashfile "%USERPROFILE%\Downloads\pxrd_review-0.2.2-py3-none-any.whl" SHA256
+   ```
+   The long hex string it prints must match the one in the release notes exactly
+   (any single character different = corrupted or tampered download — stop and
+   re-download / ask Travis).
+4. Install it — **note the `--upgrade`**:
    ```
    pip install --upgrade "%USERPROFILE%\Downloads\pxrd_review-0.2.2-py3-none-any.whl"
    ```
@@ -63,7 +71,7 @@ release.
    downloaded file from Explorer into the Command Prompt window — it pastes the full
    path for you.*
 
-**That's the whole procedure — first install and every upgrade are the same three
+**That's the whole procedure — first install and every upgrade are the same four
 steps**, just with a newer file. pip sees the higher version number and replaces the
 old one.
 
@@ -122,9 +130,10 @@ every upgrade untouched.
 
 ## macOS / Linux differences
 
-Same two options; use `python3` / `pip3` in the commands, and set the key with
+Same two options; use `python3` / `pip3` in the commands, set the key with
 `export MINDAT_API_KEY="…"` in `~/.zshrc` (macOS) or `~/.bashrc` (Linux) instead of
-`setx`. Developers working from a checkout should keep using `pip install -e .`
+`setx`, and check the wheel's fingerprint with `shasum -a 256 <file>` instead of
+`certutil`. Developers working from a checkout should keep using `pip install -e .`
 (see README "Setup") — an editable install keeps its `.cache/` and `.mindat_key`
 at the repo root, exactly as before.
 
@@ -139,9 +148,13 @@ at the repo root, exactly as before.
    python3 -m build
    ```
    → `dist/pxrd_review-<version>-py3-none-any.whl` (pure Python, small).
-3. Publish it as a GitHub release with the wheel attached:
+3. Publish it as a GitHub release with the wheel attached **and its SHA-256 in the
+   notes** (reviewers verify their download against it — step 3 of Option A):
    ```
    gh release create v<version> dist/pxrd_review-<version>-py3-none-any.whl \
-       --title "v<version>" --notes "See CHANGELOG.md"
+       --title "v<version>" \
+       --notes "See CHANGELOG.md
+
+   SHA-256: $(shasum -a 256 dist/pxrd_review-<version>-py3-none-any.whl | cut -d' ' -f1)"
    ```
 4. Tell the reviewers a new version is up — they upgrade via Option A or B above.
