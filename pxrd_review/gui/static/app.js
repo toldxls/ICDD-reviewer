@@ -60,7 +60,7 @@ async function loadEntries() {
   const r = await fetch('/api/entries').then(x => x.json());
   const parts = (r.folder || '').split('/').filter(Boolean);
   $('#folder').textContent = (parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/');
-  $('#folder').title = (r.folder || '') + '  — click to change folder';
+  $('#folder-ctl').title = (r.folder || '') + '  — click to change folder';
   $('#folder').dataset.path = r.folder || '';             // the bare path (the title is decorated)
   S.entries = r.entries;
   renderList();
@@ -1320,14 +1320,19 @@ function initAppearance() {
     if (!$('#settings').classList.contains('hidden') &&
         !e.target.closest('#settings') && e.target !== $('#gear')) $('#settings').classList.add('hidden');
   });
-  // folder picker: click the header path to open it; close on click-away
-  $('#folder').addEventListener('click', e => { e.stopPropagation(); openFolderPanel(); });
+  // folder picker: the header chip (path + Change…) toggles it; close on click-away
+  $('#folder-ctl').addEventListener('click', e => {
+    e.stopPropagation();
+    if ($('#folderpanel').classList.contains('hidden')) openFolderPanel();
+    else $('#folderpanel').classList.add('hidden');
+  });
   $('#folder-browse').addEventListener('click', pickFolderNative);
   $('#folder-open').addEventListener('click', () => openFolder($('#folder-path').value));
   $('#folder-path').addEventListener('keydown', e => { if (e.key === 'Enter') openFolder(e.target.value); });
   document.addEventListener('click', e => {
     if (!$('#folderpanel').classList.contains('hidden') &&
-        !e.target.closest('#folderpanel') && e.target !== $('#folder')) $('#folderpanel').classList.add('hidden');
+        !e.target.closest('#folderpanel') && !e.target.closest('#folder-ctl'))
+      $('#folderpanel').classList.add('hidden');
   });
   document.querySelectorAll('#theme-picker button').forEach(b => b.addEventListener('click', () => {
     CFG.theme = b.getAttribute('data-theme');

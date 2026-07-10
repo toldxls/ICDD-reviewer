@@ -4,10 +4,12 @@ code). After packaging the code into pxrd_review/, this single resolver keeps th
 findable in every install mode, so an existing .mindat_key / .cache keeps working:
 
   1. $PXRD_REVIEW_HOME, if set (explicit override).
-  2. The repo root (parent of this package) when it is writable — the dev / editable
-     (`pip install -e .`) case: preserves the user's current .cache/ + .mindat_key.
-  3. ~/.pxrd_review/ — the fallback for a non-editable install into site-packages,
-     where the package dir is read-only.
+  2. The repo root (parent of this package) when it is an actual checkout (has
+     pyproject.toml) and writable — the dev / editable (`pip install -e .`) case:
+     preserves the user's current .cache/ + .mindat_key.
+  3. ~/.pxrd_review/ — for a wheel install into site-packages. (Checked by marker,
+     not writability: per-user Pythons have a WRITABLE site-packages, and state
+     scattered there would silently vanish on upgrade/reinstall.)
 """
 import os
 
@@ -20,7 +22,7 @@ def data_home():
     if env:
         return os.path.abspath(os.path.expanduser(env))
     root = repo_root()
-    if os.access(root, os.W_OK):
+    if os.path.isfile(os.path.join(root, 'pyproject.toml')) and os.access(root, os.W_OK):
         return root
     return os.path.join(os.path.expanduser('~'), '.pxrd_review')
 

@@ -104,7 +104,27 @@ input[type=range] { accent-color: var(--accent); }
   padding: 7px 14px; border-bottom: 1px solid var(--line); z-index: 20;
 }
 .brand { font-weight: 600; white-space: nowrap; }
-#folder { max-width: 34vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* current-folder chip: shows the entries folder; the whole chip opens the picker */
+#folder-ctl {
+  display: flex; align-items: center; min-width: 0; max-width: 40vw;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: rgb(255 255 255 / .04); cursor: pointer;
+}
+#folder-ctl:hover { border-color: var(--accent); }
+.fc-icon { flex: none; padding-left: 8px; font-size: .85em; }
+#folder {
+  color: var(--muted); padding: 4px 8px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#folder-ctl:hover #folder { color: var(--text); }
+#folder-change {
+  flex: none; border: none; border-left: 1px solid var(--line);
+  border-radius: 0 5px 5px 0; background: transparent; padding: 4px 9px;
+}
+#folder-ctl:hover #folder-change, #folder-change:hover {
+  background: rgb(var(--accent-rgb) / .18); color: var(--accent);
+}
 #rerun-status { max-width: 22vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #gear { padding: 5px 9px; }
 
@@ -397,10 +417,9 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 .cmt-pop-body { color: var(--text); white-space: pre-wrap; word-break: break-word; }
 
 /* ---- folder picker (re-point the tool at a different entries folder, live) --- */
-#folder { cursor: pointer; }
-#folder:hover { color: var(--text); text-decoration: underline dotted; }
+/* left-anchored so it drops down under the folder chip that opens it */
 #folderpanel {
-  position: fixed; top: 46px; right: 10px; width: 640px; max-width: calc(100vw - 20px); z-index: 60;
+  position: fixed; top: 46px; left: 10px; width: 640px; max-width: calc(100vw - 20px); z-index: 60;
   border: 1px solid var(--line); border-radius: 12px; padding: 14px;
   box-shadow: 0 12px 40px rgb(0 0 0 / .5);
 }

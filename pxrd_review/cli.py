@@ -93,6 +93,9 @@ def _usage(code=0):
 def main():
     if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help', 'help'):
         _usage()
+    if sys.argv[1] in ('-V', '--version', 'version'):
+        from pxrd_review import __version__
+        print('pxrd-review %s' % __version__); raise SystemExit(0)
     sub, rest = sys.argv[1], sys.argv[2:]
     if sub not in MODULE:
         print("pxrd: unknown command %r\n" % sub); _usage(2)

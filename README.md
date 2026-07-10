@@ -14,6 +14,9 @@ consistency, Mindat classification/chemistry, cross-file cell/ESD agreement, and
 reflection-indexing consistency pass.
 
 ## Install / Quick start (`pxrd`)
+> **Reviewers (non-developers): see [INSTALL.md](INSTALL.md)** — step-by-step Windows
+> install & upgrade instructions (wheel from the Releases page, or pip straight from
+> GitHub). This section is the developer quick start for a checkout.
 ```
 pip install -e .                   # one-time: puts a global `pxrd` command on PATH
 cd /path/to/entries && pxrd gui    # open the GUI for the folder you're standing in

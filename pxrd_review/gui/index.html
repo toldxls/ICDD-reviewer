@@ -9,7 +9,11 @@
 <body>
   <header id="topbar">
     <div class="brand">PXRD review · <span class="muted">review mode</span></div>
-    <div id="folder" class="muted" title=""></div>
+    <div id="folder-ctl" title="">
+      <span class="fc-icon" aria-hidden="true">📁</span>
+      <span id="folder"></span>
+      <button id="folder-change" title="pick a different entries folder">Change…</button>
+    </div>
     <div class="spacer"></div>
     <span id="rerun-status" class="muted"></span>
     <button id="open-log" title="open the tool's change log (review_out/annotation_log.txt) in a new tab">Log ↗</button>

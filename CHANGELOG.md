@@ -4,7 +4,7 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
-## [0.2.2] — 2026-07-09
+## [0.2.2] — 2026-07-10
 
 Full-codebase review (five parallel reviewers + adversarial verification): 1
 critical, 10 major, ~24 minor defects found and fixed. Regression 230/230 (25 new
@@ -61,6 +61,24 @@ instead of a false anode flag, 1 entry's cell match improved), zero new findings
 - **Accept override works on refresh** — triage `disagree` now clears a previously
   stamped 'x'; repeated `--inplace` runs strip the tool's own annotations first
   instead of duplicating every comment.
+
+### Added — distribution (first packaged release)
+- **INSTALL.md** — step-by-step install & upgrade instructions for ICDD reviewers
+  (Windows-first): Option A = wheel from the GitHub Releases page, Option B =
+  `pip install --upgrade git+…` straight from the private repo; README links to it.
+- **`pxrd --version`** (also `-V` / `version`) prints the installed version;
+  `pxrd_review.__version__` synced with `pyproject.toml` (was stuck at 0.1.0).
+- **Wheel installs keep state out of site-packages** — `paths.py` now detects a
+  checkout by marker (`pyproject.toml`) instead of writability, so a pip-installed
+  copy puts `.mindat_key`/`.cache/` in `~/.pxrd_review` even on per-user Pythons
+  whose site-packages is writable (state there would vanish on reinstall). Dev
+  checkouts keep their repo-root state, unchanged.
+
+### Changed — GUI
+- **Folder control is discoverable** — the top-bar path is now a bordered chip
+  (📁 icon + current folder + an explicit "Change…" button) instead of muted text
+  you had to know to click; the picker panel drops down under the chip (was
+  anchored to the far right of the window).
 
 ### Fixed — trustworthy gates & tooling
 - **Regression suite can't vacuously pass** — a missing fixture docx is a loud FAIL
