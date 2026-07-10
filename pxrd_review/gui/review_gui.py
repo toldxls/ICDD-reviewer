@@ -1215,10 +1215,15 @@ def _run_annotate(cmd):
         # ensure the sidecar the rerun consumes is on disk
         _save_triage()
         # the subprocess is a fresh interpreter: put the repo root on PYTHONPATH so
-        # `-m pxrd_review.annotate_review` resolves even when not pip-installed (dev)
-        env = {**os.environ, 'PYTHONPATH': P.repo_root() + os.pathsep + os.environ.get('PYTHONPATH', '')}
+        # `-m pxrd_review.annotate_review` resolves even when not pip-installed (dev).
+        # PYTHONUTF8: on Windows a PIPED child otherwise encodes stdout as cp1252 and
+        # the checks' λ/α/→ output raises UnicodeEncodeError — every rerun would fail;
+        # decode our end as UTF-8 to match (errors='replace': never crash on output).
+        env = {**os.environ, 'PYTHONPATH': P.repo_root() + os.pathsep + os.environ.get('PYTHONPATH', ''),
+               'PYTHONUTF8': '1'}
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, cwd=P.repo_root(), env=env, timeout=1800)
+            r = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace',
+                               cwd=P.repo_root(), env=env, timeout=1800)
         except Exception as ex:
             return jsonify({'ok': False, 'error': str(ex)}), 500
         tail = '\n'.join((r.stdout or '').strip().splitlines()[-12:])

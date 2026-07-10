@@ -4,6 +4,27 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.2.3] — 2026-07-10
+
+Windows-compatibility pass ahead of the first Windows user (ICDD reviewer). A
+static sweep of the codebase found two blockers, fixed below; the rest checked
+out clean (spawn-safe PDF workers, explicit UTF-8 on all text file IO,
+`os.startfile`/PowerShell branches for the native integrations, colon-free
+backup timestamps, per-entry containment of Word file locks).
+
+### Fixed — Windows
+- **`pxrd` mangled folder paths containing spaces** — Windows `exec*` spawns a
+  child while joining argv *without quoting*, so `pxrd gui "C:\…\ICDD entries"`
+  arrived split in two (and the prompt returned while the child still printed).
+  The launcher now uses `subprocess.run` on Windows (correct quoting, waits,
+  propagates the exit code, Ctrl-C → 130); POSIX keeps the true exec.
+- **Every GUI rerun failed on Windows** — a piped child interpreter encodes
+  stdout as cp1252, and the first `λ`/`α`/`→` the checks print raised
+  `UnicodeEncodeError`. The rerun env now sets `PYTHONUTF8=1` and the GUI
+  decodes with `encoding='utf-8', errors='replace'` (no child output can crash
+  either side); `pxrd` also sets `PYTHONUTF8=1` on Windows so redirected
+  console output (`pxrd review > log.txt`) is safe too.
+
 ## [0.2.2] — 2026-07-10
 
 Full-codebase review (five parallel reviewers + adversarial verification): 1

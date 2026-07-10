@@ -111,7 +111,21 @@ def main():
     # the child is a fresh interpreter: ensure the package is importable even when
     # not pip-installed (running via the repo's ./pxrd dev shim)
     os.environ['PYTHONPATH'] = P.repo_root() + os.pathsep + os.environ.get('PYTHONPATH', '')
-    os.execv(sys.executable, [sys.executable, '-m', MODULE[sub]] + args)  # keeps Ctrl-C wired
+    argv = [sys.executable, '-m', MODULE[sub]] + args
+    if os.name == 'nt':
+        # Windows exec* doesn't replace the process: it spawns a child while joining
+        # argv WITHOUT quoting — a folder containing a space arrives split in two —
+        # and hands the prompt back while the child still prints. subprocess quotes
+        # list args correctly and waits. PYTHONUTF8 keeps the child's stdout UTF-8
+        # even when piped/redirected (cp1252 otherwise crashes on λ/α/→ in output).
+        import subprocess
+        os.environ['PYTHONUTF8'] = '1'
+        try:
+            rc = subprocess.run(argv).returncode
+        except KeyboardInterrupt:
+            rc = 130
+        raise SystemExit(rc)
+    os.execv(sys.executable, argv)      # POSIX: true exec — keeps Ctrl-C wired
 
 if __name__ == '__main__':
     main()
