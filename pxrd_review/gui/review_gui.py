@@ -973,11 +973,13 @@ def api_docx_html(key):
     return jsonify({'html': _docx_html(path), 'name': os.path.basename(path)})
 
 @app.route('/api/open/<key>', methods=['POST'])
-def api_open_docx(key):
-    """Open this entry's docx in the OS default app (Word) so the reviewer can inspect the
-    tracked changes/comments in place. Localhost-only tool; opens only a docx the GUI has
-    already indexed (never an arbitrary path)."""
-    path = STATE['docx'].get(key)
+def api_open(key):
+    """Open this entry's PDF or docx in the OS default app (PDF viewer / Word) so the
+    reviewer can inspect it in place. `?kind=pdf|docx` selects which — the button opens
+    whichever the middle pane is currently showing (default docx, back-compat). Localhost
+    -only tool; opens only a file the GUI has already indexed (never an arbitrary path)."""
+    kind = (request.args.get('kind') or 'docx').lower()
+    path = _pdf_path(key) if kind == 'pdf' else STATE['docx'].get(key)
     if not path or not os.path.exists(path):
         abort(404)
     try:

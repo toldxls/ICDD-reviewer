@@ -4,6 +4,21 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.2.4] — 2026-07-12
+
+Follow-up to the Windows-compatibility pass, from the first Windows reviewer's
+feedback.
+
+### Fixed — GUI
+- **The "open ↗" button now opens whichever file the middle pane is showing** —
+  it always opened the entry docx in Word, so on the `.pdf` view clicking it
+  (expecting the paper) surfaced the docx instead. It now opens the `.pdf` in the
+  default PDF viewer on the `.pdf` view and the docx in Word on the `docx` view;
+  the tooltip tracks the toggle. The route (`/api/open/<key>`) grew a
+  `?kind=pdf|docx` selector (default `docx`, so nothing else changes) and still
+  opens only a file the GUI has indexed. Not noticed on macOS, where the inline
+  PDF render made the button unnecessary.
+
 ## [0.2.3] — 2026-07-10
 
 Windows-compatibility pass ahead of the first Windows user (ICDD reviewer). A

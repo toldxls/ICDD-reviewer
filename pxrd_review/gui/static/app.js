@@ -581,6 +581,9 @@ function setMidMode(mode) {
   const search = $('.pdf-search'); if (search) search.classList.toggle('hidden', docx);
   const pager = $('#pdf-pager'); if (pager) pager.style.visibility = docx ? 'hidden' : '';
   $('#docx-view').classList.toggle('hidden', !docx);
+  const ob = $('#open-docx');                   // the 'open ↗' button follows the toggle
+  if (ob) ob.title = docx ? 'open this docx in Word to see the tracked changes'
+                          : 'open this .pdf in your default PDF viewer';
   if (docx) loadDocxView();
 }
 
@@ -646,12 +649,18 @@ function showCmtPopover(chip) {
 }
 function hideCmtPopover() { if (S.cmtPop) { S.cmtPop.remove(); S.cmtPop = null; } }
 
-async function openDocxInWord() {
+// open whichever file the middle pane is showing (the .pdf in a PDF viewer, or the
+// docx in Word) in the OS default app — matches the reviewer's intent from the toggle.
+async function openInApp() {
   if (!S.key) return;
+  const kind = S.midMode === 'docx' ? 'docx' : 'pdf';
   const b = $('#open-docx'), old = b.textContent;
+  if (kind === 'pdf' && !(S.a && S.a.pdf)) {   // on the .pdf view but nothing paired
+    b.textContent = 'no .pdf'; setTimeout(() => { b.textContent = old; }, 1600); return;
+  }
   b.textContent = 'opening…';
   let ok = false;
-  try { ok = (await fetch('/api/open/' + enc(S.key), { method: 'POST' }).then(x => x.json())).ok; } catch (_) {}
+  try { ok = (await fetch('/api/open/' + enc(S.key) + '?kind=' + kind, { method: 'POST' }).then(x => x.json())).ok; } catch (_) {}
   b.textContent = ok ? 'opened ✓' : 'open failed';
   setTimeout(() => { b.textContent = old; }, 1600);
 }
@@ -1162,7 +1171,7 @@ $('#rerun-all').addEventListener('click', () =>
   rerun('/api/rerun', $('#rerun-all'), 'Rerunning all…', 'regenerated all docx ✓'));
 document.querySelectorAll('#mid-toggle button').forEach(b =>
   b.addEventListener('click', () => setMidMode(b.dataset.mid)));
-$('#open-docx').addEventListener('click', openDocxInWord);
+$('#open-docx').addEventListener('click', openInApp);
 window.addEventListener('beforeunload', flushTriage);                           // don't lose a triage click on tab close
 document.addEventListener('click', hideCmtPopover);                              // click-away closes the comment popover
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCmtPopover(); });
