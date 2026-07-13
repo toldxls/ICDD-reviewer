@@ -68,6 +68,17 @@ pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/hea
 ```
 Run that same line again to upgrade. You do **not** need `git` installed.
 
+> **What this does and does not check.** The download is over HTTPS, so it is encrypted and the
+> server is authenticated as `github.com` — nobody on the network can alter it in transit. But
+> pip does **not** verify a fingerprint here: it installs whatever the branch currently holds.
+> To have pip *verify* the download, install a **pinned release** and give it the hash — pip
+> then refuses the install if a single byte differs. Each release lists this exact line under
+> **Source archive SHA-256**:
+> ```
+> pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/tags/v0.2.9.zip#sha256=07703169995ae6522edaec3b42c07238203f4fcabea2d4975341233364c642d8"
+> ```
+> (Option **A**'s `.whl` + `certutil` gives you the same assurance, checked by hand.)
+
 ### C — install from the source folder
 
 Prefer to see the files? On the Releases page (or the repository page → green **`Code`** button)
