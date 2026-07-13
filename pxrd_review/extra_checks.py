@@ -864,10 +864,45 @@ def _sys_letter(e):
 # symbol can't be read confidently (the cross-check then abstains rather than guess). Validated
 # to classify every space group in the corpus (230) with no false disagreement.
 _SG_PLANES = 'mcabnde'
+# The 36 cubic space groups (#195-230), compact Hermann-Mauguin. A closed set, so membership is
+# exact — no heuristic can confuse a 4-screw subscript with a body-diagonal 3.
+_CUBIC_SGS = frozenset("""
+P23 F23 I23 P213 I213
+Pm-3 Pn-3 Fm-3 Fd-3 Im-3 Pa-3 Ia-3
+P432 P4232 F432 F4132 I432 P4332 P4132 I4132
+P-43m F-43m I-43m P-43n F-43c I-43d
+Pm-3m Pn-3n Pm-3n Pn-3m Fm-3m Fm-3c Fd-3m Fd-3c Im-3m Ia-3d
+""".split())
+
+def _sg_compact(s):
+    """Compact form for CUBIC-set membership: no spaces, setting suffix dropped (Fd-3mZ).
+    (Deliberately NOT named _norm_sg — a different _norm_sg already exists further down and
+    upper-cases the symbol, which silently broke the lookup for 'I-43d'.)"""
+    s = re.sub(r'\s+', '', s or '')
+    if len(s) > 2 and s[-1] in 'HRSZ' and not s[-2].isdigit() and s[-2] != '-':
+        s = s[:-1]
+    return s
+
 def _sg_system(sg):
+    # A 4-fold SCREW axis and a cubic body-diagonal triad look identical once the spaces are gone:
+    # 'P4132' is 4₁·3·2 (CUBIC) but 'P43212' is 4₃·2₁·2 (TETRAGONAL) — both are "a 4 and a 3". The
+    # old code tested '3' before the 4-fold and called every P4₃… cubic, which flags a tetragonal
+    # entry as disagreeing with its own space group — and that flag is WRITTEN into the docx. It
+    # also contradicted itself: P4₁2₁2 came out tetragonal, its enantiomorph P4₃2₁2 cubic.
+    # The docx stores the SPACED form ('P 43 21 2'), which still carries the grouping — so use it
+    # when it is there, and abstain when the symbol is genuinely ambiguous. Abstaining costs a
+    # true positive; guessing writes a false one.
     s = re.sub(r'\s+', '', sg or '')
     if not s:
         return None
+    # The cubic groups are a CLOSED SET of 36 symbols, so match them exactly instead of guessing
+    # from "is there a 3 in here". Guessing is what made 'P43212' cubic: its 3 is the SCREW
+    # subscript of a 4₃ axis (4₃·2₁·2, tetragonal #96), not a body-diagonal triad — and the old
+    # rule tested '3' before the 4-fold, so every P4₃… came out cubic and check23 wrote a false
+    # disagreement into the docx. It even contradicted itself: P4₁2₁2 tetragonal, its enantiomorph
+    # P4₃2₁2 cubic. The set below is exact; everything else falls through to the axis logic.
+    if _sg_compact(s) in _CUBIC_SGS:
+        return 'c'
     if len(s) > 2 and s[-1] in 'HRSZ' and not s[-2].isdigit() and s[-2] != '-':
         s = s[:-1]                                   # drop a hexagonal/rhombohedral setting marker (R-3mH)
     lat = s[0]
@@ -882,12 +917,12 @@ def _sg_system(sg):
         return 'r'                                   # rhombohedral lattice -> trigonal
     if re.match(r'-?[36]', rest):
         return 'h'                                   # a 3- or 6-fold PRIMARY axis -> trigonal/hexagonal
-    if '3' in rest:
-        return 'c'                                   # a 3 in a SECONDARY position -> cubic body-diagonal
     if '6' in rest:
         return 'h'
     if re.search(r'-?4', rest):
-        return 't'                                   # 4-fold axis -> tetragonal
+        return 't'                                   # 4-fold axis (incl. a 4-screw) -> tetragonal
+    if '3' in rest:
+        return 'c'                                   # a 3 with no 4 -> cubic body-diagonal
     core = rest.replace('/', '')
     planes = sum(core.count(c) for c in _SG_PLANES)
     twos = core.count('2')
@@ -2630,7 +2665,9 @@ _TITLE_ROMAN = re.compile(r'^[IVXLC]{1,6}$')                # 'IV. Haywoodite'
 # Matched against the RAW token, not the punctuation-stripped core: 'Nacareniobsite-(Y),' keeps
 # its closing paren only in the raw form, and stripping it would let the suffix be lowercased
 # to '-(y)' — a chemistry error, exactly what this check must never introduce.
-_TITLE_LEVINSON = re.compile(r'^(\w[\w\-’\']*?)(-\([A-Z][a-zA-Z]*\))(\W*)$')   # vielleaureite-(Ce),
+# A Levinson-suffixed SPECIES: 'vielleaureite-(Ce)'. The stem must be a real word, not an element
+# symbol — 'Ca-(OH)' and 'Fe-(III)' are chemistry and were being lowercased to 'ca-(OH)'.
+_TITLE_LEVINSON = re.compile(r'^([A-Za-z][\w\-’\']{3,}?)(-\([A-Z][a-zA-Z]*\))(\W*)$')
 _TITLE_ELEM_PREFIX = re.compile(r'^([A-Z][a-z]?)[-–]\w')    # Al-bearing, Mn-dominant, Ca-glycinate
 _TITLE_SENT_END = ('.', ':', '?', '!')
 # authors follow the title as 'Surname, X.' — validated: no author leakage on any of the 165
@@ -2653,8 +2690,12 @@ def _ref_text(e):
     return ''
 
 def _ref_title(ref):
+    """The title = everything before the author list. With NO author pattern we cannot tell where
+    the title ends, and treating the whole citation as the title case-rewrites the journal name,
+    series and pages ('Physics And Chemistry Of Minerals' -> 'Physics and chemistry of minerals').
+    Abstain instead."""
     m = _TITLE_AUTHORS.search(ref or '')
-    return (ref[:m.start()] if m else (ref or '')).strip()
+    return (ref[:m.start()].strip() if m else '')
 
 def _paper_word_forms(text):
     """word -> the form the PAPER uses for it mid-sentence ('volcano', 'Tolbachik', 'USA').
@@ -2688,8 +2729,13 @@ def _paper_word_forms(text):
         upper = [x for x in v if x.isupper() and len(x) <= 6]
         if len(upper) >= 2 and len(upper) >= 0.6 * len(v):
             out[k] = max(set(upper), key=upper.count)        # acronym: USA, REE
-        elif len(caps) >= 0.7 * len(v):
-            out[k] = max(set(caps), key=caps.count)          # proper noun: Tolbachik
+        elif len(caps) >= 2 and len(caps) >= 0.3 * len(v):
+            # A NAME, even when the paper is inconsistent about it. The bar used to be 70 %, and a
+            # paper that wrote 'Utah' three times and 'utah' three times (OCR/typo) fell under it —
+            # so the tool lowercased a US state and wrote 'utah' into the reviewer's citation. A
+            # word the article capitalizes mid-sentence twice or more is a name; erring this way
+            # under-corrects, and under-correcting is the safe direction for a check that WRITES.
+            out[k] = max(set(caps), key=caps.count)          # proper noun: Tolbachik, Utah
         else:
             out[k] = k                                       # ordinary word: volcano
     return out
@@ -2845,6 +2891,12 @@ def check26_reference_title_case(e, text=None):
     # wrong and we fall back to comment-only rather than write text we cannot account for.
     fixed_ref = suggested + ref[len(title):]
     if fixed_ref.lower() != ref.lower():
+        fixed_ref = None
+    if not text:
+        # The PAPER is the oracle for what is a name. With no .pdf paired (25/405 corpus entries,
+        # plus any scanned paper with no text layer) every proper-noun decision falls back to a
+        # word list — which cannot know 'Mexico' from 'Mineral', and duly wrote 'new Mexico' into a
+        # reviewer's citation. Suggest in the comment, never write.
         fixed_ref = None
     return [Finding('ref_title_case', 'flag',
             "Reference title is in Title Case; ICDD style is sentence case (ordinary words "

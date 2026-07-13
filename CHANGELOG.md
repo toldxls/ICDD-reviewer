@@ -4,6 +4,54 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.3.2] — 2026-07-13
+
+**Upgrade from 0.3.0/0.3.1.** The final review found reproduced bugs in the one check that WRITES
+into the docx. None could touch a source file, but they could damage a review_out copy.
+
+### Fixed — the docx write path (all reproduced, all now regression-locked)
+- **The tool could destroy a row LABEL.** python-docx's `cell.text` does not see runs nested in
+  `w:ins`/`w:del`, so a citation the reviewer had replaced *with track-changes on* read as an
+  **empty cell** — `_find_value` then fell through to the row's label cell, and the tool struck out
+  **"Primary Reference"** and pasted the citation into the label. The human-marks guard could not
+  help: it was being asked about the wrong cell. A fix is now written **only** to a cell whose text
+  already IS the fix bar its capitalisation; anything else stays a comment.
+- **A reviewer's edit could be destroyed with no backup.** Word's default is track-changes OFF, so
+  a reviewer tweaking the tool's inserted citation types *inside* the tool's own `w:ins`. No
+  foreign author appears, so nothing saw the edit: the strip dropped the whole insertion and the
+  rerun rebuilt from source. The tool now compares what its insertions SAY against what it would
+  write, keeps one a human has altered, and does not re-apply over it.
+- **`--out` could delete source files.** The guard only rejected `--out` == the source folder, but
+  `discover()` is recursive and the corpus keeps docx in a subfolder — `--out <folder>/Files` put
+  the outputs on top of the sources, and the stale-twin logic then `os.remove()`d them. Outputs may
+  no longer share a directory with any source.
+- **The accepted citation came out fully italic and highlighted.** The replacement was one run
+  cloning run 0's formatting; the template's citation is italic title + plain authors + **bold**
+  year (62/62 fixture cells are multi-run). Because the rewrite is case-only it is the same length,
+  so it is now sliced back onto the existing runs — every run keeps its own formatting.
+- A human tracked change or comment **nested inside** the tool's insertion is no longer swept away
+  by the strip; the run carrying the tool's own comment anchor is no longer swept into the deletion
+  (accepting the fix used to delete the comment explaining it).
+
+### Fixed — the title-case check (its output is written, so these mattered)
+- **A place name was destroyed when no `.pdf` was paired** (25/405 entries, plus any scanned paper
+  with no text layer): `New Mexico` → `new Mexico`, `Ore Mountains` → `ore Mountains`. **The paper
+  is the oracle for what is a name — with no paper the check now suggests but NEVER writes.**
+- **`Utah` → `utah`, with the paper present.** A word the article capitalises in only half its
+  sightings (OCR, typos) fell under the 70 % proper-noun bar. Two capitalised sightings now make it
+  a name; under-correcting is the safe direction for a check that writes.
+- **A citation with no author pattern** had its journal/series/pages case-rewritten (`Physics And
+  Chemistry Of Minerals` → `Physics and chemistry of minerals`) because the whole string was taken
+  as the title. It now abstains.
+- `Ca-(OH)` / `Fe-(III)` were being lowercased as if they were Levinson-suffixed species.
+
+### Fixed — space groups
+- **`P4₃2₁2` was classified CUBIC.** The `3` of a 4-fold *screw* was read as a body-diagonal triad,
+  so check 23 wrote a false "Crystal System disagrees with the space group" flag into the docx —
+  and contradicted itself (`P4₁2₁2` tetragonal, its enantiomorph `P4₃2₁2` cubic). The 36 cubic
+  groups are a closed set and are now matched exactly. (A name collision made this subtle: a second
+  `_norm_sg` further down the module silently shadowed the helper.)
+
 ## [0.3.1] — 2026-07-13
 
 ### Added — GUI

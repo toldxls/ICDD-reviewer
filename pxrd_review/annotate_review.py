@@ -330,6 +330,12 @@ def _cell_text(cell):
     """The cell's current visible text (w:t only — a w:delText is struck through, i.e. gone)."""
     return ''.join(t.text or '' for t in cell._tc.iter(_q('t')))
 
+def _cell_has_revisions(cell):
+    """Any tracked change at all in this cell. After the strip, the tool's own are gone — so
+    whatever is left is a PERSON's, or a tool insertion a person has since edited. Either way the
+    cell is theirs and the tool must not write over it."""
+    return any(True for tag in ('ins', 'del') for _ in cell._tc.iter(_q(tag)))
+
 def _cell_human_marks(cell):
     """True when a PERSON has already worked on this cell — any tracked insertion/deletion whose
     author is not the tool. Their correction stands: the tool must not overwrite it, nor re-apply
@@ -364,36 +370,61 @@ def _apply_tracked_fix(cell, new_text):
     with_text = [p for p in ps if p.text.strip()]
     if len(with_text) > 1:
         return False
-    runs = [r for para in ps for r in para.runs]
-    if not runs or not _cell_text(cell).strip():
+    # Only w:t-bearing runs, taken straight from the XML — `paragraph.runs` misses runs nested in
+    # a w:hyperlink (Word autoformats a DOI into one), and a run that carries the tool's own
+    # commentReference has no w:t and must stay where it is, or ACCEPTING the fix would delete the
+    # comment that explains it.
+    p_el = ps[0]._p
+    xruns = [r for r in p_el.iter(_q('r')) if r.find(_q('t')) is not None]
+    if not xruns or not _cell_text(cell).strip():
+        return False
+    # Every run must be a direct child of the paragraph: a run inside a hyperlink/sdt cannot be
+    # swapped in place without rewriting that container, and getting it wrong duplicates the text.
+    if any(r.getparent() is not p_el for r in xruns):
+        return False
+    old_text = ''.join(''.join(t.text or '' for t in r.findall(_q('t'))) for r in xruns)
+    # Re-seat the fix into the cell's own whitespace envelope. The checks parse the reference with
+    # .strip(), so the fix carries no leading/trailing space, while the cell usually does ("… 2024.
+    # "). Restoring it keeps the rewrite to the letters and nothing else.
+    lead = len(old_text) - len(old_text.lstrip())
+    core = old_text.strip()
+    body = new_text.strip()
+    if len(core) == len(body) and core.lower() == body.lower():
+        new_text = old_text[:lead] + body + old_text[lead + len(core):]
+    # A case-only rewrite is the SAME LENGTH, which is what lets the new text be sliced back onto
+    # the existing runs one for one. That preserves each run's formatting exactly — the citation in
+    # this template is italic title + bold year + plain authors, and collapsing it into a single run
+    # (cloning run 0's rPr) turned the whole accepted citation italic. If the lengths still differ,
+    # the fix is not the case-only rewrite it claims to be: refuse rather than guess.
+    if len(old_text) != len(new_text) or old_text.lower() != new_text.lower():
         return False
     now = datetime.datetime.now().replace(microsecond=0).isoformat()
     _FIX_ID[0] += 1
-    dele = ps[0]._p.makeelement(_q('del'), {_q('id'): str(_FIX_ID[0]),
-                                            _q('author'): AUTHOR, _q('date'): now})
+    dele = p_el.makeelement(_q('del'), {_q('id'): str(_FIX_ID[0]),
+                                        _q('author'): AUTHOR, _q('date'): now})
     _FIX_ID[0] += 1
-    ins = ps[0]._p.makeelement(_q('ins'), {_q('id'): str(_FIX_ID[0]),
-                                           _q('author'): AUTHOR, _q('date'): now})
-    first = runs[0]._r
-    parent = first.getparent()
+    ins = p_el.makeelement(_q('ins'), {_q('id'): str(_FIX_ID[0]),
+                                       _q('author'): AUTHOR, _q('date'): now})
+    first = xruns[0]
+    parent = p_el
     parent.insert(list(parent).index(first), dele)
-    # move every existing run into the deletion, rewriting w:t -> w:delText (Word requires it)
-    for r in runs:
-        el = r._r
-        if el.getparent() is not None:
-            el.getparent().remove(el)
-        for t in el.findall(_q('t')):
+    pos = 0
+    for r in xruns:
+        n = sum(len(t.text or '') for t in r.findall(_q('t')))
+        # the INSERTED twin: this run's own formatting, its own slice of the corrected text
+        newr = copy.deepcopy(r)
+        for t in newr.findall(_q('t')):
+            k = len(t.text or '')
+            t.text = new_text[pos:pos + k]
+            t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+            pos += k
+        ins.append(newr)
+        # the DELETED original: move it, rewriting w:t -> w:delText (Word requires it)
+        if r.getparent() is not None:
+            r.getparent().remove(r)
+        for t in r.findall(_q('t')):
             t.tag = _q('delText')
-        dele.append(el)
-    # the replacement run, carrying the first run's formatting so the citation keeps its look
-    newr = dele.makeelement(_q('r'), {})
-    rPr = runs[0]._r.find(_q('rPr'))
-    if rPr is not None:
-        newr.append(copy.deepcopy(rPr))
-    t = newr.makeelement(_q('t'), {'{http://www.w3.org/XML/1998/namespace}space': 'preserve'})
-    t.text = new_text
-    newr.append(t)
-    ins.append(newr)
+        dele.append(r)
     dparent = dele.getparent()
     dparent.insert(list(dparent).index(dele) + 1, ins)
     return True
@@ -591,9 +622,25 @@ def _write_extras(doc, ac_row, res, rec, triage=None):
         # version stands and the tool stays a comment. Every other check has no fix and remains
         # comment-only, unchanged.
         if f.fix and f.sev == 'flag':
-            if _cell_human_marks(cell):
+            # THE GUARD THAT MAKES A MISDIRECTED WRITE IMPOSSIBLE.
+            # A fix is a case-only rewrite, so the ONLY cell it may touch is one whose text is
+            # already the fix bar its capitalisation. Anything else — the wrong cell, or a cell a
+            # human has retyped — fails this and the tool stays a comment.
+            #
+            # This is not theoretical. python-docx's `cell.text` does not see runs nested in
+            # w:ins/w:del, so a citation the reviewer replaced with track-changes ON reads as an
+            # EMPTY cell; `_find_value` then falls through to the row's LABEL cell, and without
+            # this check the tool would strike out "Primary Reference" and paste the citation into
+            # the label. `_cell_human_marks` could not save us — it was being asked about the wrong
+            # cell. Compare on _cell_text (which walks every w:t, tracked or not), not cell.text.
+            here = _cell_text(cell)
+            if here.strip().lower() != f.fix.strip().lower():
                 rec.setdefault('fix_skipped', []).append(f.code)
-            elif _cell_text(cell).strip() == f.fix.strip():
+            elif _cell_has_revisions(cell):
+                # a person's tracked change — or one of the tool's that a person has since edited
+                # (the strip deliberately left it). Their version stands.
+                rec.setdefault('fix_skipped', []).append(f.code)
+            elif here.strip() == f.fix.strip():
                 pass                                   # already reads as the correction
             elif _apply_tracked_fix(cell, f.fix):
                 rec.setdefault('fixes', []).append((f.code, f.fix))
@@ -744,6 +791,15 @@ def _has_tool_comment(path):
     except Exception:
         return False
 
+def _tool_ins_texts(path):
+    """What every insertion the TOOL made in this docx currently says."""
+    try:
+        root = _xml(zipfile.ZipFile(path).read('word/document.xml'))
+        return [''.join(t.text or '' for t in el.iter(_q('t')))
+                for el in root.iter(_q('ins')) if (el.get(_q('author')) or '') == AUTHOR]
+    except Exception:
+        return []
+
 def _has_tracked_changes(path):
     """True if the docx contains a HUMAN's tracked changes (w:ins / w:del).
 
@@ -811,16 +867,29 @@ def _extract_reviewer_edits(path):
         return out
     return out
 
-def output_hand_edited(out_path, src_path):
+def output_hand_edited(out_path, src_path, expect_fixes=()):
     """The output docx was edited by a human since the tool wrote it — tracked
     changes, a non-tool comment, body text differing from the source (beyond the
     Accept checkbox), or a formatting-only edit (e.g. a manual highlight) the text
     compare can't see. Such edits must be preserved across reruns, so on ANY doubt
     (an unreadable/corrupt output included) err toward hand-edited: that path backs
-    up + refreshes, whereas a False here rebuilds from source and destroys work."""
+    up + refreshes, whereas a False here rebuilds from source and destroys work.
+
+    `expect_fixes` is the text of every fix THIS run would write. Word's default is track-changes
+    OFF, so a reviewer who tweaks the tool's inserted citation (restores a capital, fixes a typo)
+    types straight INTO the tool's own <w:ins>: no foreign author appears anywhere, so nothing here
+    saw it — the strip would drop the whole insertion and the rebuild would overwrite their words
+    with no backup. Comparing what the tool's insertions actually SAY against what this run would
+    write is the only way to catch that.
+    """
     try:
         if _has_tracked_changes(out_path) or _has_foreign_comment(out_path):
             return True
+        if expect_fixes:
+            exp = {t.strip() for t in expect_fixes}
+            for got in _tool_ins_texts(out_path):
+                if got.strip() and got.strip() not in exp:
+                    return True
         # Compare against the source only AFTER stripping the tool's own marks off a TEMP copy.
         # Stripping reverts its applied fixes too, so what remains is the source plus whatever a
         # PERSON did. Comparing the un-stripped output would read the tool's own corrected title
@@ -845,7 +914,7 @@ def output_hand_edited(out_path, src_path):
     except Exception:
         return True
 
-def _strip_tool_annotations(path):
+def _strip_tool_annotations(path, expect_fixes=()):
     """Remove the tool's OWN comments (author == AUTHOR) and its yellow highlights
     from a docx in place, leaving everything human: tracked changes, body edits,
     and any non-tool comments. Lets a rerun refresh the tool's findings without
@@ -899,8 +968,22 @@ def _strip_tool_annotations(path):
     # changes (any other author) are never touched — including one that accepted the tool's fix
     # by retyping it, which then simply reads as their own edit.
     for ins in list(droot.iter(_q('ins'))):
-        if (ins.get(_q('author')) or '') == AUTHOR and ins.getparent() is not None:
-            ins.getparent().remove(ins)
+        if (ins.get(_q('author')) or '') != AUTHOR or ins.getparent() is None:
+            continue
+        # A reviewer who edits the tool's inserted text WITH track-changes on nests their own
+        # <w:del>/<w:ins>/comment INSIDE the tool's <w:ins>. Removing the subtree would throw their
+        # work away and silently re-apply the tool's version on every rerun. If anything human is
+        # in there, leave the whole thing alone: output_hand_edited already sees it, so the entry
+        # takes the backup-and-preserve path instead.
+        foreign = any((e.get(_q('author')) or '') != AUTHOR
+                      for e in ins.iter(_q('ins'), _q('del')) if e is not ins)
+        # ...and a reviewer who retyped the inserted text with track-changes OFF leaves no author
+        # at all — the giveaway is that the insertion no longer says what the tool would write.
+        txt = ''.join(t.text or '' for t in ins.iter(_q('t'))).strip()
+        edited = bool(expect_fixes) and txt and txt not in {t.strip() for t in expect_fixes}
+        if foreign or edited or ins.find('.//' + _q('commentReference')) is not None:
+            continue
+        ins.getparent().remove(ins)
     for dl in list(droot.iter(_q('del'))):
         if (dl.get(_q('author')) or '') != AUTHOR:
             continue
@@ -1144,6 +1227,21 @@ def main():
               % (args.folder, (' matching --id %s' % args.id) if args.id else ''))
         return
 
+    # The --out guard again, now that we know where the sources ACTUALLY live. discover() is
+    # recursive and the documented corpus layout keeps the docx in a subfolder, so `--out
+    # <folder>/Files` is not the source folder by the earlier test — yet the outputs would land
+    # right on top of the sources, and the stale-twin bookkeeping would then read a SOURCE docx as
+    # a previous run's output and os.remove() it. Outputs must never share a directory with a
+    # source.
+    if args.out and not args.inplace:
+        out_real = os.path.realpath(out_dir)
+        clash = sorted({os.path.dirname(os.path.realpath(d)) for d in docs} & {out_real})
+        if clash:
+            sys.exit("refusing --out '%s': the source .docx live in that folder, and the tool would "
+                     "overwrite or DELETE them (an output is named after its source). Omit --out "
+                     "(writes to <folder>/review_out), point it at an empty folder, or use --inplace "
+                     "to edit the originals deliberately." % args.out)
+
     # Single writer per output folder (see _RunLock): the GUI's 'Rerun all' and a terminal run
     # on the same folder would otherwise interleave writes to the same docx and corrupt it
     # without saying so. --inplace writes to the SOURCE folder, so lock that instead.
@@ -1211,7 +1309,8 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
             #   * both names already present and the old one edited -> leave it, warn.
             stale = os.path.join(out_dir, output_name(os.path.basename(dp), not edited))
             if os.path.exists(stale):
-                if not output_hand_edited(stale, dp):
+                _exp = [f.fix for f in _writable_extras(res) if getattr(f, 'fix', None)]
+                if not output_hand_edited(stale, dp, _exp):
                     os.remove(stale)
                 elif not os.path.exists(out):
                     os.rename(stale, out)
@@ -1225,7 +1324,11 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
         # Then either REFRESH in place (strip only the tool's OWN comments/highlights and
         # re-annotate ONTO the edited file, keeping the human edits), or — under --force —
         # rebuild from source, with the backup as the safety net.
-        hand_edited = (not args.inplace and os.path.exists(out) and output_hand_edited(out, dp))
+        # what THIS run would write into the docx — so a reviewer's own edit to a previously
+        # applied fix is recognised as theirs and preserved, instead of being silently rebuilt
+        expect = [f.fix for f in _writable_extras(res) if getattr(f, 'fix', None)]
+        hand_edited = (not args.inplace and os.path.exists(out)
+                       and output_hand_edited(out, dp, expect))
         # capture the reviewer's OWN marks (tracked changes / non-tool comments) from the
         # still-hand-edited output, before annotate() refreshes it — for the log only.
         user_edits = _extract_reviewer_edits(out) if hand_edited else []
@@ -1253,7 +1356,9 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
             try:
                 base = os.path.join(bdir, '~strip_' + os.path.basename(out))
                 shutil.copy(out, base)
-                _strip_tool_annotations(base)    # strip the temp, not `out`
+                # `expect` lets the strip tell its OWN insertion from one the reviewer has since
+                # edited: the latter is kept, so their wording survives the refresh.
+                _strip_tool_annotations(base, expect)   # strip the temp, not `out`
             except Exception as e:
                 print('  !! %s: strip failed — left untouched.\n     %s'
                       % (os.path.basename(dp), E.explain(e, out)))

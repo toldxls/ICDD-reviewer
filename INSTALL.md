@@ -51,23 +51,10 @@ site to check. You do **not** need a GitHub account.
 > quietly install **that old version**. Always take the command from the release page above, or
 > use the version-less one-liner in **B**, which is always current.
 
-### A — install from the release (recommended)
+### A — one line, nothing to download (recommended)
 
-On the Releases page, under **Assets**, download the file ending in **`.whl`**. Then in a
-Command Prompt type `pip install --upgrade ` (with the trailing space), **drag the `.whl` file**
-into the window, and press Enter:
-```
-pip install --upgrade "C:\Users\You\Downloads\pxrd_review-<version>-py3-none-any.whl"
-```
-That is also how you upgrade: download the newer `.whl` and run the same command.
-
-*Optional integrity check:* the release also lists `SHA256SUMS.txt`. To confirm the download
-isn't corrupted, run `certutil -hashfile "<the .whl file>" SHA256` and compare the long hex
-string with the one in that file (or in the release notes).
-
-### B — one-line install, no download
-
-If you'd rather not download anything by hand (this always fetches the current version):
+This always fetches the **current** version — there is nothing to download by hand, and
+nothing to keep up to date:
 ```
 pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/heads/main.zip"
 ```
@@ -85,6 +72,20 @@ Run that same line again to upgrade. You do **not** need `git` installed.
 > **<https://github.com/toldxls/ICDD-reviewer/releases/latest>**
 >
 > (Option **A**'s `.whl` + `certutil` gives the same assurance, checked by hand.)
+
+### B — download the wheel from the release (if you prefer to see the file)
+
+On the Releases page, under **Assets**, download the file ending in **`.whl`**. Then in a
+Command Prompt type `pip install --upgrade ` (with the trailing space), **drag the `.whl` file**
+into the window, and press Enter:
+```
+pip install --upgrade "C:\Users\You\Downloads\pxrd_review-<version>-py3-none-any.whl"
+```
+That is also how you upgrade: download the newer `.whl` and run the same command.
+
+*Optional integrity check:* the release also lists `SHA256SUMS.txt`. To confirm the download
+isn't corrupted, run `certutil -hashfile "<the .whl file>" SHA256` and compare the long hex
+string with the one in that file (or in the release notes).
 
 ### C — install from the source folder
 

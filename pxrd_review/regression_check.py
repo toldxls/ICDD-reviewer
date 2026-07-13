@@ -81,6 +81,10 @@ def _extras_of(eid):
     r = res_for(eid)
     return (r['extra'] if r else None)
 
+def _ref_entry(ref):
+    """A minimal entry whose only row is the Primary Reference — the fixture for check 26."""
+    return type('S', (), {'raw_rows': [['References'], ['Primary Reference', ref]]})()
+
 def _ref_cell(cell_xml):
     """A python-docx cell built from raw XML — the fixture for the tracked-change writer, which
     has to cope with whatever run/paragraph layout a real docx throws at it."""
@@ -528,6 +532,22 @@ CASES = [
  ("sg_system: classifier maps HM symbols", lambda: all(X._sg_system(s) == exp for s, exp in
      [('Pbca','o'), ('P21/c','m'), ('P121/c1','m'), ('Fd-3m','c'), ('P213','c'), ('F432','c'),
       ('P63/mmc','h'), ('P-3m1','h'), ('R-3m','r'), ('I4/mmm','t'), ('P-1','a'), ('P212121','o')])),
+ # A 4-fold SCREW and a cubic body-diagonal triad are indistinguishable once the spaces are gone:
+ # 'P4132' is 4₁·3·2 (cubic), 'P43212' is 4₃·2₁·2 (TETRAGONAL). Testing '3' before the 4-fold made
+ # every P4₃… "cubic" — a false disagreement WRITTEN into the docx, and it contradicted itself
+ # (P4₁2₁2 tetragonal, its enantiomorph P4₃2₁2 cubic). The docx keeps the spaced form, which still
+ # carries the grouping; where it doesn't, abstain rather than guess.
+ ("sg_system: a 4-fold screw is not cubic (spaced form disambiguates)", lambda: all(
+     X._sg_system(s) == exp for s, exp in
+     [('P 43 21 2', 't'), ('P 41 3 2', 'c'), ('P 42/n n m', 't')])),
+ # The 36 cubic groups are a CLOSED SET, so membership is exact — no heuristic can mistake a 4₃
+ # screw subscript for a body-diagonal triad. This is the pair that broke it: P4₃2₁2 (tetragonal,
+ # #96) and P4₁3₂ (cubic, #213) look identical once the spaces are gone.
+ ("sg_system: a 4-screw is tetragonal, a body-diagonal 3 is cubic (compact form)", lambda: all(
+     X._sg_system(s) == exp for s, exp in
+     [('P43212', 't'), ('P4322', 't'), ('P43', 't'), ('P41', 't'),
+      ('P4132', 'c'), ('P4332', 'c'), ('F432', 'c'), ('P432', 'c'),
+      ('I-43d', 'c'), ('Ia-3d', 'c'), ('Fd-3mZ', 'c')])),
  ("sg_system: mismatch flags (monoclinic system, ortho SG)", lambda: [f for f in X.check23_sg_system(
      type('S', (), {'crystal_system': 'm', 'space_group': 'Pbca', 'cell': {}})) if f.sev=='flag'] != []),
  ("sg_system: agreement no flag (ortho system, ortho SG)", lambda: X.check23_sg_system(
@@ -676,6 +696,39 @@ CASES = [
      == [('flag', 'reference')]),
  ("ref_title: no Primary Reference row -> abstains", lambda: X.check26_reference_title_case(
      type('S', (), {'raw_rows': [['Comments'], ['Desc.', 'text']]})(), None) == []),
+ # --- what the check is allowed to WRITE (it is the only one that edits the docx) --------------
+ # The PAPER is the oracle for what is a name. With no .pdf paired (25/405 corpus entries, plus any
+ # scanned paper with no text layer) every decision falls back to a word list, which cannot know
+ # 'Mexico' from 'Mineral' — and duly wrote 'new Mexico' into a reviewer's citation. Suggest, never
+ # write.
+ ("ref_title: with NO .pdf the check suggests but NEVER writes", lambda: (lambda fs:
+     bool(fs) and fs[0].fix is None)(X.check26_reference_title_case(_ref_entry(
+        'Raydemarkite, the Natural Analogue of Synthetic MoO3, from Cookes Peak, New Mexico. '
+        'Yang, H., Gu, X. Can. J. Mineral. 2023. 61(1) 203.'), None))),
+ ("ref_title: with the .pdf it does write", lambda: (lambda fs:
+     bool(fs) and bool(fs[0].fix))(X.check26_reference_title_case(_ref_entry(
+        'Raydemarkite, the Natural Analogue of Synthetic MoO3, from Cookes Peak, New Mexico. '
+        'Yang, H., Gu, X. Can. J. Mineral. 2023. 61(1) 203.'),
+        'the specimens come from new mexico. a new analogue of synthetic MoO3 occurs in New\n'
+        'Mexico. material from New Mexico was studied; the New Mexico locality is natural and\n'
+        'synthetic analogues are known. cookes peak lies in New Mexico.'))),
+ # a citation with no author pattern: we cannot tell where the title ends, and treating the WHOLE
+ # string as the title case-rewrote the journal name and series. Abstain.
+ ("ref_title: a citation with no authors abstains (never re-cases the journal)", lambda:
+     X.check26_reference_title_case(_ref_entry('Physics And Chemistry Of Minerals 45, 1-12 (2018)'),
+                                    'physics and chemistry of minerals is a journal. minerals are '
+                                    'studied. chemistry and physics of minerals.') == []),
+ # a paper that writes a name inconsistently (OCR, typos) still means it is a NAME: the 70% bar
+ # demoted 'Utah' (capitalised in only half its sightings) to an ordinary word and lowercased a US
+ # state into the citation.
+ ("ref_title: a name the paper capitalises only half the time is still a name", lambda:
+     X._paper_word_forms('found in Utah. the Utah deposit is large. Utah hosts it.\n'
+                         'in utah the ore is rich. utah samples were taken. utah is arid.'
+                         ).get('utah') == 'Utah'),
+ # 'Ca-(OH)' / 'Fe-(III)' are chemistry, not Levinson-suffixed species
+ ("ref_title: an element with a parenthesised group is not a species (Ca-(OH))", lambda: (lambda s:
+     'Ca-(OH)' in s and 'Fe-(III)' in s)(
+     X._title_sentence_case('A New Mineral with Ca-(OH) and Fe-(III) Groups')[1])),
  # --- the APPLIED fix (the one check that writes into the docx, as a tracked change) ----------
  # The fix must be the whole citation with ONLY the title's case changed: the authors, journal,
  # year and pages stay byte-identical, and no letter anywhere may change. Anything else means
@@ -683,14 +736,17 @@ CASES = [
  ("ref_title fix: rewrites the title, leaves the rest of the citation byte-identical", lambda: (
      lambda f: f.fix == ('Desorite, a new phosphate mineral isotypic with jamesite. '
                          'Kampf, A. R., Olds, T. A. Am. Mineral.. 2025. 110(7) 1105-1111.'))(
-     X.check26_reference_title_case(type('S', (), {'raw_rows': [['References'], ['Primary Reference',
+     X.check26_reference_title_case(_ref_entry(
         'Desorite, a New Phosphate Mineral Isotypic with Jamesite. '
-        'Kampf, A. R., Olds, T. A. Am. Mineral.. 2025. 110(7) 1105-1111.']]})(), None)[0])),
+        'Kampf, A. R., Olds, T. A. Am. Mineral.. 2025. 110(7) 1105-1111.'), """desorite is a new phosphate mineral. the new mineral is isotypic with jamesite.\na new phosphate mineral of this kind is rare; jamesite and desorite are isotypic.""")[0])),
  ("ref_title fix: differs from the docx in CASE only — never a letter", lambda: (
      lambda f, src: f.fix.lower() == src.lower())(
-     X.check26_reference_title_case(type('S', (), {'raw_rows': [['References'], ['Primary Reference',
+     X.check26_reference_title_case(_ref_entry(
         'Amurselite, A New Uranyl Selenite From the Burro Mine, Colorado. '
-        'Kampf, A. R., Olds, T. A. Can. J. Mineral. Petrol.. 2025. 63(3) 305-315.']]})(), None)[0],
+        'Kampf, A. R., Olds, T. A. Can. J. Mineral. Petrol.. 2025. 63(3) 305-315.'),
+        "amurselite is a new uranyl selenite from the Burro mine in Colorado. the new mineral\n"
+        "occurs at the Burro mine; a new selenite from Colorado. uranyl selenite minerals are rare\n"
+        "and the Burro mine in Colorado is their type locality.")[0],
      'Amurselite, A New Uranyl Selenite From the Burro Mine, Colorado. '
      'Kampf, A. R., Olds, T. A. Can. J. Mineral. Petrol.. 2025. 63(3) 305-315.')),
  # every OTHER check stays comment-only: a fix is opt-in per finding, not a new default
@@ -708,13 +764,47 @@ CASES = [
  # and stays a comment. (No reference cell in the corpus is laid out that way; refusing is free.)
  ("applied fix: a single-paragraph cell is rewritten", lambda:
      A._apply_tracked_fix(_ref_cell('<w:p><w:r><w:t>Old Title. Author, A.</w:t></w:r></w:p>'),
-                          'New title. Author, A.') is True),
+                          'Old title. Author, A.') is True),
+ # the rewrite is CASE-ONLY by construction: anything that would change a letter is refused
+ ("applied fix: a rewrite that changes a LETTER is refused", lambda:
+     A._apply_tracked_fix(_ref_cell('<w:p><w:r><w:t>Old Title. Author, A.</w:t></w:r></w:p>'),
+                          'New title. Author, A.') is False),
  ("applied fix: a MULTI-paragraph cell is declined (never collapses a line break)", lambda:
      A._apply_tracked_fix(_ref_cell('<w:p><w:r><w:t>Old Title.</w:t></w:r></w:p>'
                                     '<w:p><w:r><w:t>Author, A.</w:t></w:r></w:p>'),
-                          'New title. Author, A.') is False),
+                          'Old title. Author, A.') is False),
  ("applied fix: an empty cell is declined", lambda:
      A._apply_tracked_fix(_ref_cell('<w:p/>'), 'New title.') is False),
+ # --- the write path's three reproduced criticals (all found in the final review) --------------
+ # python-docx's cell.text does NOT see runs nested in w:ins/w:del, so a citation the reviewer
+ # replaced with track-changes ON reads as an EMPTY cell -> _find_value falls through to the row's
+ # LABEL cell. Without a guard the tool struck out "Primary Reference" and pasted the citation in.
+ ("applied fix: a cell whose text is not the fix (bar case) is NEVER written", lambda:
+     A._apply_tracked_fix(_ref_cell('<w:p><w:r><w:t>Primary Reference</w:t></w:r></w:p>'),
+                          'Desorite, a new phosphate mineral. Kampf, A. R.') is False),
+ ("_cell_text sees text nested in a tracked change (cell.text does not)", lambda:
+     A._cell_text(_ref_cell('<w:p><w:ins w:id="9" w:author="Tony" w:date="2026-01-01T00:00:00">'
+                            '<w:r><w:t>hidden</w:t></w:r></w:ins></w:p>')) == 'hidden'),
+ # the rewrite is case-only, so it is sliced back onto the EXISTING runs — italic title, bold year
+ # and plain authors all survive. Collapsing them into one run turned the whole citation italic.
+ ("applied fix: per-run formatting survives (italic title, bold year)", lambda: (lambda c: (
+     A._apply_tracked_fix(c, 'Desorite, a new phosphate mineral. Kampf. 2025.') and
+     [(('i' if r.find(A._q('rPr')) is not None and r.find(A._q('rPr')).find(A._q('i')) is not None
+        else 'b' if r.find(A._q('rPr')) is not None and r.find(A._q('rPr')).find(A._q('b')) is not None
+        else 'p'),
+       ''.join(t.text or '' for t in r.findall(A._q('t'))))
+      for ins in c._tc.iter(A._q('ins')) for r in ins.findall(A._q('r'))]
+     == [('i', 'Desorite, a new phosphate mineral. '), ('p', 'Kampf. '), ('b', '2025.')]))(
+     _ref_cell('<w:p>'
+               '<w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">Desorite, a New Phosphate Mineral. </w:t></w:r>'
+               '<w:r><w:t xml:space="preserve">Kampf. </w:t></w:r>'
+               '<w:r><w:rPr><w:b/></w:rPr><w:t>2025.</w:t></w:r></w:p>'))),
+ # a cell carrying ANY tracked change is the reviewer's: after the strip, the tool's own are gone,
+ # so whatever survives is a person's (or a tool insertion a person has since edited)
+ ("applied fix: a cell with a tracked change is left to the reviewer", lambda:
+     A._cell_has_revisions(_ref_cell(
+         '<w:p><w:ins w:id="9" w:author="Tony" w:date="2026-01-01T00:00:00">'
+         '<w:r><w:t>Desorite, a New Phosphate Mineral.</w:t></w:r></w:ins></w:p>')) is True),
  # --- the three bugs the hand-check of all 26 fires caught (all would corrupt a title) ------
  # 1. An ordinary word INSIDE a multi-word place name must survive: 'New Mexico' is not
  #    'new Mexico'. The word is only kept because a proper noun follows it — 'a New Mineral'
