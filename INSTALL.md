@@ -56,7 +56,7 @@ This survives reboots and upgrades — set it once and forget it.
    ```
    The long hex string it prints must match the announced fingerprint exactly.
    Any single character different = corrupted download — stop and re-download,
-   or ask the maintainer.
+   or ask Travis.
 
 3. **Install.** Type `pip install --upgrade ` (trailing space again), drag the same
    `.whl` file in, press Enter:
