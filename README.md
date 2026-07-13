@@ -102,7 +102,9 @@ Opens the review GUI in your browser — **localhost only**, auto-picks a free p
   wheels cover macOS/Linux/Windows, so no compiler is needed.
 - **Where files land:** in an editable install, `.mindat_key` and `.cache/` sit at the repo root; if
   that folder is read-only, the tool falls back to `~/.pxrd_review/` (or set `$PXRD_REVIEW_HOME`).
-- Without the key + cache, the Mindat checks are skipped cleanly — no errors, no false flags.
+- Without a key, the Mindat checks run off the **snapshot bundled in the package** (see step 2).
+  If that snapshot is ever missing too, they are skipped cleanly — no errors, no false flags —
+  and the header says so, because silently-skipped checks read exactly like a clean batch.
 
 ## Run
 ```
