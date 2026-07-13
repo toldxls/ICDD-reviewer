@@ -392,6 +392,13 @@ def _anchor_cell(doc, ac_row, anchor):
     if anchor == 'intensity_instr':
         return (_find_field_value(doc, lambda t: 'intensity instr' in t.lower())
                 or _find_field_value(doc, lambda t: 'spacing instr' in t.lower()))
+    # An Intensity Type finding is about the Intensity Type field — it used to share the generic
+    # 'instr' anchor, which highlighted the Spacing Instr. cell (and sent the GUI's '? look' to
+    # the Radiation row). Land it on its own field.
+    if anchor == 'intensity_type':
+        return (_find_field_value(doc, lambda t: 'intensity type' in t.lower())
+                or _find_field_value(doc, lambda t: 'intensity instr' in t.lower())
+                or _find_field_value(doc, lambda t: 'spacing instr' in t.lower()))
     if anchor == 'refl':
         return _find_cell(doc, lambda t: t.strip() in ('d(A)', 'd(Å)'))
     # the citation itself (References section) — highlight the value cell, not the label

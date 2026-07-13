@@ -39,38 +39,47 @@ the step above and open a **new** Command Prompt.
 
 ## 2. Install the tool
 
-The tool lives in a public repository, and **that is always the current version**:
+**The latest version is always on the Releases page:**
 
-**<https://github.com/toldxls/ICDD-reviewer>**
+### **<https://github.com/toldxls/ICDD-reviewer/releases>**
 
-Use it for installs *and* upgrades — there is nothing to be emailed and no files site to check.
+The newest one is marked **`Latest`** at the top — that is the one you want. Nothing gets
+emailed, and there is no files site to check. You do **not** need a GitHub account.
 
-### A — install straight from the repository (simplest, and how you upgrade)
+### A — install from the release (recommended)
 
-One line, in a Command Prompt. You do **not** need a GitHub account, and you do **not** need
-`git` installed:
+On the Releases page, under **Assets**, download the file ending in **`.whl`**. Then in a
+Command Prompt type `pip install --upgrade ` (with the trailing space), **drag the `.whl` file**
+into the window, and press Enter:
+```
+pip install --upgrade "C:\Users\You\Downloads\pxrd_review-<version>-py3-none-any.whl"
+```
+That is also how you upgrade: download the newer `.whl` and run the same command.
+
+*Optional integrity check:* the release also lists `SHA256SUMS.txt`. To confirm the download
+isn't corrupted, run `certutil -hashfile "<the .whl file>" SHA256` and compare the long hex
+string with the one in that file (or in the release notes).
+
+### B — one-line install, no download
+
+If you'd rather not download anything by hand (this always fetches the current version):
 ```
 pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/heads/main.zip"
 ```
-Run that **exact same line again** whenever you want the latest version — it replaces what you
-have. The first install needs internet (pip fetches the libraries it depends on).
+Run that same line again to upgrade. You do **not** need `git` installed.
 
-### B — download the folder and install from it
+### C — install from the source folder
 
-Prefer to see the files? On the repository page click the green **`Code`** button →
-**`Download ZIP`**, unzip it (right-click → *Extract All…*), then in a Command Prompt go into
-the unzipped folder and install with `.` (a dot — it means "the folder I am in"):
+Prefer to see the files? On the Releases page (or the repository page → green **`Code`** button)
+choose **Source code (zip)**, unzip it (right-click → *Extract All…*), then in a Command Prompt
+go into the unzipped folder and install with `.` (a dot — it means "the folder I am in"):
 ```
-cd Desktop\ICDD-reviewer-main
+cd Desktop\ICDD-reviewer-0.2.8
 pip install -e .
 ```
 *(Tip: type `cd ` then drag the folder into the window to fill in the path.)*
-To upgrade, download the ZIP again into a fresh folder and repeat.
 
-> **If you were given a `pxrd-review-<version>-bundle.zip`** from the files site, it still
-> installs — unzip it and run `pip install --upgrade` on the `.whl` inside (verify its SHA-256
-> against the announcement with `certutil -hashfile "<file>" SHA256`). But the repository above
-> is the current version; prefer it.
+The first install needs internet — pip fetches the libraries the tool depends on.
 
 ### Check it installed
 

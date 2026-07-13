@@ -4,6 +4,35 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.2.9] — 2026-07-13
+
+### Fixed — '? look' on the docx pane landed on the wrong cell
+Reported by an ICDD reviewer: most flags navigated to the `MoKa` cell in the Radiation row
+whatever they were about, and the cell/esd findings didn't navigate at all. Three separate
+causes, all fixed:
+- **Instrument fields are not row headers.** `Spacing Instr. :` is cell 4 of a row whose FIRST
+  cell is `Camera Diameter =`, so matching on the row header could never find it and fell back
+  to the only instrument row that did match — `Radiation =`. Hence "everything lands on MoKa".
+  The docx renderer now tags each anchor's target cell (`data-anchor`) by **label cell → next
+  cell**, the same way the annotator finds the cell it highlights, so the two always agree.
+- **The CELL / per-parameter / RADIATION findings are synthesised in the UI** and are not in the
+  findings list the server sends, so looking them up by key returned nothing and their anchors
+  were lost — `? look` had nothing to aim at (e.g. Amurselite's esd/value flag on *b*). Their
+  anchors are now recorded when the rows are built.
+- **The CELL summary's anchor carried the verdict, not a column** (`cell:match`), which resolves
+  to no axis; it now lands on the Author's Cell row.
+
+### Fixed — Intensity Type findings pointed at the wrong field
+An Intensity Type flag used the generic `instr` anchor, so the tool **highlighted the Spacing
+Instr. cell** and `? look` sent the reviewer to the Radiation row. It now anchors on
+`intensity_type`, and both the highlight and `? look` land on the Intensity Type value.
+
+### Docs
+- INSTALL.md step 2 points at the **Releases page**
+  (<https://github.com/toldxls/ICDD-reviewer/releases>) — the newest build is marked `Latest`,
+  so it is the fewest clicks to the current version. The one-line `pip install` from the repo
+  and the source-folder route are kept as alternatives.
+
 ## [0.2.8] — 2026-07-13
 
 ### Docs — INSTALL.md rewritten against how reviewers actually install it

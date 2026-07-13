@@ -847,6 +847,58 @@ def _entry_user_edits(d, src_path=None):
         marks = _reviewer_marks_from(src_path)   # reviewer marks embedded in the source docx
     return marks
 
+# Finding anchor -> the docx cell it points at, resolved on one table ROW at a time.
+#
+# Two shapes exist in the ICDD template and they must be handled differently:
+#   * ROW-HEAD fields — the label IS the row's first cell, value next to it:
+#         [0]Primary Reference  [1]<citation>
+#   * INLINE fields — the label sits in the MIDDLE of a row, value in the next cell:
+#         [0]Camera Diameter =  [2]I/Ic =  [4]Spacing Instr. :  [5]Other  [6]Intensity Instr. : …
+#     Anchoring these by row header is what made every instrument finding land on the
+#     'Radiation =' row (the only instrument row whose header matched anything).
+# The Author's Cell row is positional: a b c α β γ SG Z in columns 1-8.
+_DOCX_ROWHEAD = [
+    (re.compile(r"^primary reference\b", re.I), 'reference'),
+    (re.compile(r'^ima number\b', re.I),        'ima'),
+    (re.compile(r'^optical data\b', re.I),      'optical'),
+    (re.compile(r'^analysis$', re.I),           'analysis'),
+    (re.compile(r'^mineral$', re.I),            'name'),
+    (re.compile(r'^primary$', re.I),            'primary'),
+]
+_DOCX_INLINE = [
+    (re.compile(r'^spacing\s*instr', re.I),   'spacing_instr'),
+    (re.compile(r'^intensity\s*instr', re.I), 'intensity_instr'),
+    (re.compile(r'^intensity\s*type', re.I),  'intensity_type'),
+    (re.compile(r'^radiation\s*=', re.I),     'radiation'),
+    (re.compile(r'^filter\s*:', re.I),        'filter'),
+]
+_DOCX_AXES = ['a', 'b', 'c', 'α', 'β', 'γ', 'SG', 'Z']       # Author's Cell columns 1..8
+
+def _docx_anchor_cells(texts):
+    """{column index -> anchor} for one row of cell texts."""
+    out = {}
+    if not texts:
+        return out
+    first = texts[0].strip()
+    if re.match(r"^author'?s cell\b", first, re.I):
+        out[0] = 'cell'                                   # the summary comment's anchor
+        for i, ax in enumerate(_DOCX_AXES, start=1):
+            if i < len(texts):
+                out[i] = 'cell:' + ax
+        return out
+    if re.match(r'^d\(a\)|^d\(å\)', first, re.I):
+        out[0] = 'refl'
+        return out
+    for rx, name in _DOCX_ROWHEAD:                        # label is the row's first cell
+        if rx.match(first) and len(texts) > 1:
+            out[1] = name
+            return out
+    for j, t in enumerate(texts):                         # label sits mid-row
+        for rx, name in _DOCX_INLINE:
+            if rx.match((t or '').strip()) and j + 1 < len(texts):
+                out.setdefault(j + 1, name)
+    return out
+
 def _docx_html(path):
     """Render a docx BODY to a lightweight HTML fragment for the in-app 'docx' view —
     paragraphs and tables in document order, with tracked changes shown inline (w:ins as
@@ -924,16 +976,19 @@ def _docx_html(path):
                 if _ln(tr.tag) != 'tr':
                     continue
                 tcs = [tc for tc in tr if _ln(tc.tag) == 'tc']
-                # Label the row with its own first cell (lower-cased) and number the columns, so
-                # the '? look' button can land on the exact cell a finding is about — the anchor
-                # ('reference', 'cell:a', 'instr') names a row + column, and without these the
-                # rendered table is an anonymous grid the client cannot aim at.
-                head = ''
-                if tcs:
-                    head = ' '.join(''.join(x.text or '' for x in tcs[0].iter(q('t'))).split()).lower()
+                texts = [' '.join(''.join(x.text or '' for x in tc.iter(q('t'))).split())
+                         for tc in tcs]
+                # Tag the cell each finding ANCHOR points at, so '? look' lands exactly where the
+                # annotator writes its highlight. Resolved the way the annotator resolves it —
+                # by LABEL cell, not by row header: 'Spacing Instr. :' is cell 4 of a row whose
+                # first cell is 'Camera Diameter =', so a row-header scheme can never find it and
+                # silently lands on the Radiation row instead.
+                anchors = _docx_anchor_cells(texts)
+                head = (texts[0] if texts else '').lower()
                 cells = ''.join(
-                    '<td data-c="%d">%s</td>'
-                    % (i, ''.join(block(x) for x in tc if _ln(x.tag) in ('p', 'tbl')))
+                    '<td data-c="%d"%s>%s</td>'
+                    % (i, (' data-anchor="%s"' % esc(anchors[i])) if i in anchors else '',
+                       ''.join(block(x) for x in tc if _ln(x.tag) in ('p', 'tbl')))
                     for i, tc in enumerate(tcs))
                 rows.append('<tr data-h="%s">%s</tr>' % (esc(head[:60]), cells))
             return '<table class="docxtbl">%s</table>' % ''.join(rows)

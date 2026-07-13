@@ -378,6 +378,12 @@ function renderFindings() {
     rows.push({ fkey: fkeyOf(f), level, code: f.code, msg: f.msg, written: f.written, anchor: f.anchor, minor: !f.major });
   }
 
+  // fkey -> anchor for EVERY row, including the CELL / per-parameter / RADIATION rows synthesised
+  // above (those are not in a.findings, so they cannot be recovered later). '? look' on the docx
+  // reads this to know which cell the finding is about.
+  S.anchorOf = {};
+  for (const r of rows) if (r.anchor) S.anchorOf[r.fkey] = r.anchor;
+
   // promote by severity: FLAG (real problems) first, then CHECK (confirm), then OK,
   // with NOTE (low-confidence FYI) ranked last. Stable sort keeps the cell→λ→checks
   // order within each tier.
@@ -628,48 +634,35 @@ async function lookInPage(fkey) {
 // instrument block may only carry 'Radiation ='). Each pattern therefore accepts the variants
 // the corpus actually contains, and an anchor that resolves to nothing falls through to the
 // term search rather than landing the reviewer on the wrong cell.
-// Patterns are tried IN ORDER, most specific first — a single combined regex would match
-// whichever row comes first in the document, which lands an instrument finding on the
-// 'Instrumentation' section HEADER instead of the 'Radiation =' row that carries the value.
-const DOCX_ROW = {
-  reference:       [[/^primary reference/], 1],
-  name:            [[/^mineral\b/], 1],
-  primary:         [[/^primary\b/], 1],
-  ima:             [[/^ima number/, /^ima\b/], 1],
-  instr:           [[/spacing instr/, /^radiation/, /^instrumentation/], 1],
-  spacing_instr:   [[/spacing instr/, /^radiation/, /^instrumentation/], 1],
-  intensity_instr: [[/intensity instr/, /spacing instr/, /^radiation/], 1],
-  refl:            [[/^d\(a\)/, /^d\(å\)/], 0],
-};
-// the Author's Cell row lays its 8 params out in fixed columns (see PARAM_COL server-side)
-const DOCX_CELL_COL = { a: 1, b: 2, c: 3, 'α': 4, 'β': 5, 'γ': 6, SG: 7, Z: 8 };
+// The server tags each anchor's target cell with data-anchor (see _docx_anchor_cells), resolved
+// the same way the annotator resolves it — so '? look' lands on exactly the cell the tool
+// highlights. All this has to do is map a finding's anchor onto one of those tags.
+const DOCX_AXES = ['a', 'b', 'c', 'α', 'β', 'γ', 'SG', 'Z'];
 
-function docxTarget(view, f) {
-  const rows = [...view.querySelectorAll('tr[data-h]')];
-  const pick = (res, col) => {
-    for (const re of res) {                       // most specific pattern first
-      const tr = rows.find(r => re.test(r.dataset.h || ''));
-      if (!tr) continue;
-      const tds = tr.querySelectorAll('td');
-      if (tds.length) return tds[Math.min(col, tds.length - 1)];
-    }
-    return null;
-  };
-  const anchor = f && f.anchor;
-  if (anchor && anchor.startsWith('cell:')) {
-    const col = DOCX_CELL_COL[anchor.slice(5)];
-    const hit = col != null && pick([/^author's cell/], col);
+// One anchor may have several acceptable targets, tried in order.
+function docxAnchorCandidates(anchor) {
+  if (!anchor) return [];
+  if (anchor === 'lam') return ['radiation'];
+  if (anchor.startsWith('cell:')) {
+    const ax = anchor.slice(5);
+    // 'cell:a' is an axis; 'cell:match' / 'cell:investigate' is the CELL summary finding, whose
+    // anchor carries the verdict rather than a column — that one belongs on the row's label cell.
+    return DOCX_AXES.includes(ax) ? ['cell:' + ax, 'cell'] : ['cell'];
+  }
+  if (anchor === 'instr') return ['spacing_instr', 'intensity_instr', 'radiation'];
+  if (anchor === 'radiation') return ['radiation'];
+  return [anchor];
+}
+
+function docxTarget(view, anchor, fkey) {
+  for (const a of docxAnchorCandidates(anchor)) {
+    const hit = view.querySelector('[data-anchor="' + CSS.escape(a) + '"]');
     if (hit) return hit;
   }
-  if (anchor && DOCX_ROW[anchor]) {
-    const [res, col] = DOCX_ROW[anchor];
-    const hit = pick(res, col);
-    if (hit) return hit;
-  }
-  // no anchor we can resolve -> find the cell that actually contains the finding's evidence
-  const t = termsFor(fkeyOf(f));
-  const terms = (t.terms || []).filter(x => x && x.length > 2).slice(0, 6);
-  if (!terms.length) return null;
+  // No anchor, or this docx has no such field -> land on the cell that actually holds the
+  // finding's evidence (the same terms the .pdf look searches for).
+  const t = fkey ? termsFor(fkey) : null;
+  const terms = ((t && t.terms) || []).filter(x => x && String(x).length > 2).slice(0, 6);
   const tds = [...view.querySelectorAll('td')];
   for (const term of terms) {
     const hit = tds.find(td => (td.textContent || '').includes(term));
@@ -685,8 +678,12 @@ async function lookInDocx(fkey) {
   await loadDocxView();                       // no-op when it is already cached
   if (S.key !== key) return;                  // entry changed under us
   const view = $('#docx-view');
-  const f = findingOf(fkey);
-  const el = view && docxTarget(view, f);
+  // The CELL / per-parameter / RADIATION rows are synthesised in renderFindings and are NOT in
+  // S.a.findings (which holds only the extra checks) — findingOf() returns null for them, so
+  // their anchors were being lost and '? look' had nothing to aim at. renderFindings records
+  // every row's anchor in S.anchorOf, which is the one place that knows all of them.
+  const anchor = (S.anchorOf || {})[fkey] || (findingOf(fkey) || {}).anchor;
+  const el = view && docxTarget(view, anchor, fkey);
   if (!el) { focusFinding(fkey); return; }    // nothing to aim at — still select the finding
   view.querySelectorAll('.docx-hit').forEach(x => x.classList.remove('docx-hit'));
   el.classList.add('docx-hit');

@@ -2360,7 +2360,7 @@ def check19_intensity_detector(e, text):
             ev = loc.group(0) if loc else None
         out.append(Finding('intensity_type', 'flag',
                    "the powder pattern intensities %s, so Intensity Type should be Visual, "
-                   "not %s." % (why, it), ev, 'instr'))
+                   "not %s." % (why, it), ev, 'intensity_type'))
         return out
     if not text:
         return out
@@ -2377,11 +2377,11 @@ def check19_intensity_detector(e, text):
     if area_kw and not bb_kw and it.lower() == 'peak':
         out.append(Finding('intensity_type', 'flag',
                    ".pdf describes an area detector (%s), so Intensity Type should be "
-                   "Integrated, not Peak." % area_kw, area_kw, 'instr'))
+                   "Integrated, not Peak." % area_kw, area_kw, 'intensity_type'))
     elif bb_kw and not area_kw and it.lower() == 'integrated':
         out.append(Finding('intensity_type', 'flag',
                    ".pdf describes Bragg-Brentano geometry, so Intensity Type should be "
-                   "Peak, not Integrated.", bb_kw, 'instr'))
+                   "Peak, not Integrated.", bb_kw, 'intensity_type'))
     return out
 
 # --- 20. calculated pattern must document its wavelength --------------------
