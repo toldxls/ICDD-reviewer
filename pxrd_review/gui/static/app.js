@@ -651,6 +651,11 @@ function docxAnchorCandidates(anchor) {
   }
   if (anchor === 'instr') return ['spacing_instr', 'intensity_instr', 'radiation'];
   if (anchor === 'radiation') return ['radiation'];
+  // These fire BECAUSE the field is missing, so the row they name often isn't there. Fall back
+  // the same way the annotator does when it places the comment — onto the Comments section.
+  if (anchor === 'ima') return ['ima', 'comments'];
+  if (anchor === 'analysis') return ['analysis', 'comments'];
+  if (anchor === 'optical') return ['optical', 'comments'];
   return [anchor];
 }
 
@@ -663,7 +668,13 @@ function docxTarget(view, anchor, fkey) {
   // finding's evidence (the same terms the .pdf look searches for).
   const t = fkey ? termsFor(fkey) : null;
   const terms = ((t && t.terms) || []).filter(x => x && String(x).length > 2).slice(0, 6);
-  const tds = [...view.querySelectorAll('td')];
+  // Search FIELD cells only. The reflection list is hundreds of bare numbers, so a term like
+  // '25.4' matches some unrelated d-spacing first and the reviewer gets a confident scroll-and-
+  // flash onto a cell that has nothing to do with the finding — worse than not moving at all.
+  const rows = [...view.querySelectorAll('tr[data-h]')];
+  const reflAt = rows.findIndex(r => /^d\(a\)|^d\(å\)/i.test(r.dataset.h || ''));
+  const fieldRows = reflAt >= 0 ? rows.slice(0, reflAt) : rows;
+  const tds = fieldRows.flatMap(r => [...r.querySelectorAll('td')]);
   for (const term of terms) {
     const hit = tds.find(td => (td.textContent || '').includes(term));
     if (hit) return hit;

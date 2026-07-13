@@ -2596,8 +2596,12 @@ def check21_primary_name(e, text):
 # as evidence — running heads, and the Canadian Journal of Mineralogy and Petrology sets its
 # titles in caps/small-caps, so they say nothing about a word's true case.
 #
-# COMMENT-ONLY, like every other check: the suggested title goes in the comment and the cell is
-# highlighted. The tool never rewrites the Reference cell — the reviewer applies it.
+# THE ONE CHECK THAT WRITES (owner-approved, 0.3.0). Every other check is comment-only; this one
+# also carries `Finding.fix` — the corrected citation — which annotate_review writes into the
+# review_out COPY as a Word TRACKED CHANGE the reviewer can Accept or Reject. It never touches the
+# source, never overwrites a cell a human has already tracked-changed, differs from the docx in
+# letter case only, and is idempotent across reruns. Do NOT "restore" comment-only here without
+# asking the owner — and do not give any other check a `fix` without asking either.
 _TITLE_FUNC = {'a', 'an', 'the', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'from', 'with',
                'for', 'by', 'as', 'into', 'over', 'under', 'within', 'without', 'between',
                'during', 'near', 'its', 'their', 'is', 'not', 'nor', 'but'}

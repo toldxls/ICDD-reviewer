@@ -898,6 +898,13 @@ def _docx_anchor_cells(texts):
     if re.match(r'^d\(a\)|^d\(å\)', first, re.I):
         out[0] = 'refl'
         return out
+    # The annotator falls back to the Comments-section header when an entry has NO 'IMA Number' /
+    # 'Analysis' row — and those rows are absent precisely on the entries where those checks fire
+    # (they fire BECAUSE the field is missing). Tag the header so '? look' can land where the
+    # highlight actually is, instead of finding nothing and doing nothing at all.
+    if first.strip().lower() == 'comments':
+        out[0] = 'comments'
+        return out
     for rx, name in _DOCX_ROWHEAD:                        # label is the row's first cell
         if rx.match(first) and len(texts) > 1:
             out[1] = name

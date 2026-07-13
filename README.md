@@ -164,7 +164,7 @@ What it writes:
 - a single brief **"No matching PDF cell found."** when no cell could be matched.
 
 Comments are authored as **"PXRD Review Tool"** so they filter apart from human
-reviewers'. Extra dependency: `python-docx` (≥1.1 for the comment API).
+reviewers'. Extra dependency: `python-docx` **≥1.2** (`Document.add_comment()` arrived in 1.2.0; with 1.1.x every flagged entry raises `AttributeError`, is swallowed per-entry, and the run 'succeeds' having written no findings at all).
 
 ## What it reads from the docx
 Values reflect **accepted tracked changes**: tracked insertions are applied,
@@ -727,6 +727,21 @@ Run it after touching `pxrd_review/extra_checks.py`, `pxrd_review/cell_lambda_ch
 `pxrd_review/annotate_review.py`. If a case fails, a known problem was reintroduced.
 
 ### Hard-won rules (do NOT regress)
+- **Check 26 is the ONE check that writes into the docx.** Every other check comments and
+  highlights; the reviewer applies the fix. Check 26 (reference title case) additionally sets
+  `Finding.fix`, and `annotate_review._apply_tracked_fix` writes it into the **review_out copy**
+  as a **Word tracked change**. Five things must stay true, and each has a regression case:
+  (1) the **source docx is never touched**; (2) a cell a **human has already tracked-changed is
+  never overwritten**; (3) the rewrite differs from the docx in **letter case only** — the check
+  refuses to emit a `fix` at all if it cannot prove that; (4) reruns are **idempotent** —
+  `_strip_tool_annotations` *rejects* the tool's own `w:ins`/`w:del` and re-derives them, so edits
+  never stack; (5) the writer **declines a multi-paragraph cell** (sweeping several paragraphs'
+  runs into one `w:del` would lose the paragraph break on Reject). A dismissed finding applies no
+  fix. Do not give any other check a `fix` without the owner's say-so.
+- **The tool's own tracked changes are not a human edit.** `_has_tracked_changes`,
+  `output_hand_edited` and the reviewer-mark summaries are all author-aware. Break that and every
+  fixed entry looks hand-edited: a backup on every rerun, and the tool's own work reported back to
+  the reviewer as theirs.
 - **Calculated pattern.** A docx correctly marked `Spacing=Calculated` is normal,
   not an error → console **note only**, never a docx flag, and it suppresses the
   radiation mismatch (calc wavelength ≠ experimental). The PDF-inferred "calculated

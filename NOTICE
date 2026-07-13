@@ -33,8 +33,20 @@ reads through that worker. Swapping the renderer is therefore a change to those 
 Data & provenance
 -----------------
 - No ICDD data is bundled or redistributed. No entry .docx/.dft files and no source
-  papers (.pdf) are included. The regression fixtures are a private, external set
-  (resolved via $PXRD_REGRESSION_DIR); regression_check.py refuses to run without them.
+  papers (.pdf) are included.
+- **Mindat data IS bundled** (the only third-party dataset shipped in the artifact):
+  `pxrd_review/data/mindat_ima.json.gz` + `mindat_struct.json.gz` (~575 KB gzipped) — a snapshot
+  of the IMA-approved species list from the Mindat.org API (name, group, Nickel-Strunz code, IMA
+  status, unit cell, space group, elements, IMA formula, type-locality name), refreshed at each
+  release. It ships so a reviewer without a Mindat API key still gets the classification /
+  chemistry / cell cross-checks: without it those checks find nothing, which is indistinguishable
+  from a clean batch. It is a derived reference subset used for cross-checking, not a
+  redistribution of Mindat's database; use of the Mindat API is governed by Mindat's own terms
+  (an API key is issued per user by mindat.org). Rebuild with
+  `python3 -m pxrd_review.mindat --refresh --bundle`; delete `pxrd_review/data/` to ship without
+  it (the tool then requires a key).
+- The regression fixtures are a private, external set (resolved via $PXRD_REGRESSION_DIR);
+  regression_check.py refuses to run without them.
 - The reference tables encode standard crystallographic conventions (controlled
   vocabularies, the Kβ-filter-by-anode rule, monochromator materials, …), hand-curated.
   They do not embed proprietary ICDD field values.

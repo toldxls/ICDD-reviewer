@@ -1079,7 +1079,9 @@ def main():
     ap.add_argument('--force', action='store_true',
                     help='regenerate every output even if it has manual edits (default: preserve hand-edited outputs)')
     ap.add_argument('--triage', help='review_gui triage.json — suppress dismissed findings, fold reviewer '
-                    'notes into the comments, override Accept (COMMENT-ONLY; never rewrites a field)')
+                    'notes into the comments, override Accept. Triage never introduces a change of its '
+                    'own: it can only suppress what the tool would otherwise write (including a '
+                    'dismissed finding\'s applied fix)')
     ap.add_argument('--no-logs', action='store_true',
                     help='skip the folder-level annotation_log.txt / mindat_discrepancies.txt writes '
                          '(used by the GUI single-entry rerun so it does not clobber the batch logs)')

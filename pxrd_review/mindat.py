@@ -295,7 +295,7 @@ def _group_names(key, referenced, verbose=False):
     return {gid: {'name': lut[gid].get('name', ''), 'strunz': _strunz(lut[gid])}
             for gid in referenced if gid in lut}
 
-def refresh(verbose=True):
+def refresh(verbose=True, localities=True):
     """Single network pull of all IMA minerals → writes BOTH the group cache
     (mindat_ima.json) and the structural cache (mindat_struct.json). One pass over
     the corpus feeds both; the files stay separate on disk so a normal review still
@@ -336,15 +336,29 @@ def refresh(verbose=True):
             'strunz': _strunz(m), 'ima_status': m.get('ima_status'),
         }
     grp = {'fetched': time.strftime('%Y-%m-%d'), 'minerals': index, 'groups': groups}
+    # Type-locality NAMES for the ids the minerals point at (reference material for the GUI —
+    # never a check). The sweep is ~230 requests and ~2 minutes, so it runs ONLY on an explicit
+    # --refresh. The staleness AUTO-refresh (which fires unannounced inside `pxrd review`, the
+    # GUI, sweep, …) passes localities=False and instead CARRIES FORWARD the names already in the
+    # cache: it stays as quick as it was, and nobody's review sits for two silent minutes.
+    if localities:
+        if verbose: print('resolving type localities…')
+        tl_ids = {(m.get('type_localities') or [None])[0] for m in minerals}
+        tl_ids.discard(None)
+        loc = _locality_names(key, tl_ids, verbose=verbose)
+        st = _struct_out(minerals, loc)
+    else:
+        prev = {r.get('norm'): r.get('tl') for r in (_read_cache(STRUCT_CACHE).get('recs') or [])}
+        st = _struct_out(minerals)
+        for r in st['recs']:                       # keep the localities we already have
+            if not r.get('tl'):
+                r['tl'] = prev.get(r.get('norm')) or ''
+    # Write BOTH caches together, at the END. Writing the group cache before the (slow) sweep and
+    # the struct cache after it meant a Ctrl-C during the sweep left the group cache freshly dated
+    # and the struct cache stale — so the next run saw group_ok/struct_stale, re-pulled the whole
+    # corpus, swept again, hung again: an unbreakable loop. Now an interrupt leaves both untouched
+    # and the next run simply retries.
     _write_cache(CACHE, grp)
-    # type-locality NAMES for the ids the minerals point at (reference material for the GUI —
-    # never a check). Best-effort: a failure here leaves the field blank and nothing else breaks.
-    if verbose: print('resolving type localities…')
-    tl_ids = {(m.get('type_localities') or [None])[0] for m in minerals}
-    tl_ids.discard(None)
-    localities = _locality_names(key, tl_ids, verbose=verbose)
-    # structural cache — built from the SAME rows, written to its own file
-    st = _struct_out(minerals, localities)
     _write_cache(STRUCT_CACHE, st)
     _DB = None; _SDB = None                  # force reload of both fresh caches
     if verbose:
@@ -447,7 +461,11 @@ def _auto_refresh(max_age_days=14):
     if not struct_ok: stale.append('struct %s' % ('missing' if not struct_available() else '%dd' % (sage if sage is not None else -1)))
     print('[mindat] cache %s — refreshing IMA group + structural data (single pull)…' % ', '.join(stale))
     try:
-        grp = refresh(verbose=False)
+        # localities=False: this path fires UNANNOUNCED in the middle of `pxrd review`, the GUI,
+        # a sweep… and the locality sweep is a ~2-minute network pass. Nobody's review should
+        # stall on reference data. The names already in the cache are carried forward; a full
+        # `--refresh` (the maintainer's release step) is what re-resolves them.
+        grp = refresh(verbose=False, localities=False)
         print('[mindat] refreshed: %d minerals, %d groups, %d structural records'
               % (len(grp['minerals']), len(grp['groups']), len(struct_db().get('recs', []))))
     except Exception as ex:

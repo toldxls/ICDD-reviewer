@@ -151,6 +151,14 @@ python -m pxrd_review.gui.review_gui "C:\Users\You\Desktop\2028_PART1"
 subfolder, as *copies* with Word comments and yellow highlights. Your own manual edits to those
 copies are preserved across reruns (a timestamped backup is kept in `review_out\.edit_backup`).
 
+**One correction is written for you — as a tracked change.** If a reference title is in Title
+Case (`a New Mineral From the Burro Mine`) where ICDD style is sentence case, the tool corrects it
+in the **copy** as a **Word tracked change**. Open the docx in Word and you will see it marked in
+the Reference cell: click **Accept** to keep it or **Reject** to put the original back — exactly
+as you would with another reviewer's edit. It never overwrites a cell **you** have already edited,
+and it never changes anything but the capitalisation. Every other finding is a comment for you to
+act on; this is the only one the tool writes.
+
 ---
 
 ## 4. Mindat API key — optional
@@ -202,32 +210,65 @@ editable install keeps its `.cache/` and `.mindat_key` at the repo root.
 
 ## Maintainer — cutting a release
 
-1. **Refresh the bundled Mindat snapshot** (so reviewers without a key get current data):
+> Every step matters. Reviewers install from **`/releases/latest`** and from **`main`**, so a
+> release that is not pushed, or that carries the wrong `.whl`, silently serves an **old tool**.
+
+1. **Refresh the bundled Mindat snapshot** (so reviewers with no API key get current data — and
+   the type localities the GUI shows):
    ```
    python3 -m pxrd_review.mindat --refresh --bundle
    ```
    Commit `pxrd_review/data/`.
+
 2. Bump the version in **both** `pyproject.toml` and `pxrd_review/__init__.py`; update
-   `CHANGELOG.md`; run the regression suite (`pxrd check "<fixtures>"`); commit.
-3. Build the wheel (one-time `pip3 install build`):
+   `CHANGELOG.md`; run the regression suite (`pxrd check "<fixtures>"` — every case must PASS).
+
+3. **Commit and push `main`.** This is what ships: the one-line install in §2B and the
+   `Download ZIP` route both take whatever `main` currently holds.
    ```
-   python3 -m build --wheel
+   git commit -am "…"
+   git push origin main
    ```
-4. Build the bundle:
+
+4. **Build the wheel into a CLEAN `dist/`.** `python3 -m build` does *not* empty `dist/`, so a
+   stale wheel from an earlier release survives there — and step 6's `dist/*.whl` would then
+   upload **that** as the new release's asset. Reviewers are told to download "the `.whl`", so
+   they would install the old tool. Delete it first:
    ```
-   cd dist
-   shasum -a 256 pxrd_review-<version>-py3-none-any.whl > SHA256SUMS.txt
-   cp ../INSTALL.md .
-   zip pxrd-review-<version>-bundle.zip pxrd_review-<version>-py3-none-any.whl SHA256SUMS.txt INSTALL.md
-   rm INSTALL.md
+   rm -rf dist                       # Windows: rmdir /s /q dist
+   python3 -m build --wheel          # one-time: pip3 install build
+   ls dist                           # sanity: exactly ONE .whl, and it is the new version
    ```
-5. Tag and publish, so reviewers installing from the repository get it:
+
+5. **Checksum it** (both hashes go in the release notes):
    ```
-   git tag v<version> && git push --tags
-   gh release create v<version> dist/*.whl --notes "…SHA-256: …"
+   cd dist && shasum -a 256 pxrd_review-<version>-py3-none-any.whl > SHA256SUMS.txt && cd ..
+   git tag -a v<version> -m "v<version> — <headline>" && git push origin --tags
    ```
-   Reviewers install from `main`, so **pushing to `main` is what ships**. The release + tag are
-   the archive, and give anyone who wants a pinned wheel a checksummed one.
-6. Only if someone needs the offline bundle: upload the zip to the files site and put the
-   wheel's SHA-256 **in the announcement message itself** (the copy inside the zip can catch
-   corruption, not tampering — the message is the independent channel).
+
+6. **Publish the release**, attaching the wheel **and** `SHA256SUMS.txt`, and put BOTH hashes in
+   the notes — INSTALL.md tells reviewers to verify against them:
+   ```
+   gh release create v<version> \
+       dist/pxrd_review-<version>-py3-none-any.whl \
+       dist/SHA256SUMS.txt \
+       --latest --title "v<version> — <headline>" --notes "…"
+   ```
+   The notes **must** end with a ready-to-paste, hash-pinned install line — §2B sends reviewers
+   here for it, and it is the only install path pip actually verifies:
+   ```
+   Source archive SHA-256 (v<version>.zip):
+   pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/tags/v<version>.zip#sha256=<hash>"
+   ```
+   Get that hash *after* pushing the tag:
+   ```
+   curl -sL -o /tmp/src.zip https://github.com/toldxls/ICDD-reviewer/archive/refs/tags/v<version>.zip
+   shasum -a 256 /tmp/src.zip
+   ```
+
+7. **Verify what you actually published** — the check that catches every mistake above at once:
+   ```
+   gh release view v<version> --json assets -q '.assets[].name'    # the NEW wheel + SHA256SUMS.txt
+   pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/heads/main.zip"
+   pxrd --version                                                  # must print the new version
+   ```
