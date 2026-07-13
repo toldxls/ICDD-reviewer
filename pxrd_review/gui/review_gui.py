@@ -205,7 +205,12 @@ def _mindat_block(name):
              'al': M.get('al'), 'be': M.get('be'), 'ga': M.get('ga'),
              'sorted': lens, 'sg': M.get('sg'),
              'formula': _u(M.get('formula') or ''), 'elements': M.get('elements') or [],
-             'groupid': M.get('groupid'), 'group': None, 'ima_status': None}
+             'groupid': M.get('groupid'), 'group': None, 'ima_status': None,
+             # Type locality — REFERENCE ONLY, straight from the cache. No check reads it: Mindat's
+             # locality is not authority over the paper, and a mismatch here means nothing on its
+             # own. It is here because the reviewer usually wants to know where the type material
+             # came from while reading the entry.
+             'locality': _u(M.get('tl') or '')}
     try:
         from pxrd_review import mindat
         g = mindat.group_of(name)

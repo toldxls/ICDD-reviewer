@@ -218,6 +218,22 @@ input[type=range] { accent-color: var(--accent); }
 .preview { color: var(--fix); white-space: nowrap; }
 .accept-triage { display: inline-flex; gap: 4px; }
 .accept-triage .tbtn { padding: 1px 7px; }
+
+/* 'reviewed' — the reviewer's own progress mark, sitting beside the Accept agree/disagree
+   buttons because that is where the decision is made. Rendered as a pill so it reads as a
+   control rather than a stray checkbox, and it goes green when ticked so 'what have I done'
+   is answerable at a glance. */
+.chk.reviewed {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  margin-left: 8px; padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+}
+.chk.reviewed:hover { border-color: var(--accent); color: var(--text); }
+.chk.reviewed:has(input:checked) {
+  color: var(--ok); border-color: var(--ok); font-weight: 600;
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.chk.reviewed input { accent-color: var(--ok); margin: 0; }
 .chk { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 #rerun-entry { padding: 3px 9px; }
 

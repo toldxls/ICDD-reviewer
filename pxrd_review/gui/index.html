@@ -129,10 +129,17 @@
             <span class="sep">·</span>
             <span id="e-accept"></span>
             <span id="e-accept-triage" class="accept-triage"></span>
+            <!-- 'reviewed' is the reviewer's own progress mark, and it sits right next to the
+                 agree/disagree buttons because that is the moment they decide it: judge the
+                 tool's Accept, then tick the entry off. It used to hide at the far end of the
+                 row, past the Rerun button. -->
+            <label class="chk reviewed" id="e-reviewed-box"
+                   title="Mark this entry as reviewed — greys it out in the list so you can see what is left">
+              <input type="checkbox" id="e-reviewed"> reviewed
+            </label>
             <span class="spacer"></span>
             <span id="e-preview" class="preview" title="what a rerun will write into this docx after your triage"></span>
             <button id="rerun-entry" title="Regenerate just this docx, applying your triage">Rerun entry ▸</button>
-            <label class="chk reviewed"><input type="checkbox" id="e-reviewed"> reviewed</label>
           </div>
         </section>
 

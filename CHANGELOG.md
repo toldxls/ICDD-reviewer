@@ -4,6 +4,31 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.3.1] — 2026-07-13
+
+### Added — GUI
+- **Mindat type locality** is shown in the Mindat panel (`Beltana Mine, Puttapa, … Australia`),
+  straight from the cache. **Reference only** — no check reads it: Mindat is not authority over
+  the paper, and a locality mismatch means nothing on its own. It is there because the reviewer
+  usually wants to know where the type material came from without leaving the entry.
+  Cached for 6,086 of 6,226 species (98 %); it ships in the bundled snapshot, so it works with
+  no API key.
+  *(Mindat gives a mineral's type locality only as an ID, and its `/localities/` endpoint ignores
+  an id filter — an unknown query param silently returns the unfiltered first page, i.e. somebody
+  else's locality. The names come from a page-sweep of the locality list instead: ~225 requests
+  and ~2 min on `--refresh`, vs several thousand single fetches. `type_localities` must be listed
+  in **both** `fields` and `expand`, or the API quietly returns nothing.)*
+- **"reviewed" now sits beside the Accept agree/disagree buttons** instead of hiding at the far
+  end of the header past the Rerun button — that is the moment the reviewer decides it. It reads
+  as a pill and turns green when ticked.
+
+### Docs
+- INSTALL.md carries **no version-pinned install command** anywhere: a pasted `v0.2.9…#sha256=…`
+  line quietly installs an *old tool*, which cost real time during a Windows setup. It points at
+  `/releases/latest`, uses `<version>` placeholders, tells the reader to take the hash-pinned line
+  from the release they are installing, and warns against pasting a versioned command from an old
+  message. The verify step now says the printed version must match the one marked `Latest`.
+
 ## [0.3.0] — 2026-07-13
 
 ### Changed — the reference-title check now WRITES its correction into the docx

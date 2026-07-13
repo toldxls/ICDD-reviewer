@@ -179,7 +179,10 @@ STRUCT_CACHE = os.path.join(_paths.cache_dir(), 'mindat_struct.json')
 # so adding the four Strunz codes is everything the group cache needs too. The two
 # caches stay SEPARATE files (a normal review only loads the small group cache) but
 # share a single network pass — no second walk over the same 6224 IMA minerals.
-COMBINED_FIELDS = STRUCT_FIELDS + ',strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4'
+# `type_localities` must appear in BOTH `fields` and `expand`: `fields` filters the response,
+# so requesting the expand alone silently returns nothing (the sweep then finds no ids and
+# every locality comes back blank — a quiet no-op rather than an error).
+COMBINED_FIELDS = STRUCT_FIELDS + ',strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4,type_localities'
 
 def _f(x):
     try:
@@ -187,7 +190,7 @@ def _f(x):
     except Exception:
         return 0.0
 
-def _struct_out(rows):
+def _struct_out(rows, localities=None):
     """Build the structural cache dict from already-pulled mineral rows."""
     recs = []
     for m in rows:
@@ -195,8 +198,46 @@ def _struct_out(rows):
                      'groupid': m.get('groupid') or 0, 'sg': m.get('spacegroup') or 0,
                      'a': _f(m.get('a')), 'b': _f(m.get('b')), 'c': _f(m.get('c')),
                      'al': _f(m.get('alpha')), 'be': _f(m.get('beta')), 'ga': _f(m.get('gamma')),
-                     'elements': m.get('elements') or [], 'formula': m.get('ima_formula', '')})
+                     'elements': m.get('elements') or [], 'formula': m.get('ima_formula', ''),
+                     # type locality, for REFERENCE only in the GUI — never a check. Mindat's
+                     # geomaterials records carry only locality IDs (`expand=type_localities`),
+                     # so the names come from a separate sweep of /localities/ (see _locality_names).
+                     'tl': (localities or {}).get((m.get('type_localities') or [None])[0], '')})
     return {'fetched': time.strftime('%Y-%m-%d'), 'recs': recs}
+
+def _locality_names(key, want, verbose=True):
+    """{locality id -> 'Beltana Mine, Puttapa, …, Australia'} for the ids we actually need.
+
+    Mindat gives a mineral's type locality only as an ID, and its /localities/ endpoint ignores
+    an id filter (an unknown query param comes back as the unfiltered first page — so asking for
+    one id silently returns somebody else's locality). Fetching each id on its own would be a few
+    thousand requests; sweeping the whole list two thousand at a time is ~250 and about a minute,
+    and we simply keep the ids we want. Failure here is never fatal: the locality is reference
+    material in the GUI, not a check, so an empty map just means the field is blank."""
+    want = {int(i) for i in want if i}
+    out = {}
+    if not want:
+        return out
+    url = '%s/localities/?page-size=2000&fields=id,txt&format=json' % BASE
+    pages = 0
+    try:
+        while url and pages < 600 and len(out) < len(want):
+            data = _fetch(url, key)
+            for r in (data.get('results') or []):
+                if r.get('id') in want and r.get('txt'):
+                    out[r['id']] = r['txt'].strip()
+            pages += 1
+            if verbose and pages % 50 == 0:
+                print('  localities: %d pages, %d/%d resolved' % (pages, len(out), len(want)))
+            url = data.get('next')
+            if url:
+                time.sleep(0.15)
+    except Exception as ex:
+        print('mindat: type-locality sweep stopped early (%s) — the GUI simply shows fewer '
+              'localities; nothing else is affected.' % ex, file=sys.stderr)
+    if verbose:
+        print('  resolved %d/%d type localities in %d pages' % (len(out), len(want), pages))
+    return out
 
 def refresh_struct(verbose=True):
     """The structural cache is now built as part of the single unified pull, so
@@ -264,7 +305,7 @@ def refresh(verbose=True):
     if not key:
         raise RuntimeError('No API key. Set $MINDAT_API_KEY or write %s' % KEYFILE)
     if verbose: print('pulling IMA minerals (cell + group + Strunz, one pass)…')
-    minerals = _pull(key, ima='true', fields=COMBINED_FIELDS)
+    minerals = _pull(key, ima='true', fields=COMBINED_FIELDS, expand='type_localities')
     if verbose: print('  %d minerals' % len(minerals))
     # sanity guard: a partial/failed pull must never clobber a good cache. The IMA
     # corpus is ~6200 species, so refuse an implausibly small pull (under 1000 rows,
@@ -296,8 +337,14 @@ def refresh(verbose=True):
         }
     grp = {'fetched': time.strftime('%Y-%m-%d'), 'minerals': index, 'groups': groups}
     _write_cache(CACHE, grp)
+    # type-locality NAMES for the ids the minerals point at (reference material for the GUI —
+    # never a check). Best-effort: a failure here leaves the field blank and nothing else breaks.
+    if verbose: print('resolving type localities…')
+    tl_ids = {(m.get('type_localities') or [None])[0] for m in minerals}
+    tl_ids.discard(None)
+    localities = _locality_names(key, tl_ids, verbose=verbose)
     # structural cache — built from the SAME rows, written to its own file
-    st = _struct_out(minerals)
+    st = _struct_out(minerals, localities)
     _write_cache(STRUCT_CACHE, st)
     _DB = None; _SDB = None                  # force reload of both fresh caches
     if verbose:

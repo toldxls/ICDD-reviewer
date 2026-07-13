@@ -1199,6 +1199,10 @@ function renderMindat() {
     if (M.group) kv.push(['group', M.group]);
     if (M.ima_status) kv.push(['IMA status', M.ima_status]);
     if (M.elements && M.elements.length) kv.push(['elements', M.elements.join(' ')]);
+    // type locality: reference only — no check reads it, and Mindat is not authority over the
+    // paper. It is here because the reviewer usually wants to know where the type material came
+    // from without leaving the entry.
+    if (M.locality) kv.push(['type locality', M.locality]);
     body.append(kvTable(kv));
   }
 

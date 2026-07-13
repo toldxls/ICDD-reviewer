@@ -1,7 +1,7 @@
 """PXRD mineral-review tool — validate an ICDD entry .docx against the source paper
 (.pdf), the author .cif, the ICDD .dft, and the Mindat API; write Word comments +
 highlights into copies. See README.md for the behavioral contract."""
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # Console output carries λ, α, Å, ⚠, ★. On Windows the default console/pipe encoding is
 # cp1252, which cannot encode any of them: a plain `python -m pxrd_review.…` run (i.e. not
