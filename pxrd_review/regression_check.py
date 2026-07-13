@@ -144,7 +144,7 @@ def _docx_with(td, rel, body):
 def _discover_prefers_reviewed_ok():
     """When an id has several parallel '(MineralName)' transcriptions (the multi-reviewer training
     tree), discover() picks the MOST-REVIEWED copy (tracked changes/comments), not the alphabetically
-    first RAW copy. Guards the Andy-Roberts-raw-copy bug (the 'primary_name 9/9 FP' false alarm)."""
+    first RAW copy. Guards the raw-copy tiebreak bug (the 'primary_name 9/9 FP' false alarm)."""
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         # 'A_raw' sorts before 'Z_reviewed' alphabetically, so the old tiebreak picked A_raw.

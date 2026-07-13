@@ -1077,7 +1077,7 @@ TOOL_AUTHOR = 'PXRD Review Tool'   # author string on the tool's own comments (a
 def _review_activity(p):
     """Crude count of HUMAN tracked-change + comment markers in a docx — a content signal for the
     MOST-REVIEWED copy when one id has several parallel transcriptions (e.g. the training tree's
-    Andy/Tony/Travis reviewer folders, where the raw transcription has zero edits and the reviewed
+    per-reviewer folders, where the raw transcription has zero edits and the reviewed
     copies carry the corrections). The tool's OWN comments (TOOL_AUTHOR) do not count: a stray
     copy of a tool '_edited' output must not outrank the clean source it was generated from.
     Tracked changes always count — the tool is comment-only, so ins/del marks are human. Only

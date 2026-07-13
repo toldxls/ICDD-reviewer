@@ -606,7 +606,7 @@ def _has_pdf_below(root, max_dirs=3000, max_depth=4):
 
 def _source_pool(folder, explicit=None):
     """Locate a 'source pool' of .pdf/.cif/.dft files when the entries folder itself holds none —
-    e.g. a reviewer's own docx-only folder (Tony2028Part1/…) whose papers live up in a shared
+    e.g. a reviewer's own docx-only folder (<reviewer>2028Part1/…) whose papers live up in a shared
     sibling Files/. An explicit --pdf-root wins; otherwise walk up to 5 ancestors (never above the
     home directory) and take the nearest whose bounded scan finds any .pdf. Returns None when
     nothing is found — the paper pane just stays empty, as before."""
@@ -642,7 +642,7 @@ def build_index(folder, out_dir, pdf_root=None):
     # Files/ pool). When no .pdf is found beside the entries, pull the paper/CIF/DFT panes from
     # an ancestor 'source pool' (explicit --pdf-root, else the nearest ancestor with .pdf files)
     # so the source-comparison panes still populate. docx discovery stays on `folder` — we show
-    # THIS folder's copies (e.g. Tony's); only the read-only source indexes fall back.
+    # THIS folder's copies (the reviewer's own); only the read-only source indexes fall back.
     if not STATE['pdf']:
         pool = _source_pool(folder, pdf_root)
         if pool and os.path.abspath(pool) != STATE['folder']:
@@ -813,8 +813,8 @@ def _entry_user_edits(d, src_path=None):
     cached copy would go stale the moment the output is edited). Two sources, in order:
       1. the edited output in review_out (the normal review workflow — the reviewer's marks
          live in the _edited.docx twin, checked in both naming variants);
-      2. otherwise the SOURCE docx itself — for a reviewer's own folder (e.g. Tony's copies,
-         which carry his tracked changes/comments directly, with no review_out twin).
+      2. otherwise the SOURCE docx itself — for a reviewer's own folder (their copies
+         carry the tracked changes/comments directly, with no review_out twin).
     The tool's own comments are excluded (author != AUTHOR), so only human marks show."""
     marks = []
     base = d.get('docx_basename')
