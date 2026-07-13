@@ -681,8 +681,12 @@ is byte-for-byte unchanged (the regression suite depends on this).
 **Security:** the server **binds to `127.0.0.1` only** (off the network/internet),
 Flask **debug is OFF**, and the browser only ever sends an entry **key** that the
 server maps to a file it indexed at startup — no raw paths from the page, so no
-path traversal. No data leaves the machine. It is a localhost, single-user tool —
-the same posture as a local Jupyter server.
+path traversal. Every request is gated on a **per-launch auth token** (carried once
+in the URL the tool opens/prints, then swapped for a session cookie), so other local
+users on a shared machine can't drive the server; a Host-header allowlist and an
+Origin check on state-changing requests handle DNS rebinding and CSRF. No data
+leaves the machine. It is a localhost, single-user tool — the same posture as a
+local Jupyter server (token included).
 
 The GUI's **written-to-docx** findings mirror `annotate_review` exactly (verified
 entry-by-entry against `annotation_log.txt`), so it is a faithful preview of what

@@ -773,7 +773,7 @@ def _has_foreign_comment(path):
         z = zipfile.ZipFile(path)
         if 'word/comments.xml' not in z.namelist():
             return False
-        cx = z.read('word/comments.xml').decode('utf-8', 'replace')
+        cx = C._zread(z, 'word/comments.xml').decode('utf-8', 'replace')
         return any(a != AUTHOR for a in re.findall(r'w:author="([^"]*)"', cx))
     except Exception:
         return False
@@ -786,7 +786,7 @@ def _has_tool_comment(path):
         z = zipfile.ZipFile(path)
         if 'word/comments.xml' not in z.namelist():
             return False
-        cx = z.read('word/comments.xml').decode('utf-8', 'replace')
+        cx = C._zread(z, 'word/comments.xml').decode('utf-8', 'replace')
         return AUTHOR in re.findall(r'w:author="([^"]*)"', cx)
     except Exception:
         return False
@@ -794,7 +794,7 @@ def _has_tool_comment(path):
 def _tool_ins_texts(path):
     """What every insertion the TOOL made in this docx currently says."""
     try:
-        root = _xml(zipfile.ZipFile(path).read('word/document.xml'))
+        root = _xml(C._zread(zipfile.ZipFile(path), 'word/document.xml'))
         return [''.join(t.text or '' for t in el.iter(_q('t')))
                 for el in root.iter(_q('ins')) if (el.get(_q('author')) or '') == AUTHOR]
     except Exception:
@@ -809,7 +809,7 @@ def _has_tracked_changes(path):
     hand-edited: it would take a backup each time and report the tool's own work back to the
     reviewer as theirs. Author is what separates them."""
     try:
-        root = _xml(zipfile.ZipFile(path).read('word/document.xml'))
+        root = _xml(C._zread(zipfile.ZipFile(path), 'word/document.xml'))
         for tag in ('ins', 'del'):
             for el in root.iter(_q(tag)):
                 if (el.get(_q('author')) or '') != AUTHOR:
@@ -827,7 +827,7 @@ def _extract_reviewer_edits(path):
     try:
         z = zipfile.ZipFile(path)
         names = z.namelist()
-        droot = _xml(z.read('word/document.xml'))
+        droot = _xml(C._zread(z, 'word/document.xml'))
         # tracked changes, in document order; pair an adjacent del+ins (same author,
         # either order) into a single 'old -> new' replacement.
         revs = []
@@ -857,7 +857,7 @@ def _extract_reviewer_edits(path):
                 out.append("deleted '%s'  (%s)" % (txt.strip(), auth)); i += 1
         # comments authored by someone other than the tool
         if 'word/comments.xml' in names:
-            croot = _xml(z.read('word/comments.xml'))
+            croot = _xml(C._zread(z, 'word/comments.xml'))
             for c in croot:
                 if c.tag == _q('comment') and c.get(_q('author')) != AUTHOR:
                     body = ''.join(t.text or '' for t in c.iter(_q('t'))).strip()
@@ -920,7 +920,16 @@ def _strip_tool_annotations(path, expect_fixes=()):
     and any non-tool comments. Lets a rerun refresh the tool's findings without
     disturbing the reviewer's work."""
     z = zipfile.ZipFile(path)
-    parts = {n: z.read(n) for n in z.namelist()}
+    # per-member cap via _zread, plus a whole-archive budget: many members each under
+    # the cap could still sum to a bomb (this path reads EVERY part to rebuild the zip).
+    parts, total = {}, 0
+    for n in z.namelist():
+        data = C._zread(z, n)
+        total += len(data)
+        if total > 256 * 2**20:
+            raise ValueError('refusing to rewrite %s: archive inflates past 256 MB '
+                             '(possible decompression bomb)' % os.path.basename(path))
+        parts[n] = data
     z.close()
     tool_ids = set()
     if 'word/comments.xml' in parts:

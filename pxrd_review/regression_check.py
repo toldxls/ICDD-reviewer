@@ -184,6 +184,30 @@ def _xxe_blocked():
             pass
     return ''.join(A._xml(dt).itertext()) == '&e;'   # lxml: entity left unresolved, no file read
 
+def _zip_bomb_blocked():
+    """Security invariant: the capped zip reader refuses a docx member whose declared
+    (uncompressed) size exceeds the cap — a decompression bomb fails with a clean
+    ValueError instead of inflating into memory. Exercised with a tiny cap so the
+    fixture stays small; a normal-size member still reads under the default cap."""
+    import tempfile, zipfile
+    fd, p = tempfile.mkstemp(suffix='.docx')
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(p, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('word/document.xml', b'<w:document/>' * 200)   # ~2.6 KB declared
+        for mod in (C, X):                       # both copies of the guard
+            with zipfile.ZipFile(p) as z:
+                try:
+                    mod._zread(z, 'word/document.xml', cap=1024)
+                    return False                 # should have refused: 2.6 KB > 1 KB cap
+                except ValueError:
+                    pass
+                if not mod._zread(z, 'word/document.xml'):   # default cap: reads fine
+                    return False
+        return True
+    finally:
+        os.remove(p)
+
 def _discover_recursive_ok():
     """discover() finds entry docx at ANY depth under the root, skips the tool's own review_out/
     output, and prefers the '(MineralName)' transcription over a supplementary docx of the same id."""
@@ -1069,6 +1093,7 @@ CASES = [
           and M._norm('Quartz') == 'quartz'),
  # security: docx XML parsing is not XXE-able (DTD rejected / external entity unresolved)
  ("docx XML parsers block XXE (DTD/external entity)", _xxe_blocked),
+ ("docx zip reads refuse a decompression-bomb member", _zip_bomb_blocked),
  # discovery is recursive (docx at any depth), skips review_out/, prefers the transcription
  ("discover() finds docx recursively, skips review_out/ + supp", _discover_recursive_ok),
  ("discover() picks the most-reviewed copy, not the raw transcription", _discover_prefers_reviewed_ok),

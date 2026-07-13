@@ -46,6 +46,22 @@ def _ssl_ctx():
 _CTX = _ssl_ctx()
 
 BASE = 'https://api.mindat.org/v1'
+
+# Every request carries the API key in an Authorization header, and urllib re-sends request
+# headers on a redirect — so a redirect (or a crafted pagination 'next' URL) pointing off the
+# Mindat API would hand the key to whatever host it names. Confine the key to the API: refuse
+# to fetch any URL outside BASE, including redirect targets.
+class _APIOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith(BASE):
+            raise urllib.error.HTTPError(
+                newurl, code, 'refusing a redirect off the Mindat API (the request carries '
+                'the API key): %s' % newurl, headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+_OPENER = urllib.request.build_opener(_APIOnlyRedirects(),
+                                      urllib.request.HTTPSHandler(context=_CTX))
+
 from pxrd_review import paths as _paths
 CACHE = os.path.join(_paths.cache_dir(), 'mindat_ima.json')
 KEYFILE = _paths.keyfile()
@@ -116,10 +132,14 @@ def api_key():
 
 # ----------------------------------------------------------------------------- fetch (mirrors the Apps Script backoff)
 def _fetch(url, key, max_retries=4):
+    if not url.startswith(BASE):
+        # covers the pagination 'next' URLs too — they come from the API response
+        raise RuntimeError('refusing a fetch off the Mindat API (the request carries '
+                           'the API key): %s' % url)
     req = urllib.request.Request(url, headers={'Authorization': 'Token ' + key})
     for i in range(max_retries):
         try:
-            with urllib.request.urlopen(req, timeout=60, context=_CTX) as r:
+            with _OPENER.open(req, timeout=60) as r:
                 if r.status == 200:
                     return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
@@ -463,7 +483,7 @@ def _reachable():
     try:
         req = urllib.request.Request(BASE + '/geomaterials/?page-size=1&format=json',
                                      headers={'Authorization': 'Token ' + (api_key() or '')})
-        urllib.request.urlopen(req, timeout=6, context=_CTX).read(1)
+        _OPENER.open(req, timeout=6).read(1)
         return True
     except Exception:
         return False

@@ -38,6 +38,18 @@ def _xml_fromstring(data):
         raise ValueError('refusing to parse docx XML with a DOCTYPE/DTD (possible XXE/entity bomb)')
     return ET.fromstring(data)
 
+ZIP_MEMBER_CAP = 64 * 2**20        # bytes — a real entry member is well under 1 MB
+
+def _zread(z, name, cap=ZIP_MEMBER_CAP):
+    """Read a docx zip member with a size cap, so a decompression-bomb member raises a
+    clean error instead of exhausting memory. Checking the declared size is sufficient:
+    zipfile stops inflating at the declared size and errors on a mismatch."""
+    size = z.getinfo(name).file_size
+    if size > cap:
+        raise ValueError('refusing to read %s: declared size %.0f MB exceeds the %d MB cap '
+                         '(possible decompression bomb)' % (name, size / 2**20, cap // 2**20))
+    return z.read(name)
+
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 def _t(e): return e.tag.replace(W, '')
 
@@ -57,7 +69,7 @@ def cell_value(tc):
     return s
 
 def docx_rows(path):
-    root = _xml_fromstring(zipfile.ZipFile(path).read('word/document.xml'))
+    root = _xml_fromstring(_zread(zipfile.ZipFile(path), 'word/document.xml'))
     rows = []
     for tr in root.iter(W + 'tr'):
         rows.append([cell_value(tc) for tc in tr.findall(W + 'tc')])
@@ -148,7 +160,7 @@ def parse_comments(path):
     """Reviewer comments from word/comments.xml -> [(author, text)]."""
     z = zipfile.ZipFile(path)
     if 'word/comments.xml' not in z.namelist(): return []
-    root = _xml_fromstring(z.read('word/comments.xml'))
+    root = _xml_fromstring(_zread(z, 'word/comments.xml'))
     out = []
     for c in root.iter(W + 'comment'):
         txt = ''.join(t.text or '' for t in c.iter() if _t(t) == 't').strip()
@@ -1125,10 +1137,10 @@ def _review_activity(p):
     Returns 0 on any read error (treated as un-reviewed)."""
     try:
         with zipfile.ZipFile(p) as z:
-            xml = z.read('word/document.xml').decode('utf-8', 'ignore')
+            xml = _zread(z, 'word/document.xml').decode('utf-8', 'ignore')
             n = xml.count('<w:ins ') + xml.count('<w:del ')
             try:
-                cxml = z.read('word/comments.xml').decode('utf-8', 'ignore')
+                cxml = _zread(z, 'word/comments.xml').decode('utf-8', 'ignore')
                 n += sum(1 for m in re.finditer(r'<w:comment\s[^>]*?w:author="([^"]*)"', cxml)
                          if m.group(1) != TOOL_AUTHOR)
             except KeyError:

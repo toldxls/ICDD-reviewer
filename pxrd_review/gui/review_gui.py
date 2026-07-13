@@ -27,10 +27,12 @@ Run:
 
 Security: binds to 127.0.0.1 only (not the network), Flask debug OFF, and the
 browser only ever sends an entry KEY that the server maps to a file it indexed at
-startup — no raw paths from the page, so no path traversal. No data leaves the
-machine.
+startup — no raw paths from the page, so no path traversal. A per-launch auth token
+(in the printed/opened URL, redeemed for a session cookie) keeps OTHER local users on
+a shared machine out; Host-allowlist + Origin checks handle DNS rebinding and CSRF.
+No data leaves the machine.
 """
-import sys, os, re, io, json, html, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time
+import sys, os, re, io, json, html, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time, secrets
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
@@ -50,7 +52,7 @@ def _serial_pdf_reader(path):
 C.set_pdf_reader(_serial_pdf_reader)
 
 try:
-    from flask import Flask, jsonify, request, send_file, abort, Response
+    from flask import Flask, jsonify, request, send_file, abort, Response, redirect
 except ImportError:
     sys.exit("Flask is not installed — run: pip3 install -r requirements.txt "
              "(the GUI needs Flask; the CLI checks do not).")
@@ -60,13 +62,19 @@ app = Flask(__name__, static_folder=os.path.join(HERE, 'static'),
             static_url_path='/static')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0      # don't let the browser cache app.js/css/index
 
-# Security guard for a localhost-only server (no authentication by design):
+# Security guard for a localhost-only server:
 #  - Host-header allowlist defeats DNS-rebinding — a malicious domain pointed at 127.0.0.1
 #    still sends its OWN Host header, not ours, so it's rejected.
 #  - For state-changing requests, an Origin/Referer check blocks cross-site POSTs (CSRF) —
 #    a page on another site can't silently drive /api/rerun (regenerate docx) or /api/triage.
+#  - A per-launch token gates every request: browsers can't forge the above, but another OS
+#    user on a shared machine can (curl sets any header) — without the token they could list
+#    directories (/api/browse), open files, and trigger reruns as whoever runs the GUI. The
+#    launch URL carries it once (?t=…); the index route swaps it for a session cookie.
 # Populated at launch once the port is known (see main()); empty => not yet configured (allow).
 _ALLOWED_HOSTS = set()
+_AUTH_TOKEN = None
+_AUTH_COOKIE = 'pxrd_token'
 
 _last_seen = None                                    # monotonic time of the most recent client request
 _closing_at = None                                   # monotonic time a tab reported it is unloading
@@ -83,6 +91,12 @@ def _guard_localhost():
         return                                       # pre-launch / unconfigured
     if (request.host or '').lower() not in _ALLOWED_HOSTS:
         abort(403)                                   # wrong Host -> DNS-rebinding / off-host
+    if _AUTH_TOKEN and not secrets.compare_digest(request.cookies.get(_AUTH_COOKIE) or '', _AUTH_TOKEN):
+        # no session cookie: the only way in is the launch URL's token, on '/' (which
+        # redeems it for the cookie) — anything else is another local user probing the port
+        if not (request.path == '/'
+                and secrets.compare_digest(request.args.get('t') or '', _AUTH_TOKEN)):
+            abort(403)
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
         # CSRF: a state-changing request must prove it came from this page. Browsers attach
         # Origin to every cross-origin fetch/XHR/form POST, so REQUIRE one of Origin/Referer
@@ -110,6 +124,14 @@ def _no_cache_ui(resp):
         resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         resp.headers['Pragma'] = 'no-cache'
         resp.headers['Expires'] = '0'
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    if request.path == '/':
+        # defence-in-depth for the innerHTML-heavy docx view: everything is served from
+        # this origin; style needs 'unsafe-inline' for the per-author --au style attributes.
+        resp.headers['Content-Security-Policy'] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+            "form-action 'self'; frame-ancestors 'none'")
     return resp
 
 # ------------------------------------------------------------------ global state
@@ -703,6 +725,14 @@ def start_analysis():
 # ------------------------------------------------------------------ routes
 @app.route('/')
 def index():
+    # Redeem the launch URL's token for the session cookie every request is gated on,
+    # then strip it from the address bar with a redirect (so a copied/shared URL — or a
+    # screen-shared address bar — doesn't carry it).
+    if _AUTH_TOKEN and secrets.compare_digest(request.args.get('t') or '', _AUTH_TOKEN):
+        resp = redirect('/')
+        resp.set_cookie(_AUTH_COOKIE, _AUTH_TOKEN, httponly=True, samesite='Strict',
+                        max_age=7 * 86400)
+        return resp
     return send_file(os.path.join(HERE, 'index.html'))
 
 @app.route('/api/ping')
@@ -799,7 +829,7 @@ def _reviewer_marks_from(path):
     try:
         with zipfile.ZipFile(path) as z:
             names = z.namelist()
-            droot = xml(z.read('word/document.xml'))
+            droot = xml(C._zread(z, 'word/document.xml'))
             revs = []
             for e in droot.iter():
                 # skip the tool's own tracked changes (its applied fixes): the reviewer-marks
@@ -829,7 +859,7 @@ def _reviewer_marks_from(path):
                         out.append({'author': auth, 'kind': kind, 'text': t})
                     i += 1
             if 'word/comments.xml' in names:
-                for c in xml(z.read('word/comments.xml')):
+                for c in xml(C._zread(z, 'word/comments.xml')):
                     if c.tag == q('comment') and c.get(q('author')) != A.AUTHOR:
                         body = ' '.join(t.text or '' for t in c.iter(q('t'))).strip()
                         out.append({'author': c.get(q('author')) or '?', 'kind': 'comment', 'text': body})
@@ -928,10 +958,10 @@ def _docx_html(path):
     try:
         with zipfile.ZipFile(path) as z:
             names = z.namelist()
-            droot = xml(z.read('word/document.xml'))
+            droot = xml(C._zread(z, 'word/document.xml'))
             comments = {}
             if 'word/comments.xml' in names:
-                for c in xml(z.read('word/comments.xml')):
+                for c in xml(C._zread(z, 'word/comments.xml')):
                     if _ln(c.tag) == 'comment':
                         body = ' '.join(t.text or '' for t in c.iter(q('t'))).strip()
                         comments[c.get(q('id'))] = (c.get(q('author')) or '?', body)
@@ -1185,7 +1215,9 @@ def api_pick_folder():
             # arrows are HISTORY buttons (greyed until you navigate) — the mouse route UP is the
             # folder-name dropdown in the toolbar, so the prompt spells that out.
             start = STATE.get('folder')
-            if not (start and os.path.isdir(start)):
+            # a control character can't be escaped into an AppleScript string literal —
+            # a newline in a folder name would end the string and inject script lines
+            if not (start and os.path.isdir(start)) or any(c in start for c in '\r\n'):
                 start = os.path.expanduser('~')
             loc = start.replace('\\', '\\\\').replace('"', '\\"')
             script = ('tell me to activate\n'
@@ -1467,9 +1499,10 @@ def main():
     port = _pick_port(args.port)
     if port != args.port:
         print('[review_gui] port %d busy — using %d' % (args.port, port))
-    global _ALLOWED_HOSTS
+    global _ALLOWED_HOSTS, _AUTH_TOKEN
     _ALLOWED_HOSTS = {'127.0.0.1:%d' % port, 'localhost:%d' % port}   # Host/CSRF allowlist
-    url = 'http://127.0.0.1:%d/' % port
+    _AUTH_TOKEN = secrets.token_urlsafe(16)      # keeps other local users off the port
+    url = 'http://127.0.0.1:%d/?t=%s' % (port, _AUTH_TOKEN)
     exit_note = '' if args.no_auto_exit else ' — closes itself when the browser does'
     print('\n[review_gui] serving on %s  (localhost only — Ctrl-C to stop%s)' % (url, exit_note))
     if not args.no_browser:

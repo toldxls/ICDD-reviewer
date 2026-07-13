@@ -44,6 +44,18 @@ def _xml_fromstring(data):
         raise ValueError('refusing to parse docx XML with a DOCTYPE/DTD (possible XXE/entity bomb)')
     return ET.fromstring(data)
 
+ZIP_MEMBER_CAP = 64 * 2**20        # bytes — a real entry member is well under 1 MB
+
+def _zread(z, name, cap=ZIP_MEMBER_CAP):
+    """Read a docx zip member with a size cap, so a decompression-bomb member raises a
+    clean error instead of exhausting memory. Checking the declared size is sufficient:
+    zipfile stops inflating at the declared size and errors on a mismatch."""
+    size = z.getinfo(name).file_size
+    if size > cap:
+        raise ValueError('refusing to read %s: declared size %.0f MB exceeds the %d MB cap '
+                         '(possible decompression bomb)' % (name, size / 2**20, cap // 2**20))
+    return z.read(name)
+
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 def _t(e): return e.tag.replace(W, '')
 
@@ -65,7 +77,7 @@ def _cell_text(tc):
     return ''.join(el.text or '' for el in tc.iter() if _t(el) == 't')
 
 def _rows(path):
-    root = _xml_fromstring(zipfile.ZipFile(path).read('word/document.xml'))
+    root = _xml_fromstring(_zread(zipfile.ZipFile(path), 'word/document.xml'))
     out = []
     for tr in root.iter(W + 'tr'):
         out.append([_cell_text(tc) for tc in tr.findall(W + 'tc')])
