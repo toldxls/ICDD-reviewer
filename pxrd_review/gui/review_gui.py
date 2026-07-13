@@ -777,9 +777,12 @@ def _mindat_status():
     try:
         from pxrd_review import mindat
         state, line = mindat.cache_status()
-        return {'state': state, 'text': line}
+        # what this user can DO about it: with a key, refresh; without one, they cannot — their
+        # only route to fresher data is a newer release.
+        return {'state': state, 'text': line, 'action': mindat.cache_action()}
     except Exception as ex:
-        return {'state': 'missing', 'text': 'mindat cache: unreadable (%s)' % ex}
+        return {'state': 'missing', 'text': 'mindat cache: unreadable (%s)' % ex,
+                'action': {'kind': 'upgrade', 'text': mindat.RELEASES_URL}}
 
 def _ln(tag):
     """local-name of a namespaced lxml tag ('{…}ins' -> 'ins')."""

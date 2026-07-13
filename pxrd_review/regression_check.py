@@ -81,6 +81,19 @@ def _extras_of(eid):
     r = res_for(eid)
     return (r['extra'] if r else None)
 
+def _cache_sim(key, age, seed):
+    """cache_status() as a given user would see it: with/without a Mindat key, on a live cache or
+    on the snapshot shipped in the package."""
+    orig = (M.api_key, M.cache_age_days, M._struct_age_days, M._using_seed)
+    try:
+        M.api_key = lambda: ('k' if key else None)
+        M.cache_age_days = lambda: age
+        M._struct_age_days = lambda: age
+        M._using_seed = lambda: seed
+        return M.cache_status()
+    finally:
+        M.api_key, M.cache_age_days, M._struct_age_days, M._using_seed = orig
+
 def _ref_entry(ref):
     """A minimal entry whose only row is the Primary Reference — the fixture for check 26."""
     return type('S', (), {'raw_rows': [['References'], ['Primary Reference', ref]]})()
@@ -1036,6 +1049,20 @@ CASES = [
  # mindat name matching folds diacritics: Mindat keeps the accented species name
  # ('Åsgruvanite-(Ce)', 'Désorite') but the docx uses the ASCII form — they must match,
  # else a real species reads as 'not found among IMA species'. (Cache-independent unit check.)
+ # --- cache staleness: the advice must be something the user can ACT on -------------------
+ # A keyless reviewer cannot run --refresh (it needs a key and exits): their only route to fresher
+ # data is a newer release. And the bundled snapshot must not be judged at the 14-day API bar, or
+ # it reads "STALE" a fortnight after every release, permanently, at the people who can do nothing.
+ ("cache: a keyless reviewer is NOT nagged about a 100-day-old bundled snapshot", lambda:
+     _cache_sim(key=False, age=100, seed=True)[0] == 'ok'),
+ ("cache: at 200 days they ARE told — and pointed at a release, not at --refresh", lambda: (
+     lambda st, line: st == 'stale' and 'releases/latest' in line and '--refresh' not in line)(
+     *_cache_sim(key=False, age=200, seed=True))),
+ ("cache: with a key, --refresh is the advice (it works) at the 14-day bar", lambda: (
+     lambda st, line: st == 'stale' and '--refresh' in line)(
+     *_cache_sim(key=True, age=20, seed=False))),
+ ("cache: with a key, 3 days old is fine", lambda: _cache_sim(key=True, age=3, seed=False)[0] == 'ok'),
+
  ("mindat _norm folds diacritics (Å/é/č/ě/š == ASCII)",
   lambda: M._norm('Åsgruvanite-(Ce)') == M._norm('Asgruvanite-(Ce)')
           and M._norm('Désorite') == M._norm('Desorite')

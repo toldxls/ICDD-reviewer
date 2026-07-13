@@ -84,23 +84,29 @@ async function loadEntries() {
 // Mindat cache age. A missing/stale cache silently weakens the group, chemistry and cell
 // cross-checks — the entries just come back with fewer findings — so surface it in the header
 // rather than letting it pass for a clean batch. Quiet (grey) when fresh, loud when not.
-const MINDAT_REFRESH_CMD = 'python3 -m pxrd_review.mindat --refresh';
 function renderMindatChip(m) {
   const chip = $('#mindat-chip');
   if (!chip || !m) return;
   const stale = m.state !== 'ok';
+  // What this reviewer can actually DO. With a Mindat key: refresh. WITHOUT one they cannot —
+  // `--refresh` needs a key and exits — so their only route to fresher data is a newer release.
+  // Telling them to run a command that cannot work is worse than saying nothing.
+  const act = m.action || { kind: 'refresh', text: 'python3 -m pxrd_review.mindat --refresh' };
+  const upgrade = act.kind === 'upgrade';
   chip.textContent = stale ? '⚠ mindat cache' : 'mindat ✓';
-  // The tooltip carries the fix command; clicking copies it, so the reviewer never has to
-  // go hunting through the README for it.
-  chip.title = (m.text || '') +
-    (stale ? '\n\nTo refresh, run:\n  ' + MINDAT_REFRESH_CMD + '\n(click to copy)'
-           : '\n\nThe group / chemistry / cell cross-checks use this cache.\nRefresh with:  '
-             + MINDAT_REFRESH_CMD + '\n(click to copy)');
+  chip.title = (m.text || '') + '\n\n' +
+    'The group / chemistry / cell cross-checks read this cache.\n' +
+    (upgrade
+      ? (stale ? 'For fresher data, install a newer release:\n  ' : 'It ships inside the tool. Newer releases carry a fresher one:\n  ')
+        + act.text + '\n(click to open — or add a free Mindat API key and the tool refreshes itself)'
+      : (stale ? 'To refresh, run:\n  ' : 'Refresh with:\n  ')
+        + act.text + '\n(click to copy)');
   chip.classList.remove('hidden');
   chip.classList.toggle('chip-warn', stale);
   chip.onclick = async () => {
+    if (upgrade) { window.open(act.text, '_blank', 'noopener'); return; }
     try {
-      await navigator.clipboard.writeText(MINDAT_REFRESH_CMD);
+      await navigator.clipboard.writeText(act.text);
       const was = chip.textContent;
       chip.textContent = 'command copied ✓';
       setTimeout(() => { chip.textContent = was; }, 1400);

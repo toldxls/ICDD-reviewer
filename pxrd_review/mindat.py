@@ -375,9 +375,39 @@ def cache_age_days():
     except Exception:
         return None
 
-STALE_DAYS = 14                 # the auto-refresh threshold; the banner reports against the same line
+STALE_DAYS = 14                 # the AUTO-REFRESH bar: how old a key-backed cache may get
+# The BUNDLED snapshot needs its own, far longer bar. It is frozen at release time and a reviewer
+# with no API key CANNOT refresh it — their only path to fresher data is a newer release. Judging it
+# at 14 days flagged it "STALE" a fortnight after every release, permanently, at exactly the people
+# who could do nothing about it. Staleness here costs COVERAGE, never correctness: an unknown
+# species yields a console note and the cross-checks simply do not fire, so it can never invent a
+# false flag. IMA approves ~100 species a year (of 6,226), so ~4 months is a fair bar.
+SEED_STALE_DAYS = 120
 
-def cache_status(max_age_days=STALE_DAYS):
+RELEASES_URL = 'https://github.com/toldxls/ICDD-reviewer/releases/latest'
+
+def _using_seed():
+    """True when the data is coming from the snapshot shipped in the package, not a local pull."""
+    return not os.path.exists(CACHE)
+
+def cache_action():
+    """What the user can ACTUALLY do about a stale cache — which depends on whether they hold a key.
+
+    Telling a keyless reviewer to run `--refresh` is useless: it needs a key and exits. Their real
+    remedy is a newer release (the snapshot is refreshed at every release), or getting a free key.
+    """
+    if api_key():
+        return {'kind': 'refresh', 'text': 'python3 -m pxrd_review.mindat --refresh'}
+    return {'kind': 'upgrade', 'text': RELEASES_URL}
+
+def _remedy():
+    a = cache_action()
+    if a['kind'] == 'refresh':
+        return 'run: %s' % a['text']
+    return ('install a newer release (its snapshot is fresher): %s\n'
+            '           — or add a free Mindat API key and the tool refreshes itself' % a['text'])
+
+def cache_status(max_age_days=None):
     """(state, one_line) describing the offline Mindat caches.
 
     state is 'missing' | 'stale' | 'ok'. Worth printing at the top of every run: the
@@ -388,27 +418,33 @@ def cache_status(max_age_days=STALE_DAYS):
     have_g, have_s = available(), struct_available()
     if not have_g and not have_s:
         return 'missing', ('mindat cache: MISSING — group/chemistry/cell cross-checks are '
-                           'INACTIVE. Run: python3 -m pxrd_review.mindat --refresh')
+                           'INACTIVE. Reinstall the tool (the snapshot ships inside it): %s'
+                           % RELEASES_URL)
     n = len((_db() or {}).get('minerals') or {})
+    if not n:
+        # the file is there but holds nothing (a truncated download, a bad transfer). The
+        # cross-checks are INACTIVE, not merely old — and 'stale' would imply the data is just a
+        # bit behind, which is the one thing this banner exists to prevent.
+        return 'missing', ('mindat cache: UNREADABLE (0 species) — group/chemistry/cell '
+                           'cross-checks are INACTIVE. Reinstall the tool: %s' % RELEASES_URL)
     fetched = (_db() or {}).get('fetched') or '?'
     ages = [x for x in (gage, sage) if x is not None]
     age = max(ages) if ages else None
+    seed = _using_seed()
+    if max_age_days is None:
+        max_age_days = SEED_STALE_DAYS if seed else STALE_DAYS
     partial = '' if (have_g and have_s) else \
               ('  [%s cache missing]' % ('structural' if have_g else 'group'))
     if age is None:
-        return 'stale', ('mindat cache: undated — age unknown. Run: '
-                         'python3 -m pxrd_review.mindat --refresh' + partial)
+        return 'stale', 'mindat cache: undated — age unknown. %s%s' % (_remedy(), partial)
     when = 'today' if age == 0 else ('1 day old' if age == 1 else '%d days old' % age)
-    # Say WHERE the data came from. On a machine with no API key the seed shipped in the wheel
-    # is doing the work, and the reviewer should know that: it explains why the checks run at
-    # all, and why the date is the release date rather than today.
-    src = '' if os.path.exists(CACHE) else ' [bundled with this release]'
+    # Say WHERE the data came from. On a machine with no API key the snapshot shipped in the wheel
+    # is doing the work, and the reviewer should know that: it explains why the checks run at all,
+    # and why the date is the release date rather than today.
+    src = ' [bundled with this release]' if seed else ''
     line = 'mindat cache: %s species, fetched %s (%s)%s%s' % (f'{n:,}', fetched, when, src, partial)
     if age >= max_age_days or partial:
-        tail = ' — STALE; it auto-refreshes when online' + (
-            ' (needs a Mindat API key)' if not api_key() else '') + \
-            ', or run: python3 -m pxrd_review.mindat --refresh'
-        return 'stale', line + tail
+        return 'stale', line + ' — STALE; %s' % _remedy()
     return 'ok', line
 
 def print_cache_banner(max_age_days=STALE_DAYS, file=None):

@@ -4,6 +4,31 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.3.3] — 2026-07-13
+
+### Fixed — the stale-cache warning told reviewers to run a command they cannot run
+The bundled Mindat snapshot was judged against the **14-day** bar meant for a key-backed cache, so
+it read `!! STALE` a fortnight after every release — permanently — and the remedy it offered was
+`--refresh`, which **needs an API key and exits without one**. That is the entire population the
+snapshot exists for: nagged forever, and handed a command that cannot work.
+
+- The bundled snapshot now has its own bar: **120 days**, not 14. Staleness here costs *coverage*,
+  never correctness — an unknown species yields a console note and the cross-checks simply do not
+  fire, so it can never invent a false flag. IMA approves ~100 species a year of 6,226.
+- The advice now depends on what the user can actually do. **With** a key: `--refresh`. **Without**
+  one: install a newer release (`/releases/latest` — every release ships a fresher snapshot), or
+  get a free key and the tool refreshes itself. The GUI chip follows suit — it opens the releases
+  page for a keyless reviewer instead of copying a command that would fail.
+- A **corrupt or truncated** snapshot (present on disk, 0 species) now reports `UNREADABLE …
+  cross-checks are INACTIVE` rather than "stale". It was claiming the data was merely a bit old
+  while the checks were in fact dead — the one thing this banner exists to prevent.
+
+*(Not doing: auto-cutting a release when the snapshot ages. A Mindat refresh changes what the
+checks find, and validating that needs the private fixtures + corpus sweep, which cannot run in CI
+— an automated release would ship unverified check behaviour. It would also require the
+maintainer's personal Mindat key as a secret in a public repo. Refreshing the snapshot at each
+release, which the release procedure already does, covers it.)*
+
 ## [0.3.2] — 2026-07-13
 
 **Upgrade from 0.3.0/0.3.1.** The final review found reproduced bugs in the one check that WRITES
