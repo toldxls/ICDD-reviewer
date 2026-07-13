@@ -4,6 +4,34 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.3.4] — 2026-07-13
+
+### Security — hardening pass from a full code audit (no high-severity findings)
+The audit confirmed the existing posture — localhost-only GUI, XXE-guarded XML parsers, escaped
+rendering everywhere, verified TLS, no secrets in git history — and produced five low-severity /
+defence-in-depth fixes, all applied:
+
+- **The GUI now requires a per-launch auth token.** A browser could never forge the Host/Origin
+  checks, but **another OS user on a shared machine can** (curl sets any header): without the
+  token they could list directories (`/api/browse`), open files in Word, and trigger reruns
+  through `127.0.0.1`. The launch URL carries the token once (`?t=…`); the index route swaps it
+  for an `HttpOnly` session cookie and strips it from the address bar. A bookmarked bare
+  `http://127.0.0.1:8000/` returns 403 after a fresh launch — use the URL the tool prints/opens.
+- **The Mindat API key is confined to `api.mindat.org`.** The client refuses to fetch any URL off
+  the API base — including the API-supplied pagination `next` links — and refuses redirects off
+  the API host (urllib re-sends the `Authorization` header on redirects, so a redirect elsewhere
+  would have handed the key to whatever host it named).
+- **Capped docx zip reads.** A decompression-bomb member now raises a clean error instead of
+  inflating into memory: 64 MB per member on every read path, plus a 256 MB whole-archive budget
+  where the annotator rebuilds a docx. Regression-locked alongside the existing XXE case.
+- **Hardening headers on the GUI:** `X-Content-Type-Options: nosniff` on every response and a
+  `default-src 'self'` Content-Security-Policy on the page — defence-in-depth for the
+  innerHTML-heavy docx view.
+- The macOS folder picker refuses a start path containing `\r`/`\n` — a control character cannot
+  be escaped into an AppleScript string literal.
+
+No check behaviour changed. 293/293 regression cases pass (one new: the zip-read cap).
+
 ## [0.3.3] — 2026-07-13
 
 ### Fixed — the stale-cache warning told reviewers to run a command they cannot run
