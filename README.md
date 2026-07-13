@@ -46,8 +46,12 @@ pip install -e .
 Installs the dependencies (**PyMuPDF**, **python-docx**, **Flask**) and puts the `pxrd` command on
 your PATH. (Libraries only, without the command: `pip install -r requirements.txt`.)
 
-**2 — Add your Mindat API key.** *Optional — this only enables the Mindat classification/chemistry
-cross-checks; everything else runs without it.* Get a key from your **mindat.org** account, then
+**2 — Add your Mindat API key.** *Optional.* **A Mindat snapshot ships inside the package**
+(`pxrd_review/data/*.json.gz`, refreshed at each release), so the classification / chemistry /
+cell cross-checks work offline out of the box with **no key at all** — the header says
+`[bundled with this release]` when that copy is doing the work. A key only buys **fresher** data:
+with one, the tool auto-refreshes when the snapshot goes stale (Mindat adds species continuously,
+and its data already lags the CNMNC newsletter). Get a key from your **mindat.org** account, then
 use **either** a key file **or** an environment variable:
 
 *Key file* (set once, persists across sessions — recommended):
@@ -464,6 +468,12 @@ Setup:
 - Build/refresh BOTH caches (group lookup + structural) from one API pull:
   `python3 -m pxrd_review.mindat --refresh`. There is no need to run anything else —
   `--refresh-struct` is kept only as an alias for the same command.
+- Report what the tool is actually using: `python3 -m pxrd_review.mindat --status`.
+- **Releasing (maintainer):** `python3 -m pxrd_review.mindat --refresh --bundle` freezes the
+  current caches into `pxrd_review/data/*.json.gz` and the wheel picks them up, so reviewers
+  with no API key still get the Mindat-backed checks. Commit `pxrd_review/data/` with the
+  release. Without this the checks would simply find nothing on their machines — which looks
+  exactly like a clean batch.
 - Test one name: `python3 -m pxrd_review.mindat --lookup "#mineral-2T"`
 - HTTPS needs CA certs; the client uses `certifi` if importable (macOS
   python.org builds lack system certs). `$MINDAT_INSECURE=1` disables

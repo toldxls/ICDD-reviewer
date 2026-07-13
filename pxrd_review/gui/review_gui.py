@@ -923,9 +923,19 @@ def _docx_html(path):
             for tr in node:
                 if _ln(tr.tag) != 'tr':
                     continue
-                cells = ''.join('<td>%s</td>' % ''.join(block(x) for x in tc if _ln(x.tag) in ('p', 'tbl'))
-                                for tc in tr if _ln(tc.tag) == 'tc')
-                rows.append('<tr>%s</tr>' % cells)
+                tcs = [tc for tc in tr if _ln(tc.tag) == 'tc']
+                # Label the row with its own first cell (lower-cased) and number the columns, so
+                # the '? look' button can land on the exact cell a finding is about — the anchor
+                # ('reference', 'cell:a', 'instr') names a row + column, and without these the
+                # rendered table is an anonymous grid the client cannot aim at.
+                head = ''
+                if tcs:
+                    head = ' '.join(''.join(x.text or '' for x in tcs[0].iter(q('t'))).split()).lower()
+                cells = ''.join(
+                    '<td data-c="%d">%s</td>'
+                    % (i, ''.join(block(x) for x in tc if _ln(x.tag) in ('p', 'tbl')))
+                    for i, tc in enumerate(tcs))
+                rows.append('<tr data-h="%s">%s</tr>' % (esc(head[:60]), cells))
             return '<table class="docxtbl">%s</table>' % ''.join(rows)
         return ''
     body = next((ch for ch in droot if _ln(ch.tag) == 'body'), None)

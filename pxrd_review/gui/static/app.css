@@ -385,6 +385,20 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 #docx-view .docxtbl td {
   border: 1px solid var(--line); padding: 3px 6px; vertical-align: top; font-size: .95em;
 }
+/* '? look' landing on the docx: the cell the finding is about. It STAYS marked (docx-hit) so the
+   reviewer can look away and back, and flashes once on arrival so the eye catches where it went —
+   the same idea as the .pdf hit-flash, and deliberately NOT yellow: yellow is the tool's own
+   highlight inside the document, and this must not be mistaken for one. */
+#docx-view .docxtbl td.docx-hit {
+  outline: 2px solid var(--accent, #5aa9ff);
+  background: color-mix(in srgb, var(--accent, #5aa9ff) 14%, transparent);
+}
+#docx-view .docxtbl td.docx-flash { animation: docxflash 1.6s ease-out 1; }
+@keyframes docxflash {
+  0%   { background: color-mix(in srgb, var(--accent, #5aa9ff) 55%, transparent); }
+  100% { background: color-mix(in srgb, var(--accent, #5aa9ff) 14%, transparent); }
+}
+
 /* tracked changes + comments are coloured by AUTHOR (--au, set inline per mark), enlarged and
    highlighted so overlapping reviewers are easy to tell apart. ins = underline, del = strike. */
 #docx-view ins, #docx-view del {

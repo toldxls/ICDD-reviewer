@@ -51,19 +51,49 @@ CACHE = os.path.join(_paths.cache_dir(), 'mindat_ima.json')
 KEYFILE = _paths.keyfile()
 FIELDS = 'id,name,groupid,strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4,ima_status'
 
+# ----------------------------------------------------------------------------- bundled seed cache
+# A gzipped snapshot of BOTH caches ships inside the package (pxrd_review/data/*.json.gz,
+# refreshed at release time by `--bundle`). Without it, a user with no Mindat API key gets no
+# group/chemistry/cell cross-checks at all — and, worse, that looks exactly like a clean batch.
+# With it, the tool works fully offline out of the box; a key only buys fresher data, and the
+# usual staleness auto-refresh still overwrites the seed into the real cache when one exists.
+SEED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+
+def _seed_path(path):
+    return os.path.join(SEED_DIR, os.path.basename(path) + '.gz')
+
+def _read_seed(path):
+    """The packaged snapshot for this cache, or {} when it isn't there."""
+    sp = _seed_path(path)
+    if not os.path.exists(sp):
+        return {}
+    try:
+        import gzip
+        with gzip.open(sp, 'rt', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        print('mindat: bundled cache unreadable (%s)' % sp, file=sys.stderr)
+        return {}
+
+def _has(path):
+    """This cache is usable — from the user's own copy, or from the packaged seed."""
+    return os.path.exists(path) or os.path.exists(_seed_path(path))
+
 # ----------------------------------------------------------------------------- cache io
 def _read_cache(path):
     """Guarded cache read: a corrupt/truncated file is treated as ABSENT (one-line
     stderr warning) so the staleness logic self-heals by re-fetching, instead of
-    every consumer crashing on json.load."""
+    every consumer crashing on json.load. Falls back to the packaged seed, so a user with
+    no API key still gets the Mindat-backed checks."""
     if not os.path.exists(path):
-        return {}
+        return _read_seed(path)
     try:
         with open(path, encoding='utf-8') as f:
             return json.load(f)
     except Exception:
-        print('mindat: cache file unreadable — treating as absent (%s)' % path, file=sys.stderr)
-        return {}
+        print('mindat: cache file unreadable — falling back to the bundled copy (%s)' % path,
+              file=sys.stderr)
+        return _read_seed(path)
 
 def _write_cache(path, obj):
     """Atomic JSON write (same-dir temp + os.replace) so a Ctrl-C / disk-full
@@ -182,7 +212,7 @@ def struct_db():
     return _SDB
 
 def struct_available():
-    return os.path.exists(STRUCT_CACHE)
+    return _has(STRUCT_CACHE)
 
 def _struct_age_days():
     """Age of the structural cache in days, or None if undated/missing."""
@@ -308,10 +338,16 @@ def cache_status(max_age_days=STALE_DAYS):
         return 'stale', ('mindat cache: undated — age unknown. Run: '
                          'python3 -m pxrd_review.mindat --refresh' + partial)
     when = 'today' if age == 0 else ('1 day old' if age == 1 else '%d days old' % age)
-    line = 'mindat cache: %s species, fetched %s (%s)%s' % (f'{n:,}', fetched, when, partial)
+    # Say WHERE the data came from. On a machine with no API key the seed shipped in the wheel
+    # is doing the work, and the reviewer should know that: it explains why the checks run at
+    # all, and why the date is the release date rather than today.
+    src = '' if os.path.exists(CACHE) else ' [bundled with this release]'
+    line = 'mindat cache: %s species, fetched %s (%s)%s%s' % (f'{n:,}', fetched, when, src, partial)
     if age >= max_age_days or partial:
-        return 'stale', line + ' — STALE; it auto-refreshes when online, or run: ' \
-                                'python3 -m pxrd_review.mindat --refresh'
+        tail = ' — STALE; it auto-refreshes when online' + (
+            ' (needs a Mindat API key)' if not api_key() else '') + \
+            ', or run: python3 -m pxrd_review.mindat --refresh'
+        return 'stale', line + tail
     return 'ok', line
 
 def print_cache_banner(max_age_days=STALE_DAYS, file=None):
@@ -389,7 +425,7 @@ def _db():
     return _DB
 
 def available():
-    return os.path.exists(CACHE)
+    return _has(CACHE)
 
 def _norm(name):
     """Normalise a mineral name for matching: FOLD DIACRITICS (Å→A, ö→o), lowercase,
@@ -435,15 +471,47 @@ def group_of(name):
     return (gname, rec.get('strunz', ''), rec['name'], rec.get('ima_status'))
 
 # ----------------------------------------------------------------------------- cli
+def bundle_seed():
+    """MAINTAINER step, run before cutting a release: freeze the current caches into the
+    package as gzipped seeds, so a user with no Mindat API key still gets the group /
+    chemistry / cell cross-checks straight out of the wheel. Refresh first, then bundle."""
+    import gzip, shutil
+    os.makedirs(SEED_DIR, exist_ok=True)
+    out = []
+    for path in (CACHE, STRUCT_CACHE):
+        if not os.path.exists(path):
+            raise SystemExit('no cache at %s — run --refresh first' % path)
+        db = _read_cache(path)
+        n = len(db.get('minerals') or db.get('recs') or {})
+        if n < 1000:                       # same sanity floor the refresh uses
+            raise SystemExit('%s holds only %d records — refusing to bundle a partial cache'
+                             % (os.path.basename(path), n))
+        sp = _seed_path(path)
+        with open(path, 'rb') as fi, gzip.open(sp, 'wb', compresslevel=9) as fo:
+            shutil.copyfileobj(fi, fo)
+        out.append((sp, n, db.get('fetched'), os.path.getsize(sp)))
+    for sp, n, fetched, size in out:
+        print('bundled %-28s %5d records  fetched %s  (%.0f KB)'
+              % (os.path.basename(sp), n, fetched, size / 1024))
+    print('\nCommit pxrd_review/data/ — the wheel now works with no API key.')
+
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument('--refresh', action='store_true', help='(re)build both caches (group + structural) from one API pull')
     ap.add_argument('--refresh-struct', action='store_true', help='alias for --refresh (both caches are built from one pull now)')
+    ap.add_argument('--bundle', action='store_true',
+                    help='maintainer: freeze the current caches into pxrd_review/data/ so the '
+                         'wheel works with no API key (run --refresh first)')
+    ap.add_argument('--status', action='store_true', help='report the cache age and where it came from')
     ap.add_argument('--lookup')
     a = ap.parse_args()
     if a.refresh or getattr(a, 'refresh_struct', False):
         refresh()
+    if a.bundle:
+        bundle_seed()
+    if a.status:
+        print_cache_banner()
     if a.lookup:
         if not available():
             print('no cache — run --refresh first'); raise SystemExit(1)

@@ -427,10 +427,16 @@ function triageControls(fkey, t, label) {
       saveTriage(); renderFindings();
     }
   }, lbl);
-  // '? look' is pure NAVIGATION — it jumps the .pdf to this finding's evidence and does NOT set a
-  // verdict, so investigating a flag can never overwrite a confirm/dismiss. Lands in the live page.
+  // '? look' is pure NAVIGATION — it jumps to this finding's evidence and does NOT set a verdict,
+  // so investigating a flag can never overwrite a confirm/dismiss. It follows the pane you are
+  // actually reading: on the docx it lands on the cell the finding is about, on the .pdf it lands
+  // on the evidence in the live page. With no .pdf paired, the docx is the only place to look.
   const look = el('button', { class: 'tbtn look',
-    onclick: ev => { ev.stopPropagation(); lookInPage(fkey); } }, '? look');
+    onclick: ev => {
+      ev.stopPropagation();
+      if (S.midMode === 'docx' || !(S.a && S.a.pdf)) lookInDocx(fkey);
+      else lookInPage(fkey);
+    } }, '? look');
   const note = el('input', { class: 'tnote', type: 'text', placeholder: 'note…',
     value: t.note || '',
     onclick: ev => ev.stopPropagation(),
@@ -608,6 +614,85 @@ async function lookInPage(fkey) {
   renderHitNav();
   const landIdx = hits.findIndex(h => h.page === page);
   requestAnimationFrame(() => gotoHit(landIdx >= 0 ? landIdx : 0));
+}
+
+// ---- '? look' in the DOCX pane ---------------------------------------------
+// The .pdf side of '? look' answers "what does the paper say?". This is the other half:
+// "which cell is this about?" — it lands on the exact cell in the transcription. Findings
+// carry an anchor ('reference', 'cell:a', 'instr', 'name', …) which names a row and a column;
+// the rendered table carries tr[data-h] (the row's own first cell) and td[data-c], so the
+// anchor can be resolved directly. Anything without a usable anchor falls back to searching
+// the cells for the finding's terms — the same terms the .pdf look uses.
+// anchor -> [row matcher, column index]. The row labels are the docx's own first-cell text, so
+// they vary between entries ('IMA Number' on some, 'IMA Classifications:' on others; the
+// instrument block may only carry 'Radiation ='). Each pattern therefore accepts the variants
+// the corpus actually contains, and an anchor that resolves to nothing falls through to the
+// term search rather than landing the reviewer on the wrong cell.
+// Patterns are tried IN ORDER, most specific first — a single combined regex would match
+// whichever row comes first in the document, which lands an instrument finding on the
+// 'Instrumentation' section HEADER instead of the 'Radiation =' row that carries the value.
+const DOCX_ROW = {
+  reference:       [[/^primary reference/], 1],
+  name:            [[/^mineral\b/], 1],
+  primary:         [[/^primary\b/], 1],
+  ima:             [[/^ima number/, /^ima\b/], 1],
+  instr:           [[/spacing instr/, /^radiation/, /^instrumentation/], 1],
+  spacing_instr:   [[/spacing instr/, /^radiation/, /^instrumentation/], 1],
+  intensity_instr: [[/intensity instr/, /spacing instr/, /^radiation/], 1],
+  refl:            [[/^d\(a\)/, /^d\(å\)/], 0],
+};
+// the Author's Cell row lays its 8 params out in fixed columns (see PARAM_COL server-side)
+const DOCX_CELL_COL = { a: 1, b: 2, c: 3, 'α': 4, 'β': 5, 'γ': 6, SG: 7, Z: 8 };
+
+function docxTarget(view, f) {
+  const rows = [...view.querySelectorAll('tr[data-h]')];
+  const pick = (res, col) => {
+    for (const re of res) {                       // most specific pattern first
+      const tr = rows.find(r => re.test(r.dataset.h || ''));
+      if (!tr) continue;
+      const tds = tr.querySelectorAll('td');
+      if (tds.length) return tds[Math.min(col, tds.length - 1)];
+    }
+    return null;
+  };
+  const anchor = f && f.anchor;
+  if (anchor && anchor.startsWith('cell:')) {
+    const col = DOCX_CELL_COL[anchor.slice(5)];
+    const hit = col != null && pick([/^author's cell/], col);
+    if (hit) return hit;
+  }
+  if (anchor && DOCX_ROW[anchor]) {
+    const [res, col] = DOCX_ROW[anchor];
+    const hit = pick(res, col);
+    if (hit) return hit;
+  }
+  // no anchor we can resolve -> find the cell that actually contains the finding's evidence
+  const t = termsFor(fkeyOf(f));
+  const terms = (t.terms || []).filter(x => x && x.length > 2).slice(0, 6);
+  if (!terms.length) return null;
+  const tds = [...view.querySelectorAll('td')];
+  for (const term of terms) {
+    const hit = tds.find(td => (td.textContent || '').includes(term));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function lookInDocx(fkey) {
+  const key = S.key;
+  S.focusKey = fkey;
+  if (S.midMode !== 'docx') setMidMode('docx');
+  await loadDocxView();                       // no-op when it is already cached
+  if (S.key !== key) return;                  // entry changed under us
+  const view = $('#docx-view');
+  const f = findingOf(fkey);
+  const el = view && docxTarget(view, f);
+  if (!el) { focusFinding(fkey); return; }    // nothing to aim at — still select the finding
+  view.querySelectorAll('.docx-hit').forEach(x => x.classList.remove('docx-hit'));
+  el.classList.add('docx-hit');
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el.classList.remove('docx-flash');
+  requestAnimationFrame(() => el.classList.add('docx-flash'));
 }
 
 // ---- pdf pane --------------------------------------------------------------

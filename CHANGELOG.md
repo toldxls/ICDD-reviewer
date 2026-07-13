@@ -4,6 +4,24 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.2.7] — 2026-07-13
+
+### Added
+- **'? look' now works on the docx pane.** It answered "what does the paper say?" and did
+  nothing for the transcription; it now follows whichever pane is open and lands on the exact
+  cell the finding is about (scrolls to it, outlines it, flashes once). Findings carry an
+  anchor (`reference`, `cell:a`, `instr`, …), and the rendered docx table now carries
+  `tr[data-h]` / `td[data-c]`, so the anchor resolves to a row and column; anything without a
+  usable anchor falls back to searching the cells for the finding's own evidence terms. With
+  no `.pdf` paired, the docx is where '? look' goes.
+- **A Mindat snapshot ships inside the wheel** (`pxrd_review/data/*.json.gz`, ~385 KB gzipped).
+  Without an API key the group / chemistry / cell cross-checks previously found nothing at all —
+  which reads exactly like a clean batch — so the tool now works fully offline out of the box.
+  A key only buys fresher data. The cache banner says `[bundled with this release]` when the
+  seed is doing the work. Maintainer step before a release:
+  `python3 -m pxrd_review.mindat --refresh --bundle`, then commit `pxrd_review/data/`.
+  Also adds `python3 -m pxrd_review.mindat --status`.
+
 ## [0.2.6] — 2026-07-13
 
 ### Added — reference title case (check 26)
