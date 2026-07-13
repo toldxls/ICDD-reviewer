@@ -74,13 +74,16 @@ pxrd refresh
 Downloads the IMA species/group list into a local cache; afterwards the tool runs fully offline.
 No error = the key works. `No API key` / an auth error = the key wasn't found.
 
-**4 — Verify the install** (optional):
+**4 — Verify the install** (optional; **Task Group reviewers only**):
 ```
-pxrd check "/path/to/2028_Part 1/Part 1"
+pxrd check "/path/to/Part 1"
 ```
-Runs the regression suite against the 2028 Part 1 batch — should report **all pass**. Point it at
-the folder holding the entry `.docx` files (what you extract from `Part 1.rar`); the exact folder
-name doesn't matter, and **keep the quotes** — the path contains spaces. No other data is needed.
+Runs the regression suite against the corrected reference batch — should report **all pass**. Point
+it at the folder holding the entry `.docx` files; the exact folder name doesn't matter, and **keep
+the quotes** if the path contains spaces.
+
+That batch is ICDD review material and is **not public**, so this step only works if you already
+have it. Everyone else: skip to step 5 — `pxrd --version` is enough to confirm the install.
 
 **5 — Run the review GUI on a batch:**
 ```
@@ -292,6 +295,31 @@ confidence). The ten:
 (Checks 11–15 add optical-sign, IMA-section, analysis-total/count, non-ambient
 temperature, and strongest-line cross-checks.)
 
+#### Reference title case (check 26)
+The Primary Reference arrives **machine-Title-Cased** (`a New Mineral From the Burro
+Mine` — it even wrecks acronyms: `USA` → `Usa`). ICDD style is **sentence case**:
+ordinary words lowercase, proper nouns and acronyms kept. The direction is not a guess —
+mining the 165 reviewer-corrected reference cells in the corpus found 53 case-only title
+fixes, and **all 53 went Title Case → sentence case, none the other way**.
+
+**The paper is the oracle for what is a name.** A word the article itself writes lowercase
+mid-sentence (`volcano`, `deposit`, `mineral`) is an ordinary word whatever the docx did to
+it; one it writes capitalized (`Tolbachik`, `Kamchatka`) is a name; one it writes in caps
+(`USA`, `REE`) is an acronym to restore. Wholly upper-case lines are ignored as evidence —
+running heads, and the *Canadian Journal of Mineralogy and Petrology* sets its titles in
+caps/small-caps, so they say nothing about a word's true case. `mine` is preferred lowercase
+even where the paper capitalizes it.
+
+Never re-cased: chemistry (`Pb2(Fe3+6Zn)O2(PO4)4(OH)8`), an element-prefixed compound
+(`Al-bearing`), a Levinson suffix (`-(Ce)`, never `-(ce)`), a Roman numeral (`IV.`), and a
+site variable (the `A` in `analogs (A = K, Rb, Cs)` is not the article). A capitalized word
+the paper gives no evidence for is **left alone** — lowercasing a name it cannot verify is
+the one harmful mistake this check could make, so it under-corrects instead.
+
+Fires on 6 % of entries; needs ≥2 wrongly-capitalized words, so a single arguable word stays
+silent. **Comment-only like everything else**: the suggested title goes in the comment and
+the cell is highlighted — the tool never rewrites the Reference cell.
+
 #### Reference-table checks (16, 18) — hardened instrumentation & naming
 Reference tables encoding standard crystallographic conventions, hand-curated
 as small, editable constants at the bottom of `pxrd_review/extra_checks.py`
@@ -433,8 +461,9 @@ formations ("Creek group"). Mindat encodes the real relationship — a mineral's
 Setup:
 - API key: `$MINDAT_API_KEY` or `review_tool/.mindat_key` (untracked; in
   `.gitignore`).
-- Build/refresh the group cache: `python3 -m pxrd_review.mindat --refresh`
-- Build/refresh the structural cache (candidate-group scan): `python3 -m pxrd_review.mindat --refresh-struct`
+- Build/refresh BOTH caches (group lookup + structural) from one API pull:
+  `python3 -m pxrd_review.mindat --refresh`. There is no need to run anything else —
+  `--refresh-struct` is kept only as an alias for the same command.
 - Test one name: `python3 -m pxrd_review.mindat --lookup "#mineral-2T"`
 - HTTPS needs CA certs; the client uses `certifi` if importable (macOS
   python.org builds lack system certs). `$MINDAT_INSECURE=1` disables
@@ -502,9 +531,9 @@ older than 14 days (covering the monthly/bimonthly CNMNC cadence) and a key +
 network are present, it pulls fresh data first (one `[mindat] refreshing…` line,
 once per run). No key or offline → it quietly keeps using the existing cache, so
 a review never breaks. So newly-approved species resolve automatically on the next
-review run. Manual `--refresh` and the monthly `LaunchAgent`
-(`com.minerals.mindat-refresh.plist`) remain available but are now optional
-belt-and-suspenders.
+review run. A manual `python3 -m pxrd_review.mindat --refresh` remains available but is
+now optional belt-and-suspenders. (Scheduling that command — cron, a systemd timer, a
+macOS LaunchAgent — is equally optional; nothing in the tool depends on it.)
 
 Tuning notes from the first 44-entry pass: #3 PDF-prose and #2
 provenance were initially far too loose and were tightened to specific patterns;
@@ -547,7 +576,7 @@ a docx flag). The GUI surfaces both and lets the reviewer triage them.
 
 ```
 pip3 install -r requirements.txt              # adds Flask (GUI only)
-python3 -m pxrd_review.gui.review_gui "/path/to/entries"      # opens http://127.0.0.1:5000
+python3 -m pxrd_review.gui.review_gui "/path/to/entries"      # opens http://127.0.0.1:8000
 python3 -m pxrd_review.gui.review_gui "/path/to/entries" --port 8000 --no-browser
 ```
 It is a **thin, read-only presentation/triage layer over `annotate_review.analyze()`**
@@ -642,8 +671,12 @@ each rule below corresponds to a real false positive that was removed or a real
 catch that must stay. `pxrd_review/regression_check.py` encodes every case as an assertion:
 
 ```
-python3 pxrd_review/regression_check.py            # all cases must PASS after any edit
+python3 -m pxrd_review.regression_check "/path/to/fixtures"   # all cases must PASS after any edit
 ```
+
+The fixtures are a private corrected batch (not shipped — see NOTICE); set `$PXRD_REGRESSION_DIR`
+to point at them once and the path argument becomes optional. Without them the suite exits with a
+message rather than running, so this gate is available to Task Group reviewers only.
 
 Run it after touching `pxrd_review/extra_checks.py`, `pxrd_review/cell_lambda_check.py`, or
 `pxrd_review/annotate_review.py`. If a case fails, a known problem was reintroduced.

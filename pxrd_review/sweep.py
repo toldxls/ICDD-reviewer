@@ -252,10 +252,16 @@ def _diff_block(baseline, snap, cap=60):
 # ----------------------------------------------------------------------------- io
 def _load(path):
     # None when missing/unparseable; the explicit --baseline caller escalates that
+    if not os.path.exists(path):
+        return None
     try:
         with open(path, encoding='utf-8') as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        # a snapshot that EXISTS but won't parse is not the same as no snapshot: staying quiet
+        # here would report the run as a fresh baseline and quietly drop the drift comparison.
+        print('[sweep] !! existing snapshot is unreadable (%s: %s) — treating this run as a new '
+              'baseline; drift vs the last run is NOT being reported.' % (type(e).__name__, e))
         return None
 
 # ----------------------------------------------------------------------------- main
@@ -293,14 +299,28 @@ def main():
             baseline = _load(snap_path)     # auto-discovery: absent is fine (first run)
 
     print('[sweep] analyzing %s …' % os.path.abspath(args.folder))
+    # Report the Mindat cache's age BEFORE the numbers. Several checks are cache-backed and
+    # simply find nothing when it is absent, so a sweep run against a missing cache reports
+    # lower fire-rates that look like a real change in the corpus. (This is not hypothetical:
+    # a git-worktree baseline resolves .cache/ relative to the checkout, so a naive A/B of two
+    # revisions compares a warm cache against an empty one and invents drift that isn't there.)
+    try:
+        from pxrd_review import mindat; mindat.print_cache_banner()
+    except Exception:
+        pass
     snap = build(args.folder)
 
     text = write_report(report_path, snap, baseline, samples=args.samples)
 
     if not args.no_save and not args.baseline:
+        # atomic: a crash mid-dump would otherwise leave invalid JSON, which _load() maps to
+        # None — the next sweep would silently announce itself as a fresh baseline and the
+        # drift comparison (the whole point of the snapshot) would vanish without a word.
         os.makedirs(out_dir, exist_ok=True)
-        with open(snap_path, 'w', encoding='utf-8') as f:
+        tmp = snap_path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(snap, f)
+        os.replace(tmp, snap_path)
 
     m = snap['meta']
     # the headline the user wants at a glance

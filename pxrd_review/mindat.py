@@ -22,13 +22,20 @@ CLI:
     python3 -m pxrd_review.mindat --refresh            # (re)build both caches from the API
     python3 -m pxrd_review.mindat --lookup "#mineral"  # test a single name against the cache
 """
-import os, re, sys, json, time, ssl, datetime, unicodedata, urllib.request, urllib.error
+import os, re, sys, json, time, ssl, datetime, unicodedata, urllib.request, urllib.error, http.client
 
 # macOS python.org builds often ship without CA certs; use certifi's bundle when
-# present so HTTPS verification works. $MINDAT_INSECURE=1 disables verification
-# as a last resort (public API, read-only — but verification is preferred).
+# present so HTTPS verification works. $MINDAT_INSECURE=1 disables verification as a
+# last resort. NOTE the cost: every request carries the API key in an Authorization
+# header, so with verification off that KEY is exposed to anyone able to intercept the
+# connection (an SSL-inspecting proxy, a hostile network). The data being read is public;
+# the credential is not. Prefer fixing the CA bundle (pip install certifi).
 def _ssl_ctx():
     if os.environ.get('MINDAT_INSECURE') == '1':
+        print('mindat: WARNING — MINDAT_INSECURE=1: TLS certificate verification is OFF, and the '
+              'API key is sent on every request. Anyone intercepting the connection can read it. '
+              'Prefer `pip install certifi`; rotate the key if this network is not trusted.',
+              file=sys.stderr)
         return ssl._create_unverified_context()
     try:
         import certifi
@@ -86,9 +93,25 @@ def _fetch(url, key, max_retries=4):
                 if r.status == 200:
                     return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
+            # 429 (rate-limited) is the one status backoff EXISTS for — a full refresh is
+            # several back-to-back pages — so retry it rather than treating it as fatal.
+            # Honour Retry-After when the server sends one. Other 4xx are real client
+            # errors (bad/absent key, bad query) and stay fatal.
+            if e.code == 429:
+                try:
+                    wait = float(e.headers.get('Retry-After') or 0)
+                except (TypeError, ValueError):
+                    wait = 0
+                time.sleep(max(wait, 2 ** i + 0.3))
+                continue
             if e.code < 500:
                 raise RuntimeError('Mindat API %d: %s' % (e.code, e.read()[:200]))
         except urllib.error.URLError:
+            pass
+        except (json.JSONDecodeError, http.client.HTTPException, OSError):
+            # a 200 with truncated/invalid JSON (JSONDecodeError), a connection dropped
+            # mid-body (IncompleteRead), or a read-phase timeout (OSError) — all retryable,
+            # and left uncaught they escape this loop as a raw traceback instead.
             pass
         time.sleep(2 ** i + 0.3)
     raise RuntimeError('Mindat fetch failed after %d retries: %s' % (max_retries, url))
@@ -100,12 +123,18 @@ def _pull(key, page_size=2000, **params):
     q = '&'.join('%s=%s' % (k, v) for k, v in params.items())
     url = '%s/geomaterials/?%s&page-size=%d&format=json' % (BASE, q, page_size)
     rows = []
-    while url:
+    seen = set()
+    for _ in range(200):        # hard cap: the full IMA corpus is ~4 pages at 2000/page
         data = _fetch(url, key)
         rows.extend(data.get('results', []))
-        url = data.get('next')
-        if url:
-            time.sleep(0.2)
+        nxt = data.get('next')
+        if not nxt or nxt in seen:   # a 'next' that repeats itself would otherwise spin forever
+            return rows
+        seen.add(nxt)
+        url = nxt
+        time.sleep(0.2)
+    print('mindat: stopped paginating after 200 pages (%d rows) — the API returned an unexpectedly '
+          'long "next" chain; the pull may be incomplete.' % len(rows), file=sys.stderr)
     return rows
 
 # ----------------------------------------------------------------------------- structural cache (for the candidate-group scan)
@@ -254,6 +283,47 @@ def cache_age_days():
         return (datetime.date.today() - datetime.date.fromisoformat(f)).days
     except Exception:
         return None
+
+STALE_DAYS = 14                 # the auto-refresh threshold; the banner reports against the same line
+
+def cache_status(max_age_days=STALE_DAYS):
+    """(state, one_line) describing the offline Mindat caches.
+
+    state is 'missing' | 'stale' | 'ok'. Worth printing at the top of every run: the
+    Mindat-backed checks (group/classification, chemistry, the cell cross-check) go SILENT
+    when the cache is absent — they simply find nothing — so a missing cache looks exactly
+    like a clean corpus unless the tool says otherwise."""
+    gage, sage = cache_age_days(), _struct_age_days()
+    have_g, have_s = available(), struct_available()
+    if not have_g and not have_s:
+        return 'missing', ('mindat cache: MISSING — group/chemistry/cell cross-checks are '
+                           'INACTIVE. Run: python3 -m pxrd_review.mindat --refresh')
+    n = len((_db() or {}).get('minerals') or {})
+    fetched = (_db() or {}).get('fetched') or '?'
+    ages = [x for x in (gage, sage) if x is not None]
+    age = max(ages) if ages else None
+    partial = '' if (have_g and have_s) else \
+              ('  [%s cache missing]' % ('structural' if have_g else 'group'))
+    if age is None:
+        return 'stale', ('mindat cache: undated — age unknown. Run: '
+                         'python3 -m pxrd_review.mindat --refresh' + partial)
+    when = 'today' if age == 0 else ('1 day old' if age == 1 else '%d days old' % age)
+    line = 'mindat cache: %s species, fetched %s (%s)%s' % (f'{n:,}', fetched, when, partial)
+    if age >= max_age_days or partial:
+        return 'stale', line + ' — STALE; it auto-refreshes when online, or run: ' \
+                                'python3 -m pxrd_review.mindat --refresh'
+    return 'ok', line
+
+def print_cache_banner(max_age_days=STALE_DAYS, file=None):
+    """One-line cache header for the console tools. Never raises — a broken cache must not
+    take a review down, and the banner is exactly what tells the reviewer it IS broken."""
+    try:
+        state, line = cache_status(max_age_days)
+    except Exception as ex:
+        state, line = 'missing', 'mindat cache: unreadable (%s)' % ex
+    mark = {'ok': '', 'stale': '!! ', 'missing': '!! '}[state]
+    print('[mindat] %s%s' % (mark, line), file=file or sys.stdout)
+    return state
 
 def _reachable():
     """Quick preflight so an offline machine pays ~6 s, not the full retry budget."""

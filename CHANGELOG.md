@@ -4,6 +4,110 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.2.6] — 2026-07-13
+
+### Added — reference title case (check 26)
+- **New check: the Primary Reference title should be sentence case, not the machine Title
+  Case the entry arrives in** (`a New Mineral From the Burro Mine`; the title-caser even
+  wrecks acronyms, `USA` → `Usa`). Requested by an ICDD reviewer. The direction was mined,
+  not assumed: of 165 reviewer-corrected reference cells in the corpus, 53 were case-only
+  title fixes and **all 53 went Title Case → sentence case, none the other way**.
+- **The paper decides what is a name.** A word the article writes lowercase mid-sentence
+  (`volcano`, `deposit`) is an ordinary word; one it capitalizes (`Tolbachik`) is a name;
+  one it writes in caps (`USA`) is an acronym to restore. Wholly upper-case lines are
+  discarded as evidence — running heads, and the *Canadian Journal of Mineralogy and
+  Petrology* sets titles in caps/small-caps. `mine` is preferred lowercase regardless.
+- **Never re-cases chemistry** (`Pb2(Fe3+6Zn)O2(PO4)4(OH)8`), an element-prefixed compound
+  (`Al-bearing`), a Levinson suffix (`-(Ce)`, never `-(ce)`), a Roman numeral (`IV.`), or a
+  site variable (the `A` in `analogs (A = K, Rb, Cs)` is not the article). A capitalized word
+  the paper gives no evidence for is left alone rather than lowercased on a guess.
+- Comment-only, like every other check: the corrected title is **suggested** in the comment
+  and the Reference cell is highlighted. The tool never rewrites the cell.
+- Validated across the corpus: fires on 6 % of entries (26 of 466 with a reference), 94 %
+  recall against the reviewer's own known corrections, and **0 titles with altered letters**.
+
+## [0.2.5] — 2026-07-13
+
+Full code review ahead of the repository going public. Nothing here changes what the
+checks *mean*; the fixes are data-safety, one XSS, and false positives that were being
+written into reviewers' docx.
+
+### Fixed — data safety
+- **`--out` pointed at the source folder no longer deletes source `.docx` files.** The
+  output names are derived from the source name, so an `--out` resolving to the source
+  folder made the stale-twin bookkeeping treat a SOURCE docx as a previous run's output
+  and `os.remove()` it. It is now refused outright (`--inplace` remains the deliberate
+  way to edit originals).
+- **Every docx write is atomic** (temp + `os.replace`). `doc.save()` streams a zip; a
+  crash or full disk part-way through truncated the target — which under `--inplace`, or
+  when refreshing onto a hand-edited output, is the reviewer's only copy.
+- **Single-writer lock per output folder.** Clicking "Rerun all" in the GUI while a
+  terminal run was going interleaved writes to the same docx and could corrupt it
+  silently. A second run now stops with a message. Locks left by a crashed run are
+  reclaimed automatically.
+- **`--id` matches the entry id exactly.** Substring matching meant `--id I10126` also
+  selected (and rewrote the output of) a 6-digit `I101261…`.
+
+### Fixed — security (GUI)
+- **XSS via the paper.** `esc()` was `String(s)` — a no-op that only looked like an HTML
+  escape — and the matched-cell snippet (raw `get_text()` from the `.pdf`) went into
+  `innerHTML`. A crafted paper could run script in the localhost origin and drive the
+  local `/api/*` endpoints. `esc()` now escapes; text-node sites use `str()` instead, so
+  nothing double-escapes.
+- State-changing requests carrying **neither `Origin` nor `Referer`** are now refused.
+- `MINDAT_INSECURE=1` warns that it exposes the API key (it disables TLS verification
+  while still sending the `Authorization` header).
+
+### Fixed — false positives (were being written into the docx)
+- **Blank Crystal System no longer flags.** The guard was `cs not in 'amothrc'` on a
+  possibly-empty string — and `''` is a substring of every string — so a blank field
+  sailed through and wrote a bogus *"Crystal System () disagrees with…"* comment.
+- **"Triclinic" and "Trigonal" are no longer read as *tetragonal*.** The classifier took
+  the first letter, and all three start with `t`. Triclinic entries had `a=b` and
+  `α=β=γ=90` imposed on them, producing a storm of false symmetry flags. Crystal systems
+  are now matched as whole words (ICDD's "Anorthic" *and* the IUCr words), and an
+  unrecognised word abstains.
+- **`D8` / `SMART` instrument patterns** required only a bare token — but `d8` is the
+  electron configuration and `smart` is an English word. They now need the maker's name
+  or a real model qualifier.
+- **Near-cubic rhombohedral cells** (α=β=γ≈90°) are no longer forced into the hexagonal
+  setting and told their γ must be 120.
+- **Anode detection** is token-anchored: `CoKα (Fe filter)` read as an *iron* anode (the
+  filter metal), and "Copper" matched `co`. A string naming two metals now resolves to
+  the one carrying the K-line label, or abstains.
+- **Correctly-rounded values** no longer report as value mismatches: comparison at the
+  common precision now rounds half-UP on the decimal value, not half-even on a binary
+  float (pdf `2.675` vs docx `2.68`).
+
+### Fixed — robustness
+- **One unreadable file no longer aborts the batch.** A `.docx` that is really an HTML
+  error page, a docx with no `word/document.xml`, or a truncated `.pdf` killed the run
+  and left every later entry unchecked. Such entries are now skipped and counted.
+- **python-docx pinned to `>=1.2`** — `add_comment()` does not exist before 1.2.0. With
+  1.1.x installed, every flagged entry raised `AttributeError`, was swallowed per-entry,
+  and the run "succeeded" having written **no findings at all**.
+- Mindat: HTTP **429 now backs off and retries** (honouring `Retry-After`) instead of
+  failing the refresh; truncated-JSON / dropped-connection reads retry instead of
+  escaping as a traceback; pagination is capped so a repeating `next` link can't spin
+  forever.
+- A missing **PyMuPDF** now says so, once, instead of failing every entry with an opaque
+  error.
+- The sweep snapshot is written atomically, and an unreadable existing snapshot now says
+  the drift comparison was dropped instead of silently restarting the baseline.
+- Console output is forced to UTF-8 on Windows, so a direct `python -m pxrd_review.…`
+  run no longer dies with `UnicodeEncodeError` on `λ`/`α`/`Å` when redirected.
+- `pxrd review I003448` (a bare entry id) now works for `review`/`lambda`/`candidates`,
+  which take `--id` — the launcher advertised the shorthand but only `extras` accepted it.
+
+### Docs
+- README: the GUI runs on **port 8000**, not 5000; the regression command needed its
+  fixtures argument; install step 4 pointed public readers at a private ICDD batch;
+  `--refresh` rebuilds both caches (`--refresh-struct` is just an alias); dropped a
+  reference to a LaunchAgent that is not in the repo.
+- NOTICE now names the two files that actually import PyMuPDF (the AGPL-isolation claim
+  pointed at paths that no longer exist).
+- INSTALL uses a `<version>` placeholder instead of a wheel filename two releases stale.
+
 ## [0.2.4] — 2026-07-12
 
 Follow-up to the Windows-compatibility pass, from the first Windows reviewer's

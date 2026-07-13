@@ -105,6 +105,18 @@ input[type=range] { accent-color: var(--accent); }
 }
 .brand { font-weight: 600; white-space: nowrap; }
 
+/* Mindat cache chip: states the cache's age. The cache-backed checks (group, chemistry, the
+   cell cross-check) simply find NOTHING when it is missing — which reads as a clean batch —
+   so this stays visible, and turns amber with the fix command in its tooltip when stale. */
+.chip {
+  font-size: .85em; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  border: 1px solid var(--line); color: var(--muted); cursor: help;
+}
+.chip.chip-warn {
+  color: var(--warn); border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
 /* current-folder chip: shows the entries folder; the whole chip opens the picker */
 #folder-ctl {
   display: flex; align-items: center; min-width: 0; max-width: 40vw;

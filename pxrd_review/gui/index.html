@@ -15,11 +15,15 @@
       <button id="folder-change" title="pick a different entries folder">Change…</button>
     </div>
     <div class="spacer"></div>
+    <!-- Mindat cache age: the cache-backed checks find nothing when it is missing, which
+         looks exactly like a clean batch — so the header always states how old it is. -->
+    <span id="mindat-chip" class="chip hidden" title=""></span>
     <span id="rerun-status" class="muted"></span>
-    <button id="open-log" title="open the tool's change log (review_out/annotation_log.txt) in a new tab">Log ↗</button>
+    <!-- Tooltips name the equivalent command, so the GUI teaches the CLI rather than hiding it. -->
+    <button id="open-log" title="Open the tool's change log (review_out/annotation_log.txt) in a new tab.&#10;&#10;Also on disk at:  <folder>/review_out/annotation_log.txt&#10;Cross-source notes:  <folder>/review_out/mindat_discrepancies.txt">Log ↗</button>
     <button id="gear" title="Appearance &amp; layout">⚙</button>
-    <button id="rerun-all" title="Regenerate every docx, applying your triage (suppress dismissed, fold notes, set Accept)">Rerun all ▸</button>
-    <button id="export" title="Write triage_report.txt (never edits a docx)">Export triage</button>
+    <button id="rerun-all" title="Regenerate every docx, applying your triage (suppress dismissed findings, fold your notes into the comments, set Accept).&#10;&#10;Runs:  pxrd review <folder> --triage review_out/triage.json&#10;Comment-only — it never rewrites a field cell, and your manual docx edits are preserved (a timestamped copy goes to review_out/.edit_backup/ first).">Rerun all ▸</button>
+    <button id="export" title="Write review_out/triage_report.txt — a plain-text summary of your triage decisions.&#10;Never edits a docx.">Export triage</button>
   </header>
 
   <!-- appearance / layout settings -->

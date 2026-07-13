@@ -12,7 +12,7 @@ point the script at your local copy via the argument or $PXRD_REGRESSION_DIR.
 Read-only: it runs analyze() and inspects the verdict — it does not write docx.
 Exit code 0 = all pass, 1 = a regression.
 """
-import sys, os, glob
+import sys, os, glob, re
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import annotate_review as A
@@ -485,6 +485,144 @@ CASES = [
      type('S', (), {'crystal_system': 'h', 'space_group': 'R3m', 'cell': {}})) == []),
  ("sg_system: corpus clean (no SG/system disagreement)", lambda: not extras('I003510', 'sg_system')
      and not extras('I003807', 'sg_system') and not extras('I003632', 'sg_system')),
+ # A BLANK Crystal System must abstain, not flag. The guard used to be `cs not in 'amothrc'`
+ # on a possibly-empty string — and '' is a substring of everything, so it never returned and
+ # wrote a bogus "Crystal System () disagrees with…" comment INTO the docx.
+ ("sg_system: blank Crystal System abstains (does not flag)", lambda: X.check23_sg_system(
+     type('S', (), {'crystal_system': '', 'space_group': 'P21/c', 'cell': {}})) == []),
+ ("sg_system: unknown Crystal System word abstains", lambda: X.check23_sg_system(
+     type('S', (), {'crystal_system': 'Wurtzitic', 'space_group': 'P21/c', 'cell': {}})) == []),
+ # 'Triclinic'/'Trigonal'/'Tetragonal' all begin with 't': a first-letter classifier read the
+ # first two as TETRAGONAL, which both false-flagged here and imposed a=b, α=β=γ=90 in
+ # _constraints (a false-positive storm out of check8). Whole words only.
+ ("sg_system: IUCr 'Triclinic' is not read as tetragonal", lambda: X.check23_sg_system(
+     type('S', (), {'crystal_system': 'Triclinic', 'space_group': 'P-1', 'cell': {}})) == []),
+ ("sg_system: IUCr 'Trigonal' is not read as tetragonal", lambda: X.check23_sg_system(
+     type('S', (), {'crystal_system': 'Trigonal', 'space_group': 'R-3m', 'cell': {}})) == []),
+ ("sg_system: ICDD 'Anorthic' == triclinic", lambda: X.check23_sg_system(
+     type('S', (), {'crystal_system': 'Anorthic', 'space_group': 'P-1', 'cell': {}})) == []),
+ ("_constraints: triclinic imposes NO equal-axis / fixed-angle constraint", lambda:
+     X._constraints(type('S', (), {'crystal_system': 'Triclinic', 'space_group': 'P-1',
+                                   'cell': {}})) == ([], [], {})),
+ # a near-cubic R cell (α=β=γ≈90, a=b=c) is rhombohedral AXES, not the hexagonal setting —
+ # the old |γ-90|>1 test threw it into the hex branch and demanded γ=120.
+ ("_constraints: near-90 rhombohedral cell is not forced to γ=120", lambda:
+     X._constraints(type('S', (), {'crystal_system': 'r', 'space_group': 'R-3',
+         'cell': {'a': '9.1', 'b': '9.1', 'c': '9.1', 'α': '90.5', 'β': '90.5', 'γ': '90.5'}}))
+     == ([('a', 'b', 'c')], [('α', 'β', 'γ')], {})),
+ # --- anode detection: the SYMBOL as a token, never a bare substring ---
+ # 'CoKα (Fe filter)' read as an IRON anode (the filter metal); 'Copper' contains 'co'.
+ ("anode_key: filter metal does not win over the K-line anode", lambda:
+     C.anode_key('CoKa (Fe filter)') == 'co' and C.anode_key('Fe-filtered CoKα') == 'co'),
+ ("anode_key: 'Copper' is copper, not cobalt", lambda:
+     C.anode_key('Copper Kα') == 'cu' and C.anode_key('Cobalt') == 'co'),
+ ("anode_key: the ordinary forms still resolve", lambda: all(C.anode_key(s) == k for s, k in
+     [('CuKa','cu'), ('Cu Ka1','cu'), ('CuKα','cu'), ('Cu-Kα','cu'), ('MoKa','mo'),
+      ('FeKα','fe'), ('CrKα','cr'), ('AgKα','ag'), ('Cu Kα (Ni filter)','cu')])),
+ ("anode_key: a non-anode string stays None", lambda:
+     C.anode_key('Sync') is None and C.anode_key('graphite monochromator') is None),
+ # --- rounding at the common precision: half-UP on the decimal, not half-even on the float ---
+ # pdf 2.675 vs a correctly-rounded docx 2.68: round(2.675, 2) == 2.67, which reported a
+ # correct transcription as a VALUE MISMATCH instead of the intended sig-figs note.
+ ("axis_issues: a correctly-rounded .5 boundary is precision, not a value mismatch", lambda:
+     [k for k, _ in C.axis_issues('2.68', '2.675')] == ['precision']),
+ ("axis_issues: a genuine value difference still flags", lambda:
+     [k for k, _ in C.axis_issues('10.13', '10.123')] == ['value']),
+ # --- reference title case (check26) -----------------------------------------------------
+ # Mined from 165 reviewer-corrected reference cells: 53 were case-only title fixes and ALL 53
+ # went Title Case -> sentence case. The suggestion must NEVER alter letters, and must never
+ # lowercase chemistry, a Levinson suffix, a Roman numeral, or an unverifiable proper noun.
+ ("ref_title: Title Case is rewritten to sentence case", lambda:
+     X._title_sentence_case('Amurselite, A New Uranyl Selenite From the Burro Mine, Colorado')[1]
+     == 'Amurselite, a new uranyl selenite from the Burro mine, Colorado'),
+ ("ref_title: 'mine' is lowercase, the place name is not", lambda:
+     'Burro mine' in X._title_sentence_case('A New Mineral From the Burro Mine, Colorado')[1]),
+ ("ref_title: Levinson suffix survives (-(Ce) never -(ce))", lambda:
+     '-(Ce)' in X._title_sentence_case('Vielleaureite-(Ce), a New Epidote of the Group')[1]),
+ ("ref_title: Levinson suffix survives a trailing comma", lambda:
+     '-(Y),' in X._title_sentence_case('Two Minerals: Nacareniobsite-(Y), a New Mineral Here')[1]),
+ ("ref_title: an element-prefixed compound is untouched (Al-bearing)", lambda:
+     'Al-bearing' in X._title_sentence_case('Petermegawite, a new Al-bearing Selenite Mineral')[1]),
+ ("ref_title: a Roman numeral is not sentence-cased (IV. not Iv.)", lambda:
+     'IV.' in X._title_sentence_case('New Minerals From the Redmond Mine: IV. Haywoodite Here')[1]),
+ ("ref_title: a site variable is not the article ('(A = K, Rb, Cs)')", lambda:
+     '(A = K, Rb, Cs)' in X._title_sentence_case(
+         'Crystal Structures and Powder Data for AAlGe2O6 Synthetic Analogs (A = K, Rb, Cs)')[1]),
+ ("ref_title: chemistry is never re-cased", lambda:
+     'Pb2(Fe3+6Zn)O2(PO4)4(OH)8' in X._title_sentence_case(
+         'Desorite, Pb2(Fe3+6Zn)O2(PO4)4(OH)8, a New Phosphate Mineral Isotypic with Jamesite.')[1]),
+ # the paper is the oracle: a word IT writes lowercase mid-sentence is an ordinary word; one it
+ # capitalizes is a name; one it writes in caps is an acronym to restore ('Usa' -> 'USA').
+ ("ref_title: the paper's own usage decides proper nouns", lambda:
+     X._title_sentence_case(
+         'Natromolybdite, a New Mineral From Fumarole Deposits of the Tolbachik Volcano',
+         'Samples came from the Tolbachik volcano. A new mineral was found at the Tolbachik '
+         'volcano in fumarole deposits. The new mineral is a fumarole product; the volcano '
+         'hosts many deposits.')[1]
+     == 'Natromolybdite, a new mineral from fumarole deposits of the Tolbachik volcano'),
+ ("ref_title: an acronym mangled by the title-caser is restored (Usa -> USA)", lambda:
+     'USA' in X._title_sentence_case(
+         'Amurselite, A New Selenite From the Burro Mine, Colorado, Usa.',
+         'Collected in the USA. The USA locality is well known. Specimens from the USA were '
+         'studied. This USA occurrence is new.')[1]),
+ # the one harmful mistake this check could make: lowercasing a name it cannot verify
+ ("ref_title: an unverifiable capitalized word is LEFT ALONE, never lowercased", lambda:
+     'Koštálov' in X._title_sentence_case(
+         'Julgoldite-(Fe2+) and Fe-rich Prehnite From Pectolite Veins at Koštálov Quarry')[1]),
+ ("ref_title: never alters letters — only case", lambda: all(
+     re.sub(r'\s+', ' ', X._title_sentence_case(t)[1]).lower() == re.sub(r'\s+', ' ', t).lower()
+     for t in ['Amurselite, A New Uranyl Selenite From the Burro Mine, San Miguel County, Usa.',
+               'Vielleaureite-(Ce), a New Epidote of the Dollaseite Group, France',
+               'New Minerals From the Redmond Mine, North Carolina, USA: IV. Haywoodite Here',
+               'Desorite, Pb2(Fe3+6Zn)O2(PO4)4(OH)8, a New Phosphate Mineral with Jamesite.'])),
+ # conservative: one arguable word is not enough to fire, and a correct title stays silent
+ ("ref_title: a sentence-case title does NOT flag", lambda: not X.check26_reference_title_case(
+     type('S', (), {'raw_rows': [['References'], ['Primary Reference',
+        'Okruginite, Cu2SnSe3, a new mineral from the Ozernovskoe deposit, Kamchatka, Russia. '
+        'Vymazalova, A., Kozlov, V. V. Mineral. Mag.. 2024. 88(1) 31 - 39.']]})(), None)),
+ ("ref_title: a machine-Title-Cased title DOES flag, anchored on the reference cell", lambda: [
+     (f.sev, f.anchor) for f in X.check26_reference_title_case(
+         type('S', (), {'raw_rows': [['References'], ['Primary Reference',
+            'Amurselite, A New Uranyl Selenite From the Burro Mine, San Miguel County, Colorado. '
+            'Kampf, A. R., Olds, T. A. Can. J. Mineral. Petrol.. 2025. 63(3) 305-315.']]})(), None)]
+     == [('flag', 'reference')]),
+ ("ref_title: no Primary Reference row -> abstains", lambda: X.check26_reference_title_case(
+     type('S', (), {'raw_rows': [['Comments'], ['Desc.', 'text']]})(), None) == []),
+ # --- the three bugs the hand-check of all 26 fires caught (all would corrupt a title) ------
+ # 1. An ordinary word INSIDE a multi-word place name must survive: 'New Mexico' is not
+ #    'new Mexico'. The word is only kept because a proper noun follows it — 'a New Mineral'
+ #    (ordinary word following) must still lowercase.
+ ("ref_title: 'New Mexico' survives ('new' before a name is part of the name)", lambda:
+     'New Mexico' in X._title_sentence_case(
+         'Raydemarkite, the Natural Analogue of Synthetic MoO3, from Cookes Peak, New Mexico',
+         'The natural analogue was found. A new analogue of synthetic MoO3 occurs in New Mexico. '
+         'Specimens from New Mexico were studied; the New Mexico locality is natural.')[1]),
+ ("ref_title: 'a New Mineral' still lowercases (ordinary word, ordinary neighbour)", lambda:
+     'a new mineral' in X._title_sentence_case(
+         'Desorite, a New Mineral Isotypic with Jamesite',
+         'This is a new mineral. The new mineral is isotypic. Another new mineral occurs.')[1]),
+ ("ref_title: 'Vanadium Queen mine, La Sal' survives", lambda: (lambda s:
+     'Vanadium Queen' in s and 'La Sal' in s)(X._title_sentence_case(
+         'Lasalite, a new decavanadate Mineral Species from the Vanadium Queen mine, La Sal District',
+         'Found at the Vanadium Queen mine. The Vanadium Queen mine lies in the La Sal District. '
+         'The La Sal district hosts a new mineral species; vanadium is abundant.')[1])),
+ # 2. The paper's own Title-Cased title/running head must not teach the oracle that ordinary
+ #    words are proper nouns — it repeats on every page and would block the whole correction.
+ # ('A' opens the sentence after the colon, so it stays capital — only the ordinary words move)
+ ("ref_title: a Title-Cased running head does not poison the evidence", lambda:
+     'natural compound with a layered architecture' in X._title_sentence_case(
+         'Kanatzidisite: A Natural Compound with a Layered Architecture',
+         'Kanatzidisite: A Natural Compound With A Layered Architecture\n'
+         'Kanatzidisite: A Natural Compound With A Layered Architecture\n'
+         'We describe a natural compound. The natural compound is layered. '
+         'Its architecture is layered and the compound is natural. The architecture '
+         'of this natural compound is layered throughout.')[1]),
+ # 3. Case is only ever LOWERED, never raised: all 53 corpus corrections went one way.
+ ("ref_title: a lowercase word after a colon is not up-cased", lambda:
+     ': occurrence' in X._title_sentence_case(
+         'Stibiotantalite from the Nanyangshan LCT Pegmatite, Central China: occurrence and Data',
+         'Stibiotantalite occurs there. The occurrence is in Central China. Central China hosts '
+         'the pegmatite; data and occurrence are reported.')[1]),
  # --- optical 2V / sign vs refractive indices (docx-internal, blind-spot check #3) ---
  # I002959 (sulfatoredmondite): β=1.850 sits next to γ=1.860 (far from α=1.780) -> optically
  # NEGATIVE, and 2Vcalc≈40 matches the docx 2V=40, but the docx says Sign=+ (real sign error)

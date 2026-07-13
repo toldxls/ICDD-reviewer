@@ -87,6 +87,29 @@ def _resolve_folder(sub, rest):
         raise SystemExit("pxrd %s: remembered folder no longer exists: %s" % (sub, folder))
     return folder, rest
 
+# How each sub-command wants a single entry id. The launcher advertises a bare trailing id
+# ('pxrd review I003448'), but the modules disagree on how to take one: most expose --id,
+# extra_checks takes it positionally, and sweep/check/gui have no per-entry mode at all.
+# Translate here, so the documented shorthand works everywhere instead of only for `extras`
+# (the others used to forward the id as a stray positional and die on 'unrecognized arguments').
+_ID_STYLE = {'review': '--id', 'lambda': '--id', 'candidates': '--id',
+             'extras': 'positional', 'sweep': None, 'check': None, 'gui': None}
+
+def _fix_entry_id(sub, passthru):
+    if not passthru or not ENTRY_ID.fullmatch(passthru[0]):
+        return passthru
+    eid, tail = passthru[0], passthru[1:]
+    style = _ID_STYLE.get(sub)
+    if style == '--id':
+        return ['--id', eid] + tail
+    if style == 'positional':
+        return [eid] + tail
+    raise SystemExit("pxrd %s: does not take a single entry id (%s) — it runs over the whole "
+                     "folder. Use 'pxrd %s' without the id%s."
+                     % (sub, eid, sub,
+                        ", or 'pxrd review %s' / 'pxrd lambda %s' for one entry" % (eid, eid)
+                        if sub in ('sweep', 'check') else ''))
+
 def _usage(code=0):
     print(__doc__.strip()); raise SystemExit(code)
 
@@ -102,7 +125,7 @@ def main():
 
     if sub in NEEDS_FOLDER:
         folder, passthru = _resolve_folder(sub, rest)
-        args = [folder] + passthru
+        args = [folder] + _fix_entry_id(sub, passthru)
     elif sub == 'refresh':
         args = rest or ['--refresh']        # bare `refresh` -> --refresh
     else:                                   # mindat passthrough

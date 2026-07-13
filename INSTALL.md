@@ -52,7 +52,7 @@ This survives reboots and upgrades — set it once and forget it.
    (with the trailing space), **drag the `.whl` file** from the unzipped folder into
    the window, type ` SHA256`, and press Enter:
    ```
-   certutil -hashfile "C:\...\pxrd_review-0.2.2-py3-none-any.whl" SHA256
+   certutil -hashfile "C:\...\pxrd_review-<version>-py3-none-any.whl" SHA256
    ```
    The long hex string it prints must match the announced fingerprint exactly.
    Any single character different = corrupted download — stop and re-download,
@@ -61,7 +61,7 @@ This survives reboots and upgrades — set it once and forget it.
 3. **Install.** Type `pip install --upgrade ` (trailing space again), drag the same
    `.whl` file in, press Enter:
    ```
-   pip install --upgrade "C:\...\pxrd_review-0.2.2-py3-none-any.whl"
+   pip install --upgrade "C:\...\pxrd_review-<version>-py3-none-any.whl"
    ```
    The first install needs internet access (pip fetches the tool's libraries from
    pypi.org); upgrades normally don't.
@@ -70,7 +70,7 @@ This survives reboots and upgrades — set it once and forget it.
    ```
    pxrd --version
    ```
-   It should print the version from the announcement (e.g. `pxrd-review 0.2.2`).
+   It should print the version from the announcement (e.g. `pxrd-review 0.2.5`).
    If `pxrd` is "not recognized", close and reopen the Command Prompt first; if it
    still isn't found, re-check One-time setup step 1 (PATH).
 

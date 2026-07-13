@@ -1,8 +1,11 @@
 # Python dependencies for the PXRD review tool.
 #   pip3 install -r requirements.txt
 
-PyMuPDF              # imported as 'fitz' — PDF text extraction (tools/cell_lambda_check.py)
-python-docx>=1.1     # docx parsing + Word comments API (tools/annotate_review.py); >=1.1 for the comment API
-lxml                 # docx XML via lxml.etree (tools/annotate_review.py); also a python-docx dependency
-certifi              # optional — used for CA certs if importable, for HTTPS to the Mindat API (mindat/mindat.py)
-Flask                # optional — the review-mode GUI only (gui/review_gui.py); not needed for the CLI checks
+PyMuPDF              # imported as 'fitz' — PDF text extraction + page render (pxrd_review/cell_lambda_check.py, gui/)
+python-docx>=1.2     # docx parsing + Word comments API (pxrd_review/annotate_review.py)
+                     # >=1.2 is REQUIRED: Document.add_comment() landed in 1.2.0. With 1.1.x installed
+                     # every flagged entry raises AttributeError, is caught per-entry, and the run
+                     # "succeeds" having written no findings at all — a silent no-op.
+lxml                 # docx XML via lxml.etree (pxrd_review/annotate_review.py); also a python-docx dependency
+certifi              # optional — used for CA certs if importable, for HTTPS to the Mindat API (pxrd_review/mindat.py)
+Flask                # optional — the review-mode GUI only (pxrd_review/gui/review_gui.py); not needed for the CLI checks

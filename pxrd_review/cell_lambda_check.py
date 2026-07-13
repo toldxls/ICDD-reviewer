@@ -85,6 +85,13 @@ def split_num(s):
     dec = len(mant.split('.')[1]) if '.' in mant else 0
     return (float(mant), mant, esd, dec)
 
+def _round_half_up(x, nd):
+    """round() with .5 going AWAY from zero, decided on the DECIMAL value rather than the
+    binary float — i.e. how the number was rounded when it was typed into the docx."""
+    from decimal import Decimal, ROUND_HALF_UP
+    q = Decimal(1).scaleb(-nd)                        # 10**-nd, exactly
+    return float(Decimal(repr(x)).quantize(q, rounding=ROUND_HALF_UP))
+
 def axis_issues(dv, pv):
     """Compare one docx-vs-pdf parameter (e.g. a, or beta). Returns a list of
     (kind, note); kind in {'value','precision','esd'}. Empty = clean match.
@@ -95,7 +102,12 @@ def axis_issues(dv, pv):
     if dval is None or pval is None: return []
     out = []
     common = min(ddec, pdec)
-    if round(dval, common) != round(pval, common):
+    # Compare at the COMMON precision, but decide the tie the way a person rounding by hand
+    # does (half-UP), not the way round() does (half-EVEN, on a binary float that may sit just
+    # under the .5 boundary): pdf 2.675 vs a correctly-rounded docx 2.68 has round(2.675, 2)
+    # == 2.67, which would report a correctly-transcribed value as a VALUE MISMATCH instead of
+    # the intended sig-figs note.
+    if _round_half_up(dval, common) != _round_half_up(pval, common):
         out.append(('value', 'docx=%s  pdf=%s' % (dman, pman)))
         return out                       # value wrong -> esd/precision moot
     if ddec != pdec:                     # agree at common precision but sig-figs differ
@@ -220,7 +232,13 @@ def _norm_pdf(s):
 
 def _pdf_text_fitz(path):
     """Raw concatenated PDF text via in-process MuPDF — the default reader (CLI / regression)."""
-    import fitz
+    try:
+        import fitz
+    except ImportError:
+        # Without it, EVERY entry that has a paired .pdf fails — one clear line beats N
+        # tracebacks (or, in the GUI, N opaque 500s) that never name the missing package.
+        raise ImportError("PyMuPDF is not installed — the tool cannot read the .pdf. "
+                          "Run: pip3 install PyMuPDF   (or: pip3 install -r requirements.txt)")
     with fitz.open(path) as doc:                  # close the handle (was leaked)
         return '\n'.join(p.get_text() for p in doc)
 
@@ -752,11 +770,33 @@ def find_cells(text):
 # wavelength
 ANODE_LAMBDA = {'cu': 1.5406, 'mo': 0.71073, 'fe': 1.93604, 'co': 1.78897,
                 'cr': 2.28970, 'ag': 0.55941}
+# Element word -> anode key, for radiation strings that spell the metal out ('Copper Kα').
+_ANODE_WORDS = {'copper': 'cu', 'molybdenum': 'mo', 'iron': 'fe', 'cobalt': 'co',
+                'chromium': 'cr', 'silver': 'ag'}
 def anode_key(s):
+    """The anode element in a radiation string, or None.
+
+    Anchored on the SYMBOL as a token (CuKα, Cu Ka1, Cu-Kα, 'Cu'), never as a bare
+    substring: a plain `'fe' in s` scan reads 'CoKα (Fe filter)' as an IRON anode —
+    the filter metal, not the anode — and 'Copper' contains 'co', so it read as cobalt.
+    A string naming two different anodes is ambiguous and returns None (abstain)."""
     if not s: return None
     s = s.lower()
-    for k in ANODE_LAMBDA:
-        if k in s: return k
+    # symbol as a token: not preceded by a letter, and either followed by a K-line ('CuKα',
+    # 'Cu Ka1', 'Cu-Kα') or standing alone ('Cu'). This is what keeps 'Copper' from matching
+    # 'co' and 'Cobalt' from matching 'co'+'ba'-style noise.
+    tok = lambda k: re.search(r'(?<![a-z])%s(?:\s*[-–]?\s*k|(?![a-z]))' % k, s)
+    kline = lambda k: re.search(r'(?<![a-z])%s\s*[-–]?\s*k' % k, s)
+    hits = {k for k in ANODE_LAMBDA if tok(k)}
+    hits |= {v for w, v in _ANODE_WORDS.items() if w in s}
+    if len(hits) == 1:
+        return hits.pop()
+    if len(hits) > 1:
+        # e.g. 'CoKα (Fe filter)' names two metals — the anode is the one carrying the K-line
+        # label; a filter/monochromator metal is never written that way. Ambiguous otherwise.
+        kl = [k for k in ANODE_LAMBDA if k in hits and kline(k)]
+        if len(kl) == 1:
+            return kl[0]
     return None
 
 # 'Sync' is a valid ICDD radiation designator (synchrotron). Its λ is beamline-
@@ -1326,12 +1366,37 @@ def main():
     ap.add_argument('folder')
     ap.add_argument('--id', help='only this entry id, e.g. Innnnnn')
     args = ap.parse_args()
+    try:                    # the Mindat-backed extras go silent without a cache — say so up front
+        from pxrd_review import mindat; mindat.print_cache_banner()
+    except Exception:
+        pass
     idx = pdf_index(args.folder)
     docs = sorted(discover(args.folder).values())     # recursive: docx at any depth under the root
+    bad = 0
     for dp in docs:
         if args.id and args.id not in os.path.basename(dp): continue
         eid = entry_id(dp)
-        report(dp, idx.get(eid))
+        # One unreadable file must not take the batch down with it: a .docx that is really an
+        # HTML error page from a cloud-sync (BadZipFile), a docx with no word/document.xml
+        # (KeyError), a truncated .pdf (fitz.FileDataError), or the deliberate DOCTYPE refusal
+        # (ValueError) would otherwise abort the run and leave every later entry unchecked.
+        try:
+            report(dp, idx.get(eid))
+        except Exception as e:
+            from pxrd_review.errors import explain
+            bad += 1
+            print('=' * 78)
+            print('%s\n  !! SKIPPED — %s' % (os.path.basename(dp), explain(e, dp)))
+    if bad:
+        print('\n%d entr%s skipped as unreadable (see the !! lines above for the fix).'
+              % (bad, 'y' if bad == 1 else 'ies'))
+    # This tool only REPORTS. Name the command that actually writes the review, so the
+    # console output isn't a dead end.
+    print('\n' + '-' * 78)
+    print('This was a read-only report. To write the findings into docx COPIES as Word')
+    print('comments + highlights (sources untouched), run:')
+    print('      pxrd review "%s"' % os.path.abspath(args.folder))
+    print('Then triage them against the paper:  pxrd gui "%s"' % os.path.abspath(args.folder))
 
 if __name__ == '__main__':
     main()

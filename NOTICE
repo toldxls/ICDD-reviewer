@@ -13,8 +13,14 @@ installed separately via pip (see requirements.txt).
 
   PyMuPDF       AGPL-3.0 OR commercial (Artifex)   <-- read this
 
-PyMuPDF (imported as `fitz`) is used only in the PDF I/O layer: text extraction
-in tools/cell_lambda_check.py and page rendering in gui/review_gui.py.
+PyMuPDF (imported as `fitz`) is used only in the PDF I/O layer. Exactly two files import
+it, and nothing else in the codebase touches it:
+
+  pxrd_review/cell_lambda_check.py    text extraction  (_pdf_text_fitz)
+  pxrd_review/gui/_pdf_worker.py      page render + text, in an isolated subprocess
+
+The GUI (pxrd_review/gui/review_gui.py) never imports fitz itself; it routes its PDF
+reads through that worker. Swapping the renderer is therefore a change to those two files.
 
   - Private/personal use and local single-user runs trigger NO AGPL obligations.
   - DISTRIBUTING a combined work, or offering it to users OVER A NETWORK

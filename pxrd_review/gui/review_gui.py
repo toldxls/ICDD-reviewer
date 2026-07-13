@@ -21,7 +21,8 @@ Its only writes are its own sidecars (gui_cache.json, triage.json,
 triage_report.txt) under <folder>/review_out.
 
 Run:
-    python3 -m pxrd_review.gui.review_gui "/path/to/entries"            # opens http://127.0.0.1:5000
+    python3 -m pxrd_review.gui.review_gui "/path/to/entries"            # opens http://127.0.0.1:8000
+    #   (default port 8000; --port to override. NOT 5000 — macOS AirPlay Receiver squats on it.)
     python3 -m pxrd_review.gui.review_gui "/path/to/entries" --port 8000 --no-browser
 
 Security: binds to 127.0.0.1 only (not the network), Flask debug OFF, and the
@@ -83,11 +84,16 @@ def _guard_localhost():
     if (request.host or '').lower() not in _ALLOWED_HOSTS:
         abort(403)                                   # wrong Host -> DNS-rebinding / off-host
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+        # CSRF: a state-changing request must prove it came from this page. Browsers attach
+        # Origin to every cross-origin fetch/XHR/form POST, so REQUIRE one of Origin/Referer
+        # and require it to be us — accepting a request that carries NEITHER (the old `if src:`)
+        # left the header-less form-POST corner open for nothing.
         src = request.headers.get('Origin') or request.headers.get('Referer') or ''
-        if src:                                      # cross-site state change -> CSRF
-            netloc = src.split('://', 1)[-1].split('/', 1)[0].lower()
-            if netloc not in _ALLOWED_HOSTS:
-                abort(403)
+        if not src:
+            abort(403)
+        netloc = src.split('://', 1)[-1].split('/', 1)[0].lower()
+        if netloc not in _ALLOWED_HOSTS:
+            abort(403)
 
 @app.teardown_request
 def _request_done(exc=None):
@@ -756,7 +762,19 @@ def api_entries():
     # WHICH entries show; the id orders them.
     rows.sort(key=_eid_key)
     return jsonify({'folder': STATE['folder'], 'out_dir': STATE['out_dir'],
-                    'pending': pending, 'entries': rows})
+                    'pending': pending, 'entries': rows, 'mindat': _mindat_status()})
+
+def _mindat_status():
+    """Cache age for the header chip. The Mindat-backed checks (group/classification,
+    chemistry, cell cross-check) find nothing at all when the cache is absent, which is
+    indistinguishable from a clean batch — so the GUI states the cache's age rather than
+    letting a stale/missing one quietly weaken the review."""
+    try:
+        from pxrd_review import mindat
+        state, line = mindat.cache_status()
+        return {'state': state, 'text': line}
+    except Exception as ex:
+        return {'state': 'missing', 'text': 'mindat cache: unreadable (%s)' % ex}
 
 def _ln(tag):
     """local-name of a namespaced lxml tag ('{…}ins' -> 'ins')."""

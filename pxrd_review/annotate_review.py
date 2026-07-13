@@ -23,10 +23,11 @@ Usage:
     python3 -m pxrd_review.annotate_review "/path/to/Part 1" --out DIR
     python3 -m pxrd_review.annotate_review "/path/to/Part 1" --inplace       # edit originals (asks nothing)
 """
-import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime, json, hashlib
+import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime, json, hashlib, time
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
+from pxrd_review import errors as E
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
@@ -60,6 +61,85 @@ NO_MATCH = 'No matching .pdf cell found.'
 
 def _has_lam_flag(res):
     return res['lam'] is not None and res['lam'][0] == 'flag'
+
+def _save_docx(doc, path):
+    """Save to a temp file in the destination directory, then os.replace() it into
+    place. A crash (or a full disk) mid-write can then never truncate the target —
+    which under --inplace, or when refreshing onto a hand-edited output, IS the
+    reviewer's only copy. python-docx streams a zip, so a direct doc.save(path)
+    leaves an unopenable file if it dies part-way through."""
+    d = os.path.dirname(path) or '.'
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, '~save_' + os.path.basename(path))
+    try:
+        doc.save(tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+class _RunLock:
+    """Advisory single-writer lock over one output folder.
+
+    Two annotate_review processes on the same folder — the classic case is clicking 'Rerun all'
+    in the GUI while a terminal run is still going — write the same output docx and the same
+    fixed-name temp files. Interleaved, that can leave a corrupt .docx, and it corrupts it
+    SILENTLY. The writers are the only thing that needs serialising, so an O_EXCL lockfile in
+    the output folder is enough. A lock whose owner is gone (crash) is taken over, so a stale
+    file can never wedge the tool permanently."""
+    STALE_S = 3 * 3600
+
+    def __init__(self, out_dir):
+        self.path = os.path.join(out_dir, '.annotate.lock')
+        self.held = False
+
+    def _owner_alive(self):
+        try:
+            with open(self.path, encoding='utf-8') as f:
+                pid = int((f.read().split('\n', 1)[0] or '0').strip())
+        except Exception:
+            return False                     # unreadable/garbled -> treat as abandoned
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)                  # signal 0: existence check, no signal delivered
+            return True
+        except OSError:
+            return False                     # no such process -> abandoned by a crashed run
+
+    def acquire(self):
+        os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(fd, 'w') as f:
+                    f.write('%d\n%s\n' % (os.getpid(), datetime.datetime.now().isoformat()))
+                self.held = True
+                return True
+            except FileExistsError:
+                stale = (not self._owner_alive() or
+                         time.time() - os.path.getmtime(self.path) > self.STALE_S)
+                if not stale:
+                    return False
+                try:                          # abandoned by a dead run — reclaim it
+                    os.remove(self.path)
+                except OSError:
+                    return False
+        return False
+
+    def release(self):
+        if self.held:
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+            self.held = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
 
 def _writable_extras(res):
     """Which extra-check findings get written into the docx: every hard FLAG, plus
@@ -102,7 +182,16 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
         entry = X.parse_entry(docx_path)
         res['extra'] = X.run_all(entry, text, cif_data, dft_data)
     except Exception as ex:
-        res['extra'] = []
+        # Do NOT fail silently. If parse_entry dies, ALL 22 extra checks produce nothing —
+        # and an entry with no findings is indistinguishable from a clean one, so a parse
+        # failure used to read as a PASS. Record it as a note (console/log/GUI, never written
+        # into the docx — severity discipline) and stamp res['error'] so the sweep counts it.
+        res['extra'] = [X.Finding('parse_error', 'note',
+                                  'the extra checks could not run on this entry — %s'
+                                  % E.explain(ex, docx_path), None, None)]
+        res['error'] = E.explain(ex, docx_path)
+        print('  !! %s: extra checks SKIPPED — %s'
+              % (os.path.basename(docx_path), E.explain(ex, docx_path)))
     # a CALCULATED powder pattern uses the modelling wavelength (calc software
     # such as PLATON commonly defaults to CuKα), not the experimental radiation
     is_calc = bool(entry and (entry.instr.get('spacing_instr') or '').strip().lower() == 'calculated')
@@ -305,6 +394,10 @@ def _anchor_cell(doc, ac_row, anchor):
                 or _find_field_value(doc, lambda t: 'spacing instr' in t.lower()))
     if anchor == 'refl':
         return _find_cell(doc, lambda t: t.strip() in ('d(A)', 'd(Å)'))
+    # the citation itself (References section) — highlight the value cell, not the label
+    if anchor == 'reference':
+        return (_find_value(doc, lambda t: t.strip().lower().startswith('primary reference'))
+                or _find_cell(doc, lambda t: t.strip() == 'References'))
     if anchor == 'ima':
         # IMA numbers are reported in the Comments section. When this entry has no
         # 'IMA Number' row, anchor to the Comments-section header rather than letting
@@ -740,8 +833,6 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=Non
         # clean entries are never severe → auto-Accept. (We now open+save to set
         # the Accept 'x', so they are no longer byte-identical copies.)
         out = docx_path if inplace else out_path
-        if not inplace:
-            os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
         doc = Document(base)
         # clean entry is never severe → auto-Accept, unless the reviewer disagreed
         # (then also UNDO a previous run's 'x' — refresh/inplace bases carry it).
@@ -749,7 +840,7 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=Non
             rec['accept'] = _mark_accept(doc)
         else:
             _clear_accept(doc)
-        doc.save(out)
+        _save_docx(doc, out)
         return rec
 
     doc = Document(base)
@@ -830,8 +921,7 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=Non
     elif triage and triage.get('accept') == 'disagree':
         _clear_accept(doc)     # refresh/inplace base carries a previous run's 'x' — undo it
 
-    os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
-    doc.save(out_path)
+    _save_docx(doc, out_path)
     return rec
 
 # ----------------------------------------------------------------------------- main
@@ -867,6 +957,17 @@ def main():
         sys.exit("refusing to annotate the tool's own output folder (%s) — run on its parent instead"
                  % args.folder)
 
+    # Refuse to write the outputs INTO the source folder. The outputs are named after the
+    # source ('<name>.docx' when clean, '<name>_edited.docx' when flagged), so an --out that
+    # resolves to the source folder makes the tool's own stale-twin bookkeeping treat a SOURCE
+    # docx as a previous run's output: it would delete or rename it. Copies only — never the
+    # source. (--inplace is the explicit, documented way to edit originals.)
+    if args.out and not args.inplace and \
+       os.path.realpath(args.out) == os.path.realpath(args.folder):
+        sys.exit("refusing --out '%s': that is the source folder, and the tool would overwrite or "
+                 "delete the source .docx files. Omit --out (writes to <folder>/review_out), point "
+                 "it elsewhere, or use --inplace to edit the originals deliberately." % args.out)
+
     triage = {}
     if args.triage and os.path.exists(args.triage):
         try:
@@ -879,23 +980,63 @@ def main():
     cif_idx = C.cif_index(args.folder)
     dft_idx = C.dft_index(args.folder)
     try:                                    # keep the Mindat structural cache current (cross-source check)
-        from pxrd_review import mindat; mindat.refresh_struct_if_stale()
+        from pxrd_review import mindat
+        mindat.refresh_struct_if_stale()
+        # State the cache's age up front. The Mindat-backed checks go SILENT when the cache is
+        # absent — they just find nothing — so without this line a missing cache is indistinguishable
+        # from a clean corpus.
+        mindat.print_cache_banner()
     except Exception:
         pass
     docs = sorted(C.discover(args.folder).values())   # recursive: docx at any depth under the root
     if args.id:
-        docs = [d for d in docs if args.id in os.path.basename(d)]
+        # Match the parsed entry id exactly: the corpus mixes 5- and 6-digit ids, so a plain
+        # substring test on the filename makes '--id I10126' also select 'I101261…' and rerun
+        # (and rewrite the output of) a neighbouring entry. Fall back to the substring form
+        # only when nothing matches exactly, so a partial id still works interactively.
+        want = args.id.strip().upper()
+        exact = [d for d in docs if (C.entry_id(d) or '').upper() == want]
+        docs = exact or [d for d in docs if want in os.path.basename(d).upper()]
     if args.limit:
         docs = docs[:args.limit]
     out_dir = args.out or os.path.join(args.folder, 'review_out')
 
+    if not docs:
+        print('no entry .docx found under %s%s'
+              % (args.folder, (' matching --id %s' % args.id) if args.id else ''))
+        return
+
+    # Single writer per output folder (see _RunLock): the GUI's 'Rerun all' and a terminal run
+    # on the same folder would otherwise interleave writes to the same docx and corrupt it
+    # without saying so. --inplace writes to the SOURCE folder, so lock that instead.
+    lock = _RunLock(os.path.dirname(docs[0]) if args.inplace else out_dir)
+    if not lock.acquire():
+        sys.exit("another annotate_review run is already writing to this folder (lock: %s).\n"
+                 "Wait for it to finish, or — if no run is active — delete that lock file."
+                 % lock.path)
+    try:
+        _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage)
+    finally:
+        lock.release()
+
+def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
     records = []           # (filename, rec) for the log
+    skipped = []
     for dp in docs:
         eid = C.entry_id(dp)
         pdf = idx.get(eid)
         cif = cif_idx.get(eid)
         dft = dft_idx.get(eid)
-        res = analyze(dp, pdf, cif, dft)
+        # A file that cannot even be OPENED (an HTML error page named .docx, a truncated .pdf,
+        # a docx held open by Word) must cost one entry, not the batch: analyze() -> parse_docx()
+        # raises before any check runs, and unguarded that aborted the run and left every
+        # remaining entry unreviewed — silently, since the ones already written looked fine.
+        try:
+            res = analyze(dp, pdf, cif, dft)
+        except Exception as e:
+            print('  !! %s: SKIPPED — %s' % (os.path.basename(dp), E.explain(e, dp)))
+            skipped.append(os.path.basename(dp))
+            continue
         # Name the output by what the tool found: flagged entries -> '<name>_edited.docx',
         # clean ones keep the source name. Cleanliness is deterministic for a given
         # source, so the path is stable across reruns (refresh below still works).
@@ -914,8 +1055,8 @@ def main():
                     _strip_tool_annotations(tmp)
                     os.replace(tmp, dp)
                 except Exception as e:
-                    print('  !! %s: could not strip the previous run\'s annotations (%s) '
-                          '— left untouched' % (os.path.basename(dp), e))
+                    print('  !! %s: could not strip the previous run\'s annotations — left '
+                          'untouched.\n     %s' % (os.path.basename(dp), E.explain(e, dp)))
                     continue
                 finally:
                     if os.path.exists(tmp):
@@ -976,7 +1117,8 @@ def main():
                 shutil.copy(out, base)
                 _strip_tool_annotations(base)    # strip the temp, not `out`
             except Exception as e:
-                print('  !! %s: strip failed (%s) — left untouched' % (os.path.basename(dp), e))
+                print('  !! %s: strip failed — left untouched.\n     %s'
+                      % (os.path.basename(dp), E.explain(e, out)))
                 records.append((os.path.basename(dp),
                                 {'status': 'preserved', 'highlights': [], 'comments': [],
                                  'clean': False, 'accept': None, 'refreshed': True,
@@ -987,8 +1129,10 @@ def main():
             rec = annotate(dp, res, out, inplace=args.inplace, base_path=base,
                            triage=triage.get(tkey))
         except Exception as e:
-            # `out` is untouched on failure (annotate read the temp, not `out`)
-            print('  !! %s: %s' % (os.path.basename(dp), e)); continue
+            # `out` is untouched on failure (annotate read the temp, not `out`), and _save_docx
+            # writes via a temp + os.replace, so a failure mid-save cannot truncate it either.
+            print('  !! %s: SKIPPED — %s' % (os.path.basename(dp), E.explain(e, dp)))
+            continue
         finally:
             if base and os.path.exists(base):
                 os.remove(base)
@@ -1012,6 +1156,12 @@ def main():
               % (os.path.basename(dp), rec['status'],
                  'clean' if rec['clean'] else ('highlights: ' + ', '.join(rec['highlights']) or 'flag'),
                  n, '' if n == 1 else 's', renamed, dtag, tag))
+
+    # Say plainly that some entries were NOT reviewed. An unreadable entry produces no
+    # output docx, so without this line it just quietly isn't there.
+    if skipped:
+        print('\n!! %d of %d entries NOT reviewed (unreadable — see the !! lines above for the '
+              'cause and the fix): %s' % (len(skipped), len(docs), ', '.join(skipped)))
 
     # The single-entry GUI rerun passes --no-logs so it regenerates one docx
     # without rewriting the batch-wide annotation_log.txt / mindat_discrepancies.txt
@@ -1124,6 +1274,30 @@ def main():
                     fh.write('    [%s]\n' % LABEL.get(code, code))
                     fh.write(textwrap.fill(msg, width=78, initial_indent='      - ', subsequent_indent=' ' * 8) + '\n')
         print('mindat cross-check -> %s  (%d)' % (md_path, len(md_recs)))
+
+    _next_steps(args, out_dir, len(md_recs))
+
+def _next_steps(args, out_dir, n_mindat):
+    """Close a run by naming the commands worth running next. The tool has several entry
+    points and a reviewer should not have to re-read the README to remember which one does
+    what — nor to discover that the docx it just wrote are meant to be triaged in the GUI."""
+    folder = os.path.abspath(args.folder)
+    out = os.path.abspath(out_dir)
+    print('\n' + '-' * 78)
+    print('NEXT')
+    print('  Triage the findings side-by-side with the paper (recommended):')
+    print('      pxrd gui "%s"' % folder)
+    print("  The tool's own change log (what it commented, and why):")
+    print('      %s' % os.path.join(out, 'annotation_log.txt'))
+    if n_mindat:
+        print('  %d entr%s disagree with Mindat. Verify against the paper — neither side is'
+              % (n_mindat, 'y' if n_mindat == 1 else 'ies'))
+        print('  automatically right (Mindat lags the CNMNC newsletter):')
+        print('      %s' % os.path.join(out, 'mindat_discrepancies.txt'))
+    print('  Reviewed copies: %s'
+          % ('the SOURCE folder (--inplace was used)' if args.inplace else out))
+    if not args.inplace:
+        print('  The source .docx were not modified.')
 
 if __name__ == '__main__':
     main()

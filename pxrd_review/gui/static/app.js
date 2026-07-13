@@ -51,7 +51,19 @@ function el(tag, attrs, ...kids) {
   return e;
 }
 const $ = sel => document.querySelector(sel);
-const esc = s => (s == null ? '' : String(s));
+// Two distinct jobs, kept distinct on purpose:
+//   str() — null-safe text for a DOM *text node* (el() appends via createTextNode, which
+//           escapes on its own; running an HTML escape here would double-escape, showing
+//           a literal '&amp;').
+//   esc() — a real HTML escape, mandatory for anything that reaches an *innerHTML* sink.
+//           Some of what we render is raw third-party text (the matched-cell snippet is
+//           get_text() straight out of the paper .pdf), so it must not be able to carry
+//           markup — '<img src=x onerror=…>' in a submitted paper would otherwise execute
+//           in this page's origin and could drive the local /api/* endpoints.
+const str = s => (s == null ? '' : String(s));
+const esc = s => (s == null ? '' : String(s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;'));
 const mantissa = s => (s == null ? '' : String(s).replace(/\(.*$/, '').trim());   // '12.277(4)' -> '12.277'
 
 // ---- dashboard -------------------------------------------------------------
@@ -62,10 +74,38 @@ async function loadEntries() {
   $('#folder').textContent = (parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/');
   $('#folder-ctl').title = (r.folder || '') + '  — click to change folder';
   $('#folder').dataset.path = r.folder || '';             // the bare path (the title is decorated)
+  renderMindatChip(r.mindat);
   S.entries = r.entries;
   renderList();
   // analysis runs in the background — poll until every entry's badges are in
   if (r.pending > 0) S.pollTimer = setTimeout(loadEntries, 1200);
+}
+
+// Mindat cache age. A missing/stale cache silently weakens the group, chemistry and cell
+// cross-checks — the entries just come back with fewer findings — so surface it in the header
+// rather than letting it pass for a clean batch. Quiet (grey) when fresh, loud when not.
+const MINDAT_REFRESH_CMD = 'python3 -m pxrd_review.mindat --refresh';
+function renderMindatChip(m) {
+  const chip = $('#mindat-chip');
+  if (!chip || !m) return;
+  const stale = m.state !== 'ok';
+  chip.textContent = stale ? '⚠ mindat cache' : 'mindat ✓';
+  // The tooltip carries the fix command; clicking copies it, so the reviewer never has to
+  // go hunting through the README for it.
+  chip.title = (m.text || '') +
+    (stale ? '\n\nTo refresh, run:\n  ' + MINDAT_REFRESH_CMD + '\n(click to copy)'
+           : '\n\nThe group / chemistry / cell cross-checks use this cache.\nRefresh with:  '
+             + MINDAT_REFRESH_CMD + '\n(click to copy)');
+  chip.classList.remove('hidden');
+  chip.classList.toggle('chip-warn', stale);
+  chip.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(MINDAT_REFRESH_CMD);
+      const was = chip.textContent;
+      chip.textContent = 'command copied ✓';
+      setTimeout(() => { chip.textContent = was; }, 1400);
+    } catch (_) { /* clipboard blocked — the tooltip still shows the command */ }
+  };
 }
 
 // ---- folder picker: re-point the tool at a different entries folder, live ---
@@ -835,10 +875,13 @@ function renderPager() {
 function renderSnippet(snippet, label, terms) {
   const box = $('#pdf-snippet');
   if (!snippet) { box.innerHTML = ''; return; }
+  // esc() first, then match/wrap the ESCAPED term, so the highlight survives escaping
+  // (a term containing & or < would otherwise no longer match the escaped snippet).
   let h = esc(snippet);
   for (const t of (terms || [])) {
     if (!t) continue;
-    h = h.replaceAll(t, '<span class="hl">' + t + '</span>');
+    const et = esc(t);
+    h = h.replaceAll(et, '<span class="hl">' + et + '</span>');
   }
   box.innerHTML = (label ? '<b>' + esc(label) + ':</b> ' : '') + '…' + h + '…';
 }
@@ -953,7 +996,7 @@ function renderDocx() {
   }
 
   const kv = [];
-  kv.push(['Radiation', esc(a.docx.radiation) + (a.docx.lam ? '  λ=' + a.docx.lam : '')]);
+  kv.push(['Radiation', str(a.docx.radiation) + (a.docx.lam ? '  λ=' + a.docx.lam : '')]);
   const e = a.entry;
   if (e) {
     if (e.crystal_system) kv.push(['Crystal system', e.crystal_system]);
@@ -1030,7 +1073,7 @@ function cellGrid(vals, params, deltas, cmp) {
     if (flagged) cls += flagged.some(([k]) => k === 'value') ? ' miss' : ' near';  // value diff -> red, sig-fig/esd -> orange
     else if (cmp && ax in cmp) cls += cmp[ax] ? ' ok' : ' miss';   // green = matches .pdf cell, red = differs
     else if (dmap[ax] && dmap[ax].ok && dmap[ax].dd > 0.002 && dmap[ax].dd <= 0.004) cls += ' near';
-    const v = esc(vals[i]) || '—';                // em dash = not reported (vs a stray dot)
+    const v = str(vals[i]) || '—';                // em dash = not reported (vs a stray dot)
     g.append(el('div', { class: cls, title: ax + ' = ' + v },
       el('span', { class: 'cl' }, ax), el('span', { class: 'cv' }, v)));
   }
@@ -1040,8 +1083,8 @@ function cellGrid(vals, params, deltas, cmp) {
 function kvTable(pairs) {
   const t = el('table', { class: 'kv' });
   for (const [k, v] of pairs)
-    t.append(el('tr', {}, el('td', { class: 'k' }, esc(k)),
-                          el('td', {}, (v && v.nodeType) ? v : esc(v))));   // allow a DOM node value (e.g. a formatted formula)
+    t.append(el('tr', {}, el('td', { class: 'k' }, str(k)),
+                          el('td', {}, (v && v.nodeType) ? v : str(v))));   // allow a DOM node value (e.g. a formatted formula)
   return t;
 }
 

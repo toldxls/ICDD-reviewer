@@ -220,8 +220,12 @@ INSTRUMENTS = [
     ('Rigaku/Oxford SuperNova', r'supernova'),
     ('Rigaku MiniFlex',        r'miniflex'),
     ('Rigaku SmartLab',        r'smartlab'),
-    ('Bruker D8',              r'\bd8\b|bruker\s+d8'),
-    ('Bruker APEX/SMART',      r'\bapex\s*(?:ii|iii)?\b|\bsmart\b'),
+    # 'D8' and 'SMART' are both ordinary words in this literature — d8 is the standard
+    # electron configuration (routine in Pd²⁺/Pt²⁺/Ni²⁺ papers) and 'smart' is English —
+    # so require the maker's name, or the model qualifier that only ever follows the
+    # instrument ('D8 Advance/Venture/Discover', 'SMART APEX'). A bare token is not enough.
+    ('Bruker D8',              r'bruker\s+d8|\bd8\s+(?:advance|venture|discover|quest|focus|endeavor)\b'),
+    ('Bruker APEX/SMART',      r'\bapex\s*(?:ii|iii)?\b|bruker\s+smart|\bsmart\s+(?:apex|breeze|1000|6000)\b'),
     ('STOE (IPDS/Stadi)',      r'\bstoe\b|ipds|stadi'),
     # \b before X avoids matching 'eXPERT' (the word 'expert'); covers X'Pert/X-Pert/XPert
     ('PANalytical Empyrean',   r'empyrean|\bx[’\'\- ]?pert'),
@@ -825,13 +829,31 @@ def check7_synthetic(e, text):
     return out
 
 # ----------------------------------------------------------------------------- 8. precision / esd / symmetry consistency (docx-internal)
+# Crystal-system words -> the single letter used throughout (a/m/o/t/h/r/c).
+# Whole words, NOT first letters: 'triclinic', 'trigonal' and 'tetragonal' all begin with 't',
+# so a first-letter classifier silently reads the first two as TETRAGONAL — which then imposes
+# a=b and α=β=γ=90 in _constraints and produces a storm of false symmetry flags. The ICDD
+# template says 'Anorthic'/'Hexagonal', but the tool now runs on other people's docx, which
+# use the IUCr words. Anything not listed here returns None -> every caller abstains.
+_SYS_WORDS = {
+    'anorthic': 'a', 'triclinic': 'a',
+    'monoclinic': 'm',
+    'orthorhombic': 'o',
+    'tetragonal': 't',
+    'hexagonal': 'h', 'trigonal': 'h',      # one system; _sys_family folds r/h together anyway
+    'rhombohedral': 'r',
+    'cubic': 'c', 'isometric': 'c',
+}
 def _sys_letter(e):
-    """Single-letter crystal system from the docx field, or inferred from the
-    space-group symbol's lattice + symmetry."""
-    cs = (e.crystal_system or '').strip()
-    if cs:
-        return cs[0].lower() if cs[0].lower() in 'amothrc' else cs
-    return None
+    """Single-letter crystal system from the docx Crystal System field, or None when the
+    field is blank or holds a word we don't recognise (caller abstains rather than guess).
+    A bare letter is accepted as already-normalised, so this is idempotent."""
+    cs = (e.crystal_system or '').strip().lower()
+    if not cs:
+        return None
+    if len(cs) == 1:
+        return cs if cs in 'amothrc' else None
+    return _SYS_WORDS.get(cs)
 
 # Crystal system implied by a Hermann-Mauguin space-group symbol — a conservative classifier
 # for cross-checking the stated Crystal System field. Returns a/m/o/t/h/r/c, or None when the
@@ -882,10 +904,12 @@ def check23_sg_system(e, text=None):
     unambiguous crystal-system FAMILY is compared (rhombohedral≡hexagonal), and an unparseable
     space group abstains. Docx-internal (no PDF needed)."""
     out = []
-    cs = (e.crystal_system or '').strip().lower()
-    cs = cs[0] if cs else ''
+    # NB: abstain on a blank/unknown Crystal System. The old guard was `cs not in 'amothrc'`
+    # on a possibly-empty string — and '' IS a substring of every string, so a blank field
+    # sailed through it and flagged a bogus "Crystal System () disagrees with…" INTO the docx.
+    cs = _sys_letter(e)
     sg = (e.space_group or (e.cell or {}).get('SG') or '').strip()
-    if cs not in 'amothrc' or not sg:
+    if not cs or not sg:
         return out
     g = _sg_system(sg)
     if g and _sys_family(cs) != _sys_family(g):
@@ -902,9 +926,15 @@ def _constraints(e):
     sg = (e.space_group or '')
     cs = _sys_letter(e)
     ga = _val(cell.get('γ')); al = _val(cell.get('α')); be = _val(cell.get('β'))
-    # rhombohedral setting: all three angles equal and ≠ 90
+    # rhombohedral setting: all three angles equal (γ≠120 — that is the hexagonal setting).
+    # The old test also demanded |γ-90| > 1, which threw a near-cubic R cell (α=β=γ≈90.5°,
+    # a=b=c — they exist) into the HEXAGONAL branch and then false-flagged its γ as 'must be
+    # 120'. Equal angles + equal axes is the rhombohedral signature; 90 is not disqualifying.
     if cs in ('r', 'h') or sg.startswith('R') or sg.startswith('P3') or sg.startswith('P6') or sg.startswith('P-3') or sg.startswith('P-6'):
-        if al and be and ga and abs(al - be) < 1e-6 and abs(be - ga) < 1e-6 and abs(ga - 90) > 1:
+        a_, b_, c_ = _val(cell.get('a')), _val(cell.get('b')), _val(cell.get('c'))
+        eq_ang = al and be and ga and abs(al - be) < 1e-6 and abs(be - ga) < 1e-6
+        eq_ax = a_ and b_ and c_ and abs(a_ - b_) < 1e-6 and abs(b_ - c_) < 1e-6
+        if eq_ang and abs(ga - 120) > 1e-6 and (abs(ga - 90) > 1 or eq_ax):
             return ([('a', 'b', 'c')], [('α', 'β', 'γ')], {})          # rhombohedral axes
         return ([('a', 'b')], [], {'α': 90, 'β': 90, 'γ': 120})        # hexagonal setting
     if cs == 'c' or re.search(r'(^|\s)(F|I|P)?[m\-]?23|m-3', sg):
@@ -1848,7 +1878,8 @@ _ATWT = {
  'Cl':35.45,'K':39.098,'Ca':40.078,'Sc':44.956,'Ti':47.867,'V':50.942,'Cr':51.996,
  'Mn':54.938,'Fe':55.845,'Co':58.933,'Ni':58.693,'Cu':63.546,'Zn':65.38,'Ga':69.723,
  'Ge':72.630,'As':74.922,'Se':78.971,'Br':79.904,'Rb':85.468,'Sr':87.62,'Y':88.906,
- 'Zr':91.224,'Nb':92.906,'Mo':95.95,'Ag':107.868,'Cd':112.414,'In':114.818,'Sn':118.710,
+ 'Zr':91.224,'Nb':92.906,'Mo':95.95,'Ru':101.07,'Rh':102.906,'Pd':106.42,
+ 'Ag':107.868,'Cd':112.414,'In':114.818,'Sn':118.710,
  'Sb':121.760,'Te':127.60,'I':126.904,'Cs':132.905,'Ba':137.327,'La':138.905,'Ce':140.116,
  'Pr':140.908,'Nd':144.242,'Sm':150.36,'Eu':151.964,'Gd':157.25,'Tb':158.925,'Dy':162.500,
  'Ho':164.930,'Er':167.259,'Tm':168.934,'Yb':173.045,'Lu':174.967,'Hf':178.49,'Ta':180.948,
@@ -2547,6 +2578,244 @@ def check21_primary_name(e, text):
                 "oxoanions before Hydroxide/Hydrate)." % (nm, suggested), None, 'primary')]
     return []
 
+# ----------------------------------------------------------------------------- 26. reference title case
+# The entry's Primary Reference arrives MACHINE-TITLE-CASED ('a New Mineral From the Burro
+# Mine', and it even wrecks acronyms: 'USA' -> 'Usa'). ICDD wants sentence case: ordinary
+# words lowercase, proper nouns kept. Mined from 165 reviewer-corrected reference cells across
+# the corpus: 53 were case-only title fixes and ALL 53 went Title Case -> sentence case (0 the
+# other way), so the direction is not in doubt.
+#
+# The paper is the oracle for which words are proper nouns: a word the article itself writes
+# lowercase mid-sentence ('volcano', 'deposit', 'mineral') is an ordinary word, whatever the
+# docx did to it; one it writes capitalized ('Tolbachik', 'Kamchatka') is a name; one it writes
+# in caps ('USA', 'REE') is an acronym to restore. Lines that are wholly upper-case are ignored
+# as evidence — running heads, and the Canadian Journal of Mineralogy and Petrology sets its
+# titles in caps/small-caps, so they say nothing about a word's true case.
+#
+# COMMENT-ONLY, like every other check: the suggested title goes in the comment and the cell is
+# highlighted. The tool never rewrites the Reference cell — the reviewer applies it.
+_TITLE_FUNC = {'a', 'an', 'the', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'from', 'with',
+               'for', 'by', 'as', 'into', 'over', 'under', 'within', 'without', 'between',
+               'during', 'near', 'its', 'their', 'is', 'not', 'nor', 'but'}
+# Generic head-nouns ICDD prefers lowercase even where the paper capitalizes them ('the Burro
+# mine'). Deliberately tiny: anything more (Island, Massif, Volcano, Placer) belongs to the
+# place name it sits in, and the paper's own usage decides those.
+_TITLE_GENERIC = {'mine', 'mines'}
+# Fallback vocabulary for an entry with no paired .pdf: only words that are ordinary in ANY
+# mineralogical title. Unknown words are then left exactly as the docx has them — the
+# suggestion under-corrects rather than risk lowercasing a name it cannot verify.
+_TITLE_COMMON = _TITLE_FUNC | _TITLE_GENERIC | {
+    'new', 'novel', 'natural', 'synthetic', 'mineral', 'minerals', 'species', 'group',
+    'supergroup', 'subgroup', 'series', 'member', 'structure', 'structural', 'crystal',
+    'structures', 'crystallography', 'chemistry', 'chemical', 'composition', 'data', 'study',
+    'description', 'uranyl', 'bearing', 'dominant', 'rich', 'related', 'known',
+    'characterization', 'characterisation', 'occurrence', 'occurrences', 'first', 'second',
+    'rare', 'earth', 'element', 'elements', 'analogue', 'analog', 'analogs', 'analogues',
+    'polytype', 'type', 'unit', 'cell', 'powder', 'diffraction', 'implications', 'formation',
+    'ore', 'ores', 'epithermal', 'hydrous', 'anhydrous', 'oxide', 'sulfide', 'sulphide',
+    'sulfosalt', 'carbonate', 'phosphate', 'silicate', 'arsenate', 'vanadate', 'selenite',
+    'sulfate', 'sulphate', 'containing', 'isomorphous', 'isotypic', 'redefinition',
+    'nomenclature', 'revision', 'review', 'evidence', 'insights', 'origin', 'genesis',
+    'stability', 'deposit', 'deposits', 'quarry', 'volcano', 'fumarole', 'fumaroles'}
+_TITLE_CHEM = re.compile(r'[0-9·•⋅×+]')                     # MoO3, Fe3+, 10H2O
+_TITLE_ROMAN = re.compile(r'^[IVXLC]{1,6}$')                # 'IV. Haywoodite'
+# Matched against the RAW token, not the punctuation-stripped core: 'Nacareniobsite-(Y),' keeps
+# its closing paren only in the raw form, and stripping it would let the suffix be lowercased
+# to '-(y)' — a chemistry error, exactly what this check must never introduce.
+_TITLE_LEVINSON = re.compile(r'^(\w[\w\-’\']*?)(-\([A-Z][a-zA-Z]*\))(\W*)$')   # vielleaureite-(Ce),
+_TITLE_ELEM_PREFIX = re.compile(r'^([A-Z][a-z]?)[-–]\w')    # Al-bearing, Mn-dominant, Ca-glycinate
+_TITLE_SENT_END = ('.', ':', '?', '!')
+# authors follow the title as 'Surname, X.' — validated: no author leakage on any of the 165
+# reviewer-corrected reference cells in the corpus.
+_TITLE_AUTHORS = re.compile(r'[A-ZÀ-Ý][\w\-\'’]+,\s+[A-ZÀ-Ý]\.')
+
+def _ref_text(e):
+    """The Primary Reference cell, read from the raw rows (parse_entry deliberately skips it:
+    its 'Primary' field is the primary NAME, a different row in a different section)."""
+    section = None
+    for r in (e.raw_rows or []):
+        if not r:
+            continue
+        if len(r) == 1:
+            section = _ns(r[0])
+            continue
+        h = (r[0] or '').strip().lower()
+        if h.startswith('primary reference') and len(r) > 1:
+            return (r[1] or '').strip()
+    return ''
+
+def _ref_title(ref):
+    m = _TITLE_AUTHORS.search(ref or '')
+    return (ref[:m.start()] if m else (ref or '')).strip()
+
+def _paper_word_forms(text):
+    """word -> the form the PAPER uses for it mid-sentence ('volcano', 'Tolbachik', 'USA').
+    Sentence-initial tokens are skipped (their capital is forced by position, not by the word),
+    as are wholly upper-case lines (running heads / caps title blocks)."""
+    seen = {}
+    if not text:
+        return {}
+    for line in text.split('\n'):
+        letters = [c for c in line if c.isalpha()]
+        if letters and sum(1 for c in letters if c.isupper()) > 0.6 * len(letters):
+            continue                      # ALL-CAPS line: running head / caps title block
+        # ...and skip TITLE-CASED lines too. The paper's own title and running head are set in
+        # Title Case by many journals, and they repeat on every page — left in, they teach the
+        # oracle that 'Natural' and 'Architecture' are proper nouns, and it then refuses to
+        # lowercase the very words this check exists to lowercase.
+        ws = [w for w in line.split() if len(w) > 3 and w[:1].isalpha()]
+        if len(ws) >= 4 and sum(1 for w in ws if w[:1].isupper()) > 0.6 * len(ws):
+            continue
+        for sent in re.split(r'(?<=[.!?])\s+', line):
+            for i, tok in enumerate(sent.split()):
+                w = re.sub(r'^[^\w]+|[^\w]+$', '', tok)
+                if i == 0 or not w or len(w) < 2 or not w[0].isalpha():
+                    continue
+                seen.setdefault(w.lower(), []).append(w)
+    out = {}
+    for k, v in seen.items():
+        if len(v) < 2:                       # one sighting is not evidence
+            continue
+        caps = [x for x in v if x[0].isupper()]
+        upper = [x for x in v if x.isupper() and len(x) <= 6]
+        if len(upper) >= 2 and len(upper) >= 0.6 * len(v):
+            out[k] = max(set(upper), key=upper.count)        # acronym: USA, REE
+        elif len(caps) >= 0.7 * len(v):
+            out[k] = max(set(caps), key=caps.count)          # proper noun: Tolbachik
+        else:
+            out[k] = k                                       # ordinary word: volcano
+    return out
+
+def _title_sentence_case(title, text=None, species=()):
+    """-> (wrongly_capitalized_words, suggested_title). Never alters letters — only case —
+    and never touches chemistry, Roman numerals, or a Levinson suffix."""
+    forms = _paper_word_forms(text)
+    sp = {s.lower() for s in (species or ())}
+    toks = title.split()
+    cores = [re.sub(r'^[^\w]+|[^\w]+$', '', t) for t in toks]
+    starts, s = [], True
+    for t in toks:
+        starts.append(s)
+        s = t.endswith(_TITLE_SENT_END)
+
+    kind = []
+    for i, c in enumerate(cores):
+        low = c.lower()
+        # A bare 'A' is the article ('A New Mineral') — unless it is a SITE VARIABLE, as in
+        # 'leucite analogs (A = K, Rb, Cs)': there it is parenthesized and/or followed by '='.
+        article = (low == 'a'
+                   and '(' not in toks[i]
+                   and not (i + 1 < len(toks) and toks[i + 1].startswith('=')))
+        # untouchable: punctuation, chemistry (MoO3 / Fe3+), an element-prefixed compound
+        # (Al-bearing, Mn-dominant), a Roman numeral, and any other single letter (site labels).
+        if (not c or not c[0].isalpha() or (len(c) == 1 and not article)
+                or _TITLE_CHEM.search(c) or _TITLE_ROMAN.match(c)
+                or (_TITLE_ELEM_PREFIX.match(c)
+                    and _TITLE_ELEM_PREFIX.match(c).group(1) in _PT_ELEMENTS)):
+            kind.append('skip')
+        elif low in _TITLE_GENERIC or low in sp or _species_stem(c, sp):
+            kind.append('lower')                       # 'mine'; species names are lowercase
+        elif low in _TITLE_COMMON:
+            # BEFORE the paper evidence: these words are ordinary in any mineralogical title,
+            # so no amount of contamination from a Title-Cased heading should make one 'proper'.
+            kind.append('lower')
+        elif low in forms:
+            kind.append('proper' if forms[low][0].isupper() else 'lower')
+        else:
+            # No evidence either way: LEAVE IT ALONE. Lowercasing an unverified word is the one
+            # harmful mistake this check can make — 'Koštálov quarry' -> 'koštálov quarry'
+            # destroys a place name. Words the paper genuinely uses as ordinary words DO appear
+            # lowercase in its body, so the absence of evidence points at a rare proper noun.
+            kind.append('keep')
+    # A capitalized word IMMEDIATELY BEFORE a proper noun belongs to that name: 'New Mexico',
+    # 'La Sal', 'Vanadium Queen (mine)', 'Mount Carmel'. This must include ordinary words —
+    # 'new' is as common as a word gets, and lowercasing it inside 'New Mexico' wrecks a place
+    # name. Left-neighbour ONLY, and that asymmetry is the whole point: what FOLLOWS a proper
+    # noun is usually its generic head ('Tolbachik volcano', 'Redmond mine'), which the paper's
+    # own usage already decided should be lowercase. Function words are excluded — 'from the
+    # Burro Mine' must not resurrect 'the'.
+    for _ in range(2):
+        for i, k in enumerate(kind):
+            if k != 'lower' or starts[i] or not cores[i][:1].isupper():
+                continue
+            low = cores[i].lower()
+            if low in _TITLE_FUNC or low in _TITLE_GENERIC or low in sp:
+                continue
+            # Adjacency must not cross punctuation: in 'Rosina Pegmatite, San Piero' the comma
+            # ends the name, so 'San' says nothing about 'Pegmatite' — without this the rule
+            # keeps every generic head-noun that happens to sit before a comma and a place.
+            if toks[i][-1:] in (',', ';', ':', '.', ')', '–', '-'):
+                continue
+            if i + 1 < len(kind) and kind[i + 1] == 'proper' and cores[i + 1][:1].isupper():
+                kind[i] = 'proper'
+
+    wrong, out = [], []
+    for i, tok in enumerate(toks):
+        c = cores[i]
+        # A Levinson-suffixed species is handled on the RAW token so the '(Ce)' survives:
+        # lowercase the species stem, never the element in the suffix.
+        lev = _TITLE_LEVINSON.match(tok)
+        if lev and kind[i] != 'skip':
+            stem = lev.group(1)
+            new_stem = stem if starts[i] else stem.lower()
+            if new_stem != stem and stem[:1].isupper() and new_stem[:1].islower():
+                wrong.append(stem)
+            out.append(new_stem + lev.group(2) + lev.group(3))
+            continue
+        if kind[i] in ('skip', 'keep') or starts[i]:
+            out.append(tok)                  # the first word of a sentence stays as written
+            continue
+        low = c.lower()
+        # Only ever LOWER a word, or restore the paper's own form of a name/acronym. Never
+        # raise an ordinary word's case: all 53 reviewer corrections in the corpus went Title
+        # Case -> sentence case and not one went the other way, so up-casing (e.g. capitalizing
+        # 'occurrence' after a colon) would be inventing a convention the reviewers do not use.
+        if kind[i] == 'proper':
+            f = forms.get(low, c)
+            # A word promoted by the left-neighbour rule ('New' in 'New Mexico', 'La' in
+            # 'La Sal') is ORDINARY on its own, so the paper writes it lowercase — taking the
+            # paper's form here would undo the promotion and put back the very bug this rule
+            # exists to prevent. Keep the docx's capital; only an independently-attested name
+            # or acronym adopts the paper's form.
+            new = f if f[:1].isupper() else c
+        else:
+            new = low
+        if new[:1].isupper() and c[:1].islower():
+            new = c                          # would raise the case -> leave the docx alone
+        if new != c and c[:1].isupper() and new[:1].islower():
+            wrong.append(c)
+        out.append(tok.replace(c, new, 1) if c else tok)
+    return wrong, ' '.join(out)
+
+def _species_stem(word, species):
+    """A Levinson-suffixed species ('Vielleaureite-(Ce)') stripped back to its stem."""
+    m = _TITLE_LEVINSON.match(word)
+    return bool(m) and m.group(1).lower() in species
+
+def check26_reference_title_case(e, text=None):
+    """The reference title should read as a sentence (ordinary words lowercase, proper nouns
+    and acronyms kept), not in the machine Title Case the entry arrives in. Conservative: at
+    least two wrongly-capitalized words, so a single arguable word never fires."""
+    ref = _ref_text(e)
+    title = _ref_title(ref)
+    if not title or len(title.split()) < 5:
+        return []
+    species = ()
+    try:
+        from pxrd_review import mindat
+        species = set((mindat._db() or {}).get('minerals') or {})
+    except Exception:
+        pass
+    wrong, suggested = _title_sentence_case(title, text, species)
+    if len(wrong) < 2 or suggested == title:
+        return []
+    return [Finding('ref_title_case', 'flag',
+            "Reference title is in Title Case; ICDD style is sentence case (ordinary words "
+            "lowercase, proper nouns and acronyms kept). Capitalized here but not a name: %s. "
+            "Suggested title: %s" % (', '.join(wrong[:8]) + ('…' if len(wrong) > 8 else ''),
+                                     suggested),
+            title[:120], 'reference')]
+
 CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check4_calculated, check5_wavelength,
           check7_synthetic, check8_precision_symmetry, check9_indexing,
@@ -2554,7 +2823,8 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check13_temperature, check15_strongest_lines,
           check16_instr_vocab, check17_pdf_filter, check18_name_formula,
           check19_intensity_detector, check20_calc_wavelength, check21_primary_name,
-          check23_sg_system, check24_optical_2v, check25_reflection_geometry]
+          check23_sg_system, check24_optical_2v, check25_reflection_geometry,
+          check26_reference_title_case]
 
 # An errored check must file under the CODE its findings normally carry (regression /
 # sweep lookups filter by code, and the raw function name would hide it from them).
@@ -2606,6 +2876,8 @@ def print_findings(path, text):
 if __name__ == '__main__':
     import sys, glob, os
     from pxrd_review import cell_lambda_check as C
+    if len(sys.argv) < 2:
+        sys.exit('usage: python3 -m pxrd_review.extra_checks <folder> [entry-id]')
     folder = sys.argv[1]
     only = sys.argv[2] if len(sys.argv) > 2 else None
     idx = C.pdf_index(folder)
@@ -2614,5 +2886,10 @@ if __name__ == '__main__':
         if only and only not in os.path.basename(dp): continue
         eid = C.entry_id(dp); pdf = idx.get(eid)
         print('=' * 78); print(os.path.basename(dp), '<-', os.path.basename(pdf) if pdf else '(no pdf)')
-        text = C.pdf_text(pdf) if pdf else None
-        print_findings(dp, text)
+        # skip an unreadable docx/.pdf rather than abort the whole folder (see cell_lambda_check.main)
+        try:
+            text = C.pdf_text(pdf) if pdf else None
+            print_findings(dp, text)
+        except Exception as e:
+            from pxrd_review.errors import explain
+            print('  !! SKIPPED — %s' % explain(e, dp))
