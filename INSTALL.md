@@ -39,48 +39,38 @@ the step above and open a **new** Command Prompt.
 
 ## 2. Install the tool
 
-You will have received **either** a bundle zip **or** a source zip. Both end with the same
-working `pxrd` command — use whichever you were sent.
+The tool lives in a public repository, and **that is always the current version**:
 
-### A — from the bundle zip (`pxrd-review-<version>-bundle.zip`)
+**<https://github.com/toldxls/ICDD-reviewer>**
 
-1. **Unzip it** (right-click → *Extract All…*). Inside:
+Use it for installs *and* upgrades — there is nothing to be emailed and no files site to check.
 
-   | file | what it is |
-   |---|---|
-   | `pxrd_review-<version>-py3-none-any.whl` | the tool (this is what gets installed) |
-   | `SHA256SUMS.txt` | the wheel's fingerprint (integrity check) |
-   | `INSTALL.md` | this file |
+### A — install straight from the repository (simplest, and how you upgrade)
 
-2. **Check the download is genuine.** The message announcing the upload contains the wheel's
-   SHA-256 fingerprint. In a Command Prompt type `certutil -hashfile ` (with the trailing
-   space), **drag the `.whl` file** into the window, type ` SHA256`, press Enter:
-   ```
-   certutil -hashfile "C:\...\pxrd_review-<version>-py3-none-any.whl" SHA256
-   ```
-   The long hex string must match the announced one exactly. Any difference = corrupted
-   download; re-download, or ask Travis.
+One line, in a Command Prompt. You do **not** need a GitHub account, and you do **not** need
+`git` installed:
+```
+pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/heads/main.zip"
+```
+Run that **exact same line again** whenever you want the latest version — it replaces what you
+have. The first install needs internet (pip fetches the libraries it depends on).
 
-3. **Install.** Type `pip install --upgrade ` (trailing space), drag the same `.whl` in,
-   press Enter:
-   ```
-   pip install --upgrade "C:\...\pxrd_review-<version>-py3-none-any.whl"
-   ```
-   The first install needs internet (pip fetches the libraries it depends on); later upgrades
-   normally don't.
+### B — download the folder and install from it
 
-### B — from a source zip / a folder called `pxrd-review-tool`
+Prefer to see the files? On the repository page click the green **`Code`** button →
+**`Download ZIP`**, unzip it (right-click → *Extract All…*), then in a Command Prompt go into
+the unzipped folder and install with `.` (a dot — it means "the folder I am in"):
+```
+cd Desktop\ICDD-reviewer-main
+pip install -e .
+```
+*(Tip: type `cd ` then drag the folder into the window to fill in the path.)*
+To upgrade, download the ZIP again into a fresh folder and repeat.
 
-1. **Unzip it** somewhere you can find, e.g. your Desktop.
-2. **Go into that folder** in the Command Prompt with `cd`, then install with `.` (a dot —
-   it means "the folder I am in"):
-   ```
-   cd Desktop\pxrd-review-tool
-   pip install -e .
-   ```
-   *(Tip: type `cd ` then drag the folder into the window to fill in the path.)*
-
-To **upgrade** later, replace the folder with the new one and run `pip install -e .` again.
+> **If you were given a `pxrd-review-<version>-bundle.zip`** from the files site, it still
+> installs — unzip it and run `pip install --upgrade` on the `.whl` inside (verify its SHA-256
+> against the announcement with `certutil -hashfile "<file>" SHA256`). But the repository above
+> is the current version; prefer it.
 
 ### Check it installed
 
@@ -202,8 +192,13 @@ editable install keeps its `.cache/` and `.mindat_key` at the repo root.
    zip pxrd-review-<version>-bundle.zip pxrd_review-<version>-py3-none-any.whl SHA256SUMS.txt INSTALL.md
    rm INSTALL.md
    ```
-5. Upload the bundle zip to the shared files site, and put the wheel's SHA-256 fingerprint
-   **in the announcement message itself** (the copy inside the zip can only catch corruption,
-   not tampering — the message is the independent channel).
-6. Optional, for the archive: attach the wheel to a GitHub release
-   (`gh release create v<version> dist/*.whl --notes "…SHA-256: …"`).
+5. Tag and publish, so reviewers installing from the repository get it:
+   ```
+   git tag v<version> && git push --tags
+   gh release create v<version> dist/*.whl --notes "…SHA-256: …"
+   ```
+   Reviewers install from `main`, so **pushing to `main` is what ships**. The release + tag are
+   the archive, and give anyone who wants a pinned wheel a checksummed one.
+6. Only if someone needs the offline bundle: upload the zip to the files site and put the
+   wheel's SHA-256 **in the announcement message itself** (the copy inside the zip can catch
+   corruption, not tampering — the message is the independent channel).
