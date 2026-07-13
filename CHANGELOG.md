@@ -6,6 +6,27 @@ package version in `pyproject.toml`.
 
 ## [0.2.8] — 2026-07-13
 
+### Docs — INSTALL.md rewritten against how reviewers actually install it
+Checked against the "Visual Instructions for PXRD_REVIEW_TOOL" walkthrough ICDD wrote for
+themselves. It worked, but it diverged from our instructions at almost every step — so the
+instructions were the problem, not the reviewers:
+- They installed from a **source folder with `pip install -e .`**; INSTALL.md documented only
+  the wheel bundle. Both paths are now written out.
+- They ran **`python -m pxrd_review.gui.review_gui "<folder>"`**, not `pxrd gui` — the `pxrd`
+  command isn't on PATH for every Windows Python. The long form is now given for every command,
+  with a troubleshooting row for `'pxrd' is not recognized`.
+- **`python3` does not exist on Windows.** The README's commands are all `python3 -m …`, which
+  simply fails there. Called out in both files.
+- They installed Python from the Microsoft Store's **Python Install Manager** (answer **Y** to
+  the PATH prompts); we only documented python.org. Both are now covered.
+- Their Mindat workaround was *"GET the .json files I can email them to you … put them in
+  `.cache`"*, and their note on setting the key was an open TODO. **Both are obsolete as of
+  0.2.7**: the snapshot ships inside the package, so no key and no hand-copied JSON is needed.
+  INSTALL.md now says this at the top.
+- Clarified that **`Rerun entry/all` writes the docx** while **`Export triage` writes a text
+  report** — their walkthrough treated the two as one step.
+- The bundle's checksum file is `SHA256SUMS.txt`, as the docs have always said.
+
 ### Changed — reference title case (check 26)
 - **A formal place name now keeps all of its words.** The rule previously let the paper decide
   every word, which lowercased the head-noun of a name the paper happens to write lowercase

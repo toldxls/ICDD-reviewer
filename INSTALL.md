@@ -1,117 +1,200 @@
-# Installing & upgrading the PXRD review tool
+# Installing & running the PXRD review tool
 
-Step-by-step instructions for ICDD reviewers, written for **Windows**
-(macOS/Linux notes at the end).
+Step-by-step for ICDD reviewers, written for **Windows** (macOS/Linux notes at the end).
+No programming needed — you type a few commands into the black Command Prompt window.
 
-Everything arrives as **one file** on the shared files site:
-`pxrd-review-<version>-bundle.zip`, which contains
-
-| file | what it is |
-|---|---|
-| `pxrd_review-<version>-py3-none-any.whl` | the tool (this is what gets installed) |
-| `SHA256SUMS.txt` | the wheel's fingerprint (integrity check) |
-| `INSTALL.md` | this file |
-
-After installing you get one command, `pxrd` — e.g. `pxrd gui "C:\path\to\entries"` —
-available from any Command Prompt.
+**You do NOT need a Mindat API key.** A Mindat snapshot ships inside the tool, so the
+classification / chemistry / cell cross-checks work as soon as it is installed. (Older
+instructions told you to ask for `mindat_ima.json` / `mindat_struct.json` and copy them into a
+`.cache` folder by hand — **that is no longer necessary**; skip it.)
 
 ---
 
-## One-time setup (before your first install)
+## 1. Install Python (once)
 
-### 1. Install Python
-1. Go to <https://www.python.org/downloads/> and download the latest Python 3 for Windows.
-2. Run the installer. On the very first screen **tick the box "Add python.exe to PATH"**
-   — this is the step people miss, and nothing works without it.
-3. Verify: open a **new** Command Prompt (Start menu → type `cmd`) and run:
-   ```
-   python --version
-   pip --version
-   ```
-   Both should print a version, not "'python' is not recognized…". If they don't,
-   re-run the installer and tick the PATH box.
+Either of these works. **Whichever you use, Python must be added to your PATH** — that is the
+step people miss, and nothing works without it.
 
-### 2. Mindat API key (enables the Mindat cross-checks)
+**Option A — Python Install Manager (Microsoft Store).** Get it from
+<https://apps.microsoft.com/detail/9nq7512cxl7t>, run it, and when it asks
+**"Allow longer names"**, **"Configure directory / add PATHs"** and **"Add Python runtime"**,
+answer **Y** and press Enter each time.
+
+**Option B — python.org.** Download the latest Python 3 from
+<https://www.python.org/downloads/>, run the installer, and on the very first screen
+**tick "Add python.exe to PATH"**.
+
+**Check it worked.** Open a **new** Command Prompt (Start menu → type `cmd`) and run:
+```
+python --version
+pip --version
+```
+Both should print a version. If you get `'python' is not recognized…`, PATH wasn't set — redo
+the step above and open a **new** Command Prompt.
+
+> On Windows the command is **`python`**. (`python3` is a macOS/Linux name; it usually does not
+> exist on Windows.)
+
+---
+
+## 2. Install the tool
+
+You will have received **either** a bundle zip **or** a source zip. Both end with the same
+working `pxrd` command — use whichever you were sent.
+
+### A — from the bundle zip (`pxrd-review-<version>-bundle.zip`)
+
+1. **Unzip it** (right-click → *Extract All…*). Inside:
+
+   | file | what it is |
+   |---|---|
+   | `pxrd_review-<version>-py3-none-any.whl` | the tool (this is what gets installed) |
+   | `SHA256SUMS.txt` | the wheel's fingerprint (integrity check) |
+   | `INSTALL.md` | this file |
+
+2. **Check the download is genuine.** The message announcing the upload contains the wheel's
+   SHA-256 fingerprint. In a Command Prompt type `certutil -hashfile ` (with the trailing
+   space), **drag the `.whl` file** into the window, type ` SHA256`, press Enter:
+   ```
+   certutil -hashfile "C:\...\pxrd_review-<version>-py3-none-any.whl" SHA256
+   ```
+   The long hex string must match the announced one exactly. Any difference = corrupted
+   download; re-download, or ask Travis.
+
+3. **Install.** Type `pip install --upgrade ` (trailing space), drag the same `.whl` in,
+   press Enter:
+   ```
+   pip install --upgrade "C:\...\pxrd_review-<version>-py3-none-any.whl"
+   ```
+   The first install needs internet (pip fetches the libraries it depends on); later upgrades
+   normally don't.
+
+### B — from a source zip / a folder called `pxrd-review-tool`
+
+1. **Unzip it** somewhere you can find, e.g. your Desktop.
+2. **Go into that folder** in the Command Prompt with `cd`, then install with `.` (a dot —
+   it means "the folder I am in"):
+   ```
+   cd Desktop\pxrd-review-tool
+   pip install -e .
+   ```
+   *(Tip: type `cd ` then drag the folder into the window to fill in the path.)*
+
+To **upgrade** later, replace the folder with the new one and run `pip install -e .` again.
+
+### Check it installed
+
+```
+pxrd --version
+```
+It should print e.g. `pxrd-review 0.2.8`.
+
+**If it says `'pxrd' is not recognized`:** first close and reopen the Command Prompt. If it
+still isn't found, Python's Scripts folder isn't on your PATH — you don't need to fix that,
+just use the longer form everywhere below:
+
+| short (preferred) | longer form that always works |
+|---|---|
+| `pxrd gui "C:\path\to\entries"` | `python -m pxrd_review.gui.review_gui "C:\path\to\entries"` |
+| `pxrd review "C:\path\to\entries"` | `python -m pxrd_review.annotate_review "C:\path\to\entries"` |
+
+---
+
+## 3. Run it
+
+```
+pxrd gui "C:\Users\You\Desktop\2028_PART1"
+```
+Point it at the folder holding the entry `.docx` **and** the paper `.pdf` files. **Keep the
+quotes** — paths with spaces break without them. It opens the review window in your browser.
+The folder is remembered, so afterwards a bare `pxrd gui` reopens it.
+
+Longer form if `pxrd` isn't recognized:
+```
+python -m pxrd_review.gui.review_gui "C:\Users\You\Desktop\2028_PART1"
+```
+
+### Using the review window
+
+- **Left** — the entry list. Click an entry to open it.
+- **Middle** — the paper (`.pdf`) or the transcription (`docx`); use the toggle to switch.
+- **Right** — what the docx, the `.cif`/`.dft` and Mindat say, side by side.
+- **Findings** — each one has **`? look`**, which jumps to the evidence: on the `.pdf` it
+  scrolls to the passage; on the `docx` it lands on the exact cell. Then **`✓ confirm`** or
+  **`✗ dismiss`**, and add a note if you want.
+- **`Rerun entry ▸`** writes the corrected docx for that entry into the `review_out` subfolder,
+  applying your triage. **`Rerun all ▸`** does the whole batch when you're finished.
+- **`Export triage`** is separate and optional: it writes a plain-text summary of your
+  decisions (`review_out\triage_report.txt`). It does **not** write the docx — the Rerun
+  buttons do that.
+
+**Your source files are never modified.** Everything the tool writes goes into a `review_out`
+subfolder, as *copies* with Word comments and yellow highlights. Your own manual edits to those
+copies are preserved across reruns (a timestamped backup is kept in `review_out\.edit_backup`).
+
+---
+
+## 4. Mindat API key — optional
+
+**Skip this unless you want fresher Mindat data.** The tool ships with a Mindat snapshot and
+works fully offline without a key; the header tells you how old that snapshot is. A key only
+lets the tool refresh it automatically.
+
 Get a key from your **mindat.org** account page, then in a Command Prompt:
 ```
 setx MINDAT_API_KEY "YOUR_MINDAT_TOKEN"
 ```
-Close and reopen the Command Prompt (the variable only appears in new windows).
-This survives reboots and upgrades — set it once and forget it.
-*(Already have the key working from an earlier install? It keeps working; skip this.)*
+Close and reopen the Command Prompt (the variable only exists in new windows). This survives
+reboots and upgrades — set it once.
+
+Check it and see what data you have:
+```
+python -m pxrd_review.mindat --status
+```
 
 ---
 
-## Install — and every upgrade (same four steps)
+## Troubleshooting
 
-1. **Download** the newest `pxrd-review-<version>-bundle.zip` from the shared files
-   site and unzip it (right-click → *Extract All…*).
+| what you see | what to do |
+|---|---|
+| `'python' is not recognized` | Python isn't on PATH — redo step 1, then open a **new** Command Prompt. |
+| `'pxrd' is not recognized` | Reopen the Command Prompt; if it persists, use the `python -m …` long forms above. |
+| `'python3' is not recognized` | On Windows the command is `python`, not `python3`. |
+| The path has spaces and it fails | Put **double quotes** around the whole path. |
+| A docx won't open / "locked" | Close the file in Word (and the Explorer preview pane), then rerun. |
+| `mindat cache: MISSING` in the header | Reinstall — the snapshot ships inside the package. |
 
-2. **Check the wheel is genuine.** The message announcing the upload includes the
-   wheel's SHA-256 fingerprint. In a Command Prompt, type `certutil -hashfile `
-   (with the trailing space), **drag the `.whl` file** from the unzipped folder into
-   the window, type ` SHA256`, and press Enter:
-   ```
-   certutil -hashfile "C:\...\pxrd_review-<version>-py3-none-any.whl" SHA256
-   ```
-   The long hex string it prints must match the announced fingerprint exactly.
-   Any single character different = corrupted download — stop and re-download,
-   or ask Travis.
-
-3. **Install.** Type `pip install --upgrade ` (trailing space again), drag the same
-   `.whl` file in, press Enter:
-   ```
-   pip install --upgrade "C:\...\pxrd_review-<version>-py3-none-any.whl"
-   ```
-   The first install needs internet access (pip fetches the tool's libraries from
-   pypi.org); upgrades normally don't.
-
-4. **Verify:**
-   ```
-   pxrd --version
-   ```
-   It should print the version from the announcement (e.g. `pxrd-review 0.2.5`).
-   If `pxrd` is "not recognized", close and reopen the Command Prompt first; if it
-   still isn't found, re-check One-time setup step 1 (PATH).
-
----
-
-## Running it
-
-```
-pxrd gui "C:\path\to\entries"
-```
-Point it at the folder holding the entry `.docx` **and** `.pdf` files. The folder is
-remembered — from then on a bare `pxrd gui` reopens it. Other sub-commands:
-`pxrd review`, `pxrd sweep`, `pxrd refresh`, … (run `pxrd --help` for the list).
-
-**Upgrades never touch your data.** The API key, the Mindat caches
-(`%USERPROFILE%\.pxrd_review\`), your entries folders, and every `review_out\`
-folder (triage, edited docx) all live outside the installed package and survive
-every upgrade untouched.
+**Upgrades never touch your data.** The API key, the caches, your entries folders and every
+`review_out\` folder (triage, edited docx) live outside the installed package and survive every
+upgrade untouched.
 
 ---
 
 ## macOS / Linux differences
 
-Same steps; use `python3` / `pip3` in the commands, check the fingerprint with
+Same steps, but use `python3` / `pip3` in the commands, check the fingerprint with
 `shasum -a 256 <file>` instead of `certutil`, and set the key with
-`export MINDAT_API_KEY="…"` in `~/.zshrc` (macOS) or `~/.bashrc` (Linux) instead of
-`setx`. Developers working from a checkout should keep using `pip install -e .`
-(see README "Setup") — an editable install keeps its `.cache/` and `.mindat_key`
-at the repo root, exactly as before.
+`export MINDAT_API_KEY="…"` in `~/.zshrc` (macOS) or `~/.bashrc` (Linux) instead of `setx`.
+Developers working from a git checkout should use `pip install -e .` (see README "Setup") — an
+editable install keeps its `.cache/` and `.mindat_key` at the repo root.
 
 ---
 
 ## Maintainer — cutting a release
 
-1. Bump the version in **both** `pyproject.toml` and `pxrd_review/__init__.py`;
-   update `CHANGELOG.md`; commit.
-2. Build the wheel (one-time `pip3 install build`):
+1. **Refresh the bundled Mindat snapshot** (so reviewers without a key get current data):
+   ```
+   python3 -m pxrd_review.mindat --refresh --bundle
+   ```
+   Commit `pxrd_review/data/`.
+2. Bump the version in **both** `pyproject.toml` and `pxrd_review/__init__.py`; update
+   `CHANGELOG.md`; run the regression suite (`pxrd check "<fixtures>"`); commit.
+3. Build the wheel (one-time `pip3 install build`):
    ```
    python3 -m build --wheel
    ```
-3. Build the bundle:
+4. Build the bundle:
    ```
    cd dist
    shasum -a 256 pxrd_review-<version>-py3-none-any.whl > SHA256SUMS.txt
@@ -119,8 +202,8 @@ at the repo root, exactly as before.
    zip pxrd-review-<version>-bundle.zip pxrd_review-<version>-py3-none-any.whl SHA256SUMS.txt INSTALL.md
    rm INSTALL.md
    ```
-4. Upload the bundle zip to the shared files site, and put the wheel's SHA-256
-   fingerprint **in the announcement message itself** (the copy inside the zip can
-   only catch corruption, not tampering — the message is the independent channel).
-5. Optional, for the archive: also attach the wheel to a GitHub release
+5. Upload the bundle zip to the shared files site, and put the wheel's SHA-256 fingerprint
+   **in the announcement message itself** (the copy inside the zip can only catch corruption,
+   not tampering — the message is the independent channel).
+6. Optional, for the archive: attach the wheel to a GitHub release
    (`gh release create v<version> dist/*.whl --notes "…SHA-256: …"`).

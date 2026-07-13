@@ -71,12 +71,14 @@ $env:MINDAT_API_KEY = "YOUR_MINDAT_TOKEN"
 # make it permanent: setx MINDAT_API_KEY "YOUR_MINDAT_TOKEN"   (then reopen the terminal)
 ```
 
-**3 — Build the offline Mindat cache** (uses the key from step 2; one time):
+**3 — Refresh the Mindat cache** *(optional — only if you set a key in step 2)*:
 ```
 pxrd refresh
 ```
-Downloads the IMA species/group list into a local cache; afterwards the tool runs fully offline.
-No error = the key works. `No API key` / an auth error = the key wasn't found.
+Pulls the current IMA species/group list into a local cache, replacing the snapshot bundled with
+the release. Without a key this step is unnecessary: the bundled snapshot already makes the tool
+run fully offline. `python3 -m pxrd_review.mindat --status` reports what data is actually in use
+and how old it is.
 
 **4 — Verify the install** (optional; **Task Group reviewers only**):
 ```
@@ -107,6 +109,10 @@ Opens the review GUI in your browser — **localhost only**, auto-picks a free p
   and the header says so, because silently-skipped checks read exactly like a clean batch.
 
 ## Run
+> **On Windows the command is `python`, not `python3`** (which usually does not exist there):
+> `python -m pxrd_review.gui.review_gui "C:\path\to\entries"`. Reviewers should follow
+> [INSTALL.md](INSTALL.md) rather than this section.
+
 ```
 python3 -m pxrd_review.cell_lambda_check /path/to/entries          # console report, whole folder
 python3 -m pxrd_review.cell_lambda_check /path/to/entries --id Innnnnn
