@@ -537,6 +537,40 @@ CASES = [
      == 'Amurselite, a new uranyl selenite from the Burro mine, Colorado'),
  ("ref_title: 'mine' is lowercase, the place name is not", lambda:
      'Burro mine' in X._title_sentence_case('A New Mineral From the Burro Mine, Colorado')[1]),
+ # A formal place name keeps its head-noun ('Elba Island', 'Ingul Gold Placer') even though the
+ # paper writes the bare word lowercase elsewhere — the papers disagree with each other here, so
+ # the reviewer's rule wins. 'mine' is the stated exception. A species is normally lowercase but
+ # is part of the name when it sits inside one ('Rose Quartz Quarry' vs 'isotypic with jamesite').
+ ("ref_title: a place name keeps its head-noun ('Elba Island')", lambda:
+     'Elba Island' in X._title_sentence_case(
+         'Elbaite, the Neotype Material From the Rosina Pegmatite, Elba Island, Italy',
+         'Tourmaline from Elba Island. The Elba Island locality is famous; Elba Island '
+         'material is the neotype. The Rosina Pegmatite is on Elba Island.')[1]),
+ ("ref_title: 'Ingul Gold Placer' keeps all three words", lambda:
+     'Ingul Gold Placer' in X._title_sentence_case(
+         'Selenolaurite, a New Mineral From the Ingul Gold Placer, South Urals',
+         'Found in the Ingul Gold Placer. The Ingul Gold Placer lies in the South Urals; '
+         'the Ingul Gold Placer is a new mineral locality. Gold placer deposits occur.')[1]),
+ ("ref_title: a species inside a place name is kept ('Rose Quartz Quarry')", lambda:
+     'Rose Quartz Quarry' in X._title_sentence_case(
+         'Occurrences of Bazzite in Canada – the Quadeville Rose Quartz Quarry, Ontario',
+         'the specimens were collected at the Quadeville Rose Quartz Quarry in eastern\n'
+         'ontario, where beryl is abundant. material from the Quadeville Rose Quartz Quarry\n'
+         'has been described before, and the Quadeville Rose Quartz Quarry remains the only\n'
+         'canadian locality. the quarry is worked for quartz, and bazzite is rare there.\n'
+         'bazzite from this quarry is associated with quartz and albite.')[1]),
+ ("ref_title: a species with an ordinary neighbour still lowercases", lambda: (lambda s:
+     'isotypic with jamesite' in s and 'dongchuanite group' in s)(X._title_sentence_case(
+         'Desorite, a New Mineral Isotypic with Jamesite of the Dongchuanite Group',
+         'Desorite is isotypic with jamesite. The dongchuanite group includes jamesite; '
+         'this new mineral is isotypic with jamesite of the dongchuanite group.')[1])),
+ # an UNATTESTED word is left alone, but must not go on to vouch for its neighbours
+ ("ref_title: an unattested word does not anchor a name ('a new layered …')", lambda:
+     'a new layered' in X._title_sentence_case(
+         'Kodamaite, A New Layered Alkali Fluorosilicate',
+         'we describe a new layered fluorosilicate from the massif. the new mineral is a\n'
+         'layered alkali fluorosilicate, and its layered structure is unusual. a new\n'
+         'alkali fluorosilicate of this kind has not been reported.')[1]),
  ("ref_title: Levinson suffix survives (-(Ce) never -(ce))", lambda:
      '-(Ce)' in X._title_sentence_case('Vielleaureite-(Ce), a New Epidote of the Group')[1]),
  ("ref_title: Levinson suffix survives a trailing comma", lambda:
@@ -553,13 +587,16 @@ CASES = [
          'Desorite, Pb2(Fe3+6Zn)O2(PO4)4(OH)8, a New Phosphate Mineral Isotypic with Jamesite.')[1]),
  # the paper is the oracle: a word IT writes lowercase mid-sentence is an ordinary word; one it
  # capitalizes is a name; one it writes in caps is an acronym to restore ('Usa' -> 'USA').
- ("ref_title: the paper's own usage decides proper nouns", lambda:
+ # The paper decides the ORDINARY words ('new', 'mineral', 'fumarole', 'deposits'). The head-noun
+ # of a place name is kept regardless — 'Tolbachik Volcano' is the volcano's name, even though the
+ # paper writes the bare word 'volcano' lowercase elsewhere.
+ ("ref_title: the paper's own usage decides the ordinary words", lambda:
      X._title_sentence_case(
          'Natromolybdite, a New Mineral From Fumarole Deposits of the Tolbachik Volcano',
-         'Samples came from the Tolbachik volcano. A new mineral was found at the Tolbachik '
-         'volcano in fumarole deposits. The new mineral is a fumarole product; the volcano '
-         'hosts many deposits.')[1]
-     == 'Natromolybdite, a new mineral from fumarole deposits of the Tolbachik volcano'),
+         'samples came from the Tolbachik volcano. a new mineral was found at the Tolbachik\n'
+         'volcano in fumarole deposits. the new mineral is a fumarole product, and the\n'
+         'volcano hosts many fumarole deposits of this kind.')[1]
+     == 'Natromolybdite, a new mineral from fumarole deposits of the Tolbachik Volcano'),
  ("ref_title: an acronym mangled by the title-caser is restored (Usa -> USA)", lambda:
      'USA' in X._title_sentence_case(
          'Amurselite, A New Selenite From the Burro Mine, Colorado, Usa.',

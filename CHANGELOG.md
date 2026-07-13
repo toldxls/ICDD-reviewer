@@ -4,6 +4,26 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.2.8] — 2026-07-13
+
+### Changed — reference title case (check 26)
+- **A formal place name now keeps all of its words.** The rule previously let the paper decide
+  every word, which lowercased the head-noun of a name the paper happens to write lowercase
+  elsewhere: `Elba Island` → `Elba island`, `Ingul Gold Placer` → `Ingul gold placer`. The
+  papers disagree with each other on this, so it is the one thing the paper does *not* decide.
+  A capitalized word directly adjacent to a paper-attested name is now part of that name, on
+  **either** side — `New Mexico`, `La Sal`, `Vanadium Queen` before it; `Elba Island`,
+  `Tolbachik Volcano`, `Quadeville Rose Quartz Quarry` after it.
+- **`mine` remains the exception** (*the Burro mine*, *the Redmond mine*), per the reviewer.
+- **A species inside a name is kept** (`Rose Quartz Quarry`) while a species with an ordinary
+  neighbour still lowercases (`isotypic with jamesite`, `the dongchuanite group`) — adjacency
+  to an attested name is the discriminator.
+- **An unattested word is left alone but does not anchor a name.** Letting it anchor turned
+  `a New Layered …` back into the Title Case the check exists to remove.
+- Fire rate drops 6 % → 5 % (21 of 466): the titles that stopped firing are ones whose place
+  names were already correct — i.e. they were false positives under the old rule. Still 0 titles
+  with altered letters.
+
 ## [0.2.7] — 2026-07-13
 
 ### Added

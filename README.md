@@ -311,10 +311,19 @@ fixes, and **all 53 went Title Case → sentence case, none the other way**.
 **The paper is the oracle for what is a name.** A word the article itself writes lowercase
 mid-sentence (`volcano`, `deposit`, `mineral`) is an ordinary word whatever the docx did to
 it; one it writes capitalized (`Tolbachik`, `Kamchatka`) is a name; one it writes in caps
-(`USA`, `REE`) is an acronym to restore. Wholly upper-case lines are ignored as evidence —
-running heads, and the *Canadian Journal of Mineralogy and Petrology* sets its titles in
-caps/small-caps, so they say nothing about a word's true case. `mine` is preferred lowercase
-even where the paper capitalizes it.
+(`USA`, `REE`) is an acronym to restore. Wholly upper-case **and Title-Cased** lines are ignored
+as evidence — running heads repeat on every page, and the *Canadian Journal of Mineralogy and
+Petrology* sets its titles in caps/small-caps, so they say nothing about a word's true case.
+
+**A formal place name keeps all of its words**, on both sides of the attested name: `New Mexico`,
+`La Sal`, `Vanadium Queen` (before) and `Elba Island`, `Ingul Gold Placer`, `Tolbachik Volcano`,
+`Quadeville Rose Quartz Quarry` (after) — even though the paper writes the bare head-noun
+lowercase elsewhere ("the volcano erupted"). The papers disagree with each other here, so this is
+the one thing the paper does *not* decide. **`mine` is the exception** and stays lowercase: *the
+Burro mine*, *the Redmond mine*. A species is normally lowercase (`jamesite`, `dongchuanite
+group`) but is kept when it sits inside a name (`Rose Quartz Quarry`) — adjacency to an attested
+name is what separates the two. A word the paper cannot vouch for is left alone, and does **not**
+go on to vouch for its neighbours.
 
 Never re-cased: chemistry (`Pb2(Fe3+6Zn)O2(PO4)4(OH)8`), an element-prefixed compound
 (`Al-bearing`), a Levinson suffix (`-(Ce)`, never `-(ce)`), a Roman numeral (`IV.`), and a

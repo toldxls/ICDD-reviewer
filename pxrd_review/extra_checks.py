@@ -2727,26 +2727,42 @@ def _title_sentence_case(title, text=None, species=()):
             # destroys a place name. Words the paper genuinely uses as ordinary words DO appear
             # lowercase in its body, so the absence of evidence points at a rare proper noun.
             kind.append('keep')
-    # A capitalized word IMMEDIATELY BEFORE a proper noun belongs to that name: 'New Mexico',
-    # 'La Sal', 'Vanadium Queen (mine)', 'Mount Carmel'. This must include ordinary words —
-    # 'new' is as common as a word gets, and lowercasing it inside 'New Mexico' wrecks a place
-    # name. Left-neighbour ONLY, and that asymmetry is the whole point: what FOLLOWS a proper
-    # noun is usually its generic head ('Tolbachik volcano', 'Redmond mine'), which the paper's
-    # own usage already decided should be lowercase. Function words are excluded — 'from the
-    # Burro Mine' must not resurrect 'the'.
-    for _ in range(2):
+    # A capitalized word DIRECTLY ADJACENT to a proper noun belongs to that name, on either side:
+    #   before it — 'New' in 'New Mexico', 'La' in 'La Sal', 'Vanadium' in 'Vanadium Queen'
+    #   after it  — 'Island' in 'Elba Island', 'Placer' in 'Ingul Gold Placer',
+    #               'Volcano' in 'Tolbachik Volcano', 'Quarry' in 'Quadeville Rose Quartz Quarry'
+    # These are formal place names, so the head-noun is part of the name even though the paper
+    # writes the bare word lowercase elsewhere ('the volcano erupted'). The papers disagree with
+    # each other here, so the paper is NOT the oracle for this one thing — the reviewer's rule is.
+    # Ordinary words must be eligible: 'new' is as common as a word gets, and lowercasing it
+    # inside 'New Mexico' wrecks a place name.
+    # 'mine' is the stated exception (_TITLE_GENERIC): 'the Burro mine', 'the Redmond mine'.
+    # Function words are excluded too — 'from the Burro Mine' must not resurrect 'the'.
+    # A species never propagates: 'the Dongchuanite Group' is 'the dongchuanite group'.
+    _BREAK = (',', ';', ':', '.', ')', '(', '–', '!', '?')      # punctuation ends the name
+    # A name-ANCHOR is a word the PAPER attests as a name. Only that — a word the paper cannot
+    # vouch for is left alone, but it must not go on to vouch for its neighbours: 'Layered' is
+    # unattested in one paper, and letting it anchor turned 'a New Layered …' back into a
+    # Title-Cased phrase the check exists to fix.
+    def _anchor(j):
+        return 0 <= j < len(kind) and kind[j] == 'proper' and cores[j][:1].isupper()
+    for _ in range(3):                       # chains: 'Quadeville Rose Quartz Quarry'
         for i, k in enumerate(kind):
             if k != 'lower' or starts[i] or not cores[i][:1].isupper():
                 continue
             low = cores[i].lower()
-            if low in _TITLE_FUNC or low in _TITLE_GENERIC or low in sp:
+            # A SPECIES stays eligible here: 'quartz' is a species and normally lowercase, but in
+            # 'the Quadeville Rose Quartz Quarry' it is part of the quarry's name. Adjacency to an
+            # attested name is what distinguishes the two — a species with an ordinary neighbour
+            # ('isotypic with jamesite', 'the dongchuanite group') is never promoted.
+            if low in _TITLE_FUNC or low in _TITLE_GENERIC:
                 continue
-            # Adjacency must not cross punctuation: in 'Rosina Pegmatite, San Piero' the comma
-            # ends the name, so 'San' says nothing about 'Pegmatite' — without this the rule
-            # keeps every generic head-noun that happens to sit before a comma and a place.
-            if toks[i][-1:] in (',', ';', ':', '.', ')', '–', '-'):
+            # left of a name — this token must not itself end the phrase ('Pegmatite, San Piero')
+            if toks[i][-1:] not in _BREAK and _anchor(i + 1):
+                kind[i] = 'proper'
                 continue
-            if i + 1 < len(kind) and kind[i + 1] == 'proper' and cores[i + 1][:1].isupper():
+            # right of a name — the name must not end before it ('Colorado, Usa' is not a phrase)
+            if i > 0 and _anchor(i - 1) and toks[i - 1][-1:] not in _BREAK:
                 kind[i] = 'proper'
 
     wrong, out = [], []
