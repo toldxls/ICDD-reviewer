@@ -1,6 +1,6 @@
 # PXRD review tool
 
-Validates an ICDD pattern `.docx` (the transcription submitted to ICDD) against its
+Validates an ICDD pattern `.docx` (the transcription reviewed by a Task Group & ICDD) against its
 sources — the paper `.pdf`, the author `.cif`, the ICDD `.dft`, and the Mindat API — and
 flags the recurring problems a reviewer would otherwise comb the files for. It writes Word
 comments + highlights into *copies* of each docx and never edits the source.
