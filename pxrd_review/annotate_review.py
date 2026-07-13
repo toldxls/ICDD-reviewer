@@ -355,8 +355,17 @@ def _apply_tracked_fix(cell, new_text):
     ps = list(cell.paragraphs)
     if not ps or not new_text:
         return False
+    # ONE text-bearing paragraph only. With more, every paragraph's runs would be swept into a
+    # single <w:del> in the FIRST paragraph — so REJECTING the tool's change would restore the
+    # words but not the paragraph break, silently collapsing 'Old Title.' / 'Author, A.' into one
+    # line. No reference cell in the 466-entry corpus is laid out that way, so refusing costs
+    # nothing and removes the only way this writer can lose a reviewer's formatting. Fall back to
+    # comment-only (the caller reports it) rather than guess.
+    with_text = [p for p in ps if p.text.strip()]
+    if len(with_text) > 1:
+        return False
     runs = [r for para in ps for r in para.runs]
-    if not runs:
+    if not runs or not _cell_text(cell).strip():
         return False
     now = datetime.datetime.now().replace(microsecond=0).isoformat()
     _FIX_ID[0] += 1
@@ -588,6 +597,10 @@ def _write_extras(doc, ac_row, res, rec, triage=None):
                 pass                                   # already reads as the correction
             elif _apply_tracked_fix(cell, f.fix):
                 rec.setdefault('fixes', []).append((f.code, f.fix))
+            else:
+                # the writer declined (a layout it will not risk, e.g. a multi-paragraph cell) —
+                # the comment still carries the correction, so nothing is lost but the automation
+                rec.setdefault('fix_skipped', []).append(f.code)
 
 def _mark_accept(doc):
     """Put an 'x' in the checkbox cell after the 'Accept' label — the reviewer's

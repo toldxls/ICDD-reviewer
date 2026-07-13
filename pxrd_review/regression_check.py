@@ -81,6 +81,32 @@ def _extras_of(eid):
     r = res_for(eid)
     return (r['extra'] if r else None)
 
+def _ref_cell(cell_xml):
+    """A python-docx cell built from raw XML — the fixture for the tracked-change writer, which
+    has to cope with whatever run/paragraph layout a real docx throws at it."""
+    import tempfile, zipfile as _zf, io as _io
+    from docx import Document as _D
+    doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+           '<w:body><w:tbl><w:tr>'
+           '<w:tc><w:p><w:r><w:t>Primary Reference</w:t></w:r></w:p></w:tc>'
+           '<w:tc>' + cell_xml + '</w:tc>'
+           '</w:tr></w:tbl></w:body></w:document>')
+    fd, path = tempfile.mkstemp(suffix='.docx')
+    os.close(fd)
+    _D().save(path)                                   # a valid docx skeleton (all the other parts)
+    z = _zf.ZipFile(path)
+    parts = {n: z.read(n) for n in z.namelist()}
+    z.close()
+    parts['word/document.xml'] = doc.encode()
+    buf = _io.BytesIO()
+    with _zf.ZipFile(buf, 'w', _zf.ZIP_DEFLATED) as zo:
+        for n, d in parts.items():
+            zo.writestr(n, d)
+    with open(path, 'wb') as f:
+        f.write(buf.getvalue())
+    return _D(path).tables[0].rows[0].cells[1]
+
 def _docx_with_tracked_change(author):
     """A one-cell docx carrying a single tracked insertion by `author` — the fixture for
     'is a tracked change by the TOOL a reviewer edit?' (it must not be: the tool now writes its
@@ -677,6 +703,18 @@ CASES = [
      not A._has_tracked_changes(_docx_with_tracked_change(A.AUTHOR))),
  ("a human tracked change DOES count as a reviewer edit", lambda:
      A._has_tracked_changes(_docx_with_tracked_change('Tony Kampf'))),
+ # The writer sweeps a cell's runs into ONE <w:del>. Across several paragraphs that would restore
+ # the words but not the paragraph BREAK when the reviewer hits Reject — so it declines instead
+ # and stays a comment. (No reference cell in the corpus is laid out that way; refusing is free.)
+ ("applied fix: a single-paragraph cell is rewritten", lambda:
+     A._apply_tracked_fix(_ref_cell('<w:p><w:r><w:t>Old Title. Author, A.</w:t></w:r></w:p>'),
+                          'New title. Author, A.') is True),
+ ("applied fix: a MULTI-paragraph cell is declined (never collapses a line break)", lambda:
+     A._apply_tracked_fix(_ref_cell('<w:p><w:r><w:t>Old Title.</w:t></w:r></w:p>'
+                                    '<w:p><w:r><w:t>Author, A.</w:t></w:r></w:p>'),
+                          'New title. Author, A.') is False),
+ ("applied fix: an empty cell is declined", lambda:
+     A._apply_tracked_fix(_ref_cell('<w:p/>'), 'New title.') is False),
  # --- the three bugs the hand-check of all 26 fires caught (all would corrupt a title) ------
  # 1. An ordinary word INSIDE a multi-word place name must survive: 'New Mexico' is not
  #    'new Mexico'. The word is only kept because a proper noun follows it — 'a New Mineral'
