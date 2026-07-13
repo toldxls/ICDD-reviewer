@@ -41,10 +41,15 @@ the step above and open a **new** Command Prompt.
 
 **The latest version is always on the Releases page:**
 
-### **<https://github.com/toldxls/ICDD-reviewer/releases>**
+### **<https://github.com/toldxls/ICDD-reviewer/releases/latest>**
 
-The newest one is marked **`Latest`** at the top — that is the one you want. Nothing gets
-emailed, and there is no files site to check. You do **not** need a GitHub account.
+That link always resolves to the newest release. Nothing gets emailed, and there is no files
+site to check. You do **not** need a GitHub account.
+
+> ⚠️ **Never paste an install command that names a version** (`v0.2.9`, `…-0.3.0.whl`, a
+> `#sha256=…`) out of an old message, an old copy of this file, or a chat history — it will
+> quietly install **that old version**. Always take the command from the release page above, or
+> use the version-less one-liner in **B**, which is always current.
 
 ### A — install from the release (recommended)
 
@@ -71,13 +76,15 @@ Run that same line again to upgrade. You do **not** need `git` installed.
 > **What this does and does not check.** The download is over HTTPS, so it is encrypted and the
 > server is authenticated as `github.com` — nobody on the network can alter it in transit. But
 > pip does **not** verify a fingerprint here: it installs whatever the branch currently holds.
-> To have pip *verify* the download, install a **pinned release** and give it the hash — pip
-> then refuses the install if a single byte differs. Each release lists this exact line under
-> **Source archive SHA-256**:
-> ```
-> pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/tags/v0.2.9.zip#sha256=07703169995ae6522edaec3b42c07238203f4fcabea2d4975341233364c642d8"
-> ```
-> (Option **A**'s `.whl` + `certutil` gives you the same assurance, checked by hand.)
+>
+> To have pip *verify* the download, use the **hash-pinned line printed in the release notes**
+> (every release ends with a ready-to-paste `pip install …#sha256=…` line). pip then refuses the
+> install if a single byte differs. Do not copy such a line out of this file or an old message —
+> it pins a specific version, and an old one will quietly install an **old tool**. Take it from
+> the release you are installing:
+> **<https://github.com/toldxls/ICDD-reviewer/releases/latest>**
+>
+> (Option **A**'s `.whl` + `certutil` gives the same assurance, checked by hand.)
 
 ### C — install from the source folder
 
@@ -85,7 +92,7 @@ Prefer to see the files? On the Releases page (or the repository page → green 
 choose **Source code (zip)**, unzip it (right-click → *Extract All…*), then in a Command Prompt
 go into the unzipped folder and install with `.` (a dot — it means "the folder I am in"):
 ```
-cd Desktop\ICDD-reviewer-0.2.8
+cd Desktop\ICDD-reviewer-<version>
 pip install -e .
 ```
 *(Tip: type `cd ` then drag the folder into the window to fill in the path.)*
@@ -97,7 +104,9 @@ The first install needs internet — pip fetches the libraries the tool depends 
 ```
 pxrd --version
 ```
-It should print e.g. `pxrd-review 0.2.8`.
+It should print `pxrd-review <version>` — and that version should match the one marked
+**`Latest`** on the [Releases page](https://github.com/toldxls/ICDD-reviewer/releases). If it
+is older, the upgrade didn't take: re-run the install command and reopen the Command Prompt.
 
 **If it says `'pxrd' is not recognized`:** first close and reopen the Command Prompt. If it
 still isn't found, Python's Scripts folder isn't on your PATH — you don't need to fix that,
