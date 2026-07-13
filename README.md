@@ -337,16 +337,33 @@ site variable (the `A` in `analogs (A = K, Rb, Cs)` is not the article). A capit
 the paper gives no evidence for is **left alone** — lowercasing a name it cannot verify is
 the one harmful mistake this check could make, so it under-corrects instead.
 
-Fires on 6 % of entries; needs ≥2 wrongly-capitalized words, so a single arguable word stays
-silent. **Comment-only like everything else**: the suggested title goes in the comment and
-the cell is highlighted — the tool never rewrites the Reference cell.
+Fires on 5 % of entries; needs ≥2 wrongly-capitalized words, so a single arguable word stays
+silent.
+
+**This is the one check that WRITES its correction into the docx** — the single exception to the
+comment-only rule, and it is deliberately narrow:
+- The corrected citation is written as a **Word tracked change** in the `review_out` **copy**, so
+  the reviewer opens it, sees exactly what changed, and clicks **Accept** or **Reject** in Word.
+  Nothing is rewritten invisibly, and nothing is irreversible. The **source docx is never
+  touched** (that invariant is unchanged).
+- **A cell a person has already edited is never overwritten.** If the Reference cell carries any
+  human tracked change, the tool leaves it alone and stays a comment (the run reports *"fix left
+  to the reviewer (already hand-edited)"*).
+- The rewrite differs from the docx in **letter case only** — the authors, journal, year and
+  pages stay byte-identical, and the check refuses to write at all if it cannot prove that.
+- Reruns are **idempotent**: a rerun rejects the tool's own previous change and re-derives it, so
+  edits never stack.
+- The comment (with the full suggested title) is still written either way.
+
+Every other check remains comment-only.
 
 #### Reference-table checks (16, 18) — hardened instrumentation & naming
 Reference tables encoding standard crystallographic conventions, hand-curated
 as small, editable constants at the bottom of `pxrd_review/extra_checks.py`
 (`VOCAB_CANON`, `VOCAB_FIX`, `KBETA_FILTER`, `MONO_MATERIALS`, `REE_ELEMENTS`,
 `POLYTYPE_SYS`). They **comment/suggest only** — the annotator highlights the cell
-and writes the suggested value; it never rewrites a field.
+and writes the suggested value; it never rewrites a field. (The reference-title check, 26, is
+the one exception: it writes its correction as a reviewable tracked change — see above.)
 
 16. **instrumentation designators** — the parser now also reads the **FilterType**
     field. Checks:
@@ -651,8 +668,9 @@ edits a docx**. Its only writes are sidecars under `<folder>/review_out`:
 ### Triage → rerun feedback loop
 Triage verdicts feed back into the annotator. **Rerun entry** (header) and
 **Rerun all** (top bar) re-invoke `pxrd_review/annotate_review.py` with `--triage triage.json`,
-which is **strictly comment-only** (the tool still never rewrites a field — fixes
-remain the reviewer's): a **dismissed** finding is **suppressed** (not written),
+which is **comment-only apart from the reference-title fix** (which is written as a
+reviewable tracked change; every other correction remains the reviewer's): a
+**dismissed** finding is **suppressed** (not written, and its fix is not applied),
 a **confirmed / look** note is **folded into the tool's comment**, and the **Accept**
 box follows your agree/disagree. The header shows a live preview (`rerun writes N ·
 M suppressed`). The single-entry rerun passes `--no-logs` so it regenerates one docx

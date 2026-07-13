@@ -51,7 +51,11 @@ def _t(e): return e.tag.replace(W, '')
 #   'cell:a'..'cell:γ' (Author's-Cell value), 'instr', 'refl', 'ima', 'formula',
 #   'name', or None (annotator picks a default). evidence/anchor default to None
 # so existing 3- and 4-arg Finding(...) calls keep working.
-Finding = namedtuple('Finding', 'code sev msg evidence anchor', defaults=(None, None))
+# `fix` = the full corrected text for the anchor's cell, when the tool is confident enough to
+# write it (currently only the reference title). None -> comment-only, which is every other
+# check: the tool suggests, the reviewer edits. A fix is applied as a Word TRACKED CHANGE in
+# the review_out COPY, never in the source, and never over a cell a human has already touched.
+Finding = namedtuple('Finding', 'code sev msg evidence anchor fix', defaults=(None, None, None))
 
 # ----------------------------------------------------------------------------- docx structured parse
 def _cell_text(tc):
@@ -2691,7 +2695,11 @@ def _title_sentence_case(title, text=None, species=()):
     and never touches chemistry, Roman numerals, or a Levinson suffix."""
     forms = _paper_word_forms(text)
     sp = {s.lower() for s in (species or ())}
-    toks = title.split()
+    # keep the separators: an APPLIED fix must differ from the docx in letter case ONLY, so
+    # re-joining on single spaces (silently collapsing a double space) is not acceptable.
+    parts = re.split(r'(\s+)', title)
+    idx = [i for i, t in enumerate(parts) if t and not t.isspace()]
+    toks = [parts[i] for i in idx]
     cores = [re.sub(r'^[^\w]+|[^\w]+$', '', t) for t in toks]
     starts, s = [], True
     for t in toks:
@@ -2801,7 +2809,9 @@ def _title_sentence_case(title, text=None, species=()):
         if new != c and c[:1].isupper() and new[:1].islower():
             wrong.append(c)
         out.append(tok.replace(c, new, 1) if c else tok)
-    return wrong, ' '.join(out)
+    for k, i in enumerate(idx):          # write the words back into their original spacing
+        parts[i] = out[k]
+    return wrong, ''.join(parts)
 
 def _species_stem(word, species):
     """A Levinson-suffixed species ('Vielleaureite-(Ce)') stripped back to its stem."""
@@ -2825,12 +2835,19 @@ def check26_reference_title_case(e, text=None):
     wrong, suggested = _title_sentence_case(title, text, species)
     if len(wrong) < 2 or suggested == title:
         return []
+    # The corrected TITLE spliced back into the citation, leaving the authors / journal / year /
+    # pages byte-identical. This is what the annotator writes into the Reference cell as a tracked
+    # change. It must differ from the docx in letter CASE only — if it does not, something is
+    # wrong and we fall back to comment-only rather than write text we cannot account for.
+    fixed_ref = suggested + ref[len(title):]
+    if fixed_ref.lower() != ref.lower():
+        fixed_ref = None
     return [Finding('ref_title_case', 'flag',
             "Reference title is in Title Case; ICDD style is sentence case (ordinary words "
             "lowercase, proper nouns and acronyms kept). Capitalized here but not a name: %s. "
             "Suggested title: %s" % (', '.join(wrong[:8]) + ('…' if len(wrong) > 8 else ''),
                                      suggested),
-            title[:120], 'reference')]
+            title[:120], 'reference', fixed_ref)]
 
 CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check4_calculated, check5_wavelength,

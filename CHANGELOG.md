@@ -4,6 +4,34 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.3.0] — 2026-07-13
+
+### Changed — the reference-title check now WRITES its correction into the docx
+The first and only exception to the comment-only rule, at the maintainer's request. Every other
+check still comments and leaves the fix to the reviewer.
+
+- The corrected citation is written into the `review_out` **copy** as a **Word tracked change**,
+  so the reviewer opens the docx, sees exactly what changed, and clicks **Accept** or **Reject**
+  in Word. Nothing is rewritten invisibly and nothing is irreversible. The **source docx is
+  still never touched.**
+- **A cell a person has already edited is never overwritten.** Any human tracked change in the
+  Reference cell and the tool stands down, staying a comment (*"fix left to the reviewer
+  (already hand-edited)"*).
+- The rewrite differs from the docx in **letter case only** — authors, journal, year and pages
+  stay byte-identical, and the check refuses to write at all unless it can prove that.
+- **Reruns are idempotent**: the strip step now *rejects* the tool's own previous tracked change
+  and re-derives it, so edits never stack.
+- The console line and `annotation_log.txt` state every fix written (and every one skipped).
+
+Consequences of the tool now making revisions of its own, both fixed here:
+- `_has_tracked_changes()` assumed *"tracked changes are always human; the tool never makes
+  revisions"*. Left alone, every fixed entry would have looked hand-edited — a backup on every
+  rerun, and the tool's own work reported back to the reviewer as theirs. It is now author-aware,
+  as are the reviewer-mark summaries in the log and the GUI.
+- `output_hand_edited()` compared the output's body text against the source *before* stripping
+  the tool's marks, so an applied fix read as a human body-text edit. It now compares after the
+  strip, which reverts the tool's own change — so what remains is genuinely a person's.
+
 ## [0.2.9] — 2026-07-13
 
 ### Fixed — '? look' on the docx pane landed on the wrong cell

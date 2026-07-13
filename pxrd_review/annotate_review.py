@@ -23,7 +23,7 @@ Usage:
     python3 -m pxrd_review.annotate_review "/path/to/Part 1" --out DIR
     python3 -m pxrd_review.annotate_review "/path/to/Part 1" --inplace       # edit originals (asks nothing)
 """
-import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime, json, hashlib, time
+import sys, os, re, glob, shutil, argparse, textwrap, zipfile, io, datetime, json, hashlib, time, copy
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
@@ -326,6 +326,69 @@ def _highlight(cell, color='yellow'):
             hl = rPr.makeelement(W + 'highlight', {}); rPr.append(hl)
         hl.set(W + 'val', color)
 
+def _cell_text(cell):
+    """The cell's current visible text (w:t only — a w:delText is struck through, i.e. gone)."""
+    return ''.join(t.text or '' for t in cell._tc.iter(_q('t')))
+
+def _cell_human_marks(cell):
+    """True when a PERSON has already worked on this cell — any tracked insertion/deletion whose
+    author is not the tool. Their correction stands: the tool must not overwrite it, nor re-apply
+    a change they already made (or deliberately made differently)."""
+    for tag in ('ins', 'del'):
+        for el in cell._tc.iter(_q(tag)):
+            if (el.get(_q('author')) or '') != AUTHOR:
+                return True
+    return False
+
+_FIX_ID = [90000]                     # tracked-change ids, kept clear of Word's own numbering
+
+def _apply_tracked_fix(cell, new_text):
+    """Write `new_text` into the cell as a Word TRACKED CHANGE authored by the tool: the old runs
+    become a <w:del>, the new text a <w:ins>.
+
+    Tracked, not a silent overwrite. The reviewer opens the docx and sees exactly what the tool
+    changed, in Word's own review UI, and can Accept or Reject it — a field the tool rewrote
+    invisibly would be unreviewable, and that is the thing this tool has always refused to do.
+    The write lands in the review_out COPY; the source docx is never touched.
+
+    Returns True when it wrote something."""
+    ps = list(cell.paragraphs)
+    if not ps or not new_text:
+        return False
+    runs = [r for para in ps for r in para.runs]
+    if not runs:
+        return False
+    now = datetime.datetime.now().replace(microsecond=0).isoformat()
+    _FIX_ID[0] += 1
+    dele = ps[0]._p.makeelement(_q('del'), {_q('id'): str(_FIX_ID[0]),
+                                            _q('author'): AUTHOR, _q('date'): now})
+    _FIX_ID[0] += 1
+    ins = ps[0]._p.makeelement(_q('ins'), {_q('id'): str(_FIX_ID[0]),
+                                           _q('author'): AUTHOR, _q('date'): now})
+    first = runs[0]._r
+    parent = first.getparent()
+    parent.insert(list(parent).index(first), dele)
+    # move every existing run into the deletion, rewriting w:t -> w:delText (Word requires it)
+    for r in runs:
+        el = r._r
+        if el.getparent() is not None:
+            el.getparent().remove(el)
+        for t in el.findall(_q('t')):
+            t.tag = _q('delText')
+        dele.append(el)
+    # the replacement run, carrying the first run's formatting so the citation keeps its look
+    newr = dele.makeelement(_q('r'), {})
+    rPr = runs[0]._r.find(_q('rPr'))
+    if rPr is not None:
+        newr.append(copy.deepcopy(rPr))
+    t = newr.makeelement(_q('t'), {'{http://www.w3.org/XML/1998/namespace}space': 'preserve'})
+    t.text = new_text
+    newr.append(t)
+    ins.append(newr)
+    dparent = dele.getparent()
+    dparent.insert(list(dparent).index(dele) + 1, ins)
+    return True
+
 def _rows(doc):
     ac = rad = None
     for t in doc.tables:
@@ -514,6 +577,17 @@ def _write_extras(doc, ac_row, res, rec, triage=None):
         text = _with_note(_tidy('%s [%s] — %s' % (_check_banner(f.code), f.code, f.msg)), triage, fkey)
         doc.add_comment(runs, text=text, author=AUTHOR, initials=INITIALS)
         rec['comments'].append(text)
+        # A finding carrying a `fix` gets it WRITTEN into the cell, as a tracked change — but only
+        # where no person has been there first. If the reviewer already edited this cell, their
+        # version stands and the tool stays a comment. Every other check has no fix and remains
+        # comment-only, unchanged.
+        if f.fix and f.sev == 'flag':
+            if _cell_human_marks(cell):
+                rec.setdefault('fix_skipped', []).append(f.code)
+            elif _cell_text(cell).strip() == f.fix.strip():
+                pass                                   # already reads as the correction
+            elif _apply_tracked_fix(cell, f.fix):
+                rec.setdefault('fixes', []).append((f.code, f.fix))
 
 def _mark_accept(doc):
     """Put an 'x' in the checkbox cell after the 'Accept' label — the reviewer's
@@ -658,11 +732,20 @@ def _has_tool_comment(path):
         return False
 
 def _has_tracked_changes(path):
-    """True if the docx contains tracked changes (w:ins / w:del) — always human;
-    the tool never makes revisions."""
+    """True if the docx contains a HUMAN's tracked changes (w:ins / w:del).
+
+    The tool now makes revisions of its own — it writes an applied fix as a tracked change so the
+    reviewer can Accept/Reject it — so 'any w:ins/w:del' no longer means 'a person edited this'.
+    Counting the tool's own change as a human edit would make every rerun think the output was
+    hand-edited: it would take a backup each time and report the tool's own work back to the
+    reviewer as theirs. Author is what separates them."""
     try:
-        x = zipfile.ZipFile(path).read('word/document.xml').decode('utf-8', 'replace')
-        return ('<w:ins ' in x) or ('<w:del ' in x)
+        root = _xml(zipfile.ZipFile(path).read('word/document.xml'))
+        for tag in ('ins', 'del'):
+            for el in root.iter(_q(tag)):
+                if (el.get(_q('author')) or '') != AUTHOR:
+                    return True
+        return False
     except Exception:
         return False
 
@@ -680,6 +763,11 @@ def _extract_reviewer_edits(path):
         # either order) into a single 'old -> new' replacement.
         revs = []
         for el in droot.iter():
+            # the tool's OWN revisions (its applied fixes) are not "the reviewer's edits" —
+            # they are reported separately, under 'fixes written', and must not be echoed back
+            # to the reviewer as though they had made them.
+            if el.tag in (_q('ins'), _q('del')) and (el.get(_q('author')) or '') == AUTHOR:
+                continue
             if el.tag == _q('ins'):
                 revs.append(('ins', el.get(_q('author')) or '?',
                              ''.join(t.text or '' for t in el.iter(_q('t')))))
@@ -720,18 +808,24 @@ def output_hand_edited(out_path, src_path):
     try:
         if _has_tracked_changes(out_path) or _has_foreign_comment(out_path):
             return True
-        if _body_signature(Document(out_path)) != _body_signature(Document(src_path)):
-            return True
-        # text-identical: strip the tool's own comments/highlights off a TEMP copy
-        # and compare run-level FORMATTING against the source — a reviewer's manual
-        # highlight/bold with no text change must still register as a hand edit.
+        # Compare against the source only AFTER stripping the tool's own marks off a TEMP copy.
+        # Stripping reverts its applied fixes too, so what remains is the source plus whatever a
+        # PERSON did. Comparing the un-stripped output would read the tool's own corrected title
+        # as a body-text change and call every fixed entry 'hand-edited' — a backup on every
+        # rerun, and the tool's work reported back to the reviewer as theirs.
         bdir = os.path.join(os.path.dirname(out_path), '.edit_backup')
         os.makedirs(bdir, exist_ok=True)
         tmp = os.path.join(bdir, '~sig_' + os.path.basename(out_path))
         try:
             shutil.copy(out_path, tmp)
             _strip_tool_annotations(tmp)
-            return _format_signature(Document(tmp)) != _format_signature(Document(src_path))
+            stripped = Document(tmp)
+            src = Document(src_path)
+            if _body_signature(stripped) != _body_signature(src):
+                return True
+            # text-identical: a reviewer's manual highlight/bold with no text change must still
+            # register as a hand edit, so compare run-level FORMATTING as well.
+            return _format_signature(stripped) != _format_signature(src)
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
@@ -786,6 +880,28 @@ def _strip_tool_annotations(path):
         parent = hl.getparent()
         if parent is not None:
             parent.remove(hl)
+    # REVERT the tool's own tracked changes (its applied fixes) so a rerun re-derives them from
+    # scratch instead of stacking a second delete/insert on the first. This is a REJECT of the
+    # tool's edit: drop what it inserted, restore what it struck through. A PERSON's tracked
+    # changes (any other author) are never touched — including one that accepted the tool's fix
+    # by retyping it, which then simply reads as their own edit.
+    for ins in list(droot.iter(_q('ins'))):
+        if (ins.get(_q('author')) or '') == AUTHOR and ins.getparent() is not None:
+            ins.getparent().remove(ins)
+    for dl in list(droot.iter(_q('del'))):
+        if (dl.get(_q('author')) or '') != AUTHOR:
+            continue
+        parent = dl.getparent()
+        if parent is None:
+            continue
+        at = list(parent).index(dl)
+        for run in list(dl):                            # put the original runs back, in place
+            for t in run.findall(_q('delText')):
+                t.tag = _q('t')
+            dl.remove(run)
+            parent.insert(at, run)
+            at += 1
+        parent.remove(dl)
     parts['word/document.xml'] = etree.tostring(droot, xml_declaration=True,
                                                 encoding='UTF-8', standalone=True)
     buf = io.BytesIO()
@@ -1159,10 +1275,18 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
         tag = ' [REFRESHED: manual edits kept]' if rec.get('refreshed') else ''
         renamed = '' if (args.inplace or rec['clean']) else ' -> %s' % rec['outfile']
         dtag = '  {%d .dft-verify}' % len(rec['dft']) if rec['dft'] else ''
-        print('%-44s cell=%-12s %-26s (%d comment%s)%s%s%s'
+        # An applied fix EDITS the copy (as a tracked change), so it must never be silent.
+        ftag = ''
+        if rec.get('fixes'):
+            ftag = '  [%d fix%s written: %s]' % (len(rec['fixes']),
+                                                 '' if len(rec['fixes']) == 1 else 'es',
+                                                 ', '.join(c for c, _ in rec['fixes']))
+        if rec.get('fix_skipped'):
+            ftag += '  [fix left to the reviewer (already hand-edited): %s]' % ', '.join(rec['fix_skipped'])
+        print('%-44s cell=%-12s %-26s (%d comment%s)%s%s%s%s'
               % (os.path.basename(dp), rec['status'],
                  'clean' if rec['clean'] else ('highlights: ' + ', '.join(rec['highlights']) or 'flag'),
-                 n, '' if n == 1 else 's', renamed, dtag, tag))
+                 n, '' if n == 1 else 's', renamed, dtag, tag, ftag))
 
     # Say plainly that some entries were NOT reviewed. An unreadable entry produces no
     # output docx, so without this line it just quietly isn't there.
@@ -1201,6 +1325,22 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
         fh.write('total comments: %d | total highlights: %d\n'
                  % (sum(len(r['comments']) for _, r in records),
                     sum(len(r['highlights']) for _, r in records)))
+        # Applied fixes CHANGE the copy's text, so the log states them explicitly — the reviewer
+        # must be able to see, without opening a single docx, exactly what the tool rewrote.
+        fixed = [(f, r) for f, r in records if r.get('fixes')]
+        skipped_fix = [(f, r) for f, r in records if r.get('fix_skipped')]
+        if fixed or skipped_fix:
+            fh.write('fixes written : %d entr%s — the correction is a Word TRACKED CHANGE in the copy '
+                     '(review it in Word: Accept or Reject)\n'
+                     % (len(fixed), 'y' if len(fixed) == 1 else 'ies'))
+            for f, r in fixed:
+                for code, newtext in r['fixes']:
+                    fh.write('  %s [%s]\n' % (C.entry_id(f) or f, code))
+                    fh.write(textwrap.fill(newtext, width=76, initial_indent='      -> ',
+                                           subsequent_indent=' ' * 9) + '\n')
+            if skipped_fix:
+                fh.write('  left to the reviewer (the cell was already hand-edited): %s\n'
+                         % ', '.join(C.entry_id(f) or f for f, _ in skipped_fix))
         accepted = [f for f, r in records if r.get('accept') is True]
         withheld = [f for f, r in records if r.get('accept') is False]
         fh.write('Accept marked : %d auto-accepted | %d left blank (severe — decide manually)\n'

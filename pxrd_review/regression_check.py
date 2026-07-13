@@ -76,6 +76,31 @@ def res_for(eid):
         _cache[eid] = A.analyze(dp, _idx.get(eid), _cif.get(eid), _dft.get(eid))
     return _cache[eid]
 
+def _extras_of(eid):
+    """Every extra finding for an entry (or None when the fixture isn't present)."""
+    r = res_for(eid)
+    return (r['extra'] if r else None)
+
+def _docx_with_tracked_change(author):
+    """A one-cell docx carrying a single tracked insertion by `author` — the fixture for
+    'is a tracked change by the TOOL a reviewer edit?' (it must not be: the tool now writes its
+    applied fixes as tracked changes, and counting those as human edits would make every rerun
+    back the output up and hand the tool's own work back to the reviewer as theirs)."""
+    import tempfile, zipfile as _zf, io as _io
+    from lxml import etree as _et
+    W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+           '<w:body><w:p>'
+           '<w:ins w:id="1" w:author="%s" w:date="2026-01-01T00:00:00">'
+           '<w:r><w:t>added</w:t></w:r></w:ins>'
+           '</w:p></w:body></w:document>' % author)
+    fd, path = tempfile.mkstemp(suffix='.docx')
+    os.close(fd)
+    with _zf.ZipFile(path, 'w') as z:
+        z.writestr('word/document.xml', doc)
+    return path
+
 def extras(eid, code=None, sev=None, substr=None):
     r = res_for(eid)
     out = []
@@ -625,6 +650,33 @@ CASES = [
      == [('flag', 'reference')]),
  ("ref_title: no Primary Reference row -> abstains", lambda: X.check26_reference_title_case(
      type('S', (), {'raw_rows': [['Comments'], ['Desc.', 'text']]})(), None) == []),
+ # --- the APPLIED fix (the one check that writes into the docx, as a tracked change) ----------
+ # The fix must be the whole citation with ONLY the title's case changed: the authors, journal,
+ # year and pages stay byte-identical, and no letter anywhere may change. Anything else means
+ # the tool would be rewriting text it cannot account for, and it must fall back to a comment.
+ ("ref_title fix: rewrites the title, leaves the rest of the citation byte-identical", lambda: (
+     lambda f: f.fix == ('Desorite, a new phosphate mineral isotypic with jamesite. '
+                         'Kampf, A. R., Olds, T. A. Am. Mineral.. 2025. 110(7) 1105-1111.'))(
+     X.check26_reference_title_case(type('S', (), {'raw_rows': [['References'], ['Primary Reference',
+        'Desorite, a New Phosphate Mineral Isotypic with Jamesite. '
+        'Kampf, A. R., Olds, T. A. Am. Mineral.. 2025. 110(7) 1105-1111.']]})(), None)[0])),
+ ("ref_title fix: differs from the docx in CASE only — never a letter", lambda: (
+     lambda f, src: f.fix.lower() == src.lower())(
+     X.check26_reference_title_case(type('S', (), {'raw_rows': [['References'], ['Primary Reference',
+        'Amurselite, A New Uranyl Selenite From the Burro Mine, Colorado. '
+        'Kampf, A. R., Olds, T. A. Can. J. Mineral. Petrol.. 2025. 63(3) 305-315.']]})(), None)[0],
+     'Amurselite, A New Uranyl Selenite From the Burro Mine, Colorado. '
+     'Kampf, A. R., Olds, T. A. Can. J. Mineral. Petrol.. 2025. 63(3) 305-315.')),
+ # every OTHER check stays comment-only: a fix is opt-in per finding, not a new default
+ ("only the reference-title check carries a fix (everything else is comment-only)", lambda: all(
+     f.fix is None for e in ('I003414', 'I003416', 'I003448', 'I003510')
+     for f in (_extras_of(e) or []) if f.code != 'ref_title_case')),
+ # the tool's own tracked change is NOT a human edit — otherwise every rerun backs the output up
+ # and reports the tool's own work back to the reviewer as theirs
+ ("a tool-authored tracked change does not count as a reviewer edit", lambda:
+     not A._has_tracked_changes(_docx_with_tracked_change(A.AUTHOR))),
+ ("a human tracked change DOES count as a reviewer edit", lambda:
+     A._has_tracked_changes(_docx_with_tracked_change('Tony Kampf'))),
  # --- the three bugs the hand-check of all 26 fires caught (all would corrupt a title) ------
  # 1. An ordinary word INSIDE a multi-word place name must survive: 'New Mexico' is not
  #    'new Mexico'. The word is only kept because a proper noun follows it — 'a New Mineral'

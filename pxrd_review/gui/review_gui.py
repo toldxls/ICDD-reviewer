@@ -794,6 +794,10 @@ def _reviewer_marks_from(path):
             droot = xml(z.read('word/document.xml'))
             revs = []
             for e in droot.iter():
+                # skip the tool's own tracked changes (its applied fixes): the reviewer-marks
+                # pane is for what PEOPLE did to the docx.
+                if e.tag in (q('ins'), q('del')) and (e.get(q('author')) or '') == A.AUTHOR:
+                    continue
                 if e.tag == q('ins'):
                     revs.append(('ins', e.get(q('author')) or '?',
                                  ''.join(t.text or '' for t in e.iter(q('t')))))
