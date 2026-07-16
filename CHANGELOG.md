@@ -4,6 +4,35 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.3.5] — 2026-07-16
+
+### Security — follow-up audit (no high-severity findings)
+A second, independent audit re-confirmed the 0.3.4 posture — localhost-only GUI behind a per-launch
+token, XXE-guarded XML parsers, capped zip reads, the Mindat key confined to `api.mindat.org`,
+escaped rendering throughout, no secrets in git or the wheel — and produced two low-severity fixes,
+both applied:
+
+- **The GUI now extracts PDF text in the crash-isolating worker pool**, like every other page
+  operation. `get_text()` interprets the page content stream, so a malformed embedded image can
+  segfault libmupdf — an *uncatchable* native fault that would take the whole Flask server down.
+  Text extraction previously ran in-process (a deliberate speed choice, on the assumption that only
+  rendering can crash); a maliciously crafted paper could exploit that to crash or hang the review
+  server. It now degrades to the "no text layer" verdict instead. The CLI keeps the faster
+  in-process reader — a crash there just fails that one run, with no server to protect. A valid
+  PDF's analysis is byte-for-byte unchanged (identical page-join).
+- **The auto-exit heartbeat now updates only after a request clears the auth gate.** It was
+  refreshed at the top of `before_request`, so a *rejected* probe from another local user could
+  reset the "a tab is open" timer and keep the server running under a closed browser. Now only an
+  authenticated request counts as activity.
+
+Informational items left as-is by design, with rationale: `/api/browse` directory enumeration is
+token-gated and exists for the folder picker (no confinement possible without removing it);
+`MINDAT_INSECURE=1` is a warned, opt-in TLS escape hatch; the CSP's `style-src 'unsafe-inline'` is
+required for the per-author highlight colours, whose values come from a fixed palette (no injection
+vector).
+
+No check behaviour changed. 294/294 regression cases pass (one new: the worker-isolation invariant).
+
 ## [0.3.4] — 2026-07-13
 
 ### Security — hardening pass from a full code audit (no high-severity findings)

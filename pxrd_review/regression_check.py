@@ -208,6 +208,34 @@ def _zip_bomb_blocked():
     finally:
         os.remove(p)
 
+def _pdf_text_worker_isolated():
+    """Security invariant: the GUI extracts PDF text in the crash-isolating worker pool (the same
+    one the render ops use), so a malformed PDF that segfaults or stalls libmupdf degrades to ''
+    (analyze()'s 'no text layer' verdict) instead of taking the Flask server down. Checks the
+    worker text op (a) returns a valid PDF's text and (b) returns the caller's default — never
+    propagates — when extraction fails. Needs fitz (already a suite dependency); NOT Flask."""
+    from pxrd_review.gui import _pdf_worker as PW   # the worker pool only — does NOT import the Flask app
+    import fitz, tempfile
+    fd, p = tempfile.mkstemp(suffix='.pdf'); os.close(fd)
+    try:
+        doc = fitz.open()                          # a real 1-page PDF carrying a known token
+        doc.new_page().insert_text((72, 72), 'unitcell 1.234')
+        doc.save(p); doc.close()
+        got = PW.run(PW.text, p, default=None)
+        if not got or 'unitcell' not in got.replace(' ', ''):
+            return False                           # the worker must extract a valid PDF's text
+        # a FAILED extraction (here, a missing file) must come back as the caller's default,
+        # proving the crash/error path degrades gracefully instead of propagating to the server.
+        sentinel = '<<isolated>>'
+        missing = os.path.join(tempfile.gettempdir(), 'pxrd_no_such_file.pdf')
+        return PW.run(PW.text, missing, default=sentinel) == sentinel
+    finally:
+        os.remove(p)
+        try:
+            PW.shutdown()                          # tear the worker pool down — never leak processes
+        except Exception:
+            pass
+
 def _discover_recursive_ok():
     """discover() finds entry docx at ANY depth under the root, skips the tool's own review_out/
     output, and prefers the '(MineralName)' transcription over a supplementary docx of the same id."""
@@ -1094,6 +1122,7 @@ CASES = [
  # security: docx XML parsing is not XXE-able (DTD rejected / external entity unresolved)
  ("docx XML parsers block XXE (DTD/external entity)", _xxe_blocked),
  ("docx zip reads refuse a decompression-bomb member", _zip_bomb_blocked),
+ ("GUI reads PDF text in the crash-isolating worker (a segfault/stall can't kill the server)", _pdf_text_worker_isolated),
  # discovery is recursive (docx at any depth), skips review_out/, prefers the transcription
  ("discover() finds docx recursively, skips review_out/ + supp", _discover_recursive_ok),
  ("discover() picks the most-reviewed copy, not the raw transcription", _discover_prefers_reviewed_ok),

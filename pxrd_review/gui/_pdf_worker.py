@@ -127,6 +127,17 @@ def region_png(pdf, n, terms):
         return page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=clip).tobytes('png')
 
 
+def text(pdf):
+    """Raw concatenated text of every page — the source for annotate_review.analyze()'s cell/λ
+    parse. Byte-for-byte the same join as cell_lambda_check._pdf_text_fitz, so a valid PDF yields
+    an identical analysis; it runs HERE (like every other page op) only so a malformed embedded
+    image that segfaults libmupdf's text extraction, or a pathological page that stalls it,
+    degrades to the caller's default instead of crashing / hanging the Flask server."""
+    import fitz
+    with fitz.open(pdf) as doc:
+        return '\n'.join(p.get_text() for p in doc)
+
+
 def scan(pdf, terms):
     """[n_pages, best_evidence_page] — the page with the most hits for `terms`."""
     import fitz

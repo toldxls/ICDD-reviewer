@@ -40,16 +40,17 @@ from pxrd_review import annotate_review as A
 from pxrd_review import paths as P
 from pxrd_review.gui import _pdf_worker as PW   # MuPDF ops run in a subprocess (crash isolation)
 
-# analyze()'s PDF text parse uses fitz, which is not thread-safe — two request threads calling it
-# at once (e.g. during a live folder re-point) could corrupt libmupdf and crash the server. Unlike
-# the render path (get_pixmap can segfault on a JPEG-2000 decode, so it MUST run in the isolating
-# subprocess), get_text() has no such crash on the corpus — so we keep it IN-PROCESS for speed
-# (~0.06 s/pdf; a subprocess round-trip per entry is far slower) and just SERIALISE it under a lock.
-_pdf_read_lock = threading.Lock()
-def _serial_pdf_reader(path):
-    with _pdf_read_lock:
-        return C._pdf_text_fitz(path)
-C.set_pdf_reader(_serial_pdf_reader)
+# analyze()'s PDF text parse uses fitz, which (a) is NOT thread-safe and (b) interprets the page
+# content stream — so a malformed embedded image can segfault libmupdf, an UNCATCHABLE native fault
+# that would take the whole Flask server down (a try/except can't catch a SIGSEGV). Route text
+# extraction through the SAME isolating worker pool as the render path: a crash or stall degrades to
+# '' (→ analyze()'s 'no text layer' verdict) instead of killing the server, and the pool's separate
+# processes sidestep fitz's thread-unsafety with no in-process lock. The CLI keeps the faster
+# in-process reader (C._pdf_text_fitz) — a crash there just fails that one run, with no server to
+# protect. PW.text is a byte-identical join, so a valid PDF's analysis is unchanged.
+def _worker_pdf_reader(path):
+    return PW.run(PW.text, path, default='')
+C.set_pdf_reader(_worker_pdf_reader)
 
 try:
     from flask import Flask, jsonify, request, send_file, abort, Response, redirect
@@ -84,10 +85,10 @@ _inflight_lock = threading.Lock()
 @app.before_request
 def _guard_localhost():
     global _last_seen, _inflight
-    _last_seen = time.monotonic()                    # heartbeat: any request means a tab is open
     with _inflight_lock:
-        _inflight += 1
+        _inflight += 1                               # balanced by teardown_request (runs even on abort)
     if not _ALLOWED_HOSTS:
+        _last_seen = time.monotonic()
         return                                       # pre-launch / unconfigured
     if (request.host or '').lower() not in _ALLOWED_HOSTS:
         abort(403)                                   # wrong Host -> DNS-rebinding / off-host
@@ -108,6 +109,10 @@ def _guard_localhost():
         netloc = src.split('://', 1)[-1].split('/', 1)[0].lower()
         if netloc not in _ALLOWED_HOSTS:
             abort(403)
+    # Heartbeat LAST — only a request that cleared the Host/token/CSRF gate counts as "a tab is
+    # open". Updated earlier, a rejected probe from another local user refreshed the timer and kept
+    # the server alive under a closed browser (the auto-exit watchdog keys on _last_seen).
+    _last_seen = time.monotonic()
 
 @app.teardown_request
 def _request_done(exc=None):

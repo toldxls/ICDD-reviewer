@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# NOTE: the full regression suite (pxrd_review.regression_check) validates check *behaviour*
+# against a PRIVATE ICDD review batch that is deliberately not in this repo, so it cannot run
+# here — it stays a local / pre-commit gate (see CLAUDE.md and README "Behavioral contract").
+# CI covers everything that does NOT need the private fixtures: the package compiles and imports,
+# the security invariants hold, and the wheel builds cleanly with no secrets or corpus in it.
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (package + runtime deps)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Compile — syntax across the package
+        run: python -m compileall -q pxrd_review
+
+      - name: Import smoke — core + GUI + launcher
+        run: |
+          python - <<'PY'
+          import importlib
+          mods = ('pxrd_review', 'pxrd_review.cli', 'pxrd_review.cell_lambda_check',
+                  'pxrd_review.extra_checks', 'pxrd_review.annotate_review', 'pxrd_review.mindat',
+                  'pxrd_review.paths', 'pxrd_review.errors', 'pxrd_review.sweep',
+                  'pxrd_review.candidate_groups', 'pxrd_review.regression_check',
+                  'pxrd_review.gui.review_gui', 'pxrd_review.gui._pdf_worker')
+          for m in mods:
+              importlib.import_module(m)
+          from pxrd_review import __version__ as v
+          print('imported %d modules · version %s' % (len(mods), v))
+          PY
+
+      # Uses `python -c`, NOT a `python - <<heredoc`: the worker-isolation check spawns a
+      # multiprocessing worker, and 'spawn' tries to reload the main module by PATH — which is
+      # '<stdin>' for a heredoc (a nonexistent file → the worker never starts). `-c` has no such
+      # path, so the child bootstraps cleanly.
+      - name: Security invariants — fixture-free (XXE / zip-bomb / PDF-text worker isolation)
+        run: >
+          python -c "from pxrd_review.regression_check import _xxe_blocked, _zip_bomb_blocked,
+          _pdf_text_worker_isolated as w;
+          assert _xxe_blocked(), 'XXE guard regressed';
+          assert _zip_bomb_blocked(), 'zip-bomb read cap regressed';
+          assert w(), 'PDF-text worker isolation regressed';
+          print('security invariants OK')"
+
+      - name: Build wheel — packaging + no-leak check
+        run: |
+          pip install build
+          python -m build --wheel
+          python - <<'PY'
+          import glob, zipfile
+          w = sorted(glob.glob('dist/*.whl'))[-1]
+          names = zipfile.ZipFile(w).namelist()
+          leak = [n for n in names if any(s in n.lower() for s in
+                  ('mindat_key', '.cache', 'scratch', '.docx', '.pdf', '.cif', '.dft'))]
+          assert not leak, 'secret/corpus leaked into the wheel: %s' % leak
+          assert any(n.endswith('.json.gz') for n in names), 'bundled Mindat snapshot missing'
+          print('wheel OK: %s (%d members, no leak)' % (w, len(names)))
+          PY
