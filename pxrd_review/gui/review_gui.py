@@ -1019,11 +1019,17 @@ def _docx_html(path):
             elif len(ch):                       # hyperlink / smartTag / sdt / other container
                 buf.append(inline(ch))
         return ''.join(buf)
+    pc = [0]                      # paragraph counter — the same document order refs_check.load_docx
+                                  # uses (tables and content controls included, text boxes excluded), so
+                                  # a manuscript finding's paragraph index lands on the right <p data-p>
+    _CONTAINERS = ('sdt', 'sdtContent', 'customXml', 'smartTag')
     def block(node):
         t = _ln(node.tag)
         if t == 'p':
-            h = inline(node)
-            return '<p>%s</p>' % (h if h.strip() else '&nbsp;')
+            h = inline(node); n = pc[0]; pc[0] += 1
+            return '<p data-p="%d">%s</p>' % (n, h if h.strip() else '&nbsp;')
+        if t in _CONTAINERS:
+            return ''.join(block(x) for x in node if _ln(x.tag) in ('p', 'tbl') + _CONTAINERS)
         if t == 'tbl':
             rows = []
             for tr in node:
@@ -1042,7 +1048,7 @@ def _docx_html(path):
                 cells = ''.join(
                     '<td data-c="%d"%s>%s</td>'
                     % (i, (' data-anchor="%s"' % esc(anchors[i])) if i in anchors else '',
-                       ''.join(block(x) for x in tc if _ln(x.tag) in ('p', 'tbl')))
+                       ''.join(block(x) for x in tc if _ln(x.tag) in ('p', 'tbl') + _CONTAINERS))
                     for i, tc in enumerate(tcs))
                 rows.append('<tr data-h="%s">%s</tr>' % (esc(head[:60]), cells))
             return '<table class="docxtbl">%s</table>' % ''.join(rows)
@@ -1437,6 +1443,307 @@ def _export_report():
     print('[review_gui] triage report -> %s' % path)
     return path
 
+# ------------------------------------------------------------------ manuscript mode
+# A second mode in the same GUI: one MANUSCRIPT at a time (a paper .docx, its companion table
+# files, later its .cif) rather than a folder of ICDD entries. It reuses the shell — token gate,
+# folder picker, docx renderer, triage sidecar pattern — and calls refs_check verbatim; the GUI
+# never edits a document (the tool writes review_out/<name>_refs.docx, a copy).
+from pxrd_review import refs_check as RC
+
+MS = {
+    'folder': None, 'out_dir': None,
+    'files': {},                   # key (docx stem) -> path
+    'order': [],
+    'cifs': {},                    # key (cif stem) -> path  (the tables mode, phase 2)
+    'cache': {},                   # key -> {'fp': fingerprint, 'data': serialized analysis}
+    'triage': {},                  # key -> {'findings': {fkey: {verdict, note, label}}, 'reviewed', 'companions'}
+    'gen': 0, 'lock': threading.RLock(), 'initial': False, 'athread': None,
+}
+
+def _ms_triage_path():
+    return os.path.join(MS['out_dir'], 'ms_triage.json')
+
+def _ms_load_triage():
+    try:
+        with open(_ms_triage_path(), encoding='utf-8') as f:
+            MS['triage'] = json.load(f)
+    except Exception:
+        MS['triage'] = {}
+
+def _ms_save_triage():
+    with MS['lock']:
+        os.makedirs(MS['out_dir'], exist_ok=True)
+        path = _ms_triage_path(); tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(MS['triage'], f, indent=1)
+        os.replace(tmp, path)
+
+def _ms_remember(folder):
+    try:
+        from pxrd_review import cli as _cli
+        _cli._save('ms', folder)
+    except Exception:
+        pass
+
+def ms_set_folder(folder):
+    """Point the manuscript mode at a folder: every .docx that is not a tool output is a
+    candidate manuscript (non-recursive — any folder is allowed here, so never walk it);
+    .cif files are noted for the tables mode. False when the folder holds no docx."""
+    folder = os.path.abspath(folder)
+    if not os.path.isdir(folder):
+        return False
+    files, cifs = {}, {}
+    try:
+        names = sorted(os.listdir(folder), key=str.lower)
+    except OSError:
+        return False
+    for fn in names:
+        low = fn.lower()
+        if fn.startswith('~$') or fn.startswith('.'):
+            continue
+        if low.endswith('.docx') and not low.endswith(('_refs.docx', '_bv.docx')):
+            files[os.path.splitext(fn)[0]] = os.path.join(folder, fn)
+        elif low.endswith('.cif'):
+            cifs[os.path.splitext(fn)[0]] = os.path.join(folder, fn)
+    if not files:
+        return False
+    with MS['lock']:
+        MS['folder'] = folder
+        MS['out_dir'] = os.path.join(folder, 'review_out')
+        MS['files'] = files; MS['order'] = list(files); MS['cifs'] = cifs
+        MS['cache'] = {}; MS['gen'] += 1
+        _ms_load_triage()
+    t = threading.Thread(target=_ms_analyze_all, args=(MS['gen'],), daemon=True)
+    MS['athread'] = t; t.start()
+    _ms_remember(folder)
+    return True
+
+def _ms_companions(key):
+    """The companion keys saved for a manuscript, resolved to paths (keys only ever come from
+    the page — never a path)."""
+    keys = (MS['triage'].get(key) or {}).get('companions') or []
+    return [k for k in keys if k in MS['files'] and k != key]
+
+def _ms_fingerprint(key):
+    parts = [CODE_FP]
+    for k in [key] + _ms_companions(key):
+        p = MS['files'].get(k)
+        try:
+            st = os.stat(p); parts.append('%s:%d:%d' % (k, int(st.st_mtime), st.st_size))
+        except OSError:
+            parts.append(k + ':missing')
+    return '|'.join(parts)
+
+def _ms_outputs(key):
+    od = MS['out_dir'] or ''
+    return {'annotated': os.path.join(od, key + '_refs.docx'), 'report': os.path.join(od, key + '_refs_report.txt')}
+
+def ms_analysis(key):
+    """The refs_check analysis of one manuscript (cached by file fingerprint), serialized."""
+    with MS['lock']:
+        path = MS['files'][key]
+        c = MS['cache'].get(key); fp = _ms_fingerprint(key)
+        if c and c['fp'] == fp:
+            return c['data']
+        comps = [MS['files'][k] for k in _ms_companions(key)]
+    doc, paras = RC.load_docx(path)
+    for extra in comps:
+        _, more = RC._load(extra)
+        paras += [RC.Para(len(paras) + i, p.text, None, 'with:' + os.path.basename(extra)) for i, p in enumerate(more)]
+    res = RC.analyze(paras)
+    data = RC.serialize(paras, res)
+    data['key'] = key; data['name'] = os.path.basename(path)
+    data['summary'] = {k: sum(1 for f in data['findings'] if f['kind'] == k) for k in ('orphan', 'uncited', 'pair', 'form')}
+    with MS['lock']:
+        if key in MS['files']:
+            MS['cache'][key] = {'fp': fp, 'data': data}
+    return data
+
+def _ms_analyze_all(gen):
+    for key in list(MS['order']):
+        if MS.get('gen') != gen:
+            return
+        try:
+            ms_analysis(key)
+        except Exception as ex:
+            with MS['lock']:
+                MS['cache'][key] = {'fp': _ms_fingerprint(key),
+                                    'data': {'key': key, 'name': os.path.basename(MS['files'].get(key, key)),
+                                             'error': '%s: %s' % (type(ex).__name__, ex), 'findings': [],
+                                             'summary': {}, 'list': None, 'style': None}}
+
+def _ms_row(key):
+    c = MS['cache'].get(key)
+    t = MS['triage'].get(key) or {}
+    outs = _ms_outputs(key)
+    row = {'key': key, 'name': os.path.basename(MS['files'][key]), 'reviewed': bool(t.get('reviewed')),
+           'has_annotated': os.path.exists(outs['annotated']), 'pending': True, 'summary': None, 'error': None}
+    if c and c['fp'] == _ms_fingerprint(key):
+        d = c['data']
+        row.update(pending=False, summary=d.get('summary') or {}, error=d.get('error'),
+                   no_list=(d.get('list') is None and not d.get('error')))
+    return row
+
+@app.route('/api/ms/state')
+def api_ms_state():
+    rows = [_ms_row(k) for k in MS['order']] if MS['folder'] else []
+    pending = sum(1 for r in rows if r['pending'])
+    alive = MS.get('athread') is not None and MS['athread'].is_alive()
+    if pending and not alive and MS['folder']:
+        t = threading.Thread(target=_ms_analyze_all, args=(MS['gen'],), daemon=True); MS['athread'] = t; t.start()
+    return jsonify({'folder': MS['folder'], 'out_dir': MS['out_dir'], 'initial': MS['initial'],
+                    'files': rows, 'pending': pending, 'cifs': sorted(MS['cifs'])})
+
+@app.route('/api/ms/folder', methods=['POST'])
+def api_ms_folder():
+    data = request.get_json(silent=True) or {}
+    folder = os.path.expanduser((data.get('folder') or '').strip())
+    if not folder or not os.path.isdir(folder):
+        return jsonify({'ok': False, 'error': 'not a folder: %s' % (folder or '(empty)')}), 400
+    if not ms_set_folder(folder):
+        return jsonify({'ok': False, 'error': 'no .docx in %s (manuscripts are looked for in the folder itself, not its subfolders)' % folder}), 400
+    return jsonify({'ok': True, 'folder': MS['folder'], 'count': len(MS['order'])})
+
+@app.route('/api/ms/doc/<key>')
+def api_ms_doc(key):
+    if key not in MS['files']:
+        abort(404)
+    try:
+        d = ms_analysis(key)
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': '%s: %s' % (type(ex).__name__, ex)}), 500
+    outs = _ms_outputs(key)
+    return jsonify({'analysis': d, 'triage': MS['triage'].get(key, {}),
+                    'companions': _ms_companions(key),
+                    'others': [k for k in MS['order'] if k != key],
+                    'has_annotated': os.path.exists(outs['annotated']),
+                    'has_report': os.path.exists(outs['report'])})
+
+@app.route('/api/ms/triage/<key>', methods=['POST'])
+def api_ms_triage(key):
+    data = request.get_json(force=True, silent=True) or {}
+    data['ts'] = datetime.datetime.now().isoformat(timespec='seconds')
+    with MS['lock']:
+        if key not in MS['files']:
+            abort(404)
+        old = (MS['triage'].get(key) or {}).get('companions') or []
+        comps = [k for k in (data.get('companions') or []) if k in MS['files'] and k != key]
+        data['companions'] = comps
+        MS['triage'][key] = data
+        if comps != old:
+            MS['cache'].pop(key, None)                  # the body text changed: re-analyse on next open
+        _ms_save_triage()
+    return jsonify({'ok': True, 'reanalyse': comps != old})
+
+_ms_run_lock = threading.Lock()
+
+@app.route('/api/ms/run/<key>', methods=['POST'])
+def api_ms_run(key):
+    """Write the annotated copy (review_out/<name>_refs.docx) applying the triage: dismissed
+    findings are not written, reviewer notes are folded into the comments. The source is never
+    modified. An output someone has since commented on / tracked-changed is not overwritten
+    unless ?force=1."""
+    if key not in MS['files']:
+        abort(404)
+    if not _ms_run_lock.acquire(blocking=False):
+        return jsonify({'ok': False, 'error': 'a run is already in progress'}), 409
+    try:
+        _ms_save_triage()
+        path = MS['files'][key]; outs = _ms_outputs(key)
+        force = request.args.get('force') == '1'
+        if os.path.exists(outs['annotated']) and not force and (A._has_foreign_comment(outs['annotated'])
+                                                                or A._has_tracked_changes(outs['annotated'])):
+            return jsonify({'ok': False, 'needs_force': True,
+                            'error': 'the annotated copy carries someone\'s comments or tracked changes — '
+                                     'overwrite it?'})
+        t = (MS['triage'].get(key) or {}).get('findings') or {}
+        comps = [MS['files'][k] for k in _ms_companions(key)]
+        try:
+            res = RC.check_file(path, MS['out_dir'], annotate=True, force=True, quiet=True,
+                                companions=comps, triage=t)
+        except Exception as ex:
+            return jsonify({'ok': False, 'error': E.explain(ex, path)}), 500
+        MS['cache'].pop(key, None)
+        return jsonify({'ok': True, 'annotated': os.path.exists(outs['annotated']),
+                        'findings': bool(res['orphans'] or res['uncited'] or res['pairs'] or res.get('form'))})
+    finally:
+        _ms_run_lock.release()
+
+@app.route('/api/ms/docx/<key>.html')
+def api_ms_docx_html(key):
+    """The manuscript (source, or the tool's annotated copy) rendered for the middle pane."""
+    if key not in MS['files']:
+        abort(404)
+    which = request.args.get('which') or 'annotated'
+    path = _ms_outputs(key)['annotated'] if which == 'annotated' else MS['files'][key]
+    if not os.path.exists(path):
+        if which == 'annotated':
+            path = MS['files'][key]; which = 'source'
+        else:
+            abort(404)
+    return jsonify({'html': _docx_html(path), 'name': os.path.basename(path), 'which': which})
+
+@app.route('/api/ms/report/<key>')
+def api_ms_report(key):
+    if key not in MS['files']:
+        abort(404)
+    path = _ms_outputs(key)['report']
+    if not os.path.exists(path):
+        return jsonify({'text': ''})
+    with open(path, encoding='utf-8', errors='replace') as f:
+        return jsonify({'text': f.read()})
+
+@app.route('/api/ms/open/<key>', methods=['POST'])
+def api_ms_open(key):
+    """Open the source, the annotated copy or the report in the OS default app — only files the
+    mode has indexed or written, never an arbitrary path."""
+    if key not in MS['files']:
+        abort(404)
+    which = request.args.get('which') or 'source'
+    outs = _ms_outputs(key)
+    path = {'source': MS['files'][key], 'annotated': outs['annotated'], 'report': outs['report']}.get(which)
+    if not path or not os.path.exists(path):
+        abort(404)
+    try:
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', path])
+        elif os.name == 'nt':
+            os.startfile(path)                       # type: ignore[attr-defined]  # noqa
+        else:
+            subprocess.Popen(['xdg-open', path])
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 500
+    return jsonify({'ok': True, 'name': os.path.basename(path)})
+
+@app.route('/api/ms/export', methods=['POST'])
+def api_ms_export():
+    """review_out/ms_triage_report.txt — the reviewer's verdicts and notes, per manuscript."""
+    if not MS['folder']:
+        return jsonify({'ok': False, 'error': 'no manuscript folder open'}), 400
+    os.makedirs(MS['out_dir'], exist_ok=True)
+    path = os.path.join(MS['out_dir'], 'ms_triage_report.txt')
+    fh = io.StringIO()
+    fh.write('PXRD review — manuscript triage report\nfolder    : %s\ngenerated : %s\n%s\n'
+             % (MS['folder'], datetime.datetime.now().isoformat(timespec='seconds'), '=' * 78))
+    for key in MS['order']:
+        t = MS['triage'].get(key) or {}
+        verdicts = {fk: v for fk, v in (t.get('findings') or {}).items()
+                    if isinstance(v, dict) and (v.get('verdict') or v.get('note'))}
+        if not verdicts and not t.get('reviewed'):
+            continue
+        fh.write('\n%s%s\n%s\n' % (os.path.basename(MS['files'][key]), '   [REVIEWED]' if t.get('reviewed') else '', '-' * 78))
+        if t.get('companions'):
+            fh.write('  companions: %s\n' % ', '.join(t['companions']))
+        for fk, v in verdicts.items():
+            fh.write('  [%-12s] %s\n' % (VERDICT_LABEL.get(v.get('verdict'), v.get('verdict') or '?'), v.get('label', fk)))
+            if v.get('note'):
+                fh.write('       note: %s\n' % v['note'])
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(fh.getvalue())
+    os.replace(tmp, path)
+    return jsonify({'ok': True, 'path': path})
+
 # ------------------------------------------------------------------ main
 def _auto_exit_watchdog(grace=90):
     """Shut the server down shortly after the browser tab is CLOSED — NOT on idle. A tab beacons
@@ -1492,14 +1799,22 @@ def main():
     ap.add_argument('--no-auto-exit', action='store_true',
                     help='keep serving after the browser tab is closed (default: auto-shutdown '
                          'shortly after the last tab closes — never while one is open)')
+    ap.add_argument('--manuscript', action='store_true',
+                    help='open in Manuscript mode on this folder (a folder of paper .docx, not entries)')
     args = ap.parse_args()
 
     if not os.path.isdir(args.folder):
         sys.exit('not a folder: %s' % args.folder)
     build_index(args.folder, args.out, args.pdf_root)
-    if not STATE['order']:
-        sys.exit('no .docx entries found in %s' % args.folder)
-    start_analysis()                                    # background; the server comes up at once
+    if args.manuscript or not STATE['order']:
+        # no ICDD entries here: a folder of manuscripts opens in Manuscript mode instead
+        if ms_set_folder(args.folder):
+            MS['initial'] = True
+            print('[review_gui] %d manuscript(s) in %s — opening in Manuscript mode' % (len(MS['order']), args.folder))
+        elif not STATE['order']:
+            sys.exit('no .docx entries (or manuscripts) found in %s' % args.folder)
+    if STATE['order']:
+        start_analysis()                                # background; the server comes up at once
 
     port = _pick_port(args.port)
     if port != args.port:

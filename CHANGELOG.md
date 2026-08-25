@@ -4,6 +4,96 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.4.0] — 2026-08-25
+
+### Added — Manuscript mode in the review GUI
+An **Entries | Manuscript** toggle in the GUI's top bar. Manuscript mode reviews a folder of paper
+`.docx` files with `pxrd refs` inside the same shell: sidebar with per-manuscript badges, the
+findings pane in four sections with the familiar confirm / dismiss / ? look / note triage, the
+docx (annotated copy or source) in the middle with `? look` jumping to the finding's paragraph, the
+text report on the right. Companion files (a separate table docx) are toggled as header chips and
+re-analysed at once. **Run** writes `review_out/<name>_refs.docx` applying the triage (dismissed
+findings are not written; notes are folded into the comments); the source is never edited. Triage
+is saved to `review_out/ms_triage.json` under content-stable finding keys; **Export triage** writes
+`ms_triage_report.txt`. `pxrd gui` on a folder with manuscripts but no entries opens in this mode
+(`--manuscript` forces it). Same token/CSRF gate and no-raw-paths rule as the entry mode; the docx
+renderer now numbers paragraphs (`data-p`) and renders content controls. Routes covered by
+`tests/test_gui_ms.py`. (`refs_check` gained `finding_key`, `serialize` and triage-aware annotation
+for this.)
+
+### Added — `pxrd bv`: bond distances and bond-valence sums from the .cif, with a manuscript-table check
+`pxrd_review/bv_check.py`, run as `pxrd bv mineral.cif [--table "My paper.docx"] [--word]`.
+
+- **Own CIF reader** (loops, quoted/text fields, several blocks; no `eval` — symmetry operators go
+  through a small term parser), mixed sites merged, `Fe3+` / `Bi+3` / `S-2` type symbols, every
+  symmetry-equivalent position generated and checked; neighbours within an element-aware cutoff.
+- **Valences** from the type symbol, `_atom_type_oxidation_number`, `--ox`, or the usual mineral
+  values (sulfide/sulfosalt defaults without oxygen; ammonium recognised without its H); every
+  assumption stated. **Parameters** from I.D. Brown's `bvparm2020.cif` (bundled): Gagné &
+  Hawthorne 2015 for cation–O, Burns et al. 1997 for U⁶⁺, `--params bo|ba`; each one named.
+  Hydrogen takes its acceptor valences from H···O and the donor 1 − Σ, so each H sums to 1.
+  Bonds weighted by the anion's occupancy (split / partial O sites).
+- **Output**: per-site bond list with distances, multiplicities, valences, mean and Σ vs expected;
+  the anion × cation table with `×n↓` / `×n→` marks and sums; the parameters used; a self-check
+  against the `.cif`'s `_geom_bond` loop (≤ 0.003 Å on every fixture CIF that has one).
+  `--word` writes both tables as a `.docx`.
+- **`--table`**: the manuscript's bond-distance cells (`Cd1–O3² | 2.472(3)`) vs the `.cif`,
+  multiplicities, omitted/extra bonds, `<M–O>` arithmetic (subset means allowed); bond-valence
+  tables cell by cell under either convention (per-bond or total), marks, blanks, and the Σ
+  arithmetic with D/A hydrogen-bond columns; the parameter set is auto-detected from the table.
+  On the owner's manuscripts: cadsulfohite 16/16 distances and 14/14 cells agree; szilagyiite 29/29
+  distances, and the three BVS disagreements are real (`0.011`, a ×3 total beside a per-bond
+  value, a mixed F/OH cell); flatimerite 68/69 cells with BO91 auto-detected — the one left is a
+  `039` missing its decimal point.
+- Validated over all 57 fixture CIFs (53 run; the 4 refusals are CIFs without a cell or symmetry
+  list). `tests/test_bv_check.py` — rutile from first principles, the symop parser, parameter
+  choice, the Word writer, a synthetic manuscript table.
+
+### Added — `pxrd refs`: a manuscript's citations vs its own reference list
+A new, self-contained check for *manuscript* review (a paper `.docx`, or a `.pdf`), separate from
+the ICDD-entry checks: `pxrd_review/refs_check.py`, run as `pxrd refs "My paper.docx"`.
+
+- **Both directions.** *Cited but not listed* (an in-text citation with no reference-list entry),
+  *listed but not cited*, and *mismatch* pairs — an orphan citation and an uncited entry that are
+  probably the same reference with the year or the surname's spelling differing (`Gurzhyi` vs
+  `Gurzhiy`, cited 1985 / listed 1982) — reported as a pair, so a typo is told apart from a
+  genuinely missing reference. Orphans with the same surname elsewhere in the list carry a
+  `[list has: Schoep (1923), Schoep (1926)]` hint.
+- **FORM findings** — a citation that found its entry but disagrees with it: the year's letter
+  (`Cooper et al. 2019` vs a `2019a` entry), the author form against the entry's author count
+  (`Zhao 2024` for five authors → `Zhao et al.`; `et al.` for one author), and an entry written
+  without initials when the list has them elsewhere. The count comes from an author-list grammar
+  (`Surname, I.I.` / `Surname AB` / `I.I. Surname`, `O’Keeffe`, `Yu.S.`, `Sen Gupta`, `Jr.`,
+  `et al.`; a program/company name ends the list), so year-at-the-end entries are not over-counted
+  and the rule is silent where the block does not parse. ~0.4 findings per published paper.
+- **Styles.** Author–year in every common form (`Smith (2019)`, `Smith and Jones, 2019`,
+  `Smith et al. 2019a,b`, `Čejka (1999 and 2005)`, `van der Waals et al. (1873)`, `Van Gosen and
+  Hall 2017`, `in press`) and bracketed / Science-style numeric citations (`[3]`, `[4–7, 12]`,
+  `(1–3)`, numeric superscripts) against a numbered list. A `———` entry inherits the authors above.
+- **Body = everything outside the list**: tables, figure captions, an appendix, footnotes and
+  endnotes; a `.docx` is read with tracked changes *accepted*. Tables or captions kept in a
+  separate file fold in with `--with FILE` (repeatable) — their citations count and satisfy entries.
+- **Conservative by construction.** A citation is only recognised in a citation-shaped position;
+  `December 2024`, `IMA 2024-012`, `SHELXL-2016`, a URL, or `the Meritorious (1981) Service Award`
+  never fire. Acronyms, software/company names and multi-word proper names (`Rigaku Oxford
+  Diffraction (2018)`) match when the list has them and are silently ignored otherwise. Surnames
+  compare Unicode-folded (`Balić-Žunić` = `Balic-Zunic`, `Karup-Møller` = `Karup-Moller`).
+- **Output.** Console report + `review_out/<name>_refs_report.txt`; for a `.docx` an annotated
+  COPY `review_out/<name>_refs.docx` with a yellow highlight and a Word comment on every orphan
+  citation, uncited entry and mismatch pair (the citation's own run is split out so only the
+  citation is highlighted; body text is byte-identical afterwards). The source is never modified;
+  an output that already carries someone's comments or tracked changes is not overwritten without
+  `--force`. `--no-annotate` for the report alone.
+- **PDF path.** Text comes back line by line, so the list is split from the lines: numbered
+  sequences first, else year-anchored (an entry's boundary is the first *surname + initials* after a
+  sentence/DOI/page boundary between two consecutive years — robust to two-column layouts, wrapped
+  lines, journal names that look like surnames, and stranded accents). Report-only; no annotation.
+- Validated on eight real manuscripts (every finding reviewed) and the 61 fixture papers (published
+  papers drop from ~19 to ~3 residual findings each, mostly genuine). `tests/test_refs_check.py`
+  (unittest, no corpus needed) covers the citation forms, the noise cases, the annotator's
+  text-preservation guarantee and the splitter. The entry checks and their regression suite are
+  untouched.
+
 ## [0.3.5] — 2026-07-16
 
 ### Security — follow-up audit (no high-severity findings)

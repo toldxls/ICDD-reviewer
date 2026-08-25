@@ -12,6 +12,14 @@ long module paths, or ports.
     pxrd check [fixtures]          run the regression suite
     pxrd refresh [--refresh-struct] refresh the Mindat cache
     pxrd mindat [args…]            call mindat.py directly (e.g. --lookup Quartz)
+    pxrd refs <manuscript.docx|.pdf|folder> [--with FILE] [--no-annotate]
+                                   manuscript citations vs its reference list (both directions + form)
+                                   -> console + <dir>/review_out/<name>_refs_report.txt, and for a
+                                   .docx an annotated copy <name>_refs.docx
+    pxrd bv <structure.cif> [--table manuscript.docx] [--params gh|bo|ba] [--ox Fe=2] [--word]
+                                   bond distances + bond-valence sums from the .cif (formatted
+                                   table), self-checked against the .cif's own bond loop; --table
+                                   checks the manuscript's bond-distance and bond-valence tables
 
 Folder resolution for the data sub-commands: an explicit folder argument wins; a
 leading entry id (e.g. `pxrd extras I003448`) is passed through to the module, not
@@ -34,6 +42,8 @@ MODULE = {
     'check':      'pxrd_review.regression_check',
     'refresh':    'pxrd_review.mindat',
     'mindat':     'pxrd_review.mindat',
+    'refs':       'pxrd_review.refs_check',   # takes a FILE (or folder) — not folder-resolved
+    'bv':         'pxrd_review.bv_check',     # takes a .cif — not folder-resolved
 }
 NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'sweep', 'check'}
 MEM = os.path.join(P.cache_dir(), 'pxrd_last.json')   # remembered folder per sub-command
@@ -128,8 +138,13 @@ def main():
         args = [folder] + _fix_entry_id(sub, passthru)
     elif sub == 'refresh':
         args = rest or ['--refresh']        # bare `refresh` -> --refresh
-    else:                                   # mindat passthrough
+    else:                                   # mindat / refs passthrough
         args = rest
+        if sub == 'refs' and not rest:
+            raise SystemExit("pxrd refs: give a manuscript .docx (or .pdf, or a folder of them), "
+                             "e.g.  pxrd refs \"My paper.docx\"")
+        if sub == 'bv' and not rest:
+            raise SystemExit("pxrd bv: give a structure .cif, e.g.  pxrd bv mineral.cif --table \"My paper.docx\"")
 
     # the child is a fresh interpreter: ensure the package is importable even when
     # not pip-installed (running via the repo's ./pxrd dev shim)

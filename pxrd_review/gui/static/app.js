@@ -147,6 +147,7 @@ async function pickFolderNative() {
 async function openFolder(path) {
   path = (path || '').trim();
   if (!path) return;
+  if (window.MODE === 'manuscript') { msOpenFolder(path); return; }   // ms.js owns the other mode
   await flushTriage();              // persist any pending triage BEFORE re-pointing the tool
                                     // (un-awaited, the POST could land in the new folder's sidecar)
   const btns = ['#folder-open', '#folder-browse'].map($).filter(Boolean);
@@ -1379,8 +1380,9 @@ $('#export').addEventListener('click', async () => {
 });
 document.addEventListener('keydown', e => {
   if (e.target.matches('input, textarea')) return;
-  if (e.key === 'j') step(1);
-  else if (e.key === 'k') step(-1);
+  const go = window.MODE === 'manuscript' ? msStep : step;
+  if (e.key === 'j') go(1);
+  else if (e.key === 'k') go(-1);
 });
 
 // ============================================================ appearance + layout

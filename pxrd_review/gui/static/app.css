@@ -391,25 +391,25 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 .re-auth { flex: none; color: var(--muted); font-size: .78em; }
 
 /* ---- in-app docx view (transcription + tracked changes) ------------------ */
-#docx-view {
+.docx-view {
   flex: 1; overflow: auto; min-height: 0; padding: 12px 14px;
   background: rgb(0 0 0 / .14); font-size: .9em; line-height: 1.5; color: var(--text);
 }
-#docx-view.hidden { display: none; }
-#docx-view p { margin: 0 0 .5em; }
-#docx-view .docxtbl { border-collapse: collapse; width: 100%; margin: 6px 0; }
-#docx-view .docxtbl td {
+.docx-view.hidden { display: none; }
+.docx-view p { margin: 0 0 .5em; }
+.docx-view .docxtbl { border-collapse: collapse; width: 100%; margin: 6px 0; }
+.docx-view .docxtbl td {
   border: 1px solid var(--line); padding: 3px 6px; vertical-align: top; font-size: .95em;
 }
 /* '? look' landing on the docx: the cell the finding is about. It STAYS marked (docx-hit) so the
    reviewer can look away and back, and flashes once on arrival so the eye catches where it went —
    the same idea as the .pdf hit-flash, and deliberately NOT yellow: yellow is the tool's own
    highlight inside the document, and this must not be mistaken for one. */
-#docx-view .docxtbl td.docx-hit {
+.docx-view .docxtbl td.docx-hit {
   outline: 2px solid var(--accent, #5aa9ff);
   background: color-mix(in srgb, var(--accent, #5aa9ff) 14%, transparent);
 }
-#docx-view .docxtbl td.docx-flash { animation: docxflash 1.6s ease-out 1; }
+.docx-view .docxtbl td.docx-flash { animation: docxflash 1.6s ease-out 1; }
 @keyframes docxflash {
   0%   { background: color-mix(in srgb, var(--accent, #5aa9ff) 55%, transparent); }
   100% { background: color-mix(in srgb, var(--accent, #5aa9ff) 14%, transparent); }
@@ -417,16 +417,16 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 
 /* tracked changes + comments are coloured by AUTHOR (--au, set inline per mark), enlarged and
    highlighted so overlapping reviewers are easy to tell apart. ins = underline, del = strike. */
-#docx-view ins, #docx-view del {
+.docx-view ins, .docx-view del {
   color: var(--au, var(--text)); font-size: 1.06em; font-weight: 600;
   background: color-mix(in srgb, var(--au, #888) 16%, transparent);
   border-radius: 3px; padding: 0 2px;
 }
-#docx-view ins { text-decoration: underline; text-decoration-color: var(--au, var(--ok)); }
-#docx-view del { text-decoration: line-through; text-decoration-color: var(--au, var(--danger)); }
+.docx-view ins { text-decoration: underline; text-decoration-color: var(--au, var(--ok)); }
+.docx-view del { text-decoration: line-through; text-decoration-color: var(--au, var(--danger)); }
 /* a hidden author's deletion: keep the original text but strip strike + highlight (reads as plain body) */
-#docx-view del.au-off { text-decoration: none; background: none; color: inherit; font-size: 1em; font-weight: 400; }
-#docx-view .cmt {
+.docx-view del.au-off { text-decoration: none; background: none; color: inherit; font-size: 1em; font-weight: 400; }
+.docx-view .cmt {
   display: inline-block; font-size: .95em; font-weight: 600; cursor: pointer;
   color: var(--au, var(--info));
   background: color-mix(in srgb, var(--au, var(--info)) 15%, transparent);
@@ -482,3 +482,37 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 
 /* dashboard row while its analysis is still running in the background */
 .row2 .pending { font-style: italic; font-size: .85em; }
+
+
+/* ============================================================ manuscript mode */
+#mode { margin-right: 10px; }
+#ms-app { flex: 1; display: flex; min-height: 0; }
+#ms-app.hidden, #app.hidden { display: none; }
+#ms-sidebar { width: var(--w-sidebar); flex: none; display: flex; flex-direction: column; min-height: 0;
+  border-right: 1px solid var(--line);
+  background: rgb(var(--panel-rgb) / var(--panel-alpha));
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.3); backdrop-filter: blur(var(--blur)) saturate(1.3); }
+#ms-list { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
+#ms-list li { padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+#ms-list li:hover { background: rgb(255 255 255 / .04); }
+#ms-list li.sel { background: rgb(var(--accent-rgb) / .12); }
+#ms-list li.reviewed .row1 { opacity: .55; }
+#ms-detail { flex: 1; min-width: 0; overflow: hidden; }
+#ms-doc { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+#ms-head { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--line); }
+#ms-findings { flex: 0 0 var(--w-find); }
+#ms-view { flex: 1 1 auto; min-width: 140px; }
+#ms-right { flex: 0 0 var(--w-side); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#ms-report { flex: 1 1 auto; min-height: 56px; }
+.ms-pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .82em; line-height: 1.35; padding: 8px 10px; margin: 0; color: var(--text); }
+.ms-comps { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.ms-comp { font-size: .8em; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); cursor: pointer;
+  background: rgb(255 255 255 / .04); color: var(--muted); }
+.ms-comp.on { border-color: var(--accent); color: var(--accent); background: rgb(var(--accent-rgb) / .14); }
+.ms-comp:hover { border-color: var(--accent); }
+.ms-sec { padding: 6px 10px 2px; font-size: .78em; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+/* a finding's paragraph in the manuscript view: the same stay-marked + flash as the entry docx */
+.docx-view p.docx-hit { background: rgb(var(--accent-rgb) / .14); box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; }
+.docx-view p.docx-flash, .docx-view .docxtbl td.docx-flash { animation: docxflash 1.6s ease-out 1; }
+.f-text { font-size: .82em; color: var(--muted); margin-top: 2px; white-space: pre-wrap; }

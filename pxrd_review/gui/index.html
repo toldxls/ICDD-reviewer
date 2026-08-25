@@ -8,7 +8,12 @@
 </head>
 <body>
   <header id="topbar">
-    <div class="brand">PXRD review · <span class="muted">review mode</span></div>
+    <div class="brand">PXRD review</div>
+    <!-- mode: Entries (ICDD entry review) | Manuscript (a paper's citations / references) -->
+    <div id="mode" class="seg" title="Entries = ICDD entry review · Manuscript = check a paper's citations against its reference list">
+      <button data-mode="entries" class="on">Entries</button>
+      <button data-mode="manuscript">Manuscript</button>
+    </div>
     <div id="folder-ctl" title="">
       <span class="fc-icon" aria-hidden="true">📁</span>
       <span id="folder"></span>
@@ -24,6 +29,7 @@
     <button id="gear" title="Appearance &amp; layout">⚙</button>
     <button id="rerun-all" title="Regenerate every docx, applying your triage (suppress dismissed findings, fold your notes into the comments, set Accept).&#10;&#10;Runs:  pxrd review <folder> --triage review_out/triage.json&#10;Comments and highlights only, with ONE exception: a Title-Cased reference title is corrected in the copy as a Word TRACKED CHANGE (open it in Word to Accept or Reject). A cell you have already edited is never overwritten, and your manual docx edits are preserved (a timestamped copy goes to review_out/.edit_backup/ first).">Rerun all ▸</button>
     <button id="export" title="Write review_out/triage_report.txt — a plain-text summary of your triage decisions.&#10;Never edits a docx.">Export triage</button>
+    <button id="ms-export" class="ms-only hidden" title="Write review_out/ms_triage_report.txt — your verdicts and notes per manuscript.&#10;Never edits a docx.">Export triage</button>
   </header>
 
   <!-- appearance / layout settings -->
@@ -73,6 +79,96 @@
     <div id="folder-list" class="fp-list"></div>
     <div class="fp-tip muted">Pick the folder that holds the entry <code>.docx</code> <b>and</b> the
       <code>.pdf</code> files — subfolders are searched.</div>
+  </div>
+
+  <!-- ======================= manuscript mode ======================= -->
+  <div id="ms-app" class="hidden">
+    <aside id="ms-sidebar">
+      <div class="side-head">
+        <div id="ms-views" class="seg">
+          <button data-view="findings" class="on">Findings</button>
+          <button data-view="clean">Clean</button>
+          <button data-view="all">All</button>
+        </div>
+        <div class="filter-row">
+          <input type="search" id="ms-filter" placeholder="filter manuscripts…" autocomplete="off">
+        </div>
+        <div id="ms-counts" class="muted"></div>
+      </div>
+      <ul id="ms-list"></ul>
+    </aside>
+    <div class="splitter v" data-resize="sidebar" title="drag to resize"></div>
+    <main id="ms-detail">
+      <div id="ms-empty" class="empty">
+        <p>Select a manuscript.</p>
+        <p class="muted">Its in-text citations are checked against its own reference list — cited but not
+          listed, listed but not cited, year/spelling mismatches, and form (<code>et al.</code>, year
+          letters, initials). Tick the companion files (a separate table docx) whose citations count.
+          <b>Run</b> writes an annotated copy to <code>review_out/&lt;name&gt;_refs.docx</code>, skipping what
+          you dismissed; the source is never edited.
+          Equivalent command: <code>pxrd refs "paper.docx" --with "Table 1.docx"</code>.</p>
+      </div>
+      <div id="ms-doc" class="hidden">
+        <section id="ms-head">
+          <div class="head-main">
+            <button id="ms-prev" class="nav" title="previous (k)">‹</button>
+            <h1 id="ms-name">—</h1>
+            <button id="ms-next" class="nav" title="next (j)">›</button>
+            <span class="spacer"></span>
+            <div id="ms-badges" class="badges"></div>
+          </div>
+          <div class="head-meta">
+            <span id="ms-stats" class="muted"></span>
+            <span class="sep">·</span>
+            <span class="muted">companions:</span>
+            <span id="ms-companions" class="ms-comps"></span>
+            <span class="spacer"></span>
+            <label class="chk reviewed" id="ms-reviewed-box" title="Mark this manuscript as reviewed">
+              <input type="checkbox" id="ms-reviewed"> reviewed
+            </label>
+            <span id="ms-preview" class="preview" title="what Run will write after your triage"></span>
+            <button id="ms-run" title="Write review_out/<name>_refs.docx — a copy with a comment and highlight on every finding you have not dismissed (your notes go into the comments). The source is never edited.&#10;&#10;Runs:  pxrd refs &quot;<name>.docx&quot; [--with companion.docx]">Run ▸</button>
+          </div>
+        </section>
+        <div class="ebody">
+          <section id="ms-findings" class="pane" data-collapse="col">
+            <div class="pane-title">
+              <button class="collapse" title="collapse">▾</button>
+              <span class="ptitle">Findings</span>
+              <span class="muted" id="ms-fcount"></span>
+              <span class="spacer"></span>
+              <label class="chk mini" title="hide findings you dismissed"><input type="checkbox" id="ms-hide-dismissed"> hide dismissed</label>
+            </div>
+            <div class="pane-body" id="ms-findings-body"></div>
+          </section>
+          <div class="splitter v" data-resize="find"></div>
+          <section id="ms-view" class="pane">
+            <div class="pane-title">
+              <div id="ms-which" class="seg" title="show the tool's annotated copy or the untouched source">
+                <button data-which="annotated" class="on">annotated copy</button>
+                <button data-which="source">source</button>
+              </div>
+              <button id="ms-open" class="ghost mini" title="open the shown docx in Word">open ↗</button>
+              <span class="muted ellip" id="ms-view-name"></span>
+              <span class="spacer"></span>
+              <button id="ms-open-report" class="ghost mini" title="open review_out/<name>_refs_report.txt">report ↗</button>
+            </div>
+            <div id="ms-docx-view" class="docx-view"></div>
+          </section>
+          <div class="splitter v" data-resize="side"></div>
+          <div id="ms-right">
+            <section id="ms-report" class="pane" data-collapse="row">
+              <div class="pane-title">
+                <button class="collapse" title="collapse">▾</button>
+                <span class="ptitle">Report</span>
+                <span class="muted" id="ms-report-note"></span>
+              </div>
+              <div class="pane-body"><pre id="ms-report-body" class="ms-pre"></pre></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 
   <div id="app">
@@ -182,7 +278,7 @@
             </div>
             <div id="pdf-view"><div class="empty muted">no .pdf paired</div></div>
             <div id="pdf-snippet" class="snippet"></div>
-            <div id="docx-view" class="hidden"></div>
+            <div id="docx-view" class="docx-view hidden"></div>
           </section>
 
           <div class="splitter v" data-resize="side"></div>
@@ -212,5 +308,6 @@
   </div>
 
   <script src="/static/app.js"></script>
+  <script src="/static/ms.js"></script>
 </body>
 </html>
