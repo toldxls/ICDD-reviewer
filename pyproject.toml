@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pxrd-review"
-version = "0.3.5"
+version = "0.4.0"
 description = "PXRD mineral-review tool — validate an ICDD entry .docx against the paper (.pdf), author .cif, ICDD .dft and the Mindat API; write Word comments + highlights into copies."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -34,4 +34,4 @@ include = ["pxrd_review*"]
 "pxrd_review.gui" = ["index.html", "static/*"]
 # Mindat snapshot (gzipped, ~385 KB) so the group / chemistry / cell cross-checks work with NO
 # API key. Rebuild before each release: python3 -m pxrd_review.mindat --refresh --bundle
-"pxrd_review" = ["data/*.json.gz"]
+"pxrd_review" = ["data/*.json.gz", "data/*.cif"]   # + Brown's bvparm2020.cif (bond-valence parameters)
