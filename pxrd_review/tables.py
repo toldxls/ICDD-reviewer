@@ -327,11 +327,11 @@ def _bond_source(st, P):
         dd = B._col(tags, rows, '_geom_bond_distance'); sy = B._col(tags, rows, '_geom_bond_site_symmetry_2', '.')
         for a, b_, d, s in zip(l1, l2, dd, sy):
             if a in cat and b_ in an:
-                out.append((a, b_, d.strip(), s.strip()))
+                out.append((a, an[b_].label, d.strip(), s.strip()))          # merged label: 'F1/OH1'
             elif b_ in cat and a in an:
                 # the loop lists the anion first, so its symmetry code moves the CATION; the table
                 # puts the code on the anion, which needs the inverse operator
-                out.append((b_, a, d.strip(), _inverse_code(st, s.strip())))
+                out.append((b_, an[a].label, d.strip(), _inverse_code(st, s.strip())))
         # only bonds a paper would list: within the cutoff AND worth >= MIN_S vu (SHELXL's BOND
         # list can reach further)
         keep = []
@@ -340,7 +340,7 @@ def _bond_source(st, P):
             dv = B._num(d) or 0
             if dv > cut + 1e-6:
                 continue
-            asite = an[b_]
+            asite = an[b_] if b_ in an else next(x for x in st.anions if x.label == b_)
             lim = [P.max_length(sp.element, sp.ox, asite.element, B.ANION_OX.get(asite.element, -2))
                    for sp in site.species if sp.ox and sp.ox > 0]
             lim = [x for x in lim if x is not None]

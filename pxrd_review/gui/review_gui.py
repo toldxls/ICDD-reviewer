@@ -1597,10 +1597,21 @@ def api_tb_open(key):
         return jsonify({'ok': False, 'error': str(ex)}), 500
     return jsonify({'ok': True})
 
+_COMPANION_NAME = re.compile(r'(^|[^a-z])(table|tables|supp|supplement|supplementary|appendix|si|esm)([^a-z]|$)', re.I)
+
+def _ms_default_companions(key):
+    """Until the reviewer decides, the other docx whose NAMES say they hold tables or supplementary
+    material ('Table 1.docx', 'paper_Supp.docx') count as companions of every manuscript that is not
+    itself one of those."""
+    if _COMPANION_NAME.search(key):
+        return []
+    return [k for k in MS['order'] if k != key and _COMPANION_NAME.search(k)]
+
 def _ms_companions(key):
-    """The companion keys saved for a manuscript, resolved to paths (keys only ever come from
-    the page — never a path)."""
-    keys = (MS['triage'].get(key) or {}).get('companions') or []
+    """The companion keys saved for a manuscript (or the by-name default when nothing was saved),
+    resolved to paths later (keys only ever come from the page — never a path)."""
+    rec = MS['triage'].get(key) or {}
+    keys = rec['companions'] if 'companions' in rec else _ms_default_companions(key)
     return [k for k in keys if k in MS['files'] and k != key]
 
 def _ms_fingerprint(key):

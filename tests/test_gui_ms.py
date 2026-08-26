@@ -93,6 +93,18 @@ class ManuscriptMode(unittest.TestCase):
         # the source docx is untouched
         self.assertNotIn('word/comments.xml', zipfile.ZipFile(os.path.join(self.tmp, 'paper.docx')).namelist())
 
+    def test_default_companions_by_name(self):
+        from pxrd_review.gui import review_gui as G
+        old = dict(G.MS['triage'])
+        try:
+            G.MS['triage'].pop('paper', None)                       # nothing saved yet
+            self.assertEqual(G._ms_companions('paper'), ['table'])  # 'table.docx' is pre-ticked by name
+            self.assertEqual(G._ms_companions('table'), [])         # a table file has no companions of its own
+            G.MS['triage']['paper'] = {'companions': []}            # the reviewer un-ticked it: respected
+            self.assertEqual(G._ms_companions('paper'), [])
+        finally:
+            G.MS['triage'] = old
+
     def test_folder_validation(self):
         r = self.c.post('/api/ms/folder', json={'folder': '/nonexistent/x'})
         self.assertEqual(r.status_code, 400)
