@@ -320,7 +320,9 @@ class Structure:
                 self.notes.append('site %s: element not recognised — skipped' % lab); continue
             if el == 'H' and not self.include_h:
                 continue
-            raw.append([lab, el, ox, [xs[i] % 1.0, ys[i] % 1.0, zs[i] % 1.0], occ[i], uiso[i], types[i]])
+            # the .cif's own coordinates, NOT wrapped into [0,1): its symmetry codes (n_klm) refer to
+            # them, and every distance routine here already searches the neighbouring cells
+            raw.append([lab, el, ox, [xs[i], ys[i], zs[i]], occ[i], uiso[i], types[i]])
         # ammonium: an N bonded to H is NH4+
         self.nh4 = set()
         for r in raw:
@@ -369,7 +371,7 @@ class Structure:
         if self.nh4:
             keep = []
             for s in self.sites:
-                if s.element == 'H' and any(self.dist(s.frac, n.frac) < 1.15 for n in self.sites if n.label in self.nh4):
+                if s.element == 'H' and any(self._min_dist(s.frac, n.frac) < 1.15 for n in self.sites if n.label in self.nh4):
                     continue
                 keep.append(s)
             self.sites = keep
@@ -430,6 +432,9 @@ class Structure:
 # ----------------------------------------------------------------------------- parameters
 
 PARAM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'bvparm2020.cif')
+# A neighbour within the cutoff counts as a bond only when it contributes at least this much:
+# keeps Pb's long bonds (3.4 Å ≈ 0.03 vu) and drops a 3.2 Å P–O (0.015 vu) that no paper lists.
+MIN_S = 0.025
 PREFER = {'gh': ['bs', 'a', 'b'], 'bo': ['b', 'a', 'bs'], 'ba': ['a', 'b', 'bs']}
 # per-cation preferences that override the set: U6+–O from Burns, Ewing & Hawthorne (1997) — the
 # parameters every uranyl-mineral description uses (--params still applies to everything else)
@@ -471,6 +476,11 @@ class Params:
             self.used[(cat, cox, an)] = (r0, b, rid); return r0, b, rid
         return None
 
+    def max_length(self, cat, cox, an, aox, min_s=MIN_S):
+        """The distance at which the valence drops to min_s (None without parameters)."""
+        p = self.get(cat, cox, an, aox)
+        return None if p is None else p[0] - p[1] * math.log(min_s)
+
     def valence(self, cat, cox, an, aox, R):
         if cat == 'H':
             for lim, r0, b in H_RANGES:
@@ -511,6 +521,9 @@ def compute(st, params, cutoff=None):
                     s += (a.occ / an_tot) * v
                 vals.append((sp, None if missing and s == 0.0 else s))
             if vals and any(s is not None for _, s in vals):
+                if c.element != 'H' and cutoff is None and max((s or 0.0) for _, s in vals) < MIN_S:
+                    continue                        # too weak to be a bond in a published table (an
+                                                    # explicit --cutoff means: everything within it)
                 bonds.append(Bond(c, other, d, n, vals))
         if c.element == 'H' and bonds:
             # X-ray O–H distances are short and unreliable: take the acceptor valences from the

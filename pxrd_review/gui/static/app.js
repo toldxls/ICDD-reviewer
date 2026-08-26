@@ -101,7 +101,7 @@ function renderMindatChip(m) {
         + act.text + '\n(click to open — or add a free Mindat API key and the tool refreshes itself)'
       : (stale ? 'To refresh, run:\n  ' : 'Refresh with:\n  ')
         + act.text + '\n(click to copy)');
-  chip.classList.remove('hidden');
+  chip.classList.toggle('hidden', window.MODE !== undefined && window.MODE !== 'entries');   // entries-mode only
   chip.classList.toggle('chip-warn', stale);
   chip.onclick = async () => {
     if (upgrade) { window.open(act.text, '_blank', 'noopener'); return; }
@@ -147,7 +147,7 @@ async function pickFolderNative() {
 async function openFolder(path) {
   path = (path || '').trim();
   if (!path) return;
-  if (window.MODE === 'manuscript') { msOpenFolder(path); return; }   // ms.js owns the other mode
+  if (window.MODE === 'manuscript' || window.MODE === 'tables') { msOpenFolder(path); return; }   // ms.js / tb.js share the folder
   await flushTriage();              // persist any pending triage BEFORE re-pointing the tool
                                     // (un-awaited, the POST could land in the new folder's sidecar)
   const btns = ['#folder-open', '#folder-browse'].map($).filter(Boolean);

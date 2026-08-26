@@ -21,16 +21,18 @@ const MS_KIND = {
 // ---- mode toggle -------------------------------------------------------------
 function setMode(mode, opts) {
   window.MODE = mode;
-  const ms = mode === 'manuscript';
+  clearTimeout(MSS.pollTimer);                       // the manuscript list stops polling outside its mode
+  const ms = mode !== 'entries', tb = mode === 'tables';
   document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
   $('#app').classList.toggle('hidden', ms);
-  $('#ms-app').classList.toggle('hidden', !ms);
+  $('#ms-app').classList.toggle('hidden', !ms || tb);
+  $('#tb-app').classList.toggle('hidden', !tb);
   // entries-only controls
   for (const id of ['#rerun-all', '#export', '#open-log']) { const e = $(id); if (e) e.classList.toggle('hidden', ms); }
   const chip = $('#mindat-chip'); if (chip) { if (ms) chip.classList.add('hidden'); else if (chip.textContent) chip.classList.remove('hidden'); }
-  document.querySelectorAll('.ms-only').forEach(e => e.classList.toggle('hidden', !ms));
+  document.querySelectorAll('.ms-only').forEach(e => e.classList.toggle('hidden', mode !== 'manuscript'));
   try { localStorage.setItem('pxrd-mode', mode); } catch (_) {}
-  if (ms) msLoad(); else loadEntries();
+  if (tb) tbLoad(); else if (ms) msLoad(); else loadEntries();
   if (!(opts && opts.quiet)) { $('#folderpanel').classList.add('hidden'); }
 }
 document.querySelectorAll('#mode button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
@@ -44,9 +46,9 @@ async function msLoad() {
   $('#folder').textContent = r.folder ? ((parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/')) : '(no manuscript folder — click to choose)';
   $('#folder-ctl').title = (r.folder || '') + '  — click to change folder';
   $('#folder').dataset.path = r.folder || '';
-  MSS.files = r.files || [];
+  MSS.files = r.files || []; MSS.ncifs = (r.cifs || []).length;
   msRenderList();
-  if (r.pending > 0) MSS.pollTimer = setTimeout(msLoad, 1000);
+  if (r.pending > 0 && window.MODE === 'manuscript') MSS.pollTimer = setTimeout(msLoad, 1000);
 }
 
 function msSummaryBadges(f) {
@@ -85,7 +87,9 @@ function msRenderList() {
   }
   const pend = MSS.files.filter(f => f.pending).length;
   const withF = MSS.files.filter(msHasFindings).length;
-  $('#ms-counts').textContent = `${vis.length} shown · ${withF}/${MSS.files.length} with findings` + (pend ? ` · analyzing ${pend}…` : '');
+  $('#ms-counts').textContent = MSS.files.length
+    ? `${vis.length} shown · ${withF}/${MSS.files.length} with findings` + (pend ? ` · analyzing ${pend}…` : '')
+    : (MSS.ncifs ? `no manuscripts here — ${MSS.ncifs} .cif (switch to Tables)` : 'no manuscripts in this folder');
 }
 document.querySelectorAll('#ms-views button').forEach(b => b.addEventListener('click', () => {
   MSS.view = b.dataset.view;
@@ -110,7 +114,7 @@ async function msOpenFolder(path) {
   $('#folderpanel').classList.add('hidden');
   MSS.key = null; MSS.a = null; MSS.docxHtml = {};
   $('#ms-doc').classList.add('hidden'); $('#ms-empty').classList.remove('hidden');
-  await msLoad();
+  if (window.MODE === 'tables') { tbReset(); await tbLoad(); } else await msLoad();
 }
 
 // ---- open a manuscript --------------------------------------------------------
@@ -238,12 +242,40 @@ async function msLook(f) {
   if (!p) { msStatus('that paragraph is in a companion file (open it in Word)'); return; }
   view.querySelectorAll('.docx-hit').forEach(x => x.classList.remove('docx-hit'));
   p.classList.add('docx-hit');
-  // an INSTANT jump: smooth scrolling is inert in this pane (a smooth scrollTo moves a couple of
-  // pixels and stops), so centre the paragraph directly and let the flash show where it landed
+  // Animate the scroll ourselves: the browser's own smooth scroll is cancelled in this pane (a
+  // native smooth scrollTo moves a couple of pixels and stops), and an instant jump reads as a
+  // twitch. A short eased scroll driven by requestAnimationFrame depends on nothing.
   requestAnimationFrame(() => {
     const r = p.getBoundingClientRect(), vr = view.getBoundingClientRect();
-    view.scrollTop = Math.max(0, r.top - vr.top + view.scrollTop - view.clientHeight / 2 + r.height / 2);
-    p.classList.remove('docx-flash'); void p.offsetWidth; p.classList.add('docx-flash');
+    const target = Math.max(0, Math.min(view.scrollHeight - view.clientHeight,
+      r.top - vr.top + view.scrollTop - view.clientHeight / 2 + r.height / 2));
+    msAnimateScroll(view, target, 420).then(() => {
+      p.classList.remove('docx-flash'); void p.offsetWidth; p.classList.add('docx-flash');
+    });
+  });
+}
+
+// eased scroll of a container to `top` over `ms` milliseconds (ease-in-out); a newer call on the
+// same element supersedes an older one, so rapid '? look' clicks never fight each other.
+function msAnimateScroll(view, top, ms) {
+  return new Promise(resolve => {
+    const from = view.scrollTop, delta = top - from, t0 = performance.now();
+    const token = (view._scrollToken = (view._scrollToken || 0) + 1);
+    if (Math.abs(delta) < 1 || document.hidden) { view.scrollTop = top; resolve(); return; }
+    let framed = false, done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    const step = now => {
+      framed = true;
+      if (view._scrollToken !== token) { finish(); return; }        // superseded by a newer look
+      const k = Math.min(1, (now - t0) / ms);
+      const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      view.scrollTop = from + delta * e;
+      if (k < 1) requestAnimationFrame(step); else finish();
+    };
+    requestAnimationFrame(step);
+    // frame callbacks pause in a background tab: if none ran, land instantly rather than never —
+    // and retire this animation's token so a late first frame cannot restart it from the top
+    setTimeout(() => { if (!framed && view._scrollToken === token) { view._scrollToken++; view.scrollTop = top; finish(); } }, 150);
   });
 }
 
@@ -356,6 +388,6 @@ $('#ms-next').addEventListener('click', () => msStep(1));
   try { initial = await fetch('/api/ms/state').then(x => x.json()); } catch (_) {}
   let mode = 'entries';
   try { mode = localStorage.getItem('pxrd-mode') || 'entries'; } catch (_) {}
-  if (initial && initial.initial) mode = 'manuscript';          // launched on a manuscript folder
-  if (mode === 'manuscript') setMode('manuscript', { quiet: true });
+  if (initial && initial.initial) mode = initial.initial === true ? 'manuscript' : initial.initial;   // launched on a manuscript / cif folder
+  if (mode === 'manuscript' || mode === 'tables') setMode(mode, { quiet: true });
 })();

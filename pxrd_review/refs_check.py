@@ -100,6 +100,14 @@ def _para_pieces(p):
             else:
                 walk(c)
     walk(p)
+    # a numeric superscript right after a unit or a number is an exponent (cm³, Å², 10³), not a
+    # citation: undo the '[n]' wrapping _run_text applied
+    for i in range(1, len(pieces)):
+        r, t = pieces[i]
+        if t.startswith('[') and t.endswith(']') and re.fullmatch(r'\[[\d,\s–—\-]+\]', t):
+            prev = ''.join(x for _, x in pieces[:i]).rstrip()
+            if re.search(r'(?:\d|Å|\b(?:cm|mm|nm|µm|um|km|dm|m|g|kg|mg|mol|L|ml|K|s|Hz|R|r|e|Å|Ang))$', prev):
+                pieces[i] = (r, t[1:-1])
     return pieces
 
 MC_ALT = '{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent'

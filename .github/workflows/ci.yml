@@ -71,9 +71,12 @@ jobs:
           import glob, zipfile
           w = sorted(glob.glob('dist/*.whl'))[-1]
           names = zipfile.ZipFile(w).namelist()
-          leak = [n for n in names if any(s in n.lower() for s in
+          # the one .cif that BELONGS in the wheel: Brown's bond-valence parameter table
+          BUNDLED = {'pxrd_review/data/bvparm2020.cif'}
+          leak = [n for n in names if n not in BUNDLED and any(s in n.lower() for s in
                   ('mindat_key', '.cache', 'scratch', '.docx', '.pdf', '.cif', '.dft'))]
           assert not leak, 'secret/corpus leaked into the wheel: %s' % leak
           assert any(n.endswith('.json.gz') for n in names), 'bundled Mindat snapshot missing'
+          assert BUNDLED <= set(names), 'bond-valence parameter table missing from the wheel'
           print('wheel OK: %s (%d members, no leak)' % (w, len(names)))
           PY
