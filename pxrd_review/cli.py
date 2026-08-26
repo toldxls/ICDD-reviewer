@@ -20,6 +20,10 @@ long module paths, or ports.
                                    bond distances + bond-valence sums from the .cif (formatted
                                    table), self-checked against the .cif's own bond loop; --table
                                    checks the manuscript's bond-distance and bond-valence tables
+    pxrd tables <structure.cif> [--word] [--params gh|bo|ba] [--ox Fe=2]
+                                   publishable tables from the .cif: coordinates + displacement
+                                   parameters, selected bond distances (symmetry codes, means),
+                                   hydrogen bonds, bond-valence analysis; --word writes a .docx
 
 Folder resolution for the data sub-commands: an explicit folder argument wins; a
 leading entry id (e.g. `pxrd extras I003448`) is passed through to the module, not
@@ -44,6 +48,7 @@ MODULE = {
     'mindat':     'pxrd_review.mindat',
     'refs':       'pxrd_review.refs_check',   # takes a FILE (or folder) — not folder-resolved
     'bv':         'pxrd_review.bv_check',     # takes a .cif — not folder-resolved
+    'tables':     'pxrd_review.tables',       # takes a .cif — not folder-resolved
 }
 NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'sweep', 'check'}
 MEM = os.path.join(P.cache_dir(), 'pxrd_last.json')   # remembered folder per sub-command
@@ -145,6 +150,8 @@ def main():
                              "e.g.  pxrd refs \"My paper.docx\"")
         if sub == 'bv' and not rest:
             raise SystemExit("pxrd bv: give a structure .cif, e.g.  pxrd bv mineral.cif --table \"My paper.docx\"")
+        if sub == 'tables' and not rest:
+            raise SystemExit("pxrd tables: give a structure .cif, e.g.  pxrd tables mineral.cif --word")
 
     # the child is a fresh interpreter: ensure the package is importable even when
     # not pip-installed (running via the repo's ./pxrd dev shim)

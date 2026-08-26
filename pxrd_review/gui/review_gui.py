@@ -1505,7 +1505,7 @@ def ms_set_folder(folder):
             files[os.path.splitext(fn)[0]] = os.path.join(folder, fn)
         elif low.endswith('.cif'):
             cifs[os.path.splitext(fn)[0]] = os.path.join(folder, fn)
-    if not files:
+    if not files and not cifs:
         return False
     with MS['lock']:
         MS['folder'] = folder
@@ -1517,6 +1517,85 @@ def ms_set_folder(folder):
     MS['athread'] = t; t.start()
     _ms_remember(folder)
     return True
+
+# ------------------------------------------------------------------ tables mode
+# The third mode: publishable tables from a .cif (pxrd_review.tables), rendered in the page and
+# written to review_out/<name>_tables.docx on request. Same folder as the manuscript mode — the
+# .cif files it lists — and the same rule: keys only from the page, never paths.
+from pxrd_review import tables as TB
+
+_TB_OPTS = ('params', 'ox', 'cutoff', 'noh')
+
+def _tb_opts():
+    params = request.args.get('params') or 'gh'
+    if params not in ('gh', 'bo', 'ba'):
+        params = 'gh'
+    ox = re.sub(r'\s+', '', (request.args.get('ox') or ''))[:200]        # 'Fe = 2, mn=3' -> 'Fe=2,mn=3'
+    if ox and not re.fullmatch(r'[A-Za-z]{1,2}=[+-]?\d{1,2}(,[A-Za-z]{1,2}=[+-]?\d{1,2})*', ox):
+        ox = ''
+    try:
+        cutoff = float(request.args.get('cutoff')) if request.args.get('cutoff') else None
+        if cutoff is not None and not (1.0 <= cutoff <= 6.0):
+            cutoff = None
+    except ValueError:
+        cutoff = None
+    journal_key = request.args.get('journal') or TB.DEFAULT_JOURNAL
+    if journal_key not in TB.JOURNALS:
+        journal_key = TB.DEFAULT_JOURNAL
+    return params, ox or None, cutoff, request.args.get('noh') != '1', journal_key
+
+@app.route('/api/tb/state')
+def api_tb_state():
+    rows = []
+    for key in sorted(MS['cifs']):
+        p = MS['cifs'][key]
+        rows.append({'key': key, 'name': os.path.basename(p),
+                     'has_word': os.path.exists(os.path.join(MS['out_dir'] or '', key + '_tables.docx'))})
+    return jsonify({'folder': MS['folder'], 'cifs': rows,
+                    'journals': [{'key': k, 'name': v['name']} for k, v in TB.JOURNALS.items()], 'default_journal': TB.DEFAULT_JOURNAL})
+
+@app.route('/api/tb/tables/<key>')
+def api_tb_tables(key):
+    if key not in MS['cifs']:
+        abort(404)
+    params, ox, cutoff, include_h, jk = _tb_opts()
+    try:
+        st, tabs = TB.build(MS['cifs'][key], params, ox, cutoff, include_h, jk)
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
+    return jsonify({'ok': True, 'name': st.name, 'formula': st.formula, 'sg': st.sg,
+                    'notes': st.notes, 'html': TB.render_html(tabs), 'text': TB.render_text(tabs)})
+
+@app.route('/api/tb/word/<key>', methods=['POST'])
+def api_tb_word(key):
+    if key not in MS['cifs']:
+        abort(404)
+    params, ox, cutoff, include_h, jk = _tb_opts()
+    try:
+        st, tabs, text = TB.run(MS['cifs'][key], word=True, params=params, ox=ox, cutoff=cutoff,
+                                include_h=include_h, out_dir=MS['out_dir'], quiet=True, journal_key=jk)
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
+    return jsonify({'ok': True, 'path': os.path.join(MS['out_dir'], key + '_tables.docx')})
+
+@app.route('/api/tb/open/<key>', methods=['POST'])
+def api_tb_open(key):
+    if key not in MS['cifs']:
+        abort(404)
+    which = request.args.get('which') or 'word'
+    path = os.path.join(MS['out_dir'] or '', key + '_tables.docx') if which == 'word' else MS['cifs'][key]
+    if not os.path.exists(path):
+        abort(404)
+    try:
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', path])
+        elif os.name == 'nt':
+            os.startfile(path)                       # type: ignore[attr-defined]  # noqa
+        else:
+            subprocess.Popen(['xdg-open', path])
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 500
+    return jsonify({'ok': True})
 
 def _ms_companions(key):
     """The companion keys saved for a manuscript, resolved to paths (keys only ever come from
@@ -1807,10 +1886,11 @@ def main():
         sys.exit('not a folder: %s' % args.folder)
     build_index(args.folder, args.out, args.pdf_root)
     if args.manuscript or not STATE['order']:
-        # no ICDD entries here: a folder of manuscripts opens in Manuscript mode instead
+        # no ICDD entries here: a folder of manuscripts (or .cif files) opens in the other modes
         if ms_set_folder(args.folder):
-            MS['initial'] = True
-            print('[review_gui] %d manuscript(s) in %s — opening in Manuscript mode' % (len(MS['order']), args.folder))
+            MS['initial'] = 'manuscript' if MS['order'] else 'tables'
+            print('[review_gui] %d manuscript(s), %d .cif in %s — opening in %s mode'
+                  % (len(MS['order']), len(MS['cifs']), args.folder, MS['initial'].capitalize()))
         elif not STATE['order']:
             sys.exit('no .docx entries (or manuscripts) found in %s' % args.folder)
     if STATE['order']:

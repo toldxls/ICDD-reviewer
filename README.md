@@ -255,6 +255,52 @@ table is bundled); intermetallics and organics are out of scope; hydrogen-bond v
 D···A distances (Ferraris & Ivaldi) are not computed. Tests:
 `python3 -m unittest tests.test_bv_check` (rutile from first principles; no corpus needed).
 
+## Publishable tables from a .cif (`pxrd tables`) — and the GUI's Tables mode
+
+```
+pxrd tables mineral.cif                 # console: the four tables as text -> review_out/mineral_tables.txt
+pxrd tables mineral.cif --word          # + review_out/mineral_tables.docx (Word tables, captions, notes)
+pxrd tables mineral.cif --params bo --ox Fe=2,Mn=3 --no-h
+```
+
+Four tables, formatted the way the mineralogy journals — and the corpus manuscripts — print them:
+
+1. **Atom coordinates and displacement parameters (Å²)** — `Atoms | s.o. | x | y | z | Ueq/Uiso |
+   U11 U22 U33 U12 U13 U23`. Site occupancy as element + subscript fraction (`Ca1.00`,
+   `F0.80O0.20` for a mixed site), fixed special coordinates as ⅓ ⅔ ½ ¼ ¾, values verbatim from the
+   `.cif` with their esds, isotropic atoms with `-` in the U columns; the U columns are dropped when the
+   `.cif` has no anisotropic loop.
+2. **Selected bond distances (Å)** — one block per cation, laid out in three label–distance column
+   pairs; symmetry-equivalent atoms carry a superscript code and a *Symmetry codes* note gives each
+   operator (`(3) −y+4/3, −x+⅔, z+⅙`); `<Ca–O/F>` mean rows (`<U–Oyl>` / `<U–Oeq>` for uranyl).
+   Distances and esds come from the `.cif`'s own `_geom_bond` loop when it has one, else they are
+   computed (no esds; the note says so). A neighbour counts as a bond when it is worth ≥ 0.025 vu —
+   Pb's long bonds stay, a 3.2 Å "P–O" does not (the same rule now applies in `pxrd bv`).
+3. **Hydrogen bonds** — `D–H⋯A | D–H | H⋯A | D⋯A | ∠DHA` from the `_geom_hbond` loop, else computed
+   from the refined H positions (H⋯A ≤ 2.6 Å, ∠DHA ≥ 110°). Code numbering is shared with table 2.
+4. **Bond-valence analysis (vu)** — anion rows × cation columns with `×3↓` / `×3→` marks,
+   `Donor | vu | H bond` columns on the rows that accept a hydrogen bond, Σan (cations + accepted
+   H bonds) and a Σcat row; the note names the parameters. Same parameters and conventions as
+   `pxrd bv` (`--params`, `--ox`, `--cutoff`, `--no-h`).
+
+**Journal styles (`--journal`)** — `ammin`, `minmag`, `cjmp` (Canadian Journal of Mineralogy and
+Petrology), `ejm`, or the default `manuscript` (the owner's Am Min-like style). Each sets the
+caption form (`Table 1.` bold + sentence-case title, or the Canadian `TABLE 1. TITLE IN CAPS`),
+header labels (`Atom`/`Site`, `x`/`x/a`, `Ueq/Uiso` vs `Ueq` with `*` for isotropic atoms), the sum
+labels (`Σcat`/`Σan` or `Sum`), the symmetry-code phrase, the notes prefix, the rules (top /
+below-header / bottom only) and the font (Arial for the Canadian journal). The registry
+(`tables.JOURNALS`) marks every rule as taken from the journal's author instructions or inferred
+from its published papers in the corpus — correct it as the journals' notes say.
+
+**Tables mode in the GUI** — the third top-bar toggle, with a journal selector. Pick any folder holding `.cif` files (the
+same folder picker; a folder with only `.cif` files is fine), choose a file, and the four tables
+render in the page with the parameter set, oxidation-state overrides and "no H" as live options;
+**Write .docx** saves `review_out/<name>_tables.docx` and **open ↗** opens it in Word. `pxrd gui` on a
+folder holding `.cif` files but neither entries nor manuscripts opens in this mode.
+
+Tests: `python3 -m unittest tests.test_tables` (rutile: cells, symmetry-operator formatting, the three
+sources, the Word writer).
+
 ## Writing the review into the .docx
 `pxrd_review/annotate_review.py` runs the same comparison and writes the findings back into
 each entry as **Word comments + yellow highlights**, so they appear

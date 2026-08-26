@@ -6,6 +6,23 @@ package version in `pyproject.toml`.
 
 ## [0.4.0] — 2026-08-25
 
+### Added — `pxrd tables` and the GUI's Tables mode: publishable tables from a .cif
+`pxrd_review/tables.py`, run as `pxrd tables mineral.cif --word`, and a third **Tables** toggle in
+the GUI. Four tables formatted after the journals and the corpus manuscripts: atom coordinates +
+displacement parameters (`s.o.` as element-subscript-occupancy, ⅓/⅔/½ for fixed coordinates, values
+and esds verbatim), selected bond distances in three column pairs with superscript symmetry codes
+and a *Symmetry codes* note (`<M–O>` means; `<U–Oyl>`/`<U–Oeq>` for uranyl; the `.cif`'s own
+`_geom_bond` loop when present, computed otherwise), hydrogen bonds (loop or computed from the H
+positions), and the bond-valence analysis in the `Σan`/`Σcat` + `Donor | vu` layout. Rich cells
+render to text, HTML (the GUI) and Word (italic *x y z U*, superscript indices/codes, subscript
+occupancies; table rules). A bond now counts only when worth ≥ 0.025 vu (also in `pxrd bv`).
+Routes `/api/tb/*` under the same gate; `tests/test_tables.py`. The table conventions were taken
+from a survey of ~220 corpus papers and the owner's manuscripts. **`--journal ammin|minmag|cjmp|ejm`**
+(and a selector in the GUI) applies a journal's conventions — caption form, header and sum labels,
+symmetry-code phrase, notes, rules, font — from a registry whose rules are tagged as documented
+(American Mineralogist checklist, Mineralogical Magazine instructions, the Canadian journal's own
+table template) or corpus-inferred (~300 papers by journal).
+
 ### Added — Manuscript mode in the review GUI
 An **Entries | Manuscript** toggle in the GUI's top bar. Manuscript mode reviews a folder of paper
 `.docx` files with `pxrd refs` inside the same shell: sidebar with per-manuscript badges, the
