@@ -1454,7 +1454,9 @@ MS = {
     'folder': None, 'out_dir': None,
     'files': {},                   # key (docx stem) -> path
     'order': [],
-    'cifs': {},                    # key (cif stem) -> path  (the tables mode, phase 2)
+    'cifs': {},                    # key (cif stem) -> path  (the tables mode)
+    'data': {},                    # file name -> path: probe / peak-list files for the EPMA and PXRD tabs
+    'tb_opts': {},                 # tables mode: per-tab options remembered in review_out/tables_opts.json
     'cache': {},                   # key -> {'fp': fingerprint, 'data': serialized analysis}
     'triage': {},                  # key -> {'findings': {fkey: {verdict, note, label}}, 'reviewed', 'companions'}
     'gen': 0, 'lock': threading.RLock(), 'initial': False, 'athread': None,
@@ -1485,6 +1487,8 @@ def _ms_remember(folder):
     except Exception:
         pass
 
+_DATA_EXT = ('.txt', '.csv', '.tsv', '.xlsx', '.xlsm', '.dat', '.prn')
+
 def ms_set_folder(folder):
     """Point the manuscript mode at a folder: every .docx that is not a tool output is a
     candidate manuscript (non-recursive — any folder is allowed here, so never walk it);
@@ -1492,7 +1496,7 @@ def ms_set_folder(folder):
     folder = os.path.abspath(folder)
     if not os.path.isdir(folder):
         return False
-    files, cifs = {}, {}
+    files, cifs, data = {}, {}, {}
     try:
         names = sorted(os.listdir(folder), key=str.lower)
     except OSError:
@@ -1505,14 +1509,17 @@ def ms_set_folder(folder):
             files[os.path.splitext(fn)[0]] = os.path.join(folder, fn)
         elif low.endswith('.cif'):
             cifs[os.path.splitext(fn)[0]] = os.path.join(folder, fn)
-    if not files and not cifs:
+        elif low.endswith(_DATA_EXT):
+            data[fn] = os.path.join(folder, fn)                 # keyed by the full name: obs.txt ≠ obs.xlsx
+    if not files and not cifs and not data:
         return False
     with MS['lock']:
         MS['folder'] = folder
         MS['out_dir'] = os.path.join(folder, 'review_out')
-        MS['files'] = files; MS['order'] = list(files); MS['cifs'] = cifs
+        MS['files'] = files; MS['order'] = list(files); MS['cifs'] = cifs; MS['data'] = data
         MS['cache'] = {}; MS['gen'] += 1
         _ms_load_triage()
+        _tb_load_opts()
     t = threading.Thread(target=_ms_analyze_all, args=(MS['gen'],), daemon=True)
     MS['athread'] = t; t.start()
     _ms_remember(folder)
@@ -1524,45 +1531,128 @@ def ms_set_folder(folder):
 # .cif files it lists — and the same rule: keys only from the page, never paths.
 from pxrd_review import tables as TB
 
-_TB_OPTS = ('params', 'ox', 'cutoff', 'noh')
+from pxrd_review import epma as EP, gd as GD, pxrd_table as PX
+
+_TB_TABS = ('coords', 'bvs', 'gd', 'epma', 'pxrd')
+
+def _tb_opts_path():
+    return os.path.join(MS['out_dir'], 'tables_opts.json')
+
+def _tb_load_opts():
+    try:
+        with open(_tb_opts_path(), encoding='utf-8') as f:
+            d = json.load(f)
+        MS['tb_opts'] = {k: v for k, v in d.items() if k in _TB_TABS and isinstance(v, dict)}
+    except Exception:
+        MS['tb_opts'] = {}
+
+def _tb_save_opts(tab, opts):
+    """Remember one tab's inputs (strings only, bounded) so tomorrow's session starts where this
+    one stopped. Values are re-validated on every use — this is convenience, not trust."""
+    clean = {str(k)[:40]: str(v)[:400] for k, v in opts.items() if isinstance(v, (str, int, float, bool))}
+    with MS['lock']:
+        MS['tb_opts'][tab] = dict(list(clean.items())[:40])
+        os.makedirs(MS['out_dir'], exist_ok=True)
+        path = _tb_opts_path(); tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(MS['tb_opts'], f, indent=1)
+        os.replace(tmp, path)
+
+def _tb_journal():
+    jk = request.args.get('journal') or TB.DEFAULT_JOURNAL
+    return jk if jk in TB.JOURNALS else TB.DEFAULT_JOURNAL
 
 def _tb_opts():
+    """The bond-valence / table options of a request, re-validated (keyword arguments of
+    tables.build / tables.run)."""
     params = request.args.get('params') or 'gh'
     if params not in ('gh', 'bo', 'ba'):
         params = 'gh'
     ox = re.sub(r'\s+', '', (request.args.get('ox') or ''))[:200]        # 'Fe = 2, mn=3' -> 'Fe=2,mn=3'
     if ox and not re.fullmatch(r'[A-Za-z]{1,2}=[+-]?\d{1,2}(,[A-Za-z]{1,2}=[+-]?\d{1,2})*', ox):
         ox = ''
+    hb = request.args.get('hb') or 'oo'
+    if hb not in ('oo', 'h', 'none'):
+        hb = 'oo'
+    lab = r'[A-Za-z][A-Za-z0-9/]{0,11}'
+    donors = re.sub(r'\s+', '', request.args.get('donors') or '')[:300]
+    if donors and not re.fullmatch(r'%s=\d(,%s=\d)*' % (lab, lab), donors):
+        donors = ''
+    pairs = re.sub(r'\s+', '', request.args.get('hbp') or '')[:300]
+    if pairs and not re.fullmatch(r'%s>%s(,%s>%s)*' % (lab, lab, lab, lab), pairs):
+        pairs = ''
+    return dict(params=params, ox=ox or None, cutoff=_qf('cutoff', 1.0, 6.0), include_h=request.args.get('noh') != '1',
+                journal_key=_tb_journal(), hbond=hb, hmax=_qf('hmax', 2.6, 4.0), donors=donors or None, hb=pairs or None,
+                u6='params' if request.args.get('u6set') == '1' else 'burns')
+
+def _q(name, default='', n=300):
+    v = request.args.get(name)
+    return (v if v is not None else default)[:n]
+
+def _qf(name, lo, hi):
+    """A float query parameter inside [lo, hi], else None."""
     try:
-        cutoff = float(request.args.get('cutoff')) if request.args.get('cutoff') else None
-        if cutoff is not None and not (1.0 <= cutoff <= 6.0):
-            cutoff = None
-    except ValueError:
-        cutoff = None
-    journal_key = request.args.get('journal') or TB.DEFAULT_JOURNAL
-    if journal_key not in TB.JOURNALS:
-        journal_key = TB.DEFAULT_JOURNAL
-    return params, ox or None, cutoff, request.args.get('noh') != '1', journal_key
+        v = float(request.args.get(name))
+    except (TypeError, ValueError):
+        return None
+    return v if lo <= v <= hi else None
+
+def _tb_data_kind(fn):
+    low = fn.lower()
+    if low.endswith(('.xlsx', '.xlsm', '.csv', '.tsv')) or re.search(r'epma|probe|wds|eds|analys|chem', low):
+        return 'probe'
+    if 'calc' in low:
+        return 'calc'
+    if re.search(r'obs|peak|jade|pxrd|xrd|list', low):
+        return 'obs'
+    return ''
+
+_TB_OUTPUT = re.compile(r'[^/\\]+_(tables|epma|gd|pxrd)\.(docx|xlsx|txt)')
+
+def _tb_output_ok(name):
+    """Only the tool's own outputs in review_out may be opened — a basename of the recognised
+    shape, existing there (never a path from the page)."""
+    if not name or not _TB_OUTPUT.fullmatch(name) or not MS['out_dir']:
+        return None
+    path = os.path.join(MS['out_dir'], name)
+    return path if os.path.isfile(path) else None
 
 @app.route('/api/tb/state')
 def api_tb_state():
-    rows = []
-    for key in sorted(MS['cifs']):
-        p = MS['cifs'][key]
-        rows.append({'key': key, 'name': os.path.basename(p),
-                     'has_word': os.path.exists(os.path.join(MS['out_dir'] or '', key + '_tables.docx'))})
-    return jsonify({'folder': MS['folder'], 'cifs': rows,
+    out = MS['out_dir'] or ''
+    cifs = [{'key': k, 'name': os.path.basename(p), 'has_word': os.path.exists(os.path.join(out, k + '_tables.docx'))}
+            for k, p in sorted(MS['cifs'].items())]
+    data = [{'key': k, 'name': k, 'kind': _tb_data_kind(k)} for k in sorted(MS['data'], key=str.lower)]
+    outputs = []
+    if out and os.path.isdir(out):
+        outputs = sorted(fn for fn in os.listdir(out) if _TB_OUTPUT.fullmatch(fn) and not fn.endswith('.txt'))
+    return jsonify({'folder': MS['folder'], 'cifs': cifs, 'data': data, 'outputs': outputs, 'opts': MS['tb_opts'],
                     'journals': [{'key': k, 'name': v['name']} for k, v in TB.JOURNALS.items()], 'default_journal': TB.DEFAULT_JOURNAL})
+
+@app.route('/api/tb/opts/<tab>', methods=['POST'])
+def api_tb_opts(tab):
+    if tab not in _TB_TABS:
+        abort(404)
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    _tb_save_opts(tab, d)
+    return jsonify({'ok': True})
+
+_TB_PARTS = {'coords': ('coords', 'bonds', 'hbonds'), 'bvs': ('bvs',)}
 
 @app.route('/api/tb/tables/<key>')
 def api_tb_tables(key):
     if key not in MS['cifs']:
         abort(404)
-    params, ox, cutoff, include_h, jk = _tb_opts()
+    opts = _tb_opts()
+    keep = _TB_PARTS.get(request.args.get('part') or '')
     try:
-        st, tabs = TB.build(MS['cifs'][key], params, ox, cutoff, include_h, jk)
+        st, tabs = TB.build(MS['cifs'][key], **opts)
     except Exception as ex:
         return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
+    if keep:
+        tabs = [(k, t) for k, t in tabs if k in keep]
     return jsonify({'ok': True, 'name': st.name, 'formula': st.formula, 'sg': st.sg,
                     'notes': st.notes, 'html': TB.render_html(tabs), 'text': TB.render_text(tabs)})
 
@@ -1570,21 +1660,145 @@ def api_tb_tables(key):
 def api_tb_word(key):
     if key not in MS['cifs']:
         abort(404)
-    params, ox, cutoff, include_h, jk = _tb_opts()
+    opts = _tb_opts()
     try:
-        st, tabs, text = TB.run(MS['cifs'][key], word=True, params=params, ox=ox, cutoff=cutoff,
-                                include_h=include_h, out_dir=MS['out_dir'], quiet=True, journal_key=jk)
+        st, tabs, text = TB.run(MS['cifs'][key], word=True, out_dir=MS['out_dir'], quiet=True, **opts)
     except Exception as ex:
         return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
-    return jsonify({'ok': True, 'path': os.path.join(MS['out_dir'], key + '_tables.docx')})
+    return jsonify({'ok': True, 'file': key + '_tables.docx', 'path': os.path.join(MS['out_dir'], key + '_tables.docx')})
 
-@app.route('/api/tb/open/<key>', methods=['POST'])
-def api_tb_open(key):
-    if key not in MS['cifs']:
+# ---- EPMA: wt% oxides from a probe file -> empirical formula + the published composition table
+def _tb_epma_args():
+    a = request.args
+    split = lambda v: [x for x in re.split(r'[;,]', v) if x.strip()]
+    return dict(basis=_q('basis', 'O=1', 60), charge=a.get('charge') if a.get('charge') in ('H2O', 'Fe') else None,
+                anions=_qf('anions', 0.1, 500), raw_anions=a.get('raw') == '1',
+                adds=split(_q('add', '', 400)), converts=split(_q('convert', '', 200)), drop=split(_q('drop', '', 200)),
+                points=_q('points', '', 60), standards=_q('standards', '', 400), ideal=_q('ideal', '', 400),
+                name=_q('name', '', 80), sheet=_q('sheet', '', 80) or None)
+
+def _tb_epma(key):
+    if key not in MS['data']:
         abort(404)
-    which = request.args.get('which') or 'word'
-    path = os.path.join(MS['out_dir'] or '', key + '_tables.docx') if which == 'word' else MS['cifs'][key]
-    if not os.path.exists(path):
+    path = MS['data'][key]
+    try:
+        return path, EP.prepare(path, **_tb_epma_args()), None
+    except ValueError as ex:
+        return path, None, (str(ex), 400)
+    except Exception as ex:
+        return path, None, (E.explain(ex, path), 500)
+
+@app.route('/api/tb/epma/<key>')
+def api_tb_epma(key):
+    path, res, err = _tb_epma(key)
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    ds, red, table, text = res
+    return jsonify({'ok': True, 'html': TB.render_html(EP.to_tabs(table, _tb_journal())), 'text': text,
+                    'formula': red.formula(), 'factor': red.factor, 'charge': red.charge, 'total': red.total,
+                    'wt': [[k, round(r.wt, 3)] for k, r in red.rows.items()],
+                    'constituents': [c.formula for c in ds.constituents], 'n_points': len(ds.points), 'source': ds.source})
+
+@app.route('/api/tb/epma/<key>/export', methods=['POST'])
+def api_tb_epma_export(key):
+    fmt = request.args.get('fmt') or 'xlsx'
+    path, res, err = _tb_epma(key)
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    ds, red, table, text = res
+    stem = os.path.splitext(key)[0]
+    try:
+        paths = EP.export(ds, red, table, text, MS['out_dir'], stem, word=fmt == 'word', xlsx=fmt == 'xlsx', journal_key=_tb_journal())
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': E.explain(ex, path)}), 500
+    return jsonify({'ok': True, 'file': os.path.basename(paths.get(fmt, paths['text']))})
+
+# ---- Gladstone–Dale: composition (formula or wt%) + n + a density (measured, or from a .cif and Z)
+def _tb_gd():
+    cif_key = request.args.get('cif') or ''
+    cif = MS['cifs'].get(cif_key) if cif_key else None
+    if cif_key and not cif:
+        abort(404)
+    try:
+        res = GD.prepare(_q('formula', '', 400), _q('wt', '', 600), _q('oxide', '', 200), _qf('n', 1.0, 4.0),
+                         _qf('density', 0.5, 25.0), cif, _qf('z', 0.5, 200), _q('k', '', 300))
+    except ValueError as ex:
+        return None, (str(ex), 400)
+    except Exception as ex:
+        return None, (E.explain(ex, cif or ''), 500)
+    return res, None
+
+@app.route('/api/tb/gd')
+def api_tb_gd():
+    res, err = _tb_gd()
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    name = _q('name', '', 80)
+    return jsonify({'ok': True, 'html': TB.render_html(GD.table(res, name, _tb_journal())), 'text': GD.report_text(res, name),
+                    'KC': res['KC'], 'summary': GD.summary(res), 'D_calc': res.get('D_calc'), 'fw': res.get('fw')})
+
+@app.route('/api/tb/gd/export', methods=['POST'])
+def api_tb_gd_export():
+    fmt = request.args.get('fmt') or 'xlsx'
+    res, err = _tb_gd()
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    name = _q('name', '', 80)
+    stem = re.sub(r'[^\w.-]+', '_', name).strip('_') or 'gd'
+    os.makedirs(MS['out_dir'], exist_ok=True)
+    try:
+        if fmt == 'word':
+            path = os.path.join(MS['out_dir'], stem + '_gd.docx'); TB.write_word(None, GD.table(res, name, _tb_journal()), path)
+        else:
+            path = GD.write_xlsx(res, os.path.join(MS['out_dir'], stem + '_gd.xlsx'), name)
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 500
+    return jsonify({'ok': True, 'file': os.path.basename(path)})
+
+# ---- PXRD: observed peak list + calculated pattern -> the combined table, eight strongest in bold
+def _tb_pxrd():
+    obs, calc = request.args.get('obs') or '', request.args.get('calc') or ''
+    if obs not in MS['data'] or calc not in MS['data']:
+        abort(404)
+    try:
+        r = PX.prepare(MS['data'][obs], MS['data'][calc], _qf('tol', 0.01, 10.0) or 1.2, _qf('min_i', 0.0, 100.0) if request.args.get('min_i') else 3.5,
+                       _qf('dmin', 0.3, 50.0), _qf('wavelength', 0.1, 5.0), _q('name', '', 80), _tb_journal(), int(_qf('blocks', 1, 4) or 2))
+    except ValueError as ex:
+        return None, (str(ex), 400)
+    except Exception as ex:
+        return None, (E.explain(ex, MS['data'][obs]), 500)
+    return r, None
+
+@app.route('/api/tb/pxrd')
+def api_tb_pxrd():
+    r, err = _tb_pxrd()
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    obs, calc, rows, t = r
+    return jsonify({'ok': True, 'html': TB.render_html([('pxrd', t)]), 'text': TB.render_text([('pxrd', t)]),
+                    'n_obs': len(obs), 'n_calc': len(calc), 'n_rows': len(rows), 'n_calc_only': sum(1 for x in rows if x.Iobs is None),
+                    'bold': [[x.Iobs, x.dobs] for x in rows if x.obs_id in PX.strongest(rows)]})
+
+@app.route('/api/tb/pxrd/export', methods=['POST'])
+def api_tb_pxrd_export():
+    fmt = request.args.get('fmt') or 'word'
+    r, err = _tb_pxrd()
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    obs, calc, rows, t = r
+    stem = (re.sub(r'[^\w.-]+', '_', _q('name', '', 80)).strip('_') or os.path.splitext(request.args.get('obs'))[0])
+    try:
+        paths = PX.export(obs, calc, rows, t, MS['out_dir'], stem, word=fmt == 'word', xlsx=fmt == 'xlsx')
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 500
+    return jsonify({'ok': True, 'file': os.path.basename(paths.get(fmt, paths['text']))})
+
+@app.route('/api/tb/open', methods=['POST'])
+def api_tb_open():
+    """Open one of the tool's outputs (review_out/<x>_tables|epma|gd|pxrd.docx|xlsx) or a listed .cif."""
+    key = request.args.get('cif')
+    path = MS['cifs'].get(key) if key else _tb_output_ok(request.args.get('file') or '')
+    if not path:
         abort(404)
     try:
         if sys.platform == 'darwin':

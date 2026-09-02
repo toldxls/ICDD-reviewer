@@ -4,7 +4,7 @@
 
 Rutile (TiO2, P42/mnm) is the reference structure: Ti–O 1.949 ×4 and 1.980 ×2, and the Ti sum is
 known (≈ 4.0 vu with Brese & O'Keeffe 1991). A synthetic manuscript table exercises the checker."""
-import os, shutil, tempfile, unittest
+import os, math, shutil, tempfile, unittest
 
 from pxrd_review import bv_check as B
 
@@ -52,6 +52,34 @@ _geom_bond_site_symmetry_2
 Ti1 O1 1.9485(5) .
 Ti1 O1 1.9800(5) 3_555
 """
+
+
+# A synthetic P1 hydrate (8 Å cube): Ca at the origin with a sulfate-like O1 (2.42 Å) and a water
+# OW1 (2.40 Å); O2 and O3 sit 2.80 Å from OW1 at 120° to the Ca–OW1 bond, 120° apart — the two
+# acceptors a water molecule wants; O1 is 2.61 Å from OW1 but on the Ca polyhedron (an edge, not
+# a hydrogen bond). H1 (0.96 Å from OW1 towards O2) is appended for the H-located tests.
+HYDRATE = """data_hydrate
+_chemical_name_mineral testhydrate
+_cell_length_a 8
+_cell_length_b 8
+_cell_length_c 8
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_name_H-M_alt 'P 1'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+Ca1 Ca 0 0 0
+O1 O 0.275 0.125 0
+OW1 O 0 0.3 0
+O2 O 0.30311 0.475 0
+O3 O 0.69689 0.475 0
+"""
+HYDRATE_H = HYDRATE + "H1 H 0.10392 0.36 0\n"
 
 
 def _write(tmp, name, text):
@@ -108,10 +136,16 @@ class Rutile(unittest.TestCase):
 
     def test_bvs_and_selfcheck(self):
         P = B.Params(prefer='bo')
-        result, anion_sum, cells = B.compute(self.st, P)
+        result, anion_sum, cells, hbonds = B.compute(self.st, P)
+        self.assertEqual(hbonds, [])                         # no hydrogen anywhere
         site, bonds, bvs, expected, mean_d = result[0]
         self.assertAlmostEqual(bvs, 4.07, places=2)          # Ti4+–O R0 1.815, b 0.37
         self.assertAlmostEqual(anion_sum['O1'], bvs / 2, places=6)  # 2 Ti per 4 O: each O gets half a Ti's sum
+        # a half-occupied O: the Ti column sees it half the time, its own row still gets the whole bond
+        half = _write(self.tmp, 'half.cif', RUTILE.replace('O1 O2- 0.30479 0.30479 0 1', 'O1 O2- 0.30479 0.30479 0 0.5'))
+        r2, a2, c2, _ = B.compute(B.Structure(half), P)
+        self.assertAlmostEqual(r2[0][2], bvs / 2, places=6)
+        self.assertAlmostEqual(a2['O1'], anion_sum['O1'], places=6)
         self.assertEqual(cells[('O1', 'Ti1')][0][1:], (4, 2))  # 1.9485 ×4 into Ti, ×2 into O
         self.assertIn('consistent', B.geom_self_check(self.st, result))
         text = B.report_text(self.st, P, result, anion_sum, cells)
@@ -138,6 +172,77 @@ class Rutile(unittest.TestCase):
         self.assertEqual(d.tables[1].rows[1].cells[0].text, 'O1')
 
 
+class HydrogenBonds(unittest.TestCase):
+    def test_ferraris_ivaldi_and_labels(self):
+        self.assertAlmostEqual(B.fi_valence(2.55), 0.33, places=2)      # the paper's own anchor
+        self.assertAlmostEqual(B.fi_valence(2.926), 0.146, places=3)    # szilagyiite O1 ← OW1: 0.15 in the owner's table
+        self.assertAlmostEqual(B.fi_valence(2.657), 0.250, places=3)    # O6 ← OW1: 0.25
+        for lab, n in (('OH1', 1), ('Oh2', 1), ('OW1', 2), ('Ow3', 2), ('W4', 2), ('Wat1', 2), ('O6H', 1), ('O7W', 2), ('F1/OH1', 1), ('O5', 0), ('OH', 1)):
+            self.assertEqual(B.label_h(lab), n, lab)
+
+    def test_reference_names_and_note(self):
+        P = B.Params(prefer='bo')
+        self.assertEqual(P.short_ref('a'), "Brese and O'Keeffe (1991)")   # BO91 reprints every BA85 value
+        self.assertEqual(B.Params(prefer='ba').short_ref('a'), 'Brown and Altermatt (1985)')
+        self.assertEqual(P.short_ref('s'), 'García-Rodríguez et al. (2000)')
+        self.assertEqual(P.short_ref('bo'), 'Nyman et al. (2010)')       # derived from the file's citation
+        P = B.Params()
+        P.get('Ti', 4, 'O', -2); P.get('U', 6, 'O', -2); P.get('NH', 1, 'O', -2)
+        self.assertEqual(P.note(), 'Bond-valence parameters from Gagné and Hawthorne (2015); U6+–O from Burns et al. (1997); '
+                                   'NH4+–O from García-Rodríguez et al. (2000)')
+        self.assertEqual(B.Params(u6='params').get('U', 6, 'O', -2)[2], 'bs')
+
+    def test_blind_proposal_from_oo_geometry(self):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        try:
+            cif = _write(tmp, 'h.cif', HYDRATE)
+            st = B.Structure(cif); P = B.Params()
+            result, anion_sum, cells, hb = B.compute(st, P)
+            pairs = sorted((x.donor.label, x.acceptor.label, round(x.d, 2), round(x.s, 3), x.via) for x in hb)
+            s = round(B.fi_valence(2.8), 3)
+            self.assertEqual(pairs, [('OW1', 'O2', 2.8, s, 'OO'), ('OW1', 'O3', 2.8, s, 'OO')])   # not O1: a Ca polyhedron edge
+            self.assertAlmostEqual(anion_sum['O2'], s, places=3)                 # Σan = cations + accepted
+            self.assertAlmostEqual(B.donated(hb)['OW1'], 2 * (1 - B.fi_valence(2.8)), places=3)   # the O–H part, reported apart
+            self.assertFalse([n for n in st.notes if 'deficit' in n])            # donors came from the label
+            # overrides: one H only; a pair forced across the polyhedron edge
+            st = B.Structure(cif)
+            _, _, _, hb1 = B.compute(st, P, donors={'OW1': 1})
+            self.assertEqual(len(hb1), 1)
+            st = B.Structure(cif)
+            _, _, _, hb2 = B.compute(st, P, force=[('OW1', 'O1')])
+            self.assertIn(('OW1', 'O1'), [(x.donor.label, x.acceptor.label) for x in hb2])
+            # no labels: the valence deficit decides, and says so
+            cif2 = _write(tmp, 'h2.cif', HYDRATE.replace('OW1 O', 'O4 O'))
+            st = B.Structure(cif2)
+            _, _, _, hb3 = B.compute(st, P)
+            self.assertIn('O4', {x.donor.label for x in hb3})               # (O2/O3 have no cation at all: 'water' too)
+            self.assertTrue(any('deficit' in n and 'O4' in n for n in st.notes))
+            self.assertEqual(B.compute(B.Structure(cif), P, hbond='none')[3], [])
+            text = B.report_text(st, P, *B.compute(st, P)[:3], hbonds=hb3)
+            self.assertIn('HYDROGEN BONDS', text); self.assertIn('Ferraris', text); self.assertIn('table note:', text)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_with_located_h(self):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        try:
+            cif = _write(tmp, 'hh.cif', HYDRATE_H)
+            st = B.Structure(cif); P = B.Params()
+            geo = B.hbond_geometry(st)                       # computed: OW1–H1⋯O2, 180°
+            self.assertEqual([(g['labels'], g['ang']) for g in geo], [(('OW1', 'H1', 'O2'), '180')])
+            result, anion_sum, cells, hb = B.compute(st, P)  # 'oo': strengths from D⋯A, H not a column
+            self.assertEqual([(x.donor.label, x.acceptor.label, x.via) for x in hb], [('OW1', 'O2', 'H')])
+            self.assertAlmostEqual(hb[0].s, B.fi_valence(2.8), places=3)
+            self.assertNotIn('H1', [r[0].label for r in result])
+            result, anion_sum, cells, hb = B.compute(st, P, hbond='h')   # the older convention: H as a cation
+            self.assertIn('H1', [r[0].label for r in result])
+            got = {(x.donor.label, x.acceptor.label, x.via): x.s for x in hb}
+            self.assertIn(('OW1', 'O2', 'H···A'), got)     # (the older mode takes every O within 2.4 Å of the H, O1 included)
+            self.assertAlmostEqual(got[('OW1', 'O2', 'H···A')], math.exp((0.990 - 1.84) / 0.59), places=2)   # Brown 2002, H⋯O 1.84 Å
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class ManuscriptTable(unittest.TestCase):
     def test_bond_and_bvs_tables(self):
         from docx import Document
@@ -155,7 +260,7 @@ class ManuscriptTable(unittest.TestCase):
                     r[i].text = x
             path = os.path.join(tmp, 'ms.docx'); doc.save(path)
             st = B.Structure(cif); P = B.Params(prefer='bo')
-            result, anion_sum, cells = B.compute(st, P)
+            result, anion_sum, cells, _ = B.compute(st, P)
             tables = B.read_tables(path)
             bonds = B.check_bond_table(st, result, tables)
             self.assertIn('1 bond distances agree with the .cif, 1 do not', bonds[0])

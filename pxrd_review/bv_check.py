@@ -14,8 +14,10 @@ What it does
      --ox overrides, or a table of the usual mineral valences (stated in the report as assumed).
   3. Bond valences s = exp((R0 − R)/b) with parameters from I.D. Brown's accumulated table
      (bvparm2020.cif, bundled): Gagné & Hawthorne (2015) for cation–O by default (--params gh),
-     or Brese & O'Keeffe (1991) (--params bo) / Brown & Altermatt (1985) (--params ba); H uses the
-     three-range O–H parameters (Brown 2002). The report names every parameter it used.
+     or Brese & O'Keeffe (1991) (--params bo) / Brown & Altermatt (1985) (--params ba); U6+–O from
+     Burns et al. (1997) unless --u6 params. The report names every parameter it used, and the
+     table note cites them the way the journals want ("… from Gagné and Hawthorne (2015); U6+–O
+     from Burns et al. (1997)").
   4. Prints (and writes to review_out/<name>_bv.txt):
        • per cation site: each bond with its distance, multiplicity and valence, the mean bond
          length, the bond-valence sum and its deviation from the expected valence;
@@ -34,9 +36,16 @@ the anion's occupancy (a half-occupied O counts half); anion sums weight each co
 cation site's occupancy. Mixed sites count each species by its fraction. Without oxygen in the
 structure (sulfides, sulfosalts) the default valences switch to the sulfide ones (As3+, Cu+, Fe2+).
 An N with no O within 1.5 Å is ammonium (NH4+) whether or not its H atoms were refined.
-Hydrogen: X-ray O–H distances are too short to trust, so each H takes its acceptor valence(s)
-from the H···O distance(s) (Brown 2002 parameters, acceptors within 2.4 Å) and the donor gets
-1 − Σ(acceptors) — every H sums to exactly 1 vu, as in most mineral descriptions.
+Hydrogen bonds (--hbonds oo, the default): their strengths come from the donor–acceptor O···O
+distance, s = (d/2.17)^−8.2 + 0.06 (Ferraris & Ivaldi 1988), as mineral descriptions print them.
+With H atoms in the .cif the D–H···A pairs are the _geom_hbond loop's (else found from the H
+positions); without H the donors are the OH / OW / W sites (or, when nothing is labelled, the O
+sites short of bond valence) and the acceptors are chosen from the O···O geometry — each contact
+once, no polyhedral edges, H–O–H angles respected, the O with the larger valence deficit
+accepting — and the proposal is stated in the report (--donors OW1=2 and --hb OW1>O2 override
+it). --hbonds h keeps the older convention: acceptor valences from the H···O distances (Brown
+2002) with the donor getting 1 − Σ. Donated valences are listed but not deducted from the
+donor's sum, as in the owner's tables.
 """
 import os, re, sys, math, argparse
 from collections import namedtuple, OrderedDict
@@ -173,6 +182,26 @@ def _apply(op, p):
     rot, tr = op
     return [sum(rot[i][j] * p[j] for j in range(3)) + tr[i] for i in range(3)]
 
+def cart_matrix(st):
+    """Fractional -> Cartesian (Å) matrix of the cell (a along x, b in the xy plane)."""
+    a, b, c, al, be, ga = st.cell
+    ca, cb, cg = (math.cos(math.radians(x)) for x in (al, be, ga)); sg = math.sin(math.radians(ga))
+    v = st.volume / (a * b * c)
+    return [[a, b * cg, c * cb], [0, b * sg, c * (ca - cb * cg) / sg], [0, 0, c * v / sg]]
+
+def cart(st, p):
+    M = cart_matrix(st)
+    return [sum(M[i][j] * p[j] for j in range(3)) for i in range(3)]
+
+def angle(st, p1, p0, p2):
+    """The angle p1–p0–p2 (degrees) between three fractional positions."""
+    a, o, b = cart(st, p1), cart(st, p0), cart(st, p2)
+    v1 = [a[i] - o[i] for i in range(3)]; v2 = [b[i] - o[i] for i in range(3)]
+    n1 = math.sqrt(sum(x * x for x in v1)); n2 = math.sqrt(sum(x * x for x in v2))
+    if not n1 or not n2:
+        return 0.0
+    return math.degrees(math.acos(max(-1.0, min(1.0, sum(v1[i] * v2[i] for i in range(3)) / (n1 * n2)))))
+
 # ----------------------------------------------------------------------------- structure
 
 Species = namedtuple('Species', 'element ox occ')
@@ -203,8 +232,10 @@ CUTOFF = {'K': 3.6, 'Rb': 3.7, 'Cs': 3.9, 'Ba': 3.6, 'Sr': 3.4, 'Pb': 3.6, 'Tl':
           'Gd': 3.3, 'Tb': 3.3, 'Dy': 3.3, 'Ho': 3.3, 'Er': 3.3, 'Tm': 3.3, 'Yb': 3.3, 'Lu': 3.3, 'Y': 3.3,
           'Hg': 3.4, 'Cd': 3.3, 'Th': 3.3, 'U': 3.3, 'H': 2.4}
 
-def _element_of(label, type_symbol):
-    """('Fe', 3) from 'Fe3+'; ('O', None) from 'OH1'/'OW2'/'Ow'; ('Li', None) from 'LiY'."""
+def _element_of(label, type_symbol, known=None):
+    """('Fe', 3) from 'Fe3+'; ('O', None) from 'OH1'/'OW2'/'Ow'; ('Li', None) from 'LiY'.
+    `known` (the elements of _chemical_formula_sum) decides a bare 'W1': water unless the
+    structure contains tungsten."""
     ox = None
     src = (type_symbol or '').strip()
     # 'Fe3+' (SHELXL), 'Bi+3' / 'S-2' (JANA), 'Fe+' / 'Cl-'
@@ -220,7 +251,8 @@ def _element_of(label, type_symbol):
             ox = 1 if m.group(6) == '+' else -1
     if el is None:
         lab = label.strip()
-        if re.match(r'^(OH|OW|Ow|OA|Wat|W\d|Ow)', lab) or lab.upper().startswith('OH') or lab.upper().startswith('OW'):
+        if re.match(r'^(OH|OW|Ow|OA|Wat|Ow)', lab) or lab.upper().startswith('OH') or lab.upper().startswith('OW') \
+                or (re.match(r'^W\d', lab) and 'W' not in (known or ())):
             el = 'O'
         else:
             m = re.match(r'^([A-Z][a-z]?)', lab)
@@ -310,12 +342,13 @@ class Structure:
                 el, _ = _element_of(sym, sym)
                 if el and _num(on) is not None:
                     type_ox[el] = int(round(_num(on)))
-        has_o = any(_element_of(l, t)[0] == 'O' for l, t in zip(labels, types))
+        known = set(re.findall(r'[A-Z][a-z]?', b['items'].get('_chemical_formula_sum', ''))) & ELEMENTS
+        has_o = any(_element_of(l, t, known)[0] == 'O' for l, t in zip(labels, types))
         raw = []
         for i, lab in enumerate(labels):
             if None in (xs[i], ys[i], zs[i]):
                 continue
-            el, ox = _element_of(lab, types[i])
+            el, ox = _element_of(lab, types[i], known)
             if el is None:
                 self.notes.append('site %s: element not recognised — skipped' % lab); continue
             if el == 'H' and not self.include_h:
@@ -411,8 +444,6 @@ class Structure:
         rng = [int(math.ceil(cutoff / w)) + 1 for w in self.widths]
         found = []
         for other in self.sites:
-            if other is site and site.mult == 1 and len(site.positions) == 1:
-                pass
             for q in other.positions:
                 for i in range(-rng[0], rng[0] + 1):
                     for j in range(-rng[1], rng[1] + 1):
@@ -429,6 +460,30 @@ class Structure:
                 merged.append([other, d, 1])
         return [(o, d, n) for o, d, n in merged]
 
+    def images(self, p0, cutoff, sites=None):
+        """Every atom image within cutoff of the fractional position p0: [(site, distance,
+        position)] by distance — the positions the hydrogen-bond geometry needs."""
+        rng = [int(math.ceil(cutoff / w)) + 1 for w in self.widths]
+        out = []
+        for other in (sites if sites is not None else self.sites):
+            for q in other.positions:
+                for i in range(-rng[0], rng[0] + 1):
+                    for j in range(-rng[1], rng[1] + 1):
+                        for k in range(-rng[2], rng[2] + 1):
+                            qq = [q[0] + i, q[1] + j, q[2] + k]
+                            d = self.dist(p0, qq)
+                            if 0.3 < d <= cutoff:
+                                out.append((other, d, qq))
+        out.sort(key=lambda x: (x[1], x[0].label))
+        return out
+
+    def site(self, label):
+        """The site holding an atom label ('OH1' finds the merged site 'F1/OH1'); None if absent."""
+        for s in self.sites:
+            if label == s.label or label in s.label.split('/'):
+                return s
+        return None
+
 # ----------------------------------------------------------------------------- parameters
 
 PARAM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'bvparm2020.cif')
@@ -439,10 +494,17 @@ PREFER = {'gh': ['bs', 'a', 'b'], 'bo': ['b', 'a', 'bs'], 'ba': ['a', 'b', 'bs']
 # per-cation preferences that override the set: U6+–O from Burns, Ewing & Hawthorne (1997) — the
 # parameters every uranyl-mineral description uses (--params still applies to everything else)
 PREFER_CATION = {('U', 6): ['r']}
+# how the table note cites a reference id (the file's strings carry the journal and page numbers)
+SHORT_REF = {'a': 'Brown and Altermatt (1985)', 'b': "Brese and O'Keeffe (1991)", 'bs': 'Gagné and Hawthorne (2015)',
+             'r': 'Burns et al. (1997)', 's': 'García-Rodríguez et al. (2000)', 'bc': 'Brown (2002)', 'o': 'Allmann (1975)',
+             'p': 'Zachariasen (1978)', 'e': 'Brown (unpublished)', 'q': 'Krivovichev and Brown (2001)',
+             'af': 'Locock and Burns (2004)', 'bh': 'Brown (2009)', 'bj': 'Krivovichev (2012)', 'bk': 'Mills and Christy (2013)'}
 H_RANGES = [(1.05, 0.907, 0.28), (1.70, 0.569, 0.94), (99.0, 0.990, 0.59)]   # Brown (2002) O–H by distance
 
 class Params:
-    def __init__(self, path=PARAM_FILE, prefer='gh'):
+    def __init__(self, path=PARAM_FILE, prefer='gh', u6='burns'):
+        """prefer: 'gh' | 'bo' | 'ba'; u6: 'burns' (U6+–O from Burns et al. 1997, the uranyl
+        convention) or 'params' (U6+ from the chosen set like every other cation)."""
         self.table = {}; self.refs = {}
         blocks = read_cif(path)
         for b in blocks:
@@ -459,7 +521,46 @@ class Params:
                     self.table.setdefault(key, []).append((float(d['_valence_param_ro']), float(d['_valence_param_b']),
                                                            d['_valence_param_ref_id'], d.get('_valence_param_details', '')))
         self.prefer = PREFER.get(prefer, PREFER['gh'])
+        self.prefer_key = prefer if prefer in PREFER else 'gh'
+        self.u6 = u6
         self.used = OrderedDict()
+
+    def short_ref(self, rid):
+        """'Gagné and Hawthorne (2015)' for a reference id — the set's own name for a value the
+        chosen set reprints (Brese & O'Keeffe 1991 carries every Brown & Altermatt 1985 value)."""
+        if rid == 'a' and self.prefer_key == 'bo':
+            rid = 'b'
+        if rid in SHORT_REF:
+            return SHORT_REF[rid]
+        txt = self.refs.get(rid, rid)
+        m = re.match(r'^\s*(.+?)[,.]?\s*\(?(\d{4})\)?', txt)
+        if not m:
+            return txt
+        authors = [a.strip(' .') for a in re.split(r',| and |&', m.group(1)) if a.strip(' .') and 'et al' not in a]
+        if 'et al' in m.group(1) or len(authors) > 2:
+            who = authors[0] + ' et al.'
+        else:
+            who = ' and '.join(authors)
+        return '%s (%s)' % (who, m.group(2))
+
+    def note(self):
+        """The journal-style attribution of every parameter used: 'Bond-valence parameters from
+        Gagné and Hawthorne (2015); U6+–O from Burns et al. (1997); NH4+–O from García-Rodríguez
+        et al. (2000)' (hydrogen is cited with the hydrogen bonds)."""
+        by_ref = OrderedDict()
+        for (cat, cox, an), (r0, b, rid) in self.used.items():
+            if cat == 'H':
+                continue
+            ion = 'NH4+' if cat == 'NH' else cat + ('' if cox == 9 else ('%d+' % cox if cox > 1 else '+'))
+            by_ref.setdefault(self.short_ref(rid), []).append('%s–%s' % (ion, an))
+        if not by_ref:
+            return ''
+        main = max(by_ref, key=lambda k: len(by_ref[k]))
+        parts = ['Bond-valence parameters from %s' % main]
+        for ref, pairs in by_ref.items():
+            if ref != main:
+                parts.append('%s from %s' % (_join(pairs), ref))
+        return '; '.join(parts)
 
     def get(self, cat, cox, an, aox):
         """(R0, b, ref_id) or None. The preferred reference first; then any; then the
@@ -468,7 +569,7 @@ class Params:
             rows = self.table.get(key)
             if not rows:
                 continue
-            for ref in PREFER_CATION.get((cat, cox), []) + self.prefer:
+            for ref in (PREFER_CATION.get((cat, cox), []) if self.u6 == 'burns' else []) + self.prefer:
                 for r0, b, rid, det in rows:
                     if rid == ref and 'unchecked' not in det:
                         self.used[(cat, cox, an)] = (r0, b, rid); return r0, b, rid
@@ -491,15 +592,30 @@ class Params:
             return None
         return math.exp((p[0] - R) / p[1])
 
+def _join(items):
+    items = list(items)
+    return items[0] if len(items) == 1 else ', '.join(items[:-1]) + ' and ' + items[-1]
+
 # ----------------------------------------------------------------------------- the calculation
 
 def _species_ox(site):
     return sorted({sp.ox for sp in site.species if sp.ox is not None})
 
-def compute(st, params, cutoff=None):
-    """[(cation site, [Bond], bvs, expected, mean_d)] and the anion sums."""
+def compute(st, params, cutoff=None, hbond='oo', hmax=None, donors=None, force=None):
+    """[(cation site, [Bond], bvs, expected, mean_d)], the anion sums, the table cells and the
+    hydrogen bonds ([HBond], notes in st.notes).
+    hbond: 'oo' — strengths from the donor–acceptor O···O distances (Ferraris & Ivaldi 1988); H
+           sites are not cation columns;
+           'h'  — H as a cation: acceptor valences from the H···O distances (Brown 2002), the
+           donor gets 1 − Σ (the older convention; every H sums to 1 vu);
+           'none'.
+    Anion sums are cations + accepted hydrogen bonds (the donated O–H valence is reported with
+    the hydrogen bonds, neither deducted nor added, as the owner's tables do); in 'h' mode the H
+    columns carry it as any cation."""
     result = []
     for c in st.cations:
+        if c.element == 'H' and hbond != 'h':
+            continue
         cut = cutoff or max(CUTOFF.get(sp.element, 3.2) for sp in c.species)
         if c.element == 'H':
             cut = cutoff or CUTOFF['H']
@@ -549,13 +665,339 @@ def compute(st, params, cutoff=None):
     for c, bonds, bvs, expected, mean_d in result:
         tot_occ = sum(sp.occ for sp in c.species if sp.ox and sp.ox > 0) or 1.0
         for b in bonds:
-            s_site = min(b.anion.occ_total, 1.0) * sum((sp.occ / tot_occ) * (s or 0.0) for sp, s in b.vals)
+            # the anion's own row: the bond as the anion receives it when present (species-weighted
+            # over a mixed cation, NOT scaled by the anion's own occupancy — that scaling belongs to
+            # the cation's sum, where a half-occupied O is there half the time)
+            s_site = sum((sp.occ / tot_occ) * (s or 0.0) for sp, s in b.vals)
             n_across = b.count * c.mult / b.anion.mult
             n_across_r = int(round(n_across)) if abs(n_across - round(n_across)) < 0.02 else n_across
             occ_weight = min(tot_occ, 1.0)
             anion_sum[b.anion.label] += s_site * n_across * occ_weight
             cells.setdefault((b.anion.label, c.label), []).append((s_site, b.count, n_across_r))
-    return result, anion_sum, cells
+    hbonds = estimate_hbonds(st, result, dict(anion_sum), params, hbond, hmax, donors, force)
+    if hbond != 'h':
+        for hb in hbonds:
+            anion_sum[hb.acceptor.label] += hb.s * hb.n_across
+    return result, anion_sum, cells, hbonds
+
+# ----------------------------------------------------------------------------- hydrogen bonds
+
+# Ferraris & Ivaldi (1988), Acta Cryst. B44, 341–344: the H···O valence of an O–H···O bond from
+# the O···O distance, s = (d/2.17)^−8.2 + 0.06 — the relation mineral descriptions cite
+# ("hydrogen-bond strengths based on O–O bond lengths"); reproduces the owner's tables to 0.01 vu.
+FI_R0, FI_N, FI_K = 2.17, 8.2, 0.06
+HB_MAX = 3.2            # longest O···O counted as a hydrogen bond (the usual limit in the tables)
+HB_MIN = 2.45           # shorter than any O–H···O
+HB_ANGLE = (70.0, 150.0)   # A···O···A for the two H of a water molecule (H–O–H ≈ 105°)
+
+HBond = namedtuple('HBond', 'donor acceptor d s n_donor n_across via h')
+#   donor/acceptor: Site;  d: D···A (Å; H···A in 'h' mode);  s: valence (vu) the acceptor receives;
+#   n_donor: bonds per donor atom;  n_across: bonds per acceptor atom;  via: 'loop' | 'H' | 'OO' |
+#   'H···A';  h: the H label ('' without one)
+
+def fi_valence(d):
+    """Ferraris & Ivaldi (1988): s(H···O) from the O···O distance."""
+    return (d / FI_R0) ** -FI_N + FI_K
+
+def label_h(lab):
+    """1 for a hydroxyl label, 2 for a water label, 0 otherwise: OH1, Oh2, OW1, Ow3, W4, Wat1,
+    O6H, O7W, H2O1 (a merged 'F1/OH1' counts by its OH part)."""
+    for part in lab.split('/'):
+        if re.match(r'^(OH|Oh)\d*[a-zA-Z]?$', part) or re.match(r'^O\d+[Hh]$', part):
+            return 1
+        if re.match(r'^(OW|Ow|Wat|W\d|H2O|Hw|OH2)', part) or re.match(r'^O\d+[Ww]$', part):
+            return 2
+    return 0
+
+def _ratio(a, b):
+    r = a / b if b else 1.0
+    return int(round(r)) if abs(r - round(r)) < 0.02 else round(r, 2)
+
+def hbond_geometry(st, include_long=True):
+    """The D–H⋯A geometry: from the _geom_hbond loop when the .cif has one, else computed from
+    the H positions (H⋯A ≤ 2.6 Å, ∠DHA ≥ 110°). [{'D','H','A': Site, 'dh','ha','da','ang': text,
+    'da_val','dh_val': float, 'code': str, 'from_loop': bool}] — used by the hydrogen-bond table
+    and by the hydrogen-bond valences."""
+    out = []
+    tags, rows = _loop(st.block, '_geom_hbond_distance_ha')
+    if rows:
+        g = lambda t, d='': _col(tags, rows, t, d)
+        for D, H, A, dh, ha, da, ang, sy in zip(g('_geom_hbond_atom_site_label_d'), g('_geom_hbond_atom_site_label_h'),
+                                              g('_geom_hbond_atom_site_label_a'), g('_geom_hbond_distance_dh'),
+                                              g('_geom_hbond_distance_ha'), g('_geom_hbond_distance_da'),
+                                              g('_geom_hbond_angle_dha'), g('_geom_hbond_site_symmetry_a', '.')):
+            sD, sH, sA = st.site(D), st.site(H), st.site(A)
+            if sD is None or sA is None:
+                continue
+            out.append({'D': sD, 'H': sH, 'A': sA, 'dh': dh.strip(), 'ha': ha.strip(), 'da': da.strip(),
+                        'ang': re.sub(r'\.000\(0\)$|\.0\(0\)$', '', ang.strip()), 'da_val': _num(da), 'dh_val': _num(dh),
+                        'code': sy.strip(), 'from_loop': True, 'labels': (D, H, A)})
+        return out
+    for h in [x for x in st.sites if x.element == 'H']:
+        p_h = h.positions[0]
+        near = [(o, d, q) for o, d, q in st.images(p_h, 2.6, [x for x in st.sites if x.element in ('O', 'F', 'N', 'Cl')])]
+        if not near or near[0][1] > 1.25:
+            continue
+        D, d_dh, p_d = near[0]
+        for A, d_ha, p_a in near[1:]:
+            ang = angle(st, p_d, p_h, p_a)
+            if ang < 110:
+                continue
+            d_da = st.dist(p_d, p_a)
+            out.append({'D': D, 'H': h, 'A': A, 'dh': '%.2f' % d_dh, 'ha': '%.2f' % d_ha, 'da': '%.3f' % d_da, 'ang': '%.0f' % ang,
+                        'da_val': d_da, 'dh_val': d_dh, 'code': _code_of(st, A, p_a), 'from_loop': False, 'labels': (D.label, h.label, A.label)})
+    return out
+
+def _code_of(st, site, pos):
+    """The symmetry code 'n_klm' that carries `site`'s listed coordinates to `pos`."""
+    for n, op in enumerate(st.ops):
+        q = _apply(op, site.frac)
+        t = [pos[i] - q[i] for i in range(3)]
+        if all(abs(v - round(v)) < 1e-3 for v in t):
+            t = [int(round(v)) for v in t]
+            return '.' if n == 0 and t == [0, 0, 0] else '%d_%d%d%d' % (n + 1, 5 + t[0], 5 + t[1], 5 + t[2])
+    return '.'
+
+def hbond_donors(st, sums, override=None):
+    """{anion label: number of H} and how each was decided. Labels first (OH*, OW*, W*, O6H …);
+    when nothing is labelled, the O sites short of bond valence (Σcat < 0.75 → water, < 1.5 →
+    hydroxyl). `override` ({label: n}) wins."""
+    out = OrderedDict(); how = {}
+    for a in st.anions:
+        if a.element != 'O':
+            continue
+        if override and a.label in override:
+            if override[a.label]:
+                out[a.label] = override[a.label]; how[a.label] = 'given'
+            continue
+        for lab in a.label.split('/'):
+            if override and lab in override:
+                if override[lab]:
+                    out[a.label] = override[lab]; how[a.label] = 'given'
+                break
+        else:
+            n = label_h(a.label)
+            if n:
+                out[a.label] = n; how[a.label] = 'label'
+    if not out:                                     # nothing labelled or given: the valence deficit decides
+        for a in st.anions:
+            if a.element != 'O' or a.label in out or (override and a.label in override):
+                continue
+            s = sums.get(a.label, 0.0)
+            if s < 0.75:
+                out[a.label] = 2; how[a.label] = 'Σcat %.2f' % s
+            elif s < 1.5:
+                out[a.label] = 1; how[a.label] = 'Σcat %.2f' % s
+    return out, how
+
+def estimate_hbonds(st, result, sums, params, mode='oo', hmax=None, donors=None, force=None):
+    """[HBond] for the structure. 'oo': from the D–H⋯A geometry when the .cif has H atoms (the
+    loop, else the H positions), otherwise proposed from the O···O geometry; strengths from the
+    O···O distance (Ferraris & Ivaldi 1988). 'h': the H-as-cation bonds already in `result`.
+    Notes go to st.notes."""
+    hmax = hmax or HB_MAX
+    if mode == 'none':
+        return []
+    if mode == 'h':
+        out = []
+        for h, bonds, *_ in result:
+            if h.element != 'H' or not bonds:
+                continue
+            donor = min(bonds, key=lambda b: b.dist)
+            for b in bonds:
+                if b is donor:
+                    continue
+                s = (b.vals[0][1] or 0.0) * min(h.occ_total, 1.0)
+                out.append(HBond(donor.anion, b.anion, b.dist, s, _ratio(b.count * h.mult, donor.anion.mult),
+                                 _ratio(b.count * h.mult, b.anion.mult), 'H···A', h.label))
+        return out
+    hs = [x for x in st.sites if x.element == 'H']
+    out = []
+    if hs and not force:
+        seen_long = []
+        for g in hbond_geometry(st):
+            if g['da_val'] is None:
+                continue
+            if g['da_val'] > hmax:
+                seen_long.append('%s–%s⋯%s %.2f Å' % (g['labels'][0], g['labels'][1], g['labels'][2], g['da_val']))
+                continue
+            if g['dh_val'] is not None and g['dh_val'] > 1.3:
+                continue
+            H = g['H']
+            occ = min(H.occ_total, 1.0) if H is not None else 1.0
+            s = fi_valence(g['da_val']) * occ
+            m_h = H.mult if H is not None else g['D'].mult
+            out.append(HBond(g['D'], g['A'], g['da_val'], s, _ratio(m_h, g['D'].mult), _ratio(m_h, g['A'].mult),
+                             'loop' if g['from_loop'] else 'H', H.label if H is not None else ''))
+        if seen_long:
+            st.notes.append('hydrogen bonds longer than %.2f Å not counted: %s' % (hmax, ', '.join(seen_long)))
+        return out
+    return _hbonds_blind(st, sums, params, hmax, donors, force)
+
+class _Contact:
+    """One class of O···O contacts between two sites at one distance, shared by both ends: k1
+    contacts per atom of site 1, k2 per atom of site 2 (k1·mult1 = k2·mult2)."""
+    def __init__(self, d, ends):
+        self.d = d; self.ends = ends; self.imgs = {}; self.k = {}; self.donor = None; self.m = 0
+    def add(self, lab, imgs):
+        self.imgs[lab] = imgs; self.k[lab] = len(imgs)
+    def other(self, lab):
+        a, b = self.ends
+        return b if lab == a else a
+
+def _hbonds_blind(st, sums, params, hmax, donors_over, force):
+    """No H atoms: propose the hydrogen bonds from the O···O geometry. Donors from the labels /
+    valence deficits (hbond_donors); for each, the O within hmax that (1) is no polyhedral edge
+    (no cation bonded to both), (2) lies ≥ 80° from every cation bonded to the donor, (3) can
+    still accept (Σcat + accepted below its target), taken shortest first, each contact used
+    once; when two donors touch, the one with the larger acceptor deficit accepts; a water's two
+    acceptors subtend 70–150°. Forced pairs (--hb OW1>O2) are placed first, as given."""
+    nH, how = hbond_donors(st, sums, donors_over)
+    force = list(force or [])
+    for D, A in force:
+        sD = st.site(D)
+        if sD is None:
+            st.notes.append('--hb %s>%s: no site %s' % (D, A, D)); continue
+        if sD.label not in nH:
+            nH[sD.label] = 0; how[sD.label] = 'given'
+        nH[sD.label] = max(nH[sD.label], sum(1 for d2, _ in force if st.site(d2) is sD))
+    if not nH:
+        return []
+    deficit = [l for l, w in how.items() if w.startswith('Σcat')]
+    if deficit:
+        st.notes.append('no OH/OW labels — donors taken from the bond-valence deficits: %s (--donors to correct)'
+                        % ', '.join('%s (%d H, %s)' % (l, nH[l], how[l]) for l in deficit))
+    sites = {s.label: s for s in st.sites}
+    o_sites = [x for x in st.anions if x.element == 'O']
+    # cation environment of each donor atom (first equivalent)
+    env = {}
+    for lab in nH:
+        D = sites[lab]; pD = D.positions[0]; lst = []
+        for M, d, q in st.images(pD, 3.9, [c for c in st.cations if c.element != 'H']):
+            sp = [x for x in M.species if x.ox and x.ox > 0]
+            if not sp:
+                continue
+            s = max((params.valence(x.element, x.ox, 'O', -2, d) or 0.0) for x in sp)
+            if s >= MIN_S:
+                lst.append((M, d, q, s, sp))
+        env[lab] = lst
+    # contact classes per donor
+    contacts = {}; classes = {lab: [] for lab in nH}
+    for lab in nH:
+        D = sites[lab]; pD = D.positions[0]
+        groups = OrderedDict()
+        for A, d, q in st.images(pD, hmax, o_sites):
+            if d < HB_MIN:
+                continue
+            forced = any(st.site(x) is D and st.site(y) is A for x, y in force)
+            if not forced:
+                edge = False
+                for M, dm, qm, s, sp in env[lab]:
+                    dma = st.dist(qm, q)
+                    if dma < 3.9 and max((params.valence(x.element, x.ox, 'O', -2, dma) or 0.0) for x in sp) >= MIN_S:
+                        edge = True; break
+                if edge:
+                    continue
+                if any(s >= 0.1 and angle(st, qm, pD, q) < 80 for M, dm, qm, s, sp in env[lab]):
+                    continue
+            groups.setdefault((A.label, round(d, 3)), []).append((A, d, q))
+        for (al, dr), imgs in groups.items():
+            key = (frozenset([lab, al]), round(dr, 2))
+            ct = contacts.get(key)
+            if ct is None:
+                ct = contacts[key] = _Contact(dr, (lab, al))
+            ct.add(lab, imgs)
+            classes[lab].append(ct)
+    accepted = {}; left = dict(nH); placed = {lab: [] for lab in nH}
+    def target(lab):
+        return 2.0 - 0.8 * nH.get(lab, 0)
+    def need(lab):
+        return target(lab) - sums.get(lab, 0.0) - accepted.get(lab, 0.0)
+    def ok_angle(lab, q, others):
+        return all(HB_ANGLE[0] <= angle(st, q0, sites[lab].positions[0], q) <= HB_ANGLE[1] for _, _, q0 in others)
+    def pick_images(lab, ct):
+        """The images of a class to place at once: all of them when the donor has H for them
+        (symmetry-related H point at symmetry-related acceptors), else one."""
+        free = [im for im in ct.imgs[lab] if not any(im[2] is q0 for _, _, q0 in placed[lab])]
+        free = [im for im in free if ok_angle(lab, im[2], placed[lab])]
+        if not free:
+            return []
+        if len(free) > 1 and len(free) <= left[lab] and all(ok_angle(lab, a[2], [b]) for i, a in enumerate(free) for b in free[:i]):
+            return free
+        return free[:1]
+    def assign(lab, ct, imgs):
+        for A, d, q in imgs:
+            ct.donor = lab; ct.m += 1; placed[lab].append((A, d, q)); left[lab] -= 1
+            accepted[A.label] = accepted.get(A.label, 0.0) + fi_valence(d) * sites[lab].mult / A.mult * min(sites[lab].occ_total, 1.0)
+    # forced pairs first
+    for D, A in force:
+        sD, sA = st.site(D), st.site(A)
+        if sD is None or sA is None:
+            st.notes.append('--hb %s>%s: no site %s' % (D, A, A if sD is not None else D)); continue
+        cts = [ct for ct in classes[sD.label] if ct.other(sD.label) == sA.label and ct.m < ct.k[sD.label]]
+        if not cts:
+            st.notes.append('--hb %s>%s: no O···O contact within %.2f Å' % (D, A, hmax)); continue
+        ct = min(cts, key=lambda c: c.d)
+        assign(sD.label, ct, [ct.imgs[sD.label][ct.m]])
+    for relaxed in (False, True):
+        while True:
+            best = None
+            for lab in nH:
+                if left[lab] <= 0:
+                    continue
+                for ct in classes[lab]:
+                    if ct.donor not in (None, lab) or ct.m >= ct.k[lab]:
+                        continue
+                    al = ct.other(lab)
+                    if al == lab and ct.m >= ct.k[lab] // 2:
+                        continue                          # a site bonded to itself: half donate, half accept
+                    if need(al) < -0.15:
+                        continue                          # the acceptor is already saturated
+                    if not relaxed and al != lab and al in nH and left[al] > 0 and ct.donor is None and need(al) < need(lab) - 0.02:
+                        continue                          # the other end has the larger deficit: it accepts
+                    imgs = pick_images(lab, ct)
+                    if not imgs:
+                        continue
+                    cand = (ct.d, -left[lab], lab, ct, imgs)
+                    if best is None or cand[:2] < best[:2]:
+                        best = cand
+            if best is None:
+                break
+            assign(best[2], best[3], best[4])
+    for lab in nH:
+        if left[lab] > 0:
+            st.notes.append('%s: %d of %d H without an acceptor within %.2f Å (no O outside its own polyhedra with room for one)'
+                            % (lab, left[lab], nH[lab], hmax))
+    out = []
+    for lab in nH:
+        D = sites[lab]
+        by = OrderedDict()
+        for A, d, q in placed[lab]:
+            by.setdefault((A.label, round(d, 3)), [A, d, 0]); by[(A.label, round(d, 3))][2] += 1
+        for (al, dr), (A, d, m) in by.items():
+            out.append(HBond(D, A, d, fi_valence(d) * min(D.occ_total, 1.0), m, _ratio(m * D.mult, A.mult), 'OO', ''))
+    if any(sites[l].occ_total < 0.999 for l in nH):
+        st.notes.append('hydrogen-bond valences of the partly occupied donors (%s) are multiplied by their occupancies'
+                        % ', '.join(l for l in nH if sites[l].occ_total < 0.999))
+    return out
+
+def hbond_lines(hbonds):
+    """The hydrogen bonds as report lines, with the donated valence per donor."""
+    L = []
+    for hb in hbonds:
+        how = {'loop': 'from the .cif hydrogen-bond loop', 'H': 'from the H positions', 'OO': 'O···O geometry, H not located',
+               'H···A': 'from the H···A distance'}[hb.via]
+        L.append('  %-8s → %-8s %s %.3f Å   s %.2f vu%s%s   (%s)' % (hb.donor.label, hb.acceptor.label,
+                 'H⋯A' if hb.via == 'H···A' else 'D⋯A', hb.d, hb.s, ' ×%s per donor' % hb.n_donor if hb.n_donor != 1 else '',
+                 ' ×%s→' % hb.n_across if hb.n_across != 1 else '', (hb.h + ', ' if hb.h else '') + how))
+    return L
+
+def donated(hbonds):
+    """{donor label: Σ of the O–H valences (1 − s) it keeps} — the part the tables do not add."""
+    out = OrderedDict()
+    for hb in hbonds:
+        out[hb.donor.label] = out.get(hb.donor.label, 0.0) + (1.0 - hb.s) * hb.n_donor
+    return out
 
 # ----------------------------------------------------------------------------- report
 
@@ -571,7 +1013,7 @@ def _mark(n_down, n_across):
         m += '×%s→' % n_across
     return m
 
-def report_text(st, params, result, anion_sum, cells, geom_check=None):
+def report_text(st, params, result, anion_sum, cells, geom_check=None, hbonds=()):
     L = []
     a, b, c, al, be, ga = st.cell
     L.append('Bond-valence check — %s' % os.path.basename(st.path))
@@ -596,11 +1038,25 @@ def report_text(st, params, result, anion_sum, cells, geom_check=None):
             L.append('    <%s–X> = %.3f Å (CN %d)      Σ = %.2f vu   expected %.2f  (%+.0f%%)%s'
                      % (site.label, mean_d, sum(bd.count for bd in bonds), bvs, expected, dev, flag))
     L.append('')
+    hbonds = list(hbonds)
+    if hbonds:
+        L.append('HYDROGEN BONDS (s from the O···O distance, Ferraris & Ivaldi 1988: s = (d/2.17)^−8.2 + 0.06)'
+                 if hbonds[0].via != 'H···A' else 'HYDROGEN BONDS (acceptor valences from the H···A distances, Brown 2002)')
+        L.extend(hbond_lines(hbonds))
+        L.append('')
+    acc = {}; don = donated(hbonds) if hbonds and hbonds[0].via != 'H···A' else {}
+    for hb in hbonds:
+        acc.setdefault(hb.acceptor.label, []).append('%.2f%s' % (hb.s, '×%s→' % hb.n_across if hb.n_across != 1 else ''))
     L.append('BOND-VALENCE TABLE (vu; ×n↓ = counted n times in the column sum, ×n→ = n times in the row sum)')
     cats = [r[0] for r in result]
-    anions = [an for an in st.anions if any((an.label, ct.label) in cells for ct in cats)]
+    anions = [an for an in st.anions if any((an.label, ct.label) in cells for ct in cats) or an.label in acc]
     w = max([len(an.label) for an in anions] + [8])
-    head = ' ' * (w + 2) + ''.join('%-14s' % ct.label for ct in cats) + '  Σ'
+    head = ' ' * (w + 2) + ''.join('%-14s' % ct.label for ct in cats)
+    if acc:
+        head += '%-14s' % 'H bonds'
+    head += '  Σan'
+    if don:
+        head += '   O–H    Σall'
     L.append('  ' + head)
     for an in anions:
         row = '  %-*s' % (w + 2, an.label)
@@ -611,7 +1067,11 @@ def report_text(st, params, result, anion_sum, cells, geom_check=None):
             else:
                 txt = ', '.join('%.2f%s' % (s, _mark(nd, na)) for s, nd, na in vals)
                 row += '%-14s' % txt
+        if acc:
+            row += '%-14s' % (', '.join(acc[an.label]) if an.label in acc else '–')
         row += '  %.2f' % anion_sum[an.label]
+        if don:
+            row += '   %-6s %.2f' % ('%.2f' % don[an.label] if an.label in don else '–', anion_sum[an.label] + don.get(an.label, 0.0))
         L.append(row)
     sums = '  %-*s' % (w + 2, 'Σ')
     for site, bonds, bvs, expected, mean_d in result:
@@ -622,9 +1082,13 @@ def report_text(st, params, result, anion_sum, cells, geom_check=None):
         exp += '%-14s' % ('%.2f' % expected)
     L.append(exp)
     L.append('')
+    if don:
+        L.append('  (Σan = cations + accepted hydrogen bonds, as the tables print it; O–H = the donor\'s own Σ(1 − s); Σall = both)')
+    L.append('')
     L.append('PARAMETERS USED (R0, b, reference)')
     for (cat, cox, an), (r0, bb, rid) in params.used.items():
         L.append('  %-4s%+d – %-3s  R0 %.3f  b %.3f   %s' % (cat, cox, an, r0, bb, params.refs.get(rid, rid)))
+    L.append('  table note: %s.' % params.note())
     if geom_check:
         L.append('')
         L.append(geom_check)
@@ -853,7 +1317,8 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
     donor/acceptor bookkeeping varies too much — but they take part in the row arithmetic: a
     column headed 'D'/'Donor' subtracts, 'A'/'Acceptor'/'H bond' adds."""
     L = []
-    cat_labels = {_norm_label(x): x for r in result for x in r[0].label.split('/')}
+    cat_labels = {_norm_label(x): r[0].label for r in result for x in r[0].label.split('/')}   # 'Mg' -> 'Mg/Mn'
+    cat_labels.update({_norm_label(r[0].label): r[0].label for r in result})
     an_labels = {_norm_label(x): a.label for a in st.anions for x in a.label.split('/')}
     an_labels.update({_norm_label(a.label): a.label for a in st.anions})
     def resolve_anion(lab):
@@ -868,7 +1333,7 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
     cat_occ = {x: min(r[0].occ_total, 1.0) for r in result for x in r[0].label.split('/')}
     cat_occ.update({r[0].label: min(r[0].occ_total, 1.0) for r in result})
     bvs_of = {r[0].label: r[2] for r in result}
-    h_cols = {x for r in result if r[0].element == 'H' for x in r[0].label.split('/')}
+    h_cols = {r[0].label for r in result if r[0].element == 'H'}
     found = False
     for ti, rows in enumerate(tables):
         if len(rows) < 3:
@@ -1011,7 +1476,7 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
 
 # ----------------------------------------------------------------------------- Word output
 
-def write_word(st, result, anion_sum, cells, path):
+def write_word(st, result, anion_sum, cells, path, hbonds=()):
     from docx import Document
     from docx.shared import Pt
     from pxrd_review.annotate_review import _save_docx
@@ -1030,12 +1495,17 @@ def write_word(st, result, anion_sum, cells, path):
     doc.add_paragraph('')
     doc.add_heading('Bond-valence analysis (vu) for %s' % st.name, level=2)
     cats = [r[0] for r in result]
-    anions = [an for an in st.anions if any((an.label, ct.label) in cells for ct in cats)]
-    tb = doc.add_table(rows=1, cols=len(cats) + 2)
+    acc = {}
+    for hb in hbonds:
+        acc.setdefault(hb.acceptor.label, []).append('%.2f%s' % (hb.s, '×%s→' % hb.n_across if hb.n_across != 1 else ''))
+    anions = [an for an in st.anions if any((an.label, ct.label) in cells for ct in cats) or an.label in acc]
+    tb = doc.add_table(rows=1, cols=len(cats) + 2 + (1 if acc else 0))
     hdr = tb.rows[0].cells
     hdr[0].text = 'Atom'
     for i, ct in enumerate(cats):
         hdr[i + 1].text = ct.label
+    if acc:
+        hdr[-2].text = 'H bonds'
     hdr[-1].text = 'Σ'
     for an in anions:
         r = tb.add_row().cells
@@ -1050,6 +1520,8 @@ def write_word(st, result, anion_sum, cells, path):
                 m = _mark(nd, na)
                 if m:
                     run = p.add_run(m); run.font.superscript = True
+        if acc:
+            r[-2].text = ', '.join(acc.get(an.label, [])) or '–'
         r[-1].text = '%.2f' % anion_sum[an.label]
     r = tb.add_row().cells
     r[0].text = 'Σ'
@@ -1074,20 +1546,46 @@ def _parse_ox(s):
 
 PARAM_NAMES = {'gh': 'Gagné & Hawthorne 2015', 'bo': "Brese & O'Keeffe 1991", 'ba': 'Brown & Altermatt 1985'}
 
+def _parse_donors(s):
+    """'OW1=2,O5=1' -> {'OW1': 2, 'O5': 1}"""
+    out = {}
+    for part in (s or '').split(','):
+        if '=' in part:
+            k, v = part.split('=', 1)
+            try:
+                out[k.strip()] = int(v)
+            except ValueError:
+                raise ValueError('--donors: %r is not label=N' % part.strip())
+    return out
+
+def _parse_hb(s):
+    """'OW1>O2,OW1>O7' -> [('OW1', 'O2'), ('OW1', 'O7')]"""
+    out = []
+    for part in (s or '').split(','):
+        if '>' in part:
+            d, a = part.split('>', 1); out.append((d.strip(), a.strip()))
+        elif part.strip():
+            raise ValueError('--hb: %r is not donor>acceptor' % part.strip())
+    return out
+
 def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word=False, out_dir=None, quiet=False,
-        auto_params=True):
+        auto_params=True, hbond='oo', hmax=None, donors=None, hb=None, u6='burns'):
     st = Structure(cif, _parse_ox(ox), include_h=include_h)
     tables = read_tables(table) if table else None
-    P = Params(prefer=params)
-    result, anion_sum, cells = compute(st, P, cutoff)
+    P = Params(prefer=params, u6=u6)
+    hb_args = dict(hbond=hbond, hmax=hmax, donors=_parse_donors(donors) if isinstance(donors, str) else donors,
+                   force=_parse_hb(hb) if isinstance(hb, str) else hb)
+    result, anion_sum, cells, hbonds = compute(st, P, cutoff, **hb_args)
     chosen_note = ''
     if tables and auto_params:
         # the manuscript's bond-valence table tells which parameter set its authors used:
         # score every set and report with the one that agrees best (ties -> the requested set)
         scores = {}
         for key in ('gh', 'bo', 'ba'):
-            Pk = Params(prefer=key)
-            rk = compute(st, Pk, cutoff)
+            Pk = Params(prefer=key, u6=u6)
+            notes_before = list(st.notes)
+            rk = compute(st, Pk, cutoff, **hb_args)
+            st.notes[:] = notes_before                      # the trial runs repeat the same notes
             lines = check_bvs_table(st, rk[0], rk[2], rk[1], tables, PARAM_NAMES[key])
             hits = [re.search(r'(\d+) cells compared, (\d+) disagree', ln) for ln in lines]
             hits = [m for m in hits if m]
@@ -1096,13 +1594,13 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
         if scores:
             best = min(scores, key=lambda k: scores[k][:2])
             if best != params:
-                P, (result, anion_sum, cells) = scores[best][2], scores[best][3]
+                P, (result, anion_sum, cells, hbonds) = scores[best][2], scores[best][3]
                 chosen_note = ('  the manuscript table agrees best with %s parameters (%d cells disagree, vs %d with %s) '
                                '— the report below uses them; --params %s forces a set\n' %
                                (PARAM_NAMES[best], scores[best][0], scores[params][0] if params in scores else -1,
                                 PARAM_NAMES[params], params))
                 params = best
-    text = report_text(st, P, result, anion_sum, cells, geom_self_check(st, result))
+    text = report_text(st, P, result, anion_sum, cells, geom_self_check(st, result), hbonds)
     if table:
         text += '\n\nMANUSCRIPT TABLE CHECK — %s\n' % os.path.basename(table) + chosen_note + '  '
         text += '\n  '.join(check_bond_table(st, result, tables))
@@ -1119,7 +1617,7 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
         print('  report → %s' % rep)
     if word:
         wp = os.path.join(out_dir, stem + '_bv.docx')
-        write_word(st, result, anion_sum, cells, wp)
+        write_word(st, result, anion_sum, cells, wp, hbonds)
         if not quiet:
             print('  tables → %s' % wp)
     return st, result, anion_sum, cells, text
@@ -1134,11 +1632,20 @@ def main(argv=None):
     ap.add_argument('--ox', help='oxidation states, e.g. Fe=2,Mn=3 (override the .cif / defaults)')
     ap.add_argument('--cutoff', type=float, help='neighbour cutoff in Å for every cation (default 3.2, larger for big cations)')
     ap.add_argument('--no-h', action='store_true', help='ignore hydrogen atoms')
+    ap.add_argument('--hbonds', default='oo', choices=['oo', 'h', 'none'],
+                    help='hydrogen-bond strengths: oo = from the O···O distances (Ferraris & Ivaldi 1988, default); '
+                         'h = from the H···O distances (Brown 2002, H as a cation column); none')
+    ap.add_argument('--hmax', type=float, help='longest O···O counted as a hydrogen bond (default %.2f Å)' % HB_MAX)
+    ap.add_argument('--donors', help='hydrogen count per O site when the labels do not say, e.g. OW1=2,O5=1 (0 = not a donor)')
+    ap.add_argument('--hb', help='hydrogen bonds to place as given, e.g. OW1>O2,OW1>O7 (donor>acceptor; the rest are still proposed)')
+    ap.add_argument('--u6', default='burns', choices=['burns', 'params'],
+                    help='U6+–O parameters: burns = Burns et al. (1997), the uranyl convention (default); params = the chosen set')
     ap.add_argument('--word', action='store_true', help='also write the tables as a .docx')
     ap.add_argument('--out', help='output folder (default <cif dir>/review_out)')
     a = ap.parse_args(argv)
     try:
-        run(a.cif, a.table, a.params, a.ox, a.cutoff, not a.no_h, a.word, a.out)
+        run(a.cif, a.table, a.params, a.ox, a.cutoff, not a.no_h, a.word, a.out,
+            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6)
     except ValueError as e:
         raise SystemExit('bv_check: %s' % e)
     return 0

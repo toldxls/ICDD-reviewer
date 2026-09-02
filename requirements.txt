@@ -9,3 +9,4 @@ python-docx>=1.2     # docx parsing + Word comments API (pxrd_review/annotate_re
 lxml                 # docx XML via lxml.etree (pxrd_review/annotate_review.py); also a python-docx dependency
 certifi              # optional — used for CA certs if importable, for HTTPS to the Mindat API (pxrd_review/mindat.py)
 Flask                # optional — the review-mode GUI only (pxrd_review/gui/review_gui.py); not needed for the CLI checks
+openpyxl>=3.1   # xlsx in/out (EPMA, Gladstone-Dale, PXRD tables)

@@ -173,47 +173,121 @@
   </div>
 
   <!-- ======================= tables mode ======================= -->
+  <!-- Five tabs over one folder; each renders the table its CLI prints (pxrd tables / bv / gd / epma / pxrd)
+       and writes the same review_out/<name>_<tab>.docx / .xlsx. Inputs are remembered per folder
+       (review_out/tables_opts.json). The page sends file keys and option strings, never paths. -->
   <div id="tb-app" class="hidden">
     <aside id="tb-sidebar">
-      <div class="side-head">
-        <div class="muted">.cif files in the folder</div>
-      </div>
-      <ul id="tb-list"></ul>
+      <div class="side-head"><div class="muted">.cif files</div></div>
+      <ul id="tb-list" class="tb-side-list"></ul>
+      <div class="side-head"><div class="muted">data files — probe analyses, peak lists</div></div>
+      <ul id="tb-data" class="tb-side-list"></ul>
+      <div class="side-head"><div class="muted">written to review_out</div></div>
+      <ul id="tb-outputs" class="tb-side-list"></ul>
     </aside>
     <div class="splitter v" data-resize="sidebar" title="drag to resize"></div>
     <main id="tb-detail">
-      <div id="tb-empty" class="empty">
-        <p>Select a .cif.</p>
-        <p class="muted">Four publishable tables are built from it — atom coordinates and displacement
-          parameters, selected bond distances (with symmetry codes and mean rows), hydrogen bonds, and the
-          bond-valence analysis — formatted the way the mineralogy journals print them. <b>Write .docx</b>
-          saves them to <code>review_out/&lt;name&gt;_tables.docx</code> to paste into a manuscript.
-          Equivalent command: <code>pxrd tables mineral.cif --word</code>.</p>
-      </div>
-      <div id="tb-doc" class="hidden">
+      <div id="tb-doc">
         <section id="tb-head">
           <div class="head-main">
-            <h1 id="tb-name">—</h1>
-            <span id="tb-meta" class="muted"></span>
+            <div id="tb-tabs" class="seg">
+              <button data-tab="coords" class="on" title="atom coordinates &amp; displacement parameters, selected bond distances, hydrogen bonds — from the .cif">Coords &amp; bonds</button>
+              <button data-tab="bvs" title="bond-valence analysis from the .cif">Bond valence</button>
+              <button data-tab="gd" title="Gladstone–Dale compatibility from the composition, n and density">Gladstone–Dale</button>
+              <button data-tab="epma" title="empirical formula and the published composition table from probe wt% data">EPMA</button>
+              <button data-tab="pxrd" title="observed + calculated powder lines, combined, eight strongest in bold">PXRD</button>
+            </div>
             <span class="spacer"></span>
-            <button id="tb-word" title="Write review_out/<name>_tables.docx (Word tables with captions and notes).&#10;&#10;Runs:  pxrd tables <name>.cif --word">Write .docx ▸</button>
-            <button id="tb-open" class="ghost" title="open the written .docx in Word">open ↗</button>
+            <label class="opt"><span class="muted">journal</span> <select id="tb-journal" title="table conventions of the journal you are submitting to (caption form, header labels, sum labels, rules, notes, font)"></select></label>
           </div>
-          <div class="head-meta tb-opts">
-            <span class="muted">journal</span>
-            <select id="tb-journal" title="table conventions of the journal you are submitting to (caption form, header labels, sum labels, rules, notes, font)"></select>
+
+          <div class="head-meta tb-opts tb-pane" data-pane="coords">
+            <label class="chk mini" title="leave hydrogen out of every table"><input type="checkbox" data-opt="noh"> no H</label>
+            <span class="spacer"></span>
+            <button data-export="word" title="Write review_out/<name>_tables.docx — all four tables (coordinates, bonds, H bonds, bond valence).&#10;&#10;Runs:  pxrd tables <name>.cif --word">Write .docx ▸</button>
+            <button data-open class="ghost" title="open the written .docx in Word">open ↗</button>
+          </div>
+
+          <div class="head-meta tb-opts tb-pane hidden" data-pane="bvs">
             <span class="muted">parameters</span>
             <div id="tb-params" class="seg">
               <button data-params="gh" class="on" title="Gagné &amp; Hawthorne (2015); U6+ from Burns et al. (1997)">GH2015</button>
               <button data-params="bo" title="Brese &amp; O'Keeffe (1991)">BO91</button>
               <button data-params="ba" title="Brown &amp; Altermatt (1985)">BA85</button>
             </div>
-            <span class="muted">oxidation states</span>
-            <input type="text" id="tb-ox" placeholder="e.g. Fe=2,Mn=3" spellcheck="false" autocomplete="off">
-            <label class="chk mini" title="leave hydrogen out of every table"><input type="checkbox" id="tb-noh"> no H</label>
+            <input type="hidden" data-opt="params" value="gh">
+            <label class="opt"><span class="muted">oxidation states</span> <input type="text" data-opt="ox" placeholder="e.g. Fe=2,Mn=3" spellcheck="false" autocomplete="off"></label>
+            <label class="opt"><span class="muted">cutoff Å</span> <input type="text" class="n" data-opt="cutoff" placeholder="auto" title="explicit bond-length cutoff (default: every bond with s ≥ 0.025 vu)"></label>
+            <label class="chk mini" title="U⁶⁺–O from the chosen set instead of Burns et al. (1997), the uranyl convention"><input type="checkbox" data-opt="u6set"> U⁶⁺ from set</label>
+            <label class="opt"><span class="muted">H bonds</span> <select data-opt="hb" title="hydrogen-bond strengths: from the donor–acceptor O–O distances (Ferraris &amp; Ivaldi 1988 — the tables' convention; without H atoms the pairs are proposed from the geometry), from the H⋯A distances (Brown 2002, needs H atoms), or none"><option value="oo">O–O (Ferraris &amp; Ivaldi)</option><option value="h">H⋯A (Brown 2002)</option><option value="none">none</option></select></label>
+            <label class="opt"><span class="muted">O–O max Å</span> <input type="text" class="n" data-opt="hmax" placeholder="3.2" title="longest O–O counted as a hydrogen bond"></label>
+            <label class="opt"><span class="muted">donors</span> <input type="text" data-opt="donors" placeholder="OW1=2,O5=1" spellcheck="false" autocomplete="off" title="hydrogen atoms per O site when the labels do not say (OH*/OW*/W* are read; 0 = not a donor)"></label>
+            <label class="opt"><span class="muted">assign</span> <input type="text" data-opt="hbp" placeholder="OW1>O2,OW1>O7" spellcheck="false" autocomplete="off" title="hydrogen bonds to place as given (donor>acceptor); the rest are still proposed"></label>
+            <label class="chk mini" title="leave hydrogen out"><input type="checkbox" data-opt="noh"> no H</label>
             <span class="spacer"></span>
-            <span id="tb-notes" class="muted ellip"></span>
+            <button data-export="word" title="Write review_out/<name>_tables.docx — all four tables.&#10;&#10;Runs:  pxrd tables <name>.cif --word --params gh">Write .docx ▸</button>
+            <button data-open class="ghost" title="open the written .docx in Word">open ↗</button>
           </div>
+
+          <div class="head-meta tb-opts tb-pane hidden" data-pane="gd">
+            <div id="tb-gd-mode" class="seg">
+              <button data-gdmode="formula" class="on" title="ideal formula as atoms per formula unit; O implied">formula</button>
+              <button data-gdmode="wt" title="wt% oxides (e.g. the EPMA means)">wt%</button>
+            </div>
+            <input type="hidden" data-opt="mode" value="formula">
+            <input type="text" class="w" id="tb-gd-formula" data-opt="formula" placeholder="Ca=1,U=2,V=2,H2O=4" spellcheck="false" autocomplete="off" title="atoms per formula unit, O implied; elements map to their usual oxide (Fe→FeO, S→SO3 …) unless 'oxide' says otherwise">
+            <input type="text" class="w hidden" id="tb-gd-wt" data-opt="wt" placeholder="UO3=63.88,PbO=13.41,H2O=7.0" spellcheck="false" autocomplete="off" title="wt% per constituent">
+            <button id="tb-gd-from-epma" class="ghost mini" title="use the mean wt% values from the EPMA tab">← EPMA</button>
+            <label class="opt"><span class="muted">oxide</span> <input type="text" data-opt="oxide" placeholder="Fe=Fe2O3,S=S" spellcheck="false" autocomplete="off" title="constituent to use for an element on the formula route"></label>
+            <label class="opt"><span class="muted"><i>n</i></span> <input type="text" class="n" data-opt="n" placeholder="1.700" title="mean refractive index"></label>
+            <label class="opt"><span class="muted">D meas</span> <input type="text" class="n" data-opt="density" placeholder="g/cm³" title="measured density (optional)"></label>
+            <label class="opt"><span class="muted">.cif</span> <select id="tb-gd-cif" data-opt="cif" title="calculated density from this cell (needs Z and the formula)"></select></label>
+            <label class="opt"><span class="muted">Z</span> <input type="text" class="n" data-opt="z" placeholder="Z" title="formula units per cell (default: from the .cif)"></label>
+            <label class="opt"><span class="muted">k</span> <input type="text" data-opt="k" placeholder="UO3=0.118" spellcheck="false" autocomplete="off" title="override a constant (data/gd_constants.json)"></label>
+            <label class="opt"><span class="muted">name</span> <input type="text" class="n" data-opt="name" placeholder="mineral"></label>
+            <span class="spacer"></span>
+            <button data-export="xlsx" title="Write review_out/<name>_gd.xlsx with live formulas (K_C, K_P, compatibility).&#10;&#10;Runs:  pxrd gd --formula … --n … --xlsx">Write .xlsx ▸</button>
+            <button data-export="word" title="Write review_out/<name>_gd.docx (the constants table with the compatibility note)">Write .docx ▸</button>
+            <button data-open class="ghost" title="open the last written file">open ↗</button>
+          </div>
+
+          <div class="head-meta tb-opts tb-pane hidden" data-pane="epma">
+            <label class="opt"><span class="muted">probe file</span> <select id="tb-epma-file" data-opt="file"></select></label>
+            <label class="opt"><span class="muted">sheet</span> <input type="text" class="n" data-opt="sheet" placeholder="auto" title="sheet name (xlsx) — default: the biggest block of oxide columns"></label>
+            <label class="opt"><span class="muted">points</span> <input type="text" class="n" data-opt="points" placeholder="all" title="rows to use, e.g. 1-8 or 1,3,5"></label>
+            <label class="opt"><span class="muted">basis</span> <input type="text" class="n" data-opt="basis" placeholder="O=21" title="normalisation: O=N (anions, F/Cl included, O=F applied), cations=N, U=5, Si+Al=4 …"></label>
+            <label class="opt"><span class="muted">charge</span> <select data-opt="charge" title="balance charge: H2O adds the hydrogen the analysis lacks (cation/element basis + anions N); Fe splits FeO into FeO + Fe2O3"></label>
+              <option value="">none</option><option value="H2O">H2O</option><option value="Fe">Fe2+/Fe3+</option>
+            </select>
+            <label class="opt"><span class="muted">anions</span> <input type="text" class="n" data-opt="anions" placeholder="N" title="total anions (O + F) per formula unit from the structure, for charge = H2O"></label>
+            <label class="chk mini" title="count oxide O and halogens both, without the O=F reduction (the spreadsheet convention, e.g. 21.5)"><input type="checkbox" data-opt="raw"> raw anions</label>
+            <label class="opt"><span class="muted">add</span> <input type="text" class="w" data-opt="add" placeholder="H2O=structure:6, CO2=wt:14.02, H2O=difference" spellcheck="false" autocomplete="off" title="constituents the probe does not give: X=structure:N (apfu), X=wt:V (wt%), X=difference (100 − total)"></label>
+            <label class="opt"><span class="muted">convert</span> <input type="text" data-opt="convert" placeholder="UO2=UO3" spellcheck="false" autocomplete="off" title="re-express a constituent (by MW ratio)"></label>
+            <label class="opt"><span class="muted">drop</span> <input type="text" data-opt="drop" placeholder="Cl" spellcheck="false" autocomplete="off" title="constituents to leave out"></label>
+            <label class="opt"><span class="muted">standards</span> <input type="text" class="w" data-opt="standards" placeholder="CaO=anorthite,UO3=UO2" spellcheck="false" autocomplete="off" title="Standard column of the published table"></label>
+            <label class="opt"><span class="muted">ideal</span> <input type="text" class="w" data-opt="ideal" placeholder="CaO=3,UO3=1,CO2=3,F=1,H2O=6" spellcheck="false" autocomplete="off" title="ideal formula as constituent apfu → the Ideal column"></label>
+            <label class="opt"><span class="muted">name</span> <input type="text" class="n" data-opt="name" placeholder="mineral"></label>
+            <span class="spacer"></span>
+            <button data-export="xlsx" title="Write review_out/<file>_epma.xlsx — raw | reduction (live formulas, to check the maths) | table.&#10;&#10;Runs:  pxrd epma <file> --basis … --xlsx">Write .xlsx ▸</button>
+            <button data-export="word" title="Write review_out/<file>_epma.docx — the composition table (Constituent | Mean | Range | S.D. | Standard | Normalized | Ideal)">Write .docx ▸</button>
+            <button data-open class="ghost" title="open the last written file">open ↗</button>
+          </div>
+
+          <div class="head-meta tb-opts tb-pane hidden" data-pane="pxrd">
+            <label class="opt"><span class="muted">observed</span> <select id="tb-pxrd-obs" data-opt="obs" title="observed peak list (JADE export with hkl, or any d / I list)"></select></label>
+            <label class="opt"><span class="muted">calculated</span> <select id="tb-pxrd-calc" data-opt="calc" title="calculated pattern (d, I, hkl)"></select></label>
+            <label class="opt"><span class="muted">min I</span> <input type="text" class="n" data-opt="min_i" placeholder="3.5" title="a line is listed when Iobs or Icalc ≥ this"></label>
+            <label class="opt"><span class="muted">tol %</span> <input type="text" class="n" data-opt="tol" placeholder="1.2" title="d tolerance to attach a calculated line to an observed peak"></label>
+            <label class="opt"><span class="muted"><i>d</i> min</span> <input type="text" class="n" data-opt="dmin" placeholder="Å" title="drop lines below this d — the table's 2θ limit"></label>
+            <label class="opt"><span class="muted">λ</span> <input type="text" class="n" data-opt="wavelength" placeholder="Å" title="only for a 2θ list — converts it to d"></label>
+            <label class="opt"><span class="muted">blocks</span> <input type="text" class="n" data-opt="blocks" placeholder="2" title="column blocks side by side"></label>
+            <label class="opt"><span class="muted">name</span> <input type="text" class="n" data-opt="name" placeholder="mineral"></label>
+            <span class="spacer"></span>
+            <button data-export="word" title="Write review_out/<name>_pxrd.docx — the combined table, eight strongest observed lines bold.&#10;&#10;Runs:  pxrd pxrd obs calc --word">Write .docx ▸</button>
+            <button data-export="xlsx" title="Write review_out/<name>_pxrd.xlsx — matched | obs | calc sheets, Δd per line">Write .xlsx ▸</button>
+            <button data-open class="ghost" title="open the last written file">open ↗</button>
+          </div>
+          <div id="tb-status" class="muted ellip"></div>
         </section>
         <div id="tb-body" class="tb-body"></div>
       </div>

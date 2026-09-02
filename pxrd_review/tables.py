@@ -12,10 +12,13 @@ the corpus manuscripts) print them:
      <U–Oyl> and <U–Oeq>), a 'Symmetry codes' note. Distances and esds come from the .cif's own
      _geom_bond loop when it has one, else they are computed (no esd).
   3. Hydrogen bonds: D–H⋯A | D–H | H⋯A | D⋯A | ∠DHA from the _geom_hbond loop, else computed
-     from the H positions (H⋯A ≤ 2.6 Å, angle ≥ 110°).
+     from the H positions (H⋯A ≤ 2.6 Å, angle ≥ 110°); without H atoms, the donor–acceptor
+     contacts the tool proposes from the O⋯O geometry (marked as such, to be checked).
   4. Bond-valence analysis (vu): anion rows × cation columns with ×n↓ / ×n→ marks, hydrogen-bond
-     Donor | vu columns on the acceptor rows, Σan (cations + accepted H bonds) and a Σcat row —
-     from bv_check, same parameters and conventions (--params, --ox, --cutoff, --no-h).
+     Donor | vu | H bond columns on the acceptor rows (strengths from the O⋯O distances, Ferraris &
+     Ivaldi 1988 — the convention of the owner's tables; donated valences are not deducted), Σan
+     (cations + accepted H bonds) and a Σcat row; the note cites every parameter set used — from
+     bv_check, same options (--params, --u6, --ox, --cutoff, --hbonds, --hmax, --donors, --hb, --no-h).
 
     python3 -m pxrd_review.tables <structure.cif> [--word] [--journal ammin|minmag|cjmp|ejm] [--params gh|bo|ba] [--ox Fe=2] [--out DIR]
     pxrd tables <structure.cif> --word --journal cjmp
@@ -113,8 +116,6 @@ def _title(J, text):
     """The caption text in the journal's case; element symbols and labels survive a caps title."""
     if J['title_case'] != 'caps':
         return text
-    def keep(m):
-        return m.group(0)
     out = text.upper()
     # put back mixed-case tokens that are element symbols / formulas / mineral names the journal keeps
     for tok in re.findall(r"[A-Z][a-z](?:\d|\b)|\([A-Za-z0-9]+\)|Å²|Å", text):
@@ -481,93 +482,45 @@ def bond_table(st, codes, P, J=None):
             'note': (codes.note(J['symcodes']) + ('' if from_loop else ' Distances computed from the .cif coordinates (no esds: the .cif has no _geom_bond loop).')).strip(),
             'blocks': blocks}
 
-def _cart_matrix(st):
-    a, b, c, al, be, ga = st.cell
-    ca, cb, cg = (math.cos(math.radians(x)) for x in (al, be, ga)); sg = math.sin(math.radians(ga))
-    v = st.volume / (a * b * c)
-    return [[a, b * cg, c * cb], [0, b * sg, c * (ca - cb * cg) / sg], [0, 0, c * v / sg]]
-
-def _angle(st, p_d, p_h, p_a):
-    M = _cart_matrix(st)
-    def cart(p): return [sum(M[i][j] * p[j] for j in range(3)) for i in range(3)]
-    d, h, a = cart(p_d), cart(p_h), cart(p_a)
-    v1 = [d[i] - h[i] for i in range(3)]; v2 = [a[i] - h[i] for i in range(3)]
-    n1 = math.sqrt(sum(x * x for x in v1)); n2 = math.sqrt(sum(x * x for x in v2))
-    if not n1 or not n2:
-        return 0.0
-    return math.degrees(math.acos(max(-1.0, min(1.0, sum(v1[i] * v2[i] for i in range(3)) / (n1 * n2)))))
-
-def hbond_table(st, codes, J=None):
+def hbond_table(st, codes, J=None, hbonds=(), hmax=None):
+    """The hydrogen-bond geometry (loop, else from the H positions); without H atoms, the D⋯A
+    contacts proposed from the O⋯O geometry (bv_check), clearly labelled as a proposal."""
     J = J or journal(None)
     codes.begin_table()
-    tags, rows = B._loop(st.block, '_geom_hbond_distance_ha')
+    geo = B.hbond_geometry(st)
     out = []
-    if rows:
-        g = lambda t, d='': B._col(tags, rows, t, d)
-        for D, H, A, dh, ha, da, ang, sy in zip(g('_geom_hbond_atom_site_label_d'), g('_geom_hbond_atom_site_label_h'), g('_geom_hbond_atom_site_label_a'),
-                                              g('_geom_hbond_distance_dh'), g('_geom_hbond_distance_ha'), g('_geom_hbond_distance_da'),
-                                              g('_geom_hbond_angle_dha'), g('_geom_hbond_site_symmetry_a', '.')):
-            out.append([C(D, '–', H, '⋯', A, R(str(codes.index(sy)), 'sup') if codes.index(sy) else None),
-                        C(dh.strip()), C(ha.strip()), C(da.strip()), C(re.sub(r'\.000\(0\)$|\.0\(0\)$', '', ang.strip()))])
-        note = ''
-    else:
-        # computed from the H positions
-        hs = [s for s in st.sites if s.element == 'H']
-        donors = [s for s in st.sites if s.element in ('O', 'F', 'N')]
-        for h in hs:
-            near = [(o, d, code) for o, d, code in _neighbours_with_codes(st, h, 2.6) if o.element in ('O', 'F', 'N', 'Cl')]
-            if not near:
-                continue
-            near.sort(key=lambda x: x[1])
-            D, d_dh, _ = near[0]
-            if d_dh > 1.25:
-                continue
-            p_h = h.positions[0]
-            # the donor's actual position next to this H
-            for o, dist, code in near[1:]:
-                p_a = _pos_from_code(st, o, code)
-                p_d = _pos_from_code(st, D, near[0][2])
-                ang = _angle(st, p_d, p_h, p_a)
-                if ang < 110:
-                    continue
-                da = st.dist(p_d, p_a)
-                out.append([C(D.label, '–', h.label, '⋯', o.label, R(str(codes.index(code)), 'sup') if codes.index(code) else None),
-                            C('%.2f' % d_dh), C('%.2f' % dist), C('%.3f' % da), C('%.0f' % ang)])
-        note = 'Computed from the refined H positions (no esds: the .cif has no _geom_hbond loop); H⋯A ≤ 2.6 Å, ∠DHA ≥ 110°.' if out else ''
-    if not out:
+    if geo:
+        for g in geo:
+            D, H, A = g['labels']
+            idx = codes.index(g['code'])
+            out.append([C(D, '–', H, '⋯', A, R(str(idx), 'sup') if idx else None), C(g['dh']), C(g['ha']), C(g['da']), C(g['ang'])])
+        head = [C(R('D', 'i'), '–', R('H', 'i'), '⋯', R('A', 'i')), C(R('D', 'i'), '–', R('H', 'i')), C(R('H', 'i'), '⋯', R('A', 'i')),
+                C(R('D', 'i'), '⋯', R('A', 'i')), C('∠', R('DHA', 'i'))]
+        note = '' if geo[0]['from_loop'] else 'Computed from the refined H positions (no esds: the .cif has no _geom_hbond loop); H⋯A ≤ 2.6 Å, ∠DHA ≥ 110°.'
+        return {'caption': _title(J, J['hbonds_caption'].format(name=st.name)), 'head': head, 'rows': out,
+                'note': (codes.note(J['symcodes']) + ' ' + note).strip()}
+    oo = [hb for hb in hbonds if hb.via == 'OO']
+    if not oo:
         return None
-    head = [C(R('D', 'i'), '–', R('H', 'i'), '⋯', R('A', 'i')), C(R('D', 'i'), '–', R('H', 'i')), C(R('H', 'i'), '⋯', R('A', 'i')), C(R('D', 'i'), '⋯', R('A', 'i')), C('∠', R('DHA', 'i'))]
-    return {'caption': _title(J, J['hbonds_caption'].format(name=st.name)), 'head': head, 'rows': out, 'note': (codes.note(J['symcodes']) + ' ' + note).strip()}
+    for hb in oo:
+        out.append([C(hb.donor.label, '⋯', hb.acceptor.label), C('%.3f' % hb.d), C('%.2f' % hb.s),
+                    C(('×%s per donor' % hb.n_donor if hb.n_donor != 1 else '') + (' ×%s→' % hb.n_across if hb.n_across != 1 else '') or '-')])
+    head = [C(R('D', 'i'), '⋯', R('A', 'i')), C(R('D', 'i'), '⋯', R('A', 'i'), ' (Å)'), C('vu'), C('multiplicity')]
+    note = ('Hydrogen atoms were not located: the donor–acceptor pairs are PROPOSED from the O⋯O geometry (donors from the '
+            'site labels, acceptors within %.2f Å that share no coordinating cation, H–O–H geometry respected, each contact once); '
+            'valences from the O⋯O distance (Ferraris and Ivaldi, 1988). Check them against the structure before publishing.'
+            % (hmax or B.HB_MAX))
+    return {'caption': _title(J, 'Hydrogen-bond contacts proposed for {name} (Å, vu)'.format(name=st.name)), 'head': head, 'rows': out, 'note': note}
 
-def _pos_from_code(st, site, code):
-    """The site's position under a symmetry code: 'n_klm', a bare 'n', or '.' (identity)."""
-    code = (code or '.').strip()
-    m = re.match(r'^(\d+)(?:_(\d)(\d)(\d))?$', code)
-    if not m or not (1 <= int(m.group(1)) <= len(st.ops)):
-        return list(site.frac)
-    n = int(m.group(1)); t = [int(m.group(k)) - 5 for k in (2, 3, 4)] if m.group(2) else [0, 0, 0]
-    q = B._apply(st.ops[n - 1], site.frac)
-    return [q[i] + t[i] for i in range(3)]
-
-def bvs_table(st, params, result, anion_sum, cells, J=None):
+def bvs_table(st, params, result, anion_sum, cells, J=None, hbonds=()):
     J = J or journal(None)
     cats = [r[0] for r in result if r[0].element != 'H']
-    hres = [r for r in result if r[0].element == 'H']
     bvs_of = {r[0].label: r[2] for r in result}
     # hydrogen bonds accepted per anion: donor label, valence, count across
-    accepted = {}
-    for h, bonds, *_ in hres:
-        if not bonds:
-            continue
-        donor = min(bonds, key=lambda b: b.dist)
-        for b in bonds:
-            if b is donor:
-                continue
-            s = b.vals[0][1] or 0.0
-            n_across = b.count * h.mult / b.anion.mult
-            n_across = int(round(n_across)) if abs(n_across - round(n_across)) < 0.02 else 1
-            accepted.setdefault(b.anion.label, []).append((donor.anion.label, s * min(h.occ_total, 1.0), n_across))
-    has_h = bool(hres)
+    accepted = OrderedDict()
+    for hb in hbonds:
+        accepted.setdefault(hb.acceptor.label, []).append((hb.donor.label, hb.s, hb.n_across))
+    has_h = bool(hbonds)
     head = [C(J['atom_head'] if J['atom_head'] != 'Atoms' else 'Atom')] + [C(ct.label) for ct in cats]
     if has_h:
         head += [C('Donor'), C('vu'), C('H bond')]
@@ -594,7 +547,7 @@ def bvs_table(st, params, result, anion_sum, cells, J=None):
             acc = accepted.get(an.label, [])
             if acc:
                 row += [C(', '.join(d for d, _, _ in acc)), C(', '.join('%.2f' % s for _, s, _ in acc)),
-                        C(', '.join(('×%d →' % n) if n > 1 else '-' for _, _, n in acc))]
+                        C(', '.join(('×%s →' % n) if n != 1 else '-' for _, _, n in acc))]
                 total += sum(s * n for _, s, n in acc)
             else:
                 row += [C('-'), C('-'), C('-')]
@@ -605,28 +558,34 @@ def bvs_table(st, params, result, anion_sum, cells, J=None):
         last += [C(''), C(''), C('')]
     last.append(C(''))
     rows.append(last)
-    refs = OrderedDict()
-    for (cat, cox, an), (r0, b, rid) in params.used.items():
-        if cat != 'H':
-            refs[params.refs.get(rid, rid)] = True
-    note = 'Bond-valence parameters from %s' % '; '.join(refs) if refs else ''
+    note = 'Multiplicity is indicated by ×→↓. ' + params.note() + '.'
     if has_h:
-        note += '; hydrogen-bond valences from the H⋯A distances (Brown 2002), Σan includes the accepted hydrogen bonds'
-    return {'caption': _title(J, J['bvs_caption'].format(name=st.name)), 'head': head, 'rows': rows, 'note': note + '.' if note else ''}
+        via = {hb.via for hb in hbonds}
+        if via <= {'H···A'}:
+            note += ' Hydrogen-bond valences from the H⋯A distances (Brown, 2002); donated valences are not deducted from the OH and H2O sums.'
+        else:
+            note += ' Hydrogen-bond strengths based on O–O bond lengths from Ferraris and Ivaldi (1988); donated hydrogen-bond valences are not deducted from the OH and H2O sums.'
+            if 'OO' in via:
+                note += ' H atoms were not located: the hydrogen bonds are proposed from the O–O geometry (see the hydrogen-bond table).'
+    return {'caption': _title(J, J['bvs_caption'].format(name=st.name)), 'head': head, 'rows': rows, 'note': note}
 
 # ----------------------------------------------------------------------------- build + render
 
-def build(cif, params='gh', ox=None, cutoff=None, include_h=True, journal_key=None):
+def build(cif, params='gh', ox=None, cutoff=None, include_h=True, journal_key=None, hbond='oo', hmax=None, donors=None, hb=None, u6='burns'):
+    """The tables of one .cif. include_h=False leaves hydrogen out of everything (no H sites, no
+    hydrogen bonds); hbond/hmax/donors/hb/u6 as in bv_check.run."""
     st = B.Structure(cif, B._parse_ox(ox), include_h=include_h)
-    P = B.Params(prefer=params)
+    P = B.Params(prefer=params, u6=u6)
     J = journal(journal_key)
-    result, anion_sum, cells = B.compute(st, P, cutoff)
+    result, anion_sum, cells, hbonds = B.compute(st, P, cutoff, hbond if include_h else 'none', hmax,
+                                                 B._parse_donors(donors) if isinstance(donors, str) else donors,
+                                                 B._parse_hb(hb) if isinstance(hb, str) else hb)
     codes = SymCodes(st)
     tabs = [('coords', coordinates_table(st, J)), ('bonds', bond_table(st, codes, P, J))]
-    hb = hbond_table(st, codes, J) if include_h else None
-    if hb:
-        tabs.append(('hbonds', hb))
-    tabs.append(('bvs', bvs_table(st, P, result, anion_sum, cells, J)))
+    hbt = hbond_table(st, codes, J, hbonds, hmax) if include_h else None
+    if hbt:
+        tabs.append(('hbonds', hbt))
+    tabs.append(('bvs', bvs_table(st, P, result, anion_sum, cells, J, hbonds)))
     for i, (k, t) in enumerate(tabs, 1):
         t['n'] = i
         t['label'] = J['caption'].format(n=i)
@@ -716,8 +675,9 @@ def write_word(st, tabs, path):
         doc.add_paragraph('')
     _save_docx(doc, path)
 
-def run(cif, word=False, params='gh', ox=None, cutoff=None, include_h=True, out_dir=None, quiet=False, journal_key=None):
-    st, tabs = build(cif, params, ox, cutoff, include_h, journal_key)
+def run(cif, word=False, params='gh', ox=None, cutoff=None, include_h=True, out_dir=None, quiet=False, journal_key=None,
+        hbond='oo', hmax=None, donors=None, hb=None, u6='burns'):
+    st, tabs = build(cif, params, ox, cutoff, include_h, journal_key, hbond, hmax, donors, hb, u6)
     text = render_text(tabs)
     if not quiet:
         print(text)
@@ -741,9 +701,15 @@ def main(argv=None):
     ap.add_argument('--ox'); ap.add_argument('--cutoff', type=float); ap.add_argument('--no-h', action='store_true'); ap.add_argument('--out')
     ap.add_argument('--journal', default=DEFAULT_JOURNAL, choices=sorted(JOURNALS),
                     help='table style: ammin, minmag, cjmp (Canadian Journal of Mineralogy and Petrology), ejm, or manuscript (default)')
+    ap.add_argument('--hbonds', default='oo', choices=['oo', 'h', 'none'], help='hydrogen-bond strengths: oo = from the O···O distances (Ferraris & Ivaldi 1988, default), h = from the H···O distances (Brown 2002), none')
+    ap.add_argument('--hmax', type=float, help='longest O···O counted as a hydrogen bond (default %.2f Å)' % B.HB_MAX)
+    ap.add_argument('--donors', help='hydrogen count per O site when the labels do not say, e.g. OW1=2,O5=1')
+    ap.add_argument('--hb', help='hydrogen bonds to place as given, e.g. OW1>O2,OW1>O7')
+    ap.add_argument('--u6', default='burns', choices=['burns', 'params'], help='U6+–O parameters: burns = Burns et al. (1997) (default), params = the chosen set')
     a = ap.parse_args(argv)
     try:
-        run(a.cif, a.word, a.params, a.ox, a.cutoff, not a.no_h, a.out, journal_key=a.journal)
+        run(a.cif, a.word, a.params, a.ox, a.cutoff, not a.no_h, a.out, journal_key=a.journal,
+            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6)
     except ValueError as e:
         raise SystemExit('tables: %s' % e)
     return 0

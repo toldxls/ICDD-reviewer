@@ -223,11 +223,36 @@ with sulfide/sulfosalt defaults (As³⁺, Cu⁺, Fe²⁺) when the structure has
 valence is stated in the report. An N with no O within 1.5 Å is ammonium whether or not its H
 were refined. Parameters are I.D. Brown's accumulated table (`bvparm2020.cif`, bundled): Gagné &
 Hawthorne (2015) for cation–O by default, Burns et al. (1997) for U⁶⁺ (the uranyl standard),
-`--params bo` / `ba` for Brese & O'Keeffe (1991) / Brown & Altermatt (1985); the report names
-each parameter used. Hydrogen: X-ray O–H distances are not trusted — each H takes its acceptor
-valence(s) from the H···O distance(s) and the donor gets 1 − Σ(acceptors), so every H sums to
-1 vu. Cation sums are unscaled but each bond is weighted by the anion's occupancy (a
-half-occupied O counts half); anion sums weight by the cation's occupancy.
+`--params bo` / `ba` for Brese & O'Keeffe (1991) / Brown & Altermatt (1985), `--u6 params` to
+take U⁶⁺ from the chosen set too; the report names each parameter used, and the table note cites
+them the way the journals print it — "Bond-valence parameters from Gagné and Hawthorne (2015);
+U6+–O from Burns et al. (1997); NH4+–O from García-Rodríguez et al. (2000)" (Brown's file lists a
+value under the paper that *derived* it, so a Brese & O'Keeffe request used to be footnoted as
+Brown & Altermatt; the note now follows the set asked for). Cation sums are unscaled but each
+bond is weighted by the anion's occupancy (a half-occupied O counts half); anion sums weight by
+the cation's occupancy.
+
+**Hydrogen bonds** (`--hbonds oo`, the default) follow the convention of the owner's tables:
+the strength of each O–H···O bond comes from the donor–acceptor **O···O distance**,
+s = (d/2.17)^−8.2 + 0.06 (Ferraris & Ivaldi 1988 — reproduces the szilagyiite, cadsulfohite and
+svornostite tables to 0.01 vu). With H atoms in the `.cif` the D–H···A pairs are the
+`_geom_hbond` loop's (else found from the H positions: H···A ≤ 2.6 Å, ∠DHA ≥ 110°); bonds
+longer than `--hmax` (3.2 Å) are listed in a note and not counted; a partly occupied H scales
+its bond. **Without H atoms** the tool *proposes* the hydrogen bonds from the O···O geometry:
+donors are the `OH*` / `OW*` / `W*` / `O6H`-style sites (when nothing is labelled, the O sites
+short of bond valence — Σcat < 0.75 → water, < 1.5 → hydroxyl — and the report says so);
+acceptors are the O within `--hmax` that share no coordinating cation with the donor (polyhedral
+edges are not hydrogen bonds), lie ≥ 80° from every cation bonded to it and still have room for
+the valence; contacts are taken shortest first, each once, a water's two acceptors 70–150°
+apart, symmetry-related pairs together, and when two donors touch the one with the larger
+deficit accepts. Blind, this recovers 81 % of the refined hydrogen bonds in the corpus CIFs; the
+rest are the genuinely ambiguous directions, so the proposal is labelled as such and
+`--donors OW1=2,O5=1` (H per site) and `--hb OW1>O2,OW1>O7` (pairs placed as given) override
+it. The donor's own O–H valences (1 − s) are reported but **not deducted from or added to** the
+donor's sum — Σan = cations + accepted hydrogen bonds, as in the owner's tables (the text report
+adds an `O–H` / `Σall` column so the full accounting is visible). `--hbonds h` keeps the older
+convention (acceptor valences from the H···O distances, Brown 2002, the donor 1 − Σ; H as a
+cation column); `--hbonds none` drops them.
 
 **What it prints.** Per cation site: every bond with distance, multiplicity and valence, the mean
 bond length, the bond-valence sum and its deviation from the expected valence (`◄ check` beyond
@@ -251,9 +276,11 @@ manuscripts: a `0.011` for `0.11`, a `039` missing its decimal point, a cell giv
 total beside one given per bond, a Σ that counts a `×3↓` in the row.
 
 Limits: a `.cif` without a symmetry-operator loop is refused unless it is P1/P-1 (no space-group
-table is bundled); intermetallics and organics are out of scope; hydrogen-bond valences from
-D···A distances (Ferraris & Ivaldi) are not computed. Tests:
-`python3 -m unittest tests.test_bv_check` (rutile from first principles; no corpus needed).
+table is bundled); intermetallics and organics are out of scope; ammonium is not a hydrogen-bond
+donor here; one parameter set applies to every cation (a table that mixes, say, Brown & Altermatt
+for V⁵⁺ with Gagné & Hawthorne for the rest needs two runs). Tests:
+`python3 -m unittest tests.test_bv_check` (rutile and a synthetic hydrate from first principles;
+no corpus needed).
 
 ## Publishable tables from a .cif (`pxrd tables`) — and the GUI's Tables mode
 
@@ -278,10 +305,15 @@ Four tables, formatted the way the mineralogy journals — and the corpus manusc
    Pb's long bonds stay, a 3.2 Å "P–O" does not (the same rule now applies in `pxrd bv`).
 3. **Hydrogen bonds** — `D–H⋯A | D–H | H⋯A | D⋯A | ∠DHA` from the `_geom_hbond` loop, else computed
    from the refined H positions (H⋯A ≤ 2.6 Å, ∠DHA ≥ 110°). Code numbering is shared with table 2.
+   Without H atoms: the `D⋯A | D⋯A (Å) | vu` contacts the tool proposes from the O⋯O geometry,
+   captioned and footnoted as a proposal to check.
 4. **Bond-valence analysis (vu)** — anion rows × cation columns with `×3↓` / `×3→` marks,
-   `Donor | vu | H bond` columns on the rows that accept a hydrogen bond, Σan (cations + accepted
-   H bonds) and a Σcat row; the note names the parameters. Same parameters and conventions as
-   `pxrd bv` (`--params`, `--ox`, `--cutoff`, `--no-h`).
+   `Donor | vu | H bond` columns on the rows that accept a hydrogen bond (strengths from the O⋯O
+   distances, Ferraris & Ivaldi 1988; donated valences not deducted), Σan (cations + accepted
+   H bonds) and a Σcat row; the note reads "Multiplicity is indicated by ×→↓. Bond-valence
+   parameters from … Hydrogen-bond strengths based on O–O bond lengths from Ferraris and Ivaldi
+   (1988) …" and names every set actually used. Same options as `pxrd bv` (`--params`, `--u6`,
+   `--ox`, `--cutoff`, `--hbonds`, `--hmax`, `--donors`, `--hb`, `--no-h`).
 
 **Journal styles (`--journal`)** — `ammin`, `minmag`, `cjmp` (Canadian Journal of Mineralogy and
 Petrology), `ejm`, or the default `manuscript` (the owner's Am Min-like style). Each sets the
@@ -292,14 +324,95 @@ below-header / bottom only) and the font (Arial for the Canadian journal). The r
 (`tables.JOURNALS`) marks every rule as taken from the journal's author instructions or inferred
 from its published papers in the corpus — correct it as the journals' notes say.
 
-**Tables mode in the GUI** — the third top-bar toggle, with a journal selector. Pick any folder holding `.cif` files (the
-same folder picker; a folder with only `.cif` files is fine), choose a file, and the four tables
-render in the page with the parameter set, oxidation-state overrides and "no H" as live options;
-**Write .docx** saves `review_out/<name>_tables.docx` and **open ↗** opens it in Word. `pxrd gui` on a
-folder holding `.cif` files but neither entries nor manuscripts opens in this mode.
+**Tables mode in the GUI** — the third top-bar toggle, with a journal selector, in five tabs:
+**Coords & bonds** and **Bond valence** (from a `.cif`, the tables above, with the parameter set,
+U⁶⁺ source, oxidation-state overrides, the hydrogen-bond mode / O–O limit / donor and pair
+overrides, and "no H" as live options — the footnote follows them), **Gladstone–Dale**, **EPMA** and **PXRD** (the
+three tools of the next section, each with its options as a row of inputs). Pick any folder (the
+same folder picker; a folder with only `.cif` / data files is fine): the sidebar lists the `.cif`
+files, the data files — probe analyses, peak lists, with a guess at what each is; click one to use
+it in the current tab — and what has been written to `review_out`. Every tab renders the same table
+the CLI prints (the reduction / working underneath), and **Write .docx** / **Write .xlsx** save
+`review_out/<name>_<tab>.docx` / `.xlsx`; **open ↗** opens the last one. The EPMA means can be
+handed to the Gladstone–Dale tab (**← EPMA**). Inputs are remembered per folder in
+`review_out/tables_opts.json`. `pxrd gui` on a folder holding `.cif` files but neither entries nor
+manuscripts opens in this mode.
 
 Tests: `python3 -m unittest tests.test_tables` (rutile: cells, symmetry-operator formatting, the three
 sources, the Word writer).
+
+## Composition, Gladstone–Dale and powder tables (`pxrd epma`, `pxrd gd`, `pxrd pxrd`)
+
+Three more table builders for a new-mineral manuscript, alongside `pxrd tables`. Each prints the
+table as text, writes `review_out/<name>_<tool>.txt`, and on request the Word table (`--word`, in the
+`--journal` style) and/or an `.xlsx` whose cells are live formulas so the arithmetic can be checked
+(`--xlsx`; needs `openpyxl`, in `requirements.txt`). All three are also tabs of the GUI's Tables mode.
+
+```bash
+pxrd epma "szilagyiite raw EPMA.xlsx" --basis O=21 --add CO2=wt:14.02 --add H2O=wt:12.61 --xlsx --word
+pxrd epma probe.xlsx --basis U=1 --charge H2O --anions 12 --convert UO2=UO3 --points 1-8 \
+         --standards CaO=anorthite,UO3=UO2 --ideal CaO=1,UO3=2,V2O5=1,H2O=4 --name mineral
+pxrd gd --formula "Ca=1,U=2,V=2,H2O=4" --n 1.700 --cif mineral.cif --z 2 --name mineral --xlsx
+pxrd gd --wt "UO3=63.88,PbO=13.41,H2O=7.0" --n 1.85 --density 4.9
+pxrd pxrd "spanoite obs.txt" "spanoite calc.txt" --dmin 1.45 --name spanoite --word --xlsx
+```
+
+**`pxrd epma`** — the probe file is an xlsx / csv / txt with the oxide wt% columns (`CaO`, `UO3`,
+`F`, `H2O`… — the header row is found by the oxide names, e.g. JEOL's `CaO (2) Oxide%`; one row per
+point; comment rows tolerated; the biggest block wins, or `--sheet`). The reduction follows the
+owner's spreadsheets: moles = wt%/MW, cations and O per constituent, then the normalisation
+**basis** — `O=N` (anions per formula unit: oxide O with the O=F,Cl reduction plus F, Cl and the
+water O; `--raw-anions` counts O and halogens both, the spreadsheet's 21.5 convention),
+`cations=N`, or an element or sum (`U=5`, `Si+Al=4`). Constituents the probe cannot give are added
+with `--add X=structure:N` (apfu from the structure, back-computed to wt%), `X=wt:V` (a measured
+value, e.g. CO2 by CHN), or `X=difference` (100 − total); `--convert UO2=UO3` re-expresses a
+constituent by molecular weight; `--drop` leaves one out; `--points 1-8` picks rows. **Charge
+balance**: `--charge H2O --anions N` (on a cation or element basis) adds the hydrogen the analysis
+lacks, `--charge Fe` splits FeO into FeO + Fe2O3. The console shows the full reduction (moles,
+cations, apfu, O apfu per constituent, factor, charge) and the empirical formula, then the published
+table — Constituent | Mean | Range | S.D. | Standard | Normalized | Ideal with the O=F and Total rows
+and the "calculated from the structure / by difference" note (`--standards`, `--ideal`). The `.xlsx`
+has `raw` (the points), `reduction` (formulas) and `table` sheets.
+
+**`pxrd epma --check`** replicates a *published* formula from an ICDD entry's Analysis field — the
+mean wt% list followed by the empirical formula in the ICDD notation (`( Mn1.75 +2 Mg0.25 )sigma2.00
+( P O4 )4 … !3.9 H2 O`): `pxrd epma "I003246(...).docx" --check` reads the field from the entry,
+`pxrd epma --check "Microprobe analysis … (wt.%): CaO 18.4, … : Ca2.99Na0.67…"` takes the string.
+The means are re-reduced on the basis read off the formula (its anion total with and without the
+water O, its cation total, every whole-number element — `--basis` forces one) and every coefficient
+is compared (0.02 apfu / 2 %); a constant factor between the two sets means only the basis differs
+and is reported as such. What it reveals is what a reader cannot check by hand: a constituent in
+the formula but absent from the wt% list (F, most often), a value dropped (`ZrO2, TiO2 1.42`), a
+zero typed for an O (`Nb205`), a missing digit (`TiO`), a constituent listed twice, a group whose
+parts do not add to its stated Σ, unbalanced brackets, and coefficients that do not follow from
+the numbers. Constituents a probe cannot give (H, Li, B, Be, C, N) are reported as "calculated by
+the authors" rather than as discrepancies. On the ICDD corpus (178 distinct entries with an Analysis
+field; 161 parsable, 144 reducible) the replication reproduces 87 formulas exactly; the rest split
+between coefficients that do not follow from the listed numbers (values garbled or dropped in the
+entry), 15 formula strings too garbled to read, and calculated-constituent conventions (H, N). Library: `epma.parse_icdd_analysis`,
+`parse_icdd_formula`, `basis_candidates`, `replicate_formula`, `check_analysis`.
+
+**`pxrd gd`** — Gladstone–Dale compatibility, 1 − K_P/K_C: K_C = Σ k·wt%/100 from the composition
+(`--formula` as atoms per formula unit, mapped to the usual oxides — `--oxide S=S`, `Fe=Fe2O3` to
+change one — or `--wt` oxides), K_P = (n − 1)/D with the measured density and/or the density from
+the `.cif` and Z (`--cif`, `--z`). Constants live in `pxrd_review/data/gd_constants.json` (Mandarino
+1976/1981, harvested from the owner's spreadsheets; each entry carries its source and the uncertain
+ones say "check" — correct them there; `--k UO3=0.118` overrides one). Categories: superior < 0.02,
+excellent < 0.04, good < 0.06, fair < 0.08, poor.
+
+**`pxrd pxrd`** — the combined powder table from an observed peak list and the calculated pattern.
+Observed: a JADE export (with its hkl assignments) or any d / I list (2θ / I with `--wavelength`);
+calculated: d, I, hkl. Rules, tuned on the owner's spanoite table (all 66 rows reproduced): a line is
+matched by hkl when the list has one, else by d; an unobserved reflection within `--tol` (1.2 % in
+d) of a strong observed peak is attached to it with Iobs / dobs repeated; a calculated line far from
+every peak stands alone; a row is kept when Iobs or Icalc ≥ `--min-i` (3.5); a peak whose
+reflections are all weak keeps one row; `--dmin` cuts the tail; the **eight strongest observed
+lines are bold**; `--blocks 2` lays the table out side by side. The `.xlsx` has `matched` (with Δd
+per line), `obs` and `calc` sheets.
+
+Tests: `python3 -m unittest tests.test_epma tests.test_gd tests.test_pxrd_table tests.test_gui_tb`.
+
+---
 
 ## Writing the review into the .docx
 `pxrd_review/annotate_review.py` runs the same comparison and writes the findings back into

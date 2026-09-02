@@ -6,7 +6,7 @@ import os, re, shutil, tempfile, unittest
 
 from pxrd_review import tables as T
 from pxrd_review import bv_check as B
-from tests.test_bv_check import RUTILE, _write
+from tests.test_bv_check import RUTILE, HYDRATE, HYDRATE_H, _write
 
 
 class Cells(unittest.TestCase):
@@ -62,7 +62,9 @@ class Rutile(unittest.TestCase):
         self.assertEqual(rows[0][0], 'O1')
         self.assertIn('0.70×4↓×2→', rows[0][1])
         self.assertEqual(rows[-1][:2], ['Σcat', '4.07'])
-        self.assertIn('Brown and Altermatt', bvs['note'])
+        self.assertIn("Brese and O'Keeffe (1991)", bvs['note'])       # the set asked for, not the file's ref id
+        self.assertIn('Multiplicity is indicated by', bvs['note'])
+        self.assertNotIn('Brown and Altermatt', bvs['note'])
 
     def test_render_and_word(self):
         h = T.render_html(self.tabs)
@@ -97,6 +99,39 @@ class Journals(unittest.TestCase):
             st, tabs = T.build(cif, params='bo')                     # the default: the owner's style
             self.assertEqual([T.plain(c) for c in dict(tabs)['coords']['head']][:1], ['Atoms'])
             self.assertEqual(T.build(cif, params='bo', journal_key='nope')[1][0][1]['label'], 'Table 1.')   # unknown -> default
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class Hydrate(unittest.TestCase):
+    def test_hbond_columns_and_proposed_contacts(self):
+        tmp = tempfile.mkdtemp(prefix='tbl_')
+        try:
+            cif = _write(tmp, 'h.cif', HYDRATE)
+            st, tabs = T.build(cif)
+            d = dict(tabs)
+            self.assertEqual([k for k, _ in tabs], ['coords', 'bonds', 'hbonds', 'bvs'])
+            self.assertIn('proposed', d['hbonds']['caption'].lower())
+            self.assertIn('PROPOSED', d['hbonds']['note'])
+            head = [T.plain(c) for c in d['bvs']['head']]
+            self.assertEqual(head, ['Atom', 'Ca1', 'Donor', 'vu', 'H bond', 'Σan'])
+            rows = {T.plain(r[0]): [T.plain(c) for c in r] for r in d['bvs']['rows']}
+            s = B.fi_valence(2.8)
+            self.assertEqual(rows['O2'][2:5], ['OW1', '%.2f' % s, '-'])
+            self.assertEqual(rows['O2'][-1], '%.2f' % s)                          # Σan = accepted only (no cation)
+            self.assertEqual(rows['OW1'][2:5], ['-', '-', '-'])                   # donors: nothing deducted
+            self.assertIn('Ferraris and Ivaldi (1988)', d['bvs']['note'])
+            self.assertIn('not located', d['bvs']['note'])
+            # H located: the geometry table, and no 'proposed' wording
+            st, tabs = T.build(_write(tmp, 'hh.cif', HYDRATE_H))
+            d = dict(tabs)
+            self.assertIn('OW1–H1⋯O2', T.render_text([('hbonds', d['hbonds'])]))
+            self.assertNotIn('not located', d['bvs']['note'])
+            # no H at all
+            st, tabs = T.build(cif, include_h=False)
+            self.assertEqual([k for k, _ in tabs], ['coords', 'bonds', 'bvs'])
+            st, tabs = T.build(cif, hbond='none')
+            self.assertNotIn('Donor', [T.plain(c) for c in dict(tabs)['bvs']['head']])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

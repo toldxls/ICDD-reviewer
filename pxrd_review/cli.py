@@ -24,6 +24,16 @@ long module paths, or ports.
                                    publishable tables from the .cif: coordinates + displacement
                                    parameters, selected bond distances (symmetry codes, means),
                                    hydrogen bonds, bond-valence analysis; --word writes a .docx
+    pxrd epma <probe.xlsx|.csv> --basis O=21 [--add H2O=structure:6 …] [--charge H2O --anions N] [--xlsx]
+                                   microprobe reduction: mean/range/s.d. table, empirical formula on a
+                                   basis, xlsx with live formulas
+    pxrd epma <entry.docx> --check | pxrd epma --check "Microprobe analysis … : formula"
+                                   replicate an ICDD entry's published formula from its Analysis field
+                                   and report the coefficients / constituents that do not follow
+    pxrd gd --wt "UO3=63.9,…" --n 2.06 [--density D | --cif X.cif] [--xlsx]
+                                   Gladstone–Dale compatibility (K_P, K_C, 1 − K_P/K_C)
+    pxrd pxrd <obs list> <calc list> [--word --xlsx]   the powder-diffraction table (obs/calc combined
+                                   lines, eight strongest in bold)
 
 Folder resolution for the data sub-commands: an explicit folder argument wins; a
 leading entry id (e.g. `pxrd extras I003448`) is passed through to the module, not
@@ -49,6 +59,9 @@ MODULE = {
     'refs':       'pxrd_review.refs_check',   # takes a FILE (or folder) — not folder-resolved
     'bv':         'pxrd_review.bv_check',     # takes a .cif — not folder-resolved
     'tables':     'pxrd_review.tables',       # takes a .cif — not folder-resolved
+    'epma':       'pxrd_review.epma',         # takes a probe export — not folder-resolved
+    'gd':         'pxrd_review.gd',           # options only
+    'pxrd':       'pxrd_review.pxrd_table',   # takes obs + calc lists — not folder-resolved
 }
 NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'sweep', 'check'}
 MEM = os.path.join(P.cache_dir(), 'pxrd_last.json')   # remembered folder per sub-command
@@ -152,6 +165,10 @@ def main():
             raise SystemExit("pxrd bv: give a structure .cif, e.g.  pxrd bv mineral.cif --table \"My paper.docx\"")
         if sub == 'tables' and not rest:
             raise SystemExit("pxrd tables: give a structure .cif, e.g.  pxrd tables mineral.cif --word")
+        if sub == 'epma' and not rest:
+            raise SystemExit("pxrd epma: give the probe export, e.g.  pxrd epma probe.xlsx --basis O=21 --xlsx")
+        if sub == 'pxrd' and not rest:
+            raise SystemExit("pxrd pxrd: give the observed and calculated peak lists, e.g.  pxrd pxrd obs.txt calc.txt --word")
 
     # the child is a fresh interpreter: ensure the package is importable even when
     # not pip-installed (running via the repo's ./pxrd dev shim)
