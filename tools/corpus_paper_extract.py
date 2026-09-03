@@ -68,7 +68,7 @@ def main(roots, pdf_dirs, out_dir, tag=''):
     lines.append(''); lines.append('STATS %s' % stats)
     os.makedirs(out_dir, exist_ok=True)
     open(os.path.join(out_dir, 'paper_checks_report%s.txt' % tag), 'w', encoding='utf-8').write(
-        'Paper self-checks (pxrd-review 0.5.3): the composition re-derived from the paper\'s own table, basis and method\n'
+        'Paper self-checks (pxrd-review 0.5.4): the composition re-derived from the paper\'s own table, basis and method\n'
         'against its own empirical formula; its bond-valence table (read from the pdf) against the .cif. Rerun:\n'
         '  python3 tools/corpus_paper_extract.py "<unused>" "<pdf+cif folders, comma-separated>"\n\n' + '\n'.join(lines) + '\n')
     with open(os.path.join(out_dir, 'paper_checks_faults%s.tsv' % tag), 'w', encoding='utf-8', newline='') as f:

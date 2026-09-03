@@ -457,3 +457,218 @@ class Parser4(unittest.TestCase):
         self.assertIn('Ge0.940', J('(Ge0.91-0.97Si0.03-0.09)Σ1.00O2'))                         # several dashes: ranges
         self.assertIn('Fe0.25 +3', J('(Mg0.75Fe0.25 3+)Σ1'))                                   # the charge after the count
         self.assertIn('?0.63', J('(Pb8.33Sr0.04o0.63)S9.00'))                                   # a vacancy printed as o
+
+
+class Domains(unittest.TestCase):
+    def test_domains_assigned_to_the_headline(self):
+        t = ('Electron microprobe data (in wt.%) of ferriandrosite-(Ce) (domains A–C) and associated vielleaureite-(Ce) (domain D). '
+             'Domains B and C correspond to the end-member formula MnCeFe3+AlMn2+(Si2O7)(SiO4)O(OH), i.e. to ferriandrosite-(Ce), '
+             'however domain D leads to the end-member formula of vielleaureite-(Ce).')
+        self.assertEqual(PE.headline_domains(t, 'ferriandrosite-(ce)')[:3], ['B', 'C', 'A'])     # B and C named twice; D belongs to the other mineral
+        self.assertEqual(PE.headline_domains('Crystal II of piccoliite gave the best data.', 'piccoliite'), ['II'])
+
+
+class TwoFormulas(unittest.TestCase):
+    def test_abstract_disagrees_with_body(self):
+        rows = [{'constituent': c, 'mean': v} for c, v in (('Ce2O3', 39.37), ('La2O3', 19.92), ('Nd2O3', 14.46), ('Sm2O3', 2.84), ('CaO', 0.73), ('F', 14.33))]
+        ex = {'name': 'håleniusite-(ce)', 'basis': ('O', 2.0), 'epma': {'rows': rows, 'total': 93.72, 'header': 'Constituent Mean'}}
+        text = ('Abstract. Electron probe microanalysis provided the empirical formula (Ce0.41La0.21Sm0.15Nd0.04Ca0.02)R0.83(O0.70F1.30)R2.00. ' + 'x ' * 2500 +
+                'The empirical formula calculated on the basis of O + F = 2 apfu is (Ce0.412La0.210Nd0.148Sm0.028Ca0.022)R0.820(O0.70F1.30)R2.00. Later text.')
+        c = PE.check_composition(ex, text)
+        self.assertTrue(any('abstract does not agree' in l and 'Sm 0.15 vs 0.028' in l for l in c['lines']), c['lines'])
+        self.assertFalse(c['ok'])
+
+
+class Exclusions(unittest.TestCase):
+    def test_excluded_elements(self):
+        t = 'as Al3+ strongly differs in ionic radius from large cations such as REE, the empirical formula was calculated without Al. Later, Si was excluded from the sum.'
+        self.assertEqual(PE.excluded_elements(t), ['Al', 'Si'])
+        self.assertEqual(PE.excluded_elements('The formula was calculated on the basis of 12 O.'), [])
+
+
+class Corrected(unittest.TestCase):
+    def test_total_composition_and_corrected_formula(self):
+        rows = [{'constituent': c, 'mean': v} for c, v in (('Fe2O3', 4.18), ('MnO', 0.43), ('K2O', 0.98), ('SO3', 56.72), ('SiO2', 0.10), ('Al2O3', 10.10), ('MgO', 1.00), ('Na2O', 19.39))]
+        ex = {'name': 'heimaeyite', 'basis': None, 'epma': {'rows': rows, 'total': 92.89, 'header': 'Constituent Mean'}}
+        text = ('We assume the presence of small amounts of Mn, Si, K and Mg is due to impurities. The total composition of the sample results in '
+                'K0.10Na2.95Mn0.03Mg0.12Fe0.25Al0.94Si0.01S3.35O13.5. If the Mn and Si impurity and the contributions of koryakite are removed, '
+                'the resulting empirical formula of heimaeyite is Na2.93Al0.82Fe0.25S2.99O12.05. The ideal formula is NaAl(SO4)2.')
+        c = PE.check_composition(ex, text)
+        self.assertFalse(c['ok']); self.assertFalse(c['verified'])
+        self.assertTrue(any('uncorrected composition' in l and 'cannot be re-derived' in l for l in c['lines']), c['lines'])
+
+
+class HandCheck(unittest.TestCase):
+    """2026-09-03: the owner's five hand-checked papers, one rule each."""
+
+    def test_legend_columns(self):
+        t = '1, 2, 8 – fluorpyromorphite (1 – holotype, mean of 8 spot analyses; 2 – F-richest spot; 8 – cotype); 3 – hydroxylpyromorphite (mean of 4).'
+        self.assertEqual(PE.legend_columns(t, 'fluorpyromorphite'), ['1', '2', '8'])
+        self.assertEqual(PE.legend_columns('4–6 – pyromorphite; 1 – mimetite', 'pyromorphite'), ['4', '5', '6'])
+
+    def test_two_line_cell_mean_above_label(self):
+        import fitz
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'twoline.pdf')
+        try:
+            doc = fitz.open(); page = doc.new_page(width=595, height=842); y = 60
+            page.insert_text((40, y), 'Constituent', fontsize=9); y += 14
+            for x, t in zip((130, 180, 220, 260), ('1', '2', '3', '4')): page.insert_text((x, y), t, fontsize=9)
+            y += 14
+            for label, mean, rng, others in (('CaO', '0.10', '(0.00–0.32)', ('0.15', '0.05', '0.34')), ('PbO', '83.51', '(82.79–84.40)', ('82.50', '83.20', '82.34')),
+                                              ('P2O5', '16.13', '(16.00–16.23)', ('15.90', '16.05', '16.02')), ('F', '1.00', '(0.92–1.06)', ('1.36', '0.37', '0.14'))):
+                page.insert_text((130, y), mean, fontsize=9)                       # the mean, a line above the label
+                page.insert_text((40, y + 5), label, fontsize=9); page.insert_text((120, y + 5), rng, fontsize=7)
+                for x, t in zip((180, 220, 260), others): page.insert_text((x, y + 5), t, fontsize=9)
+                y += 20
+            page.insert_text((40, y), 'Total  100.84  99.37  100.29  100.44', fontsize=9)
+            doc.save(path); doc.close()
+            e = PE.epma_table(path)
+            rows = {r['constituent']: r for r in e['rows']}
+            self.assertEqual(rows['PbO']['mean'], 83.51); self.assertEqual(rows['PbO']['all'][:2], [83.51, 82.5])
+            self.assertEqual(rows['CaO']['mean'], 0.1)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class Attribution(unittest.TestCase):
+    def test_other_mineral_formula_dropped_and_associated_caption(self):
+        t = ('The empirical formula of zoisite-(Pb) is (Ca1.09Pb0.86Mn2+0.01)Σ1.96(Al2.88Fe3+0.10)Σ2.98Si3.00O12(OH). '
+             'The empirical formula of hancockite is (Ca1.18Pb0.73Mn2+0.06)Σ1.97(Al2.32Fe3+0.66)Σ2.98Si3.01O12(OH).')
+        fs = PE._formulas(t, 'zoisite-(pb)')
+        self.assertEqual(len(fs), 1); self.assertAlmostEqual(fs[0][1]['Pb'], 0.86)
+        self.assertLess(PE._caption_score('Table 2. EPMA representative analyses of phases associated with zoisite-(Pb).', 'zoisite-(pb)'),
+                        PE._caption_score('Table 1. Chemical composition of zoisite-(Pb) (wt.%).', 'zoisite-(pb)'))
+
+
+class ReaderClasses(unittest.TestCase):
+    """2026-09-03 afternoon: the general reader defects behind the 'column chosen by fit' verdicts."""
+
+    def _pdf(self, lines, xs=None):
+        """lines: [(y, [(x, text), …])] or [(y, 'text at x=40')] -> a one-page pdf path."""
+        import fitz
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'page.pdf')
+        doc = fitz.open(); page = doc.new_page(width=595, height=842)
+        for y, cells in lines:
+            if isinstance(cells, str):
+                page.insert_text((40, y), cells, fontsize=9)
+            else:
+                for x, t in cells:
+                    page.insert_text((x, y), t, fontsize=9)
+        doc.save(path); doc.close()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        return path
+
+    def test_value_cells(self):
+        self.assertEqual(PE._numbers(['29(3)', '67(3)', '3.6(3)'])[::2], [('num', 29.0), ('num', 67.0), ('num', 3.6)])
+        self.assertEqual(PE._numbers(['(13.16)', '13.09–13.25'])[0], ('num', 13.16))
+        self.assertEqual(PE._constituent_ok('S2–'), ('S', 'constituent'))
+        self.assertEqual(PE._constituent_ok('HS'), ('HS', 'constituent'))
+        self.assertEqual(PE._constituent_ok('Cl–')[0], 'Cl')
+
+    def test_footnote_mark_on_value(self):
+        import fitz
+        path = self._pdf([(100, [(40, 'FeOb'), (120, '11.41c'), (160, '0.46'), (200, '11.97d')]), (114, [(40, 'MnO'), (120, '0.62'), (160, '0.05'), (200, '0.70')])])
+        lines = PE.page_lines(fitz.open(path)[0])
+        self.assertEqual([w[4] for w in lines[0]['w']], ['FeOb', '11.41', '0.46', '11.97'])
+
+    def test_legend_name_then_number(self):
+        t = 'Table 3. Chemical composition of gmalimite (1—grain used for SCXRD, 2—aggregate, Figure 4B) and zoharite (3—aggregate, Figure 3C).'
+        self.assertEqual(PE.legend_columns(t, 'zoharite'), ['3'])
+        self.assertEqual(PE.legend_columns(t, 'gmalimite'), ['1'])
+
+    def test_holotype_words_stop_at_the_cotype(self):
+        w = PE.holotype_words('It was found at two localities: the holotype in the Sahatany Valley, central Madagascar, and a cotype specimen from Sakangyi, Mogok Township, Mandalay Region, Myanmar.')
+        self.assertIn('Madagascar', w); self.assertNotIn('Myanmar', w); self.assertNotIn('Mogok', w)
+
+    def test_formula_sentences(self):
+        fs = PE._formulas('The empirical formula of koragoite (Voloshin et al., 1997) calculated on the basis of 20 O atoms is Mn3.71Fe0.13Nb3.65Ta0.56W1.83Ti0.08O20. '
+                          'The crystal chemical formula of the mineral is (Mn2.02Fe0.98)Σ3.00(Nb2.30Ta0.64Ti0.06)Σ3.00(W1.34Nb0.66)Σ2.00O20.', 'koragoite')
+        self.assertEqual(fs[0][4], 'structural'); self.assertAlmostEqual(fs[1][1]['Mn'], 3.71)      # the cited formula goes last
+        fs = PE._formulas('The empirical formula (O = 28 apfu) is Ca9.00(Ca0.33Fe0. 2+ 20□0.47)Σ1.00Mg1.04P6.97O28.', 'keplerite')
+        self.assertAlmostEqual(fs[0][1]['Fe'], 0.20); self.assertAlmostEqual(fs[0][1]['Ca'], 9.33)   # the charge superscript set mid-number
+        fs = PE._formulas('The empirical formulas for ferriphoxite (for O = 13 apfu) and carboferriphoxite (for O = 15 apfu) are '
+                          '{[(NH4)2.13K0.87]Σ3.00(H2O)}{(Fe3+ 0.95Al0.05)Σ1.00(HPO4)2(C2O4)} and {[(NH4)1.12K0.88]Σ2.00(H2CO3)}{(Fe3+ 0.78Al0.22)Σ1.00(HPO4)(H2PO4)(C2O4)}, respectively.', 'ferriphoxite')
+        self.assertEqual(fs[0][2], []); self.assertAlmostEqual(fs[0][1]['N'], 2.13); self.assertAlmostEqual(fs[0][1]['Fe'], 0.95)   # braces are brackets
+        fs = PE._formulas('A combination of results of EMPA and site scattering values obtained by single-crystal structure refinements of Tangir Valley chevkinite-(Ce) '
+                          'yielded the formula: (Ce1.81La0.81Nd0.59Ca0.46)Σ3.67(Fe2+ 0.80Mg0.10)Σ0.90Ti2.65Si4.02O22.', 'chevkinite-(ce)')
+        self.assertEqual(fs[0][4], 'structural')
+
+    def test_tables_that_are_not_the_analysis(self):
+        path = self._pdf([(80, 'Table 2. Trace element composition of ferri-taramite (µg g−1).'), (94, 'Element   Mean   Range'),
+                          (108, 'As   18.0   12–25'), (122, 'B   5.5   4–7'), (136, 'Be   75.0   60–90'), (150, 'Co   109.0   90–120'), (164, 'Sc   49.0   40–60')])
+        self.assertIsNone(PE.epma_table(path, 'ferri-taramite'))
+        path = self._pdf([(80, 'TABLE 6. EMPIRICAL BOND VALENCES (vu) FOR CANADIAN BAZZITE'), (94, 'Bz-ON   Si   Be   Na'),
+                          (108, 'O1   4.09   1.964   1.056'), (122, 'O2   4.05   1.980   1.010'), (136, 'O3   4.11   1.950   1.100')])
+        self.assertIsNone(PE.epma_table(path, 'bazzite'))
+
+    def test_transposed_apfu_columns_and_integer_esds(self):
+        xs = (40, 90, 130, 170, 210, 250, 290, 330, 370, 410, 450)
+        head = ['', 'CaO', 'MgO', 'MnO', 'As2O5', 'P2O5', 'H2O*', 'total', 'Ca', 'Mg', 'Mn']
+        rows = [['mean', '25.42', '6.11', '0.10', '56.00', '0.29', '11.20', '99.13', '3.691', '1.235', '0.012'],
+                ['1', '26.05', '5.44', '0.15', '56.10', '0.12', '11.22', '99.08', '3.793', '1.102', '0.017'],
+                ['2', '26.18', '5.47', '0.02', '55.55', '0.44', '11.19', '98.85', '3.814', '1.109', '0.002']]
+        path = self._pdf([(80, 'Tab. 2 Chemical composition of chongite from Jáchymov (wt. %)')] + [(100 + 14 * k, list(zip(xs, r))) for k, r in enumerate([head] + rows)])
+        e = PE.epma_table(path, 'chongite')
+        self.assertEqual([r['constituent'] for r in e['rows']], ['CaO', 'MgO', 'MnO', 'As2O5', 'P2O5', 'H2O'])
+        self.assertEqual(e['rows'][0]['mean'], 25.42)
+        xs = (40, 90, 140, 190, 240)
+        rows = [['Spot', 'SiO2', 'Al2O3', 'Fe2O3', 'Total'], ['1', '27.25', '68.66', '3.48', '99.96'], ['2', '27.24', '68.84', '3.49', '100.17'],
+                ['Mean', '29(3)', '67(3)', '3.6(3)', '99.8(5)']]
+        path = self._pdf([(80, 'Table 2. (a) Electron microprobe analyses of mullite-2c given in weight percent.')] + [(100 + 14 * k, list(zip(xs, r))) for k, r in enumerate(rows)])
+        e = PE.epma_table(path, 'mullite')
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'SiO2': 29.0, 'Al2O3': 67.0, 'Fe2O3': 3.6})
+
+    def test_nd_rows_legend_column_and_the_apfu_block(self):
+        xs = (40, 180, 240, 410)
+        body = [['S', '33.77', '33.58', '30.87'], ['Fe', '36.19', '36.84', '28.35'], ['Cu', '14.33', '14.10', '20.05'], ['K', '7.58', '7.60', '7.00'],
+                ['Ba', '0.12', '0.10', '11.50'], ['Na', 'n.d.', 'n.d.', '0.18'], ['Se', 'n.d.', 'n.d.', '0.17'], ['Total', '99.99', '99.22', '99.72'],
+                ['S', '25.00', '25.00', '27.00'], ['Na', '0.00', '0.00', '0.22']]
+        path = self._pdf([(80, 'Table 3. Chemical composition of gmalimite (1—grain used for SCXRD, 2—aggregate) and zoharite (3—aggregate).'),
+                          (100, list(zip(xs, ['wt.%', '1', '2', '3'])))] + [(114 + 14 * k, list(zip(xs, r))) for k, r in enumerate(body)])
+        e = PE.epma_table(path, 'zoharite')
+        self.assertNotIn('Na', [r['constituent'] for r in e['rows']])                        # n.d. in the first column: no mean
+        na = [r for r in e['rows_all'] if r['constituent'] == 'Na']
+        self.assertEqual(len(na), 1); self.assertEqual(na[0]['all'], [0.0, 0.0, 0.18])       # kept for the named columns; the apfu 'Na 0.22' below the Total is not a second row
+        cols = PE.headline_columns(e, 'zoharite', {'codes': [], 'n': None, 'holotype': False, 'holotype_words': [], 'domains': ['3']})
+        self.assertTrue(cols); wt, why = cols[0]
+        self.assertIn('column 3', why); self.assertNotIn('averaged', why)
+        self.assertEqual(wt['Na'], 0.18); self.assertEqual(wt['S'], 30.87); self.assertEqual(wt['Se'], 0.17)
+        alts = PE.table_alternatives(e, {r['constituent']: r['mean'] for r in e['rows']})
+        self.assertTrue(any(a.get('Na') == 0.18 and a.get('S') == 30.87 for a in alts))     # the by-fit columns carry the n.d.-first rows too
+
+    def test_mean_cell_inside_the_named_group(self):
+        xs = (40, 170, 200, 230, 262, 330, 360, 390, 422)
+        head2 = ['No. of spot analyses', '5', '6', '13', 'Mean (n = 3)', '8', '15', '32', 'Mean (n = 9)']
+        body = [['SiO2', '29.21', '29.32', '29.43', '29.32', '26.39', '25.49', '26.30', '25.98'], ['Al2O3', '48.10', '48.60', '48.65', '48.45', '44.10', '43.90', '44.30', '44.10'],
+                ['B2O3', '16.50', '16.60', '16.64', '16.58', '15.90', '15.80', '16.00', '15.90'], ['MnO', '0.40', '0.38', '0.39', '0.39', '0.20', '0.22', '0.21', '0.21'],
+                ['Na2O', '2.10', '2.12', '2.14', '2.12', '1.90', '1.95', '1.92', '1.92']]
+        path = self._pdf([(80, 'TABLE 2. Representative chemical compositions of ertlite and mean analyses used for structure refinement'),
+                          (100, [(200, 'Madagascar'), (360, 'Myanmar')]), (114, list(zip(xs, head2)))] + [(128 + 14 * k, list(zip(xs, r))) for k, r in enumerate(body)])
+        e = PE.epma_table(path, 'ertlite')
+        cols = PE.headline_columns(e, 'ertlite', {'codes': [], 'n': None, 'holotype': True, 'holotype_words': ['Madagascar'], 'domains': []})
+        wt, why = next((w, y) for w, y in cols if 'Madagascar' in y)
+        self.assertNotIn('averaged', why); self.assertEqual(wt['SiO2'], 29.32); self.assertEqual(wt['MnO'], 0.39)
+
+    def test_pass9_vetting(self):
+        fs = PE._formulas('The empirical formula using Li, Na, and K based on the structure refinement is Li1.00Na5.81K2.19(UO2)(SO4)5(SO3OH)(H2O). '
+                          'The empirical formula using Na measured via EPMA is Li0.79Na5.02K2.02(UO2)(SO4)5(SO3OH)(H2O).', 'seaborgite')
+        self.assertEqual([f[4] for f in fs], ['structural', 'empirical'])
+        fs = PE._formulas('The empirical formula is Pb8.00Al2.00S6+ 2.88S2 2.60O28.52H22.92.', 'dinilawiite')
+        self.assertAlmostEqual(fs[0][1]['S'], 5.48)                                           # 'S2 2.60': the minus of S2− lost
+        self.assertIsNone(PE._constituent_ok('Mn2+')[0]); self.assertIsNone(PE._constituent_ok('As3–')[0])   # only anions carry a charge worth stripping
+        self.assertIsNone(PE.prose_table('The composition is K0.89 Na0.05 Y0.02 Ca0.01 Ba0.01 Mg0.97 Sc0.54.'))
+        self.assertIsNotNone(PE.prose_table('The mean composition is MnO 14.78, Ce2O3 34.19, P2O5 29.57, and H2O 21.46, total 100.00.'))
+        xs = (40, 150, 200, 250, 300, 350, 400)
+        rows = [['Na', 'Ca', 'K', 'Na', 'F', 'Cl', 'Mn'], ['A', '1.82', '0.02', '0.09', '0.10', '0.05', '1.81'], ['B', '1.80', '0.03', '0.08', '0.12', '0.04', '1.79'], ['C', '1.85', '0.01', '0.10', '0.11', '0.06', '1.83']]
+        path = self._pdf([(80, 'Site populations of speziaite')] + [(100 + 14 * k, list(zip(xs, r))) for k, r in enumerate(rows)])
+        e = PE.epma_table(path, 'speziaite')
+        self.assertTrue(e is None or e.get('total') is None and sum(r['mean'] for r in e['rows']) < 50)
+        xs = (40, 150, 200, 240, 300, 350, 390)
+        head = ['', 'CF9a1', 'Range', 'SD', 'CF9a2', 'Range', 'SD']
+        body = [['Na2O', '1.58', '1.4–1.7', '0.15', '1.67', '1.5–1.8', '0.05'], ['CaO', '10.20', '9.9–10.5', '0.20', '10.40', '10.1–10.7', '0.15'],
+                ['FeO', '20.10', '19.5–20.6', '0.30', '19.80', '19.2–20.3', '0.25'], ['P2O5', '39.50', '39.0–40.0', '0.30', '39.20', '38.8–39.6', '0.25'], ['H2O', '28.60', '', '', '28.90', '', '']]
+        path = self._pdf([(80, 'TABLE 3. SUMMARY OF CHEMICAL DATA (wt.%) OF LIRAITE HOLOTYPE')] + [(100 + 14 * k, list(zip(xs, r))) for k, r in enumerate([head] + body)])
+        e = PE.epma_table(path, 'liraite')
+        cols = PE.headline_columns(e, 'liraite', {'codes': ['CF9a1'], 'n': None, 'holotype': False, 'holotype_words': [], 'domains': []})
+        wt, why = cols[0]
+        self.assertNotIn('averaged', why); self.assertEqual(wt['Na2O'], 1.58); self.assertEqual(wt['FeO'], 20.1)

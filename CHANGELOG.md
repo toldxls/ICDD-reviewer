@@ -4,6 +4,60 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.5.4] — 2026-09-03
+
+### Changed — five papers hand-checked with the owner, one rule each
+- **Ferriandrosite-(Ce)**: a header with "wt.%" over columns B–D on one line and "Mean" over
+  column A on the next put the whole default read on column B; "Mean" now outranks "wt.%" and the
+  leftmost wins. And the owner's policy: when the Mean column reproduces the formula it is the
+  source and no other column is tried; named columns (domain letters a sentence assigns to the
+  headline mineral, sample codes, a holotype locality, the Levinson suffix, a table legend) are
+  consulted only when the mean does not reproduce. Domain phrases belong to the nearest mineral
+  name in their sentence ("… (domains A–C) and associated vielleaureite-(Ce) (domain D)").
+- **Håleniusite-(Ce)**: the abstract's formula swaps Sm and Nd against the body's. Every formula
+  sentence is now read; the one the table reproduces is the reference and an abstract that
+  disagrees with it is flagged with the differences ("Nd 0.04 vs 0.148; Sm 0.15 vs 0.028 …"). A
+  second formula in the body is a note (an alternative normalisation). The basis "O þ F ¼ 2 apfu"
+  reads.
+- **Calcioancylite-(La)**: "the empirical formula was calculated without Al" is read and Al left
+  out with a note; the factor gate holds back only ratios near a clean factor (½, 2, 3, 4, 10) or
+  beyond 0.4–2.5, so the paper's Nd0.10 against 0.057 from its own Nd2O3 is reported.
+- **Heimaeyite**: "the total composition of the sample results in …" is a formula of its own kind
+  and is verified; correction wording (impurity, admixed, subtracted, corrected for) near the final
+  formula marks it as not re-derivable from the table, and the report says so.
+- **Fluorpyromorphite**: a two-line cell prints the mean of column 1 on the line above the label
+  and the range beside it; both lines are folded into the row. A table legend "1, 2, 8 –
+  fluorpyromorphite (1 – holotype, …)" supplies column keys, the holotype's first. A formula
+  candidate that is a prefix of another (cut by a page break) is dropped, and a formula is
+  preferred only when its check is clean and verified.
+
+### Changed — the reader defects behind the "column chosen by fit" verdicts
+Ten unverified papers read by hand: in nine the paper does say which column or row is the mean of
+the new mineral and the tool failed to read it, for general reasons that are now fixed:
+- **Value cells**: an esd on an integer ("Mean 29(3) 67(3)"), a parenthesised value ("SO3 (13.16)"
+  = total S as SO3), a footnote mark glued to the value ("11.41c", "3.19*"), an anion label with
+  its charge ("S2–", "Cl–"), hydrosulfide ("HS" wt% → the sulfur). A row that reads n.d. in the
+  first column but is measured in the others keeps its other columns (as 0 / value, columns
+  aligned) for the named-column and by-fit reads; it still has no mean of its own.
+- **Transposed tables**: the apfu columns beside the oxides ("CaO MgO MnO … total Ca Mg Mn") are
+  not constituents; a duplicated constituent keeps its first column.
+- **Which column**: a legend of the form "zoharite (3—aggregate, Figure 3C)" names column 3, and a
+  legend number is explicit (before the name-headed span, never averaged); a group's own Mean cell
+  ("Madagascar: 5 6 13 Mean (n = 3)") beats averaging its spots; the holotype's words stop at
+  "cotype / paratype" in the same sentence; a constituent repeated below the Total is the apfu
+  block and never overrides the wt% row (also in the named-column read).
+- **Which table**: a trace-element table (µg/g, ppm) is skipped; a bond-valence or coordinates
+  table alone is no analytical table (the check says so instead of reading it).
+- **Formula sentences**: braces are brackets ("{[(NH4)2.13K0.87]Σ3.00(H2O)}{…}"); a charge
+  superscript typeset between the digits ("Fe0. 2+ 20" = Fe2+0.20) is rejoined; a formula the
+  sentence cites from the original description ("formula of koragoite (Voloshin et al., 1997) … is")
+  goes last; a formula that rests on site scattering / the structure refinement is the structural
+  one whatever the sentence calls it; so is one "based on the structure refinement" (seaborgite's
+  abstract); a charge whose sign the text layer lost ("S6+ 2.88S2 2.60" = S2− 2.60) is read as the
+  charge, not a count (dinilawiite). A run of apfu in prose ("K0.89 Na0.05 …") is not a composition.
+- Corpus (975 papers with a table and a formula): 814 reproduce exactly (83 %, from 786 this
+  morning), 142 unverified (from 173), 19 flags, every flag vetted by hand.
+
 ## [0.5.3] — 2026-09-03
 
 ### Changed — the paper checker hardened on ~1,400 corpus papers
