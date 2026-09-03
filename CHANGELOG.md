@@ -55,8 +55,21 @@ the new mineral and the tool failed to read it, for general reasons that are now
   one whatever the sentence calls it; so is one "based on the structure refinement" (seaborgite's
   abstract); a charge whose sign the text layer lost ("S6+ 2.88S2 2.60" = S2− 2.60) is read as the
   charge, not a count (dinilawiite). A run of apfu in prose ("K0.89 Na0.05 …") is not a composition.
-- Corpus (975 papers with a table and a formula): 814 reproduce exactly (83 %, from 786 this
-  morning), 142 unverified (from 173), 19 flags, every flag vetted by hand.
+- Corpus (975 papers with a table and a formula): 816 reproduce exactly (84 %, from 786 this
+  morning), 140 unverified (from 173), 19 flags, every flag vetted by hand.
+- **Review of the above (medium effort, eight confirmed findings, all fixed)**: only a bare
+  element repeated below the Total is the apfu block (an oxide there is the FeO / Fe2O3 split);
+  n.d. cells are 0 in the positional values only, never averaged into a point-column mean or
+  taken as an s.d.; a two-line cell's continuation must sit under the row's values (a "Σ" / "Sum"
+  totals line is a total, not phantom columns); a transposed header is judged as printed, then
+  only a mostly-repeated one is rejected; a figure legend is not a table legend and a legend
+  number needs a numbered header; legend numbers keep the legend's order (holotype first);
+  "calculated without Al" is applied to every column and candidate table, not only the mean; the
+  abstract / body decision searches the same normalised text the formulas were cut from.
+  Vetting the corpus after those fixes: a caption like "Bond-valence analysis" is structural (the
+  word "analysis" alone does not make a table analytical), a composition given in the text beats such
+  a table, and two formulas for two samples ("beraunite (FR)" / "beraunite (NM)", "the original
+  sample") are not an abstract disagreeing with the body.
 
 ## [0.5.3] — 2026-09-03
 

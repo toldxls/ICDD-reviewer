@@ -79,7 +79,7 @@ def text_of(pdf):
 # ----------------------------------------------------------------------------- the analytical table
 
 _CONST = re.compile(r'^(\(NH4\)2O|H2O[+\-]?|H2O\+?|CO2|SO3|SO2|HS|[A-Z][a-z]?\d*O\d*|[A-Z][a-z]|[A-Z])[*†‡§¹²³]*$')
-_TOTAL = re.compile(r'^(Total|Sum|[-–−]?O\s*[=≡]\s*(F|Cl|S|F,Cl|Cl,F)(,Cl)?)$', re.I)
+_TOTAL = re.compile(r'^(Total:?|Sum:?|Σ|Сумма|Итого|[-–−]?O\s*[=≡]\s*(F|Cl|S|F,Cl|Cl,F)(,Cl)?)$', re.I)
 _NUM = re.compile(r'^[-–−]?\d+\.\d+$|^\d+$')
 _NUM_ESD = re.compile(r'^(\d+(?:\.\d+)?)\((\d+(?:\.\d+)?)\)$')
 _RANGE1 = re.compile(r'^(\d+\.\d+)\s*[-–—]\s*(\d+\.\d+)$')
@@ -221,14 +221,17 @@ def _transposed(lines, pno, name=''):
             c, kind = _constituent_ok(w[4])
             if kind == 'constituent' and c != 'O':
                 cols.append((c, (w[0] + w[2]) / 2))
+        if len(cols) < 3 or len(cols) < 0.5 * len(ws):
+            continue
         if any(re.fullmatch(r'x|y|z|U ?eq|U ?iso|s\.o\.f\.?|occ\.?|Wyck\w*|Site|Atom', w[4]) for w in ws):
             continue                                                            # a structure table
         oxide_els = {m_.group(0) for m_ in (re.match(r'[A-Z][a-z]?', c) for c, _ in cols if re.search(r'O\d*$', c) and c != 'O') if m_}
         if sum(1 for c, _ in cols if re.search(r'[A-Za-z]\d*O\d*$', c) and not c.startswith('H2O')) >= 3:
             cols = [(c, x) for c, x in cols if not (re.fullmatch(r'[A-Z][a-z]?', c) and c in oxide_els and c not in ('F', 'Cl', 'Br', 'I', 'S', 'Se', 'Te'))]   # 'CaO MgO MnO … Ca Mg Mn': the apfu columns beside the oxides
+        n_twin = len(cols)
         seen_ = set(); cols = [t for t in cols if not (t[0] in seen_ or seen_.add(t[0]))]            # 'H2O*' and the apfu 'H2O': the first column of a constituent
-        if len(cols) < 3 or len(cols) < 0.5 * len(ws):
-            continue                                                            # too few distinct constituents for a header ('Na Ca K Na OH− F− Cl− … Na Ca K Na': a site table)
+        if len(cols) < 3 or len(cols) < 0.5 * n_twin:
+            continue                                                            # mostly repeats ('Na Ca K Na OH− F− Cl− … Na Ca K Na'): a site table, not a header
         total_x = next((((w[0] + w[2]) / 2) for w in ws if _TOTAL.match(w[4])), None)
         rows = []; mean_row = None; mean_rows = []; j = i + 1; gap = 0
         while j < len(lines) and j < i + 45:
@@ -345,7 +348,13 @@ def _caption_score(cap, name=''):
         who = 3 if stem in low else (-4 if others else 0)
         if re.search(r'associated|accompanying|coexisting|co-existing|host|matrix|other (?:minerals|phases)', low):
             who = -5                                                  # 'phases associated with zoisite-(Pb)': the supporting phases, not the headline
-    return prior + who + (6 if _CAP_YES.search(cap) else 0) - (8 if _CAP_NO.search(cap) and not _CAP_YES.search(cap) else 0)
+    return prior + who + (6 if _CAP_YES.search(cap) and not _structural_caption(cap) else 0) - (8 if _structural_caption(cap) else 0)
+
+_CAP_STRONG = re.compile(r'chemical|composition|EPMA|EMPA|microprobe|wt\.?\s*%|WDS|LA-ICP|electron', re.I)
+
+def _structural_caption(cap):
+    """'Bond-valence analysis', 'Structure refinement data': structural unless a chemical word says otherwise ('Electron microprobe analyses')."""
+    return bool(cap) and bool(_CAP_NO.search(cap)) and not _CAP_STRONG.search(cap)
 
 def epma_table(pdf, name=''):
     """The analytical table with the most constituent rows: {'rows': [{'constituent', 'mean',
@@ -383,7 +392,9 @@ def epma_table(pdf, name=''):
                     if j + 1 < len(lines) and kind == 'constituent':
                         nxt = lines[j + 1]['w']; ntoks = [w[4] for w in nxt]
                         n_numlike = sum(1 for t_ in ntoks if _NUM.match(t_.replace('−', '-')) or _RANGE1.match(t_.replace('−', '-')) or _NA.match(t_) or re.fullmatch(r'\(\d+\.\d+[-–]\d+\.\d+\)', t_))
-                        if n_numlike >= 3 and n_numlike >= 0.8 * len(ntoks) and _row_at(nxt, x_col) is None and not any(_constituent_ok(t_)[0] for t_ in ntoks):
+                        fx = next((w[0] for w in ws if _numlike(w[4])), None)
+                        under_row = ntoks[0].startswith('(') or bool(_RANGE1.match(ntoks[0].replace('−', '-'))) or (fx is not None and nxt[0][0] >= fx - 10)
+                        if n_numlike >= 3 and n_numlike >= 0.8 * len(ntoks) and under_row and _row_at(nxt, x_col) is None and not any(_constituent_ok(t_)[0] for t_ in ntoks):
                             more = _numbers([t_.strip('()') for t_ in ntoks])           # a two-line cell: the mean above, '(range)' and the other columns below
                             vals = vals + [(kk, v) for kk, v in more if kk in ('num', 'range', 'na')]
                             ws_row = ws_row + list(nxt); j += 1
@@ -457,27 +468,28 @@ def epma_table(pdf, name=''):
                     v0 = next((v for k_, v in vals if k_ == 'num'), None)
                     if kind == 'constituent' and c in first_val and v0 is not None and v0 < first_val[c] / 2:
                         continue                                                 # the same constituent again, much smaller: the apfu block (Ag 72.29 … Ag 8.01)
-                    if kind == 'constituent' and past_total and c in first_val:
-                        continue                                                 # the same constituent again below the Total: the apfu block ('Na 0.22' under 'Na n.d. n.d. 0.18')
+                    if kind == 'constituent' and past_total and c in first_val and re.fullmatch(r'[A-Z][a-z]?', c):
+                        continue                                                 # a bare element again below the Total: the apfu block ('Na 0.22' under 'Na n.d. n.d. 0.18'); an oxide there is the FeO / Fe2O3 split
                     if kind == 'constituent' and (v0 is not None or (vals and vals[0][0] == 'na')):
                         first_val.setdefault(c, v0 if v0 is not None else 0.0)
                     if past_total and re.fullmatch(r'[A-Z][a-z]?', c) and c in oxide_els:
                         continue                                                 # below the Total: the apfu block (S 1.99 under SO3 54.76)
                     if n_oxide >= 3 and re.fullmatch(r'[A-Z][a-z]?', c) and c in oxide_els and c not in ('F', 'Cl', 'Br', 'I', 'S', 'Se', 'Te'):
                         continue                                                 # an apfu row (Si 5.936) beside the oxide row of the same element
-                    nums = [v if k == 'num' else 0.0 for k, v in vals if k in ('num', 'na')]   # 'n.d.' = 0 in its column: the columns stay aligned
+                    nums_all = [v if k == 'num' else 0.0 for k, v in vals if k in ('num', 'na')]   # positional: 'n.d.' = 0 in its column, the columns stay aligned
+                    nums = [v for k, v in vals if k == 'num']                   # the measured numbers: the mean, the points' average, the s.d.
                     nd_first = bool(vals) and vals[0][0] == 'na'
-                    if nd_first and (kind != 'constituent' or not any(v > 0 for v in nums)):
+                    if nd_first and (kind != 'constituent' or not nums):
                         continue                                                 # not detected anywhere: nothing to use
                     rng = next((v for k, v in vals if k == 'range'), None)
                     texts = [v for k, v in vals if k == 'text' and not re.fullmatch(r'[a-d*†‡§]+', v)] if has_std else []
                     if kind == 'total':
-                        if c.lower().startswith('total') and nums:
+                        if (c.lower().startswith(('total', 'sum')) or c in ('Σ', 'Сумма', 'Итого')) and nums:
                             total = nums[0]; past_total = True
                         continue
                     if not nums:
                         continue
-                    mean = nums[0]                                               # 0.0 when the first column reads n.d.: such a row serves the named columns only
+                    mean = 0.0 if nd_first else nums[0]                          # n.d. in the first column: no mean of its own, the row serves the named columns only
                     if point_cols and len(nums) >= 3:
                         use_ = [nums[q] for q in (keep_cols or range(len(nums))) if q < len(nums)] or nums
                         mean = round(sum(use_) / len(use_), 3)                # no Mean column: the points' average (of the same phase)
@@ -498,10 +510,10 @@ def epma_table(pdf, name=''):
                         sd = nums[1]
                     xs = [(w[0] + w[2]) / 2 for w in ws_row if _numlike(w[4]) or _NA.match(w[4])]
                     if c == 'HS':                                               # hydrosulfide, wt% of HS: the sulfur (the H is informational)
-                        k_hs = 32.06 / 33.068; c = 'S'; mean = round(mean * k_hs, 3); nums = [round(v * k_hs, 3) for v in nums]
+                        k_hs = 32.06 / 33.068; c = 'S'; mean = round(mean * k_hs, 3); nums_all = [round(v * k_hs, 3) for v in nums_all]
                         rng = (round(rng[0] * k_hs, 3), round(rng[1] * k_hs, 3)) if rng else None
                     (rows_nd if nd_first else rows).append({'constituent': 'N2H8O' if c == '(NH4)2O' else c.rstrip('+-'), 'mean': mean, 'range': rng, 'sd': sd,
-                                 'standard': ' '.join(texts) if texts else None, 'all': nums, 'xs': xs})
+                                 'standard': ' '.join(texts) if texts else None, 'all': nums_all, 'xs': xs})
                 cand = {'rows': _drop_totals(rows), 'total': total, 'header': ' '.join(head)[:200], 'page': pno + 1, 'n': n_const, 'score': score, 'caption': cap[:160], 'head_cells': head_cells, 'rows_all': rows + rows_nd, 'label_x': x_col}
                 cands.append(cand)
                 if best is None or score > best['score']:
@@ -511,9 +523,9 @@ def epma_table(pdf, name=''):
     pt = prose_table(text_of(pdf))
     if pt:
         cands.append(pt)
-        if best is None or (pt['score'] > best['score'] and best.get('total') is None):
+        if best is None or (pt['score'] > best['score'] and (best.get('total') is None or best['score'] <= 0)):
             best = pt                                                            # the composition is in the text
-    if best is not None and best['score'] <= 0 and _CAP_NO.search(best.get('caption') or '') and not _CAP_YES.search(best.get('caption') or ''):
+    if best is not None and best['score'] <= 0 and _structural_caption(best.get('caption') or ''):
         return None                                                              # only a bond-valence / coordinates table was read: no analytical table
     if best is not None:
         best['candidates'] = sorted((c for c in cands if c is not best), key=lambda c: -c['score'])[:6]
@@ -815,6 +827,14 @@ def _same_counts(a, b):
     keys = set(a) | set(b)
     return all(abs(a.get(k, 0.0) - b.get(k, 0.0)) <= 0.011 + 0.01 * max(a.get(k, 0.0), b.get(k, 0.0)) for k in keys if k not in ('H', 'O'))
 
+def _norm_text(text):
+    """The paper's text as the formula finder reads it: control and zero-width codes out, 'þ' = '+', a
+    font's ':' for '.' and ð Þ for brackets, a charge superscript set mid-number rejoined."""
+    t = re.sub(r'[\x00-\x08\x0b-\x1f\u200b\u200c\u200d\u2060\ufeff]', '', text.replace('þ', '+').replace('\xad', ''))   # soft hyphens, zero-width and glyph control codes
+    t = re.sub(r'(\d):(\d)', r'\1.\2', t).replace('ð', '(').replace('Þ', ')')        # a font that prints '.' as ':' and brackets as ð Þ
+    t = re.sub(r'([A-Z][a-z]?\d*)\. (\d\+) (\d+)(?=[A-Za-z□\)\]])', r'\1.\3', t)     # 'Fe0. 2+ 20o0.47': the charge superscript set between the digits of 0.20
+    return t
+
 def _formula_iter(text):
     """The empirical formula the paper states ("The empirical formula (based on 28 O apfu) is …"):
     (formula text, {element: apfu}, issues). Journal notation is turned into the ICDD form the
@@ -822,9 +842,7 @@ def _formula_iter(text):
     The formula is the first formula-shaped run (a bracket, or an element with a decimal count)
     within 300 characters after 'empirical … formula' that parses — the wording between varies
     (is / = / : / being / as follows / can be written as / with the parenthetical basis)."""
-    t = re.sub(r'[\x00-\x08\x0b-\x1f\u200b\u200c\u200d\u2060\ufeff]', '', text.replace('þ', '+').replace('\xad', ''))   # soft hyphens, zero-width and glyph control codes
-    t = re.sub(r'(\d):(\d)', r'\1.\2', t).replace('ð', '(').replace('Þ', ')')        # a font that prints '.' as ':' and brackets as ð Þ
-    t = re.sub(r'([A-Z][a-z]?\d*)\. (\d\+) (\d+)(?=[A-Za-z□\)\]])', r'\1.\3', t)     # 'Fe0. 2+ 20o0.47': the charge superscript set between the digits of 0.20
+    t = _norm_text(text)
     # the empirical formula first; a structural / crystal-chemical one (site populations from the
     # refinement) only when the paper gives no other — its coefficients need not match the analysis
     triggers = [(m, 'empirical') for m in re.finditer(r'empirical (?:mineral |chemical |crystal[- ]chemical |holotype |structural )?formula[e]?|эмпирическ\w+ (?:кристаллохимическ\w+ |химическ\w+ )?формул\w*', t, re.I)]
@@ -1058,10 +1076,17 @@ def check_composition(ex, text):
         who = _attributed_to(ctx_o)
         if who and stem and stem not in who:
             continue                                                  # the sentence attributes this formula to another mineral
+        tags_a = set(sample_hints(fc[5][-200:])['codes']); tags_b = set(sample_hints(other[5][-200:])['codes'])
+        orig = re.compile(r'original (?:\w+ )?(?:sample|material|specimen|description)', re.I)
+        if (tags_a and tags_b and not tags_a & tags_b) or (bool(orig.search(fc[5][-200:])) != bool(orig.search(other[5][-200:]))):
+            continue                                                  # 'beraunite (FR)' against 'beraunite (NM)', or the original sample's formula: two samples, not one paper disagreeing with itself
         diffs = ['%s %.3g vs %.3g' % (k, b[k], a[k]) for k in shared if abs(a[k] - b[k]) > max(0.02, 0.1 * max(a[k], b[k]))]
         missing = [k for k in b if k not in a and k not in ('H', 'O') and b[k] >= 0.02] + [k for k in a if k not in b and k not in ('H', 'O') and a[k] >= 0.02]
         if diffs or missing:
-            in_abstract = text.find(other[0][:30]) < min(4000, text.find(fc[0][:30]))
+            tn = _norm_text(text); p_o = tn.find(other[0][:30]); p_f = tn.find(fc[0][:30])   # the formulas were cut from the normalised text
+            if p_o < 0:
+                continue                                                    # cannot place the other formula: no abstract / body call
+            in_abstract = p_o < min(4000, p_f if p_f >= 0 else 4000)
             if in_abstract:                                             # the abstract's formula against the body's: a fault
                 res['lines'].append('  the formula in the abstract does not agree with the one the table reproduces: %s%s' % (
                     '; '.join(diffs[:6]), ('; only one of them carries ' + ', '.join(missing[:4])) if missing else ''))
@@ -1086,6 +1111,7 @@ def _check_formula(ex, text, fcand):
     excluded = [e_ for e_ in excluded_elements(text) if e_ not in counts]
     if excluded:
         wt = {c: v for c, v in wt.items() if not (_parses(c) and EP.parse_constituent(c).element in excluded)}   # 'calculated without Al'
+        e = _without_elements(e, excluded)                        # … and out of every other column and candidate table the check may fall back to
     if not counts:
         return _derived_composition(ex, wt, species)
     if 'S' in counts and not any(_parses(c) and EP.parse_constituent(c).element == 'S' for c in wt) and re.search(r'\sS\d\.\d\d', ftxt):
@@ -1270,6 +1296,20 @@ def _check_formula(ex, text, fcand):
         lines.append('  every coefficient of the published formula follows from the published wt%')
     return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts}
 
+def _without_elements(e, excluded):
+    """The table candidate without the constituents of the given elements ('calculated without Al'),
+    in its rows, its positional rows and its candidate tables alike."""
+    def keep(r):
+        return not (_parses(r['constituent']) and EP.parse_constituent(r['constituent']).element in excluded)
+    out = dict(e); out['rows'] = [r for r in e['rows'] if keep(r)]
+    if e.get('rows_all'):
+        out['rows_all'] = [r for r in e['rows_all'] if keep(r)]
+    if e.get('alts'):
+        out['alts'] = [{c: v for c, v in a.items() if keep({'constituent': c})} for a in e['alts']]
+    if e.get('candidates'):
+        out['candidates'] = [_without_elements(c_, excluded) for c_ in e['candidates']]
+    return out
+
 def table_alternatives(e, wt):
     """The other numeric columns of a row-layout table, or the other Mean / analysis rows of a
     transposed one, as wt% dicts — a table of several minerals or samples: [wt dict, …]."""
@@ -1363,17 +1403,21 @@ def legend_columns(text, name):
         return []
     stem = stem[:max(5, len(stem) - 2)]
     out = []
-    for m in re.finditer(r'(?<![\d.])(\d{1,2}(?:\s*(?:,|and|–|-)\s*\d{1,2})*)\s*[–-]\s*([a-zà-ÿč]{4,}ite(?:-\([a-z]+\))?)', text.lower()):
-        if stem in m.group(2):
+    low = text.lower()
+    def _under_figure(pos):
+        prev = re.findall(r'\b(table|tab\.|таблица|fig\.?|figure|рис\.?)\s*\d+[a-z]?[.:]', low[max(0, pos - 700):pos])
+        return bool(prev) and prev[-1].startswith(('fig', 'рис'))              # the nearest caption start is 'Fig. 2.': a figure legend ('Figure 4B)' mid-sentence is not one)
+    for m in re.finditer(r'(?<![\d.])(\d{1,2}(?:\s*(?:,|and|–|-)\s*\d{1,2})*)\s*[–-]\s*([a-zà-ÿč]{4,}ite(?:-\([a-z]+\))?)', low):
+        if stem in m.group(2) and not _under_figure(m.start()):
             nums = re.findall(r'\d{1,2}', m.group(1))
             rng = re.match(r'^(\d{1,2})\s*[–-]\s*(\d{1,2})$', m.group(1).strip())
             if rng and int(rng.group(2)) > int(rng.group(1)):
                 nums = [str(k_) for k_ in range(int(rng.group(1)), int(rng.group(2)) + 1)]
             out += [n_ for n_ in nums if n_ not in out]
-    for m in re.finditer(r'([a-zà-ÿč]{4,}ite(?:-\([a-z]+\))?)\s*\((\d{1,2})\s*[–—-]\s*[a-z]', text.lower()):      # 'zoharite (3—aggregate, Figure 3C)'
-        if stem in m.group(1) and m.group(2) not in out:
+    for m in re.finditer(r'([a-zà-ÿč]{4,}ite(?:-\([a-z]+\))?)\s*\((\d{1,2})\s*[–—-]\s*[a-z]', low):      # 'zoharite (3—aggregate, Figure 3C)'
+        if stem in m.group(1) and m.group(2) not in out and not _under_figure(m.start()):
             out.append(m.group(2))
-    holo = re.findall(r'\(?(\d{1,2})\s*[–-]\s*holotype', text.lower())
+    holo = re.findall(r'\(?(\d{1,2})\s*[–-]\s*holotype', low)
     return [h_ for h_ in holo if h_ in out or not out] + [n_ for n_ in out if n_ not in holo]
 
 def sample_hints(ctx, text=''):
@@ -1381,6 +1425,7 @@ def sample_hints(ctx, text=''):
     'holotype', 'mean of 12 analyses' -> {'codes': [...], 'n': 12 or None, 'holotype': bool}."""
     codes = re.findall(r'(?:sample|specimen|crystal|grain|fragment|analysis|analyses)\s*(?:no\.?|number|#)?\s*([A-Za-z]{0,6}[-–]?\d[\w\-–/.]*)', ctx, re.I)
     codes += re.findall(r'\(([A-Z]{1,6}[-–]?\d[\w\-–/]*)\)', ctx)
+    codes += re.findall(r'(?<=[a-z]) \(([A-Z]{2,4})\)', re.split(r'\.\s+(?=[A-Z])', ctx)[-1])   # 'beraunite (NM)': a sample tag, from the formula's own sentence only
     codes += re.findall(r'(?:domain|crystal|grain|sample|zone|area|spot|type)\s+([A-Z]|[IVX]{1,4}|\d{1,2})\b', ctx, re.I)   # 'domain A', 'crystal II'
     codes += re.findall(r'(?<![\w-])([A-Z]{1,4}[-–][A-Z]*\d\w*|[A-Z]{2,6}\d{3,}[\w-]*)(?![\w-])', ctx)                  # 'A-WP1', 'NRM19331765'
     codes += [w for w in re.findall(r'\b([A-Z][a-zà-ÿ]{4,})\b', ctx) if w.lower() not in ('the', 'this', 'table', 'based', 'chemical', 'empirical', 'formula', 'analyses', 'electron', 'microprobe')]   # a locality or sample name
@@ -1411,8 +1456,13 @@ def headline_columns(e, name, hints):
     suf = re.search(r'-\((\w+)\)$', name or '')
     if suf:
         keys.append((suf.group(1).lower(), 'the Levinson suffix of the headline mineral, (%s)' % suf.group(1).capitalize()))   # '(Nd)1 (Y)2 (Ce)3' columns
+    pos = 0
     for c_ in hints.get('domains', []):
-        keys.insert(0 if c_.isdigit() else len(keys), (c_.lower(), ('column %s, which the table legend assigns to %s' % (c_, name)) if c_.isdigit() else ('the domain the text assigns to %s, %s' % (name, c_))))   # a legend number is explicit: before the name-headed span
+        entry = (c_.lower(), ('column %s, which the table legend assigns to %s' % (c_, name)) if c_.isdigit() else ('the domain the text assigns to %s, %s' % (name, c_)))
+        if c_.isdigit():
+            keys.insert(pos, entry); pos += 1                                  # legend numbers are explicit: before the name-headed span, in the legend's order (holotype first)
+        else:
+            keys.append(entry)
     for c_ in hints.get('codes', []):
         keys.append((c_.lower(), 'the sample the formula cites, %s' % c_))
     if hints.get('holotype'):
@@ -1423,9 +1473,12 @@ def headline_columns(e, name, hints):
         keys.append(('n = %d' % hints['n'], '%d analyses, as the formula sentence says' % hints['n']))
         keys.append(('n=%d' % hints['n'], '%d analyses' % hints['n'])); keys.append(('(%d)' % hints['n'], '%d analyses' % hints['n']))
     joined = ' '.join(t for t, x in cells).lower()
+    n_digit_cells = sum(1 for t, x in cells if re.fullmatch(r'\d{1,2}', t))
     for key, why in keys:
         if key not in joined:
             continue
+        if key.isdigit() and n_digit_cells < 2:
+            continue                                                           # a legend number names a column only of a numbered header
         # the x of the cell (or run of cells) carrying the key; a short code must be a whole cell
         x_hit = None
         for k_ in range(len(cells)):

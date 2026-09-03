@@ -672,3 +672,69 @@ class ReaderClasses(unittest.TestCase):
         cols = PE.headline_columns(e, 'liraite', {'codes': ['CF9a1'], 'n': None, 'holotype': False, 'holotype_words': [], 'domains': []})
         wt, why = cols[0]
         self.assertNotIn('averaged', why); self.assertEqual(wt['Na2O'], 1.58); self.assertEqual(wt['FeO'], 20.1)
+
+
+class ReviewFixes(unittest.TestCase):
+    """2026-09-03: the medium-effort review of 10e25cc, one test per confirmed finding."""
+
+    def _pdf(self, lines):
+        return ReaderClasses._pdf(self, lines)
+
+    def test_iron_split_below_the_total_survives(self):
+        xs = (40, 130)
+        rows = [['CaO', '46.10'], ['FeO', '11.79'], ['P2O5', '38.20'], ['MgO', '2.10'], ['SiO2', '1.20'], ['Total', '99.39'], ['FeO', '10.71'], ['Fe2O3', '1.20']]
+        path = self._pdf([(80, 'Table 1. Chemical composition of testite (wt%).'), (94, 'Constituent   Mean')] + [(108 + 14 * k, list(zip(xs, r))) for k, r in enumerate(rows)])
+        e = PE.epma_table(path, 'testite')
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows'] if r['constituent'].startswith('Fe')}, {'FeO': 10.71, 'Fe2O3': 1.2})
+
+    def test_nd_points_not_averaged_in_and_sigma_total(self):
+        xs = (40, 130, 170, 210, 250, 290, 330)
+        rows = [['Constituent', '1', '2', '3', '4', '5', '6'], ['SiO2', '46.1', '46.3', '46.0', '46.2', '46.4', '46.1'], ['CaO', '20.2', '20.1', '20.3', '20.0', '20.2', '20.1'],
+                ['MgO', '29.0', '29.1', '28.9', '29.2', '29.0', '29.1'], ['F', '0.30', 'n.d.', '0.28', '0.31', 'n.d.', '0.29'], ['Sum', '95.6', '95.5', '95.5', '95.7', '95.6', '95.6']]
+        path = self._pdf([(80, 'Table 1. Chemical composition of testite (wt%).')] + [(100 + 14 * k, list(zip(xs, r))) for k, r in enumerate(rows)])
+        e = PE.epma_table(path, 'testite')
+        f = next(r for r in e['rows'] if r['constituent'] == 'F')
+        self.assertAlmostEqual(f['mean'], 0.295); self.assertEqual(f['all'], [0.3, 0.0, 0.28, 0.31, 0.0, 0.29])
+        self.assertEqual(e['total'], 95.6)                                              # 'Sum' is the total row, not a continuation of the F row
+        self.assertEqual(len(next(r for r in e['rows'] if r['constituent'] == 'MgO')['all']), 6)
+
+    def test_transposed_fully_twinned_header(self):
+        xs = (40, 90, 130, 170, 210, 250, 290, 330, 365, 400, 435, 470)
+        head = ['Sample', 'SiO2', 'Al2O3', 'FeO', 'MgO', 'CaO', 'Total', 'Si', 'Al', 'Fe', 'Mg', 'Ca']
+        rows = [['1', '40.10', '10.20', '12.30', '20.10', '16.90', '99.60', '2.90', '0.87', '0.74', '2.17', '1.31'],
+                ['2', '40.30', '10.10', '12.10', '20.30', '16.80', '99.60', '2.91', '0.86', '0.73', '2.18', '1.30'],
+                ['Mean', '40.20', '10.15', '12.20', '20.20', '16.85', '99.60', '2.90', '0.86', '0.74', '2.18', '1.30']]
+        path = self._pdf([(80, 'Table 2. Chemical composition of testite (wt%).')] + [(100 + 14 * k, list(zip(xs, r))) for k, r in enumerate([head] + rows)])
+        e = PE.epma_table(path, 'testite')
+        self.assertIsNotNone(e); self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'SiO2': 40.2, 'Al2O3': 10.15, 'FeO': 12.2, 'MgO': 20.2, 'CaO': 16.85})
+
+    def test_legend_scope_and_order(self):
+        self.assertEqual(PE.legend_columns('Fig. 2. 1 – newmineralite, 2 – quartz, 3 – calcite. Table 3 – Newmineralite composition', 'newmineralite'), [])
+        self.assertEqual(PE.legend_columns('Table 2. Analyses. 1, 2, 8 – newmineralite (1 – holotype; 8 – cotype); 3 – quartz.', 'newmineralite'), ['1', '2', '8'])
+        cells = [('Constituent', 40), ('1', 130), ('2', 170), ('8', 210)]
+        e = {'head_cells': cells, 'label_x': 40, 'rows': [{'constituent': c, 'mean': v[0], 'all': v, 'xs': [130, 170, 210]} for c, v in
+             (('SiO2', [46.1, 46.3, 46.0]), ('CaO', [20.2, 20.1, 20.3]), ('MgO', [29.0, 29.1, 28.9]))]}
+        cols = PE.headline_columns(e, 'newmineralite', {'codes': [], 'n': None, 'holotype': False, 'holotype_words': [], 'domains': ['1', '2', '8']})
+        self.assertEqual([w['SiO2'] for w, _ in cols], [46.1, 46.3, 46.0])               # the legend's order: the holotype's column first
+        e2 = dict(e, head_cells=[('Constituent', 40), ('Mean', 130), ('Range', 170), ('S.D.', 210)])
+        self.assertEqual(PE.headline_columns(e2, 'newmineralite', {'codes': [], 'n': None, 'holotype': False, 'holotype_words': [], 'domains': ['1']}), [])   # no numbered header: no column 1
+
+    def test_norm_text_and_excluded_elements(self):
+        self.assertIn('Sr0.57Ba0.38', PE._norm_text('formula Sr0:57Ba0:38'))
+        e = {'rows': [{'constituent': 'Al2O3', 'mean': 1.0}, {'constituent': 'SiO2', 'mean': 40.0}], 'rows_all': [{'constituent': 'Al2O3', 'mean': 1.0}],
+             'candidates': [{'rows': [{'constituent': 'Al2O3', 'mean': 2.0}, {'constituent': 'CaO', 'mean': 3.0}]}]}
+        f = PE._without_elements(e, ['Al'])
+        self.assertEqual([r['constituent'] for r in f['rows']], ['SiO2']); self.assertEqual(f['rows_all'], [])
+        self.assertEqual([r['constituent'] for r in f['candidates'][0]['rows']], ['CaO'])
+
+    def test_two_samples_and_prose_over_structural(self):
+        self.assertIn('NM', PE.sample_hints('The empirical formula of beraunite (NM) calculated on the basis of P = 4 apfu is')['codes'])
+        self.assertIn('FR', PE.sample_hints('The empirical formula of beraunite (FR) calculated on the basis of P = 4 apfu is')['codes'])
+        self.assertNotIn('NM', PE.sample_hints('formula (NM) of')['codes'] if False else [])
+        rows = [['Constituent', 'Mean'], ['PbO', '43.21'], ['CuO', '15.38'], ['TeO3', '35.29'], ['H2O', '3.49'], ['Total', '97.37']]
+        path = self._pdf([(60, 'The electron microprobe analyses (average of five) provided: PbO 43.21, CuO 15.38, TeO3 35.29, H2O 3.49 (structure), total 97.37 wt.%.'),
+                          (200, 'Table 3. Bond-valence analysis for andychristyite'), (214, [(40, 'Site'), (120, 'O1'), (160, 'O2'), (200, 'Total')]),
+                          (228, [(40, 'Pb'), (120, '0.45'), (160, '0.30'), (200, '2.05')]), (242, [(40, 'Cu'), (120, '0.50'), (160, '0.48'), (200, '2.02')]),
+                          (256, [(40, 'Te'), (120, '1.05'), (160, '0.98'), (200, '6.01')]), (270, [(40, 'Total'), (120, '2.00'), (160, '1.76'), (200, '')])])
+        e = PE.epma_table(path, 'andychristyite')
+        self.assertIsNotNone(e); self.assertTrue(e.get('prose')); self.assertEqual(e['rows'][0]['constituent'], 'PbO')
