@@ -2005,7 +2005,7 @@ def _ms_paper_findings(key, path):
         head = not ln.startswith('  ')
         if head:
             section = s.split(':', 1)[0]
-        kind = 'calcinfo' if head or not _CALC_FLAG.search(s) else 'calc'
+        kind = 'calcinfo' if head or not _CALC_FLAG.search(s) or '[unverified]' in s or s.startswith('not verifiable') else 'calc'
         fkey = 'calc:' + hashlib.sha1(s.encode('utf-8')).hexdigest()[:12]
         out.append({'kind': kind, 'fkey': fkey, 'label': section or 'paper', 'msg': s, 'para': None, 'start': None, 'end': None, 'text': ''})
     return out

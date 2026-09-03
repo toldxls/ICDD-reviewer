@@ -644,8 +644,12 @@ def parse_icdd_formula(text, has_sulfur=False):
                 # the group's item total first (a dry run), to tell a sum from a multiplier
                 items.append(0.0); saved = (dict(counts), dict(ox), list(sums), list(issues))
                 inner(i + 1, j - 1, 1.0)
-                total = items.pop(); counts.clear(); counts.update(saved[0]); ox.clear(); ox.update(saved[1]); sums[:] = saved[2]; issues[:] = saved[3]
-                gm = 1.0; k = j; stated = None
+                total = items.pop()
+                n_cat = sum(1 for e in counts if e not in ('H', 'O') and counts[e] > saved[0].get(e, 0.0)) + (1 if '?' in toks[i + 1:j - 1] else 0)
+                cat_total = sum(v - saved[0].get(e, 0.0) for e, v in counts.items() if e not in ('H', 'O'))
+                n_dec = sum(1 for x in toks[i + 1:j - 1] if re.match(r'^\d+\.\d+$', x))
+                counts.clear(); counts.update(saved[0]); ox.clear(); ox.update(saved[1]); sums[:] = saved[2]; issues[:] = saved[3]
+                gm = 1.0; k = j; stated = None; explicit = False
                 if k < len(toks) and toks[k] in ('Σ', 'sigma', 'Sigma', 'SIGMA'):
                     k += 1
                     if k < len(toks) and re.match(r'^\d', toks[k]):
@@ -655,22 +659,29 @@ def parse_icdd_formula(text, has_sulfur=False):
                     if nxt is not None and abs(float(nxt) - total) <= max(0.06, 0.1 * total):
                         stated = float(nxt); k += 2                             # ')S2.000': the sum of the parts
                     elif nxt is not None and '.' not in nxt and float(nxt) <= 12:
-                        gm = float(nxt); k += 2                                 # '( U O2 )S2': a subscript multiplier
+                        gm = float(nxt); k += 2; explicit = True                # '( U O2 )S2': a subscript multiplier
                     elif nxt is not None and not has_sulfur:
                         stated = float(nxt); k += 2
                     else:
                         toks[k] = 'S'
                 elif k < len(toks) and re.match(r'^\d+(\.\d+)?$', toks[k]):
                     v = float(toks[k])
-                    if '.' in toks[k] and abs(v - total) <= max(0.06, 0.1 * total):
-                        stated = v; k += 1                                  # ']7.00' after O5.91 OH1.09
+                    inner_syms = [x for x in toks[i + 1:j - 1] if re.match(r'^[A-Z][a-z]?$', x)]
+                    complex_anion = n_cat == 1 and 'O' in inner_syms and len(set(inner_syms)) == 2      # (SO4), (PO4), (UO2): a decimal after it is a multiplier
+                    if '.' in toks[k] and not complex_anion and (n_cat >= 2 or n_dec >= 1) and abs(v - total) <= (0.035 if n_cat < 2 else max(0.06, 0.1 * total)):
+                        stated = v; k += 1                                  # ']7.00' after O5.91 OH1.09 — a sum; '(AsO3OH)5.97' (no decimals inside) is a multiplier
+                    elif '.' not in toks[k] and n_cat >= 2 and n_dec >= 2 and abs(v - cat_total) <= max(0.05, 0.03 * v):
+                        stated = v; k += 1                                  # '(As3.99S0.01)4': the Σ glyph lost — the integer is the cations' own sum
                     else:
-                        gm = v; k += 1
+                        gm = v; k += 1; explicit = True                     # '(H2O)2.70': a multiplier
+                if stated is not None and stated >= 1.5 and 0.85 <= cat_total <= 1.15 and 'O' in toks[i + 1:j - 1] and n_dec >= 1:
+                    gm = stated; stated = None; explicit = True            # '((As0.95Sb0.08)O4)Σ2.03': the number of such groups, not a sum
                 items.append(0.0)
                 inner(i + 1, j - 1, mult * gm)
-                got = items.pop(); items[-1] += gm
+                got = items.pop()
+                items[-1] += gm if explicit else got * gm                 # (SO4)1.98 is one item ×1.98; a Σ group or a bare (Zn0.32Mg0.16) counts its atoms
                 if stated is not None:
-                    sums.append((stated, got))
+                    sums.append((stated, got, n_cat > 0))
                 i = k; continue
             if tk in (')', ']', '}'):
                 if len(items) == 1:
@@ -685,6 +696,8 @@ def parse_icdd_formula(text, has_sulfur=False):
                     n = float(toks[i]); i += 1
                 if i + 2 < len(toks) and toks[i] == 'H' and toks[i + 1] == '2' and toks[i + 2] == 'O':
                     add('H', 2, n * mult); add('O', 1, n * mult); i += 3
+                    if len(items) > 1:
+                        items[-1] += n                                        # '[(OH)1.25F0.06·0.69H2O]Σ2.00': the water is an item of the group
                 elif i + 1 < len(toks) and toks[i] == 'H' and toks[i + 1] == 'O':
                     add('H', 1, n * mult); add('O', 1, n * mult); i += 2
                 continue
@@ -708,7 +721,7 @@ def parse_icdd_formula(text, has_sulfur=False):
                 el = tk; n = 1.0; i += 1
                 if i < len(toks) and re.match(r'^\d+(\.\d+)?$', toks[i]):
                     n = float(toks[i]); i += 1
-                    if i + 1 < len(toks) and toks[i] == 'C' and re.match(r'^\d+(\.\d+)?$', toks[i + 1]) and n in (1, 2, 3, 4, 5, 6, 7) and el != 'C':
+                    if i + 1 < len(toks) and toks[i] == 'C' and re.match(r'^\d+\.\d+$', toks[i + 1]) and n in (1, 2, 3, 4, 5, 6, 7) and el != 'C':   # 'Fe3 C1.01' = Fe3+ 1.01; '(N3C2H2)' is not
                         ox[el] = int(n); n = float(toks[i + 1]); i += 2  # 'Fe3 C1.01' = Fe3+ 1.01
                 if i < len(toks) and re.match(r'^[+-]\d+(\.\d+)?$', toks[i]):
                     mm = re.match(r'^([+-]\d)(\d+\.\d+)$', toks[i])
@@ -726,10 +739,13 @@ def parse_icdd_formula(text, has_sulfur=False):
         parse(0, mult)
         toks[:] = saved
     parse(0, 1.0)
-    bad = [(st_, got) for st_, got in sums if abs(st_ - got) > max(0.03, 0.03 * st_)]
+    bad = [(st_, got) for st_, got, cat in sums if cat and abs(st_ - got) > max(0.03, 0.03 * st_)]
     if bad:
         issues.append('formula group sums do not add up: ' + ', '.join('Σ%.2f given, parts add to %.2f' % x for x in bad[:3]))
-    big = [el for el, v in counts.items() if el not in ('H', 'O') and v > 40]
+    bad_an = [(st_, got) for st_, got, cat in sums if not cat and abs(st_ - got) > max(0.03, 0.03 * st_)]
+    if bad_an:
+        issues.append('anion group sum: ' + ', '.join('Σ%.2f given, parts add to %.2f' % x for x in bad_an[:3]))
+    big = [el for el, v in counts.items() if el not in ('H', 'O') and v > 250]         # large sulfosalt cells reach S120, Pb46
     if big:
         issues.append('formula group sums do not add up: %s apfu is not a coefficient (%s)' % (', '.join('%s %.1f' % (el, counts[el]) for el in big), 'a garbled multiplier or sum'))
     return counts, ox, issues
@@ -784,7 +800,9 @@ def replicate_formula(wt, counts, bases, name='entry', tol_abs=0.02, tol_rel=0.0
         except Exception:
             continue
         apfu = _apfu_of(red)
-        devs = [(apfu[el] - v) / max(v, 0.05) for el, v in counts.items() if el not in ('H', 'O') and v >= 0.05 and el in apfu]
+        major = [el for el, v in counts.items() if el not in ('H', 'O') and v >= 0.1 and el in apfu]
+        use = major if len(major) >= 2 else [el for el, v in counts.items() if el not in ('H', 'O') and v >= 0.05 and el in apfu]
+        devs = [(apfu[el] - counts[el]) / counts[el] for el in use]       # the fit is judged on the major cations; traces are checked one by one
         if not devs:
             continue
         sc = math.sqrt(sum(d * d for d in devs) / len(devs))

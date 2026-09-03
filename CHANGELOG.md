@@ -4,6 +4,135 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.5.3] — 2026-09-03
+
+### Changed — the paper checker hardened on ~1,400 corpus papers
+The composition check (a paper's empirical formula re-derived from its own analytical table and
+basis) went from about a third of the checkable papers reproduced exactly to well over half, with
+no false flags, by reading more of what papers actually print:
+- **The formula sentence.** The formula is now the first formula-shaped run after "empirical …
+  formula" (is / = / : / being / as follows / can be written as / a Russian "эмпирическая формула"),
+  up to 1,200 characters long. Notation read: `Cu+ 0.99` charges without a digit, bare `Σ1.01` sums
+  without a bracket, a Σ printed as `6` before two-digit and integer sums (`)616.15`, `)62`),
+  tourmaline-style site labels (`X( Y( Z( T[ V( W[`, also glued: `ZAl6.00[`), sites named after
+  their element (`Mg1(Mg1.42…)`), a font that prints decimals as colons and brackets as `ð Þ`,
+  and nested `[(…)Σ16.15 Ca4.85]Σ21.01` sums (a Σ group counts its atoms in the enclosing sum).
+- **The table.** A footnote letter printed as its own word (`TiO2 a 15.36`), `Sb`/`Sc` no longer
+  split into S + footnote, `NaO` / `Fe2O` / `P2O` lost subscripts, a *Mean* that is the first
+  column (the S.D. was being taken when the header was centred over a wider cell), `Aver`
+  headers, bare-element rows below *Total* and repeated constituents at under half the value
+  (the apfu block), and the **transposed layout** (constituents across a header line, analyses
+  down the rows, a Mean/Average row or the rows' average).
+- **Several minerals or samples in one table.** When the mean column does not reproduce the
+  formula, the other numeric columns (or the other Mean / analysis rows of a transposed table)
+  are tried; the one that reproduces it is used and named ("column 3 of the table … a normalised
+  column, or another sample or mineral").
+- **A bracketed group with a stated Σ is a basis candidate** (`(Pb0.93Ce0.43…)Σ2.000` → Pb+REE = 2;
+  two sites of the same elements add up).
+- **Species evidence from Mindat** (owner's suggestion): the ideal formula in the offline cache
+  supplies oxidation states. An oxide the table reports at another charge than the paper's
+  formula (or, failing that, the species) is re-reduced in the other form — FeO as Fe2O3 — and
+  adopted only when it reproduces the formula better, with the evidence named; a formula that
+  writes an element at a charge the species never has is noted; an element essential to the ideal
+  formula that neither the table nor the formula carries is noted; and when no formula sentence
+  can be read at all, the table is reduced on the stated basis and the derived formula printed
+  for the reviewer to hold against the paper's by eye (unverified). All of these are CALC NOTEs,
+  never flags.
+- **Rows with no value** (2026-09-03): a subscript in `P2O5` or `Fe2O3` deepens the word's box
+  so its vertical centre drifts from its numbers and the row came out as a label with no value.
+  Words now share a line when their top, centre or bottom agrees — this alone recovered
+  bakakinite, koryakite and barronite. Also `Fe2O3(tot)` / `H2O(calc)` qualifiers, `Fe+3 0.23`
+  (sign before the digit), the `(ΣMe = 3.97)` suffix, `Ln0.10` / `REE*0.01` grouped lanthanides
+  (compared with the table's La–Lu oxides summed), `Cu12(` as a formula start, "crystal chemical
+  formula" wording, soft hyphens, nested groups without a Σ counting their atoms, structure tables
+  (Site Atom x y z Ueq, or Si Si Si rows, or 0.8641-style values) never taken for the analytical
+  table, trace-element rows in ppm dropped, and **every candidate table kept**: when the first
+  choice lacks an element of the formula, the table that carries them all is tried and named
+  ("the table on page 11 reproduces the formula"). One lost bracket in the pdf text with every
+  coefficient agreeing is a note, not a doubt. Later the same morning: a subscript digit set as its
+  own glyph (`B2O` + `3`) is glued into its parent and a superscript footnote number dropped; the
+  word "total" in the other page column's prose ("A total of 16 scans") no longer passes for the
+  Total row and breaks the block (natromolybdite lost its Na2O row that way); a composition given
+  in the running text ("MnO 14.78, Ce2O3 34.19, …, total 100.00 wt.%") is read as a table, the
+  ideal formula's "requires …" list excluded; `Fe2.5+ 0.25` charges; a formula followed by
+  `= (structural form)` is cut there; a vacancy printed as `h` (font). Lines are now built in two
+  passes (words on one baseline first, then the top/centre/bottom merge), so a table row's numbers
+  are never captured by the other page column's prose line 3 pt away (åsgruvanite's Yb2O3). The
+  formula is cut before a capitalised prose word ("Crystal B" gave a spurious Cr); a mineral name
+  may start with a non-ASCII capital (Åsgruvanite was being called calcite) and rock names and
+  English -ite words are excluded; the overall fit is judged on the major cations (≥ 0.1 apfu) —
+  a trace at 60 % off is reported on its own (merelaniite's Mn 0.05 is the wt% copied as apfu).
+  **Captions** (owner): a human finds the analytical table by its caption, and it is Table 1 or 2 in
+  almost every paper — candidates are now scored by the "Table N. …" line up to eight lines above
+  (+ for chemical / composition / analytical / EPMA / microprobe / wt%, − for coordinates, bonds,
+  powder, crystal data, refinement, Raman, IR; + for Table 1–2, − for Table 4 and up). Other rules
+  of the same batch: an ideal formula (integers and halves only) is never taken for the empirical
+  one; a trace below 0.1 apfu is a finding only when off by half or more; a column chosen by fit,
+  a fallback table chosen for its elements, a table with two or more samples fitting poorly, or a
+  table whose header was not recognised — all unverified, never flags; alternative columns must
+  carry a plausible total (an s.d. column is not a sample); a group basis only when its elements
+  occur nowhere else in the formula (`Si4(S1.61Si0.32…)`); element-named site labels only when
+  numbered from 1 (`Mg1(…)Mg2(…)`, but `Si4(` is a count); a Σ mismatch in a pure anion group is a
+  note, the cations are checked regardless; a vacancy printed as `A`; `(OH)3.524.13H2O` with the
+  hydrate dot lost; a constituent listed twice tries the other value.
+  A second sweep the same afternoon (owner: "so many remain unverified"): `<0.01` bounds, ranges
+  inside a formula (`Ge0.91-0.97`), `(Th,U)4+ 0.54`, a vacancy glyph lost before its count, a Σ
+  printed as `P` (only where the value is the group's own sum) or as a bare `S` when the table
+  has no sulfur, `(PO4)22H2O` = (PO4)2·2H2O, a `(SREF)` tag, `Σ=48.49`, `·nH2O`, `(Sample 1)`
+  after the formula, water inside a bracketed group counting toward its Σ, `(SO4)5.01` always a
+  multiplier (S1+O4 = 5 made it look like a sum), sulfosalt cells up to 250 apfu, near-ideal
+  formulas with two-decimal coefficients (Au3.00Tl1.01Te2.00) accepted, "the chemical formula of
+  X is" as a trigger, Cyrillic lookalike letters in constituents (`Na2О`), the point-averaging
+  rule never on a table whose first column is the mean (a powder table sharing the lines was
+  being averaged in), a group basis only from analysed elements, and the "deviate overall"
+  gate only when two or more major cations are off — one genuine slip stays a finding
+  (lauraniite computed S from an SO4 column with the SO3 molar mass). Then, from the flags that
+  pass produced: an integer after a bracketed group that equals the group's own cation sum is a Σ
+  whose glyph was lost (`(As3.99S0.01)4`), the Σ-as-P rule matches brackets properly so it also
+  works after a nested group, a basis prefix such as `(O + F)` before the formula is dropped, and
+  a major cation off by a factor beyond 0.6–1.6 is a multiplier or notation misread and is
+  reported as unverified — a genuine slip in a paper is a modest deviation, never a factor.
+  **The headline mineral's column** (owner): a paper's table often holds other phases or several
+  samples, and the caption, the header or the text says which analyses the formula rests on.
+  The column is now chosen by that evidence before any fitting: the header cell carrying the
+  headline mineral's name, a sample or specimen code the formula sentence cites, a domain or
+  crystal letter, a locality named next to "holotype" anywhere in the paper, or the number of
+  analyses the sentence states (`n = 10`); an IMA code or name centred over Ave | Std | Range
+  selects that group's value column. A transposed table is matched by its row labels. A total
+  row (Mn2O3 for both localities) followed by the split (MnO2 + Mn2O3 for one of them) is dropped
+  per column, only where the split has a value. Footnote numbers on constituents (`V2O31)`) and
+  a Total of 8.00 read from the apfu block are handled. Each starting column (the named one and
+  the plain mean column) runs through the same chain — best basis, another table carrying every
+  element, the other columns, the oxide forms — and the named column wins only when it leaves no
+  residual or the mean column does not either; an author's surname next to "holotype" or a
+  locality mentioned in passing can otherwise select the wrong column. A caption sharing its line
+  with prose ("… Table 1. Composition of wortupaite") is cut from the header cells at the "Table N."
+  token. A trace in the paper that reads five times larger is a factor problem, not a finding.
+  Later: `(PO4)3.02` flattened to `PO43.02` in the pdf text is re-bracketed; H never counts as
+  factor-like (it is informational); the caption score rewards the headline mineral's name and
+  penalises another mineral's (a supporting phase's table from other localities was winning);
+  the running head at the top of a page is never a column header; a per-analysis table averages
+  only the columns of the same phase as column 1 (calcite columns beside fluorpyromorphite were
+  being averaged in); more formula wording — "empirical mineral formula", "gives / yielded /
+  resulted in the formula", "with an average formula of", a crystal-data table's "Chemical
+  formula …" — and round coefficients are accepted after an explicit "empirical formula"
+  (uroxite); zero-width spaces inside a formula's glyph runs are stripped (a journal that
+  letter-spaces its formulas). More evidence for the column: the headline's Levinson suffix
+  labelling the columns (`(Nd)1 (Y)2 (Ce)3`), a wt% list inside the formula sentence itself
+  ("Ni 17.09, Fe 9.76 … which corresponds to"), sample codes such as `A-WP1` or `NRM19331765`
+  anywhere in the sentence; the averaging span of a named group is bounded by the neighbouring
+  labelled columns. Parser: `(N3C2H2)` is not the ICDD `Fe3 C1.01` charge notation; a one-cation
+  group with no decimals inside (`(AsO3OH)5.97`) is always a multiplier; a Σ on a one-cation anion
+  complex (`((As0.95Sb0.08)O4)Σ2.03`) is the number of such groups; the headline mineral is the
+  candidate the paper uses most, read from the first 3,000 characters.
+- The wt% total gate is 85–112 (analyses far from 100 are common, the owner notes). Two more
+  gates: a column chosen by fit is never flag-grade evidence (its residual disagreement is reported
+  as unverified), and a table constituent at 1 wt% or more that the formula read does not carry
+  means another (simplified) formula sentence was read — unverified; and a table of several
+  samples (two or more mean columns) whose first sample fits the formula only to 2 % or worse is
+  unverified (the formula may belong to another sample). A FeO total row followed by its FeO /
+  Fe2O3 split is dropped (Fe was being counted twice).
+
 ## [0.5.2] — 2026-09-02
 
 ### Added — a paper .pdf in Manuscript mode: the paper checked against itself
@@ -16,6 +145,13 @@ table agrees best with vs the one it cites). The `.cif` of the same mineral is f
 by name. A **Tables ▸** button carries the paper into the Tables mode (Fill ▸). `pxrd paper x.pdf
 --check [--cif x.cif]` prints the same. `pxrd_review/paper_extract.check_paper` is the engine;
 `tools/corpus_paper_extract.py` runs it over a corpus into `review_out/paper_checks_*.{txt,tsv}`.
+A confidence gate keeps the flags honest: a composition finding is raised only when the formula
+parsed cleanly, at least three constituents were read, their wt% add to a plausible total, the
+other cations agree, and every element of the formula was found in the table; anything short of
+that is reported as *not verifiable, because …* and never as a fault. Extractor hardening from the
+corpus: the value under a *Mean* header when a table carries several samples, `n.d.` rows dropped,
+apfu rows beside oxides recognised by value not by the mere presence of an oxide (a sulfide table
+with an H2O row keeps its element rows), site labels and REE in formulas tolerated.
 
 ### Added — Fill from paper, and the calculation workbooks
 The Tables mode can now be filled from the paper itself: pick the `.pdf` in the folder and press

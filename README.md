@@ -391,7 +391,15 @@ saying what was re-done and how. **Tables ▸** carries the paper into the Table
 analytical table, the stated basis and the treatment of the unmeasured constituents, the optics, the
 bond-valence parameter set and the powder table are read from it (`pxrd_review/paper_extract.py`;
 `pxrd paper x.pdf` prints the same) and the tabs' inputs are set from them, so the EPMA reduction
-and the tables re-do the paper's own calculation the paper's way. The **Write .xlsx** of the Bond
+and the tables re-do the paper's own calculation the paper's way. The reader takes both table
+layouts (constituents down the rows or across a header line), several minerals or samples in one
+table (the column that reproduces the formula is used and named), the formula sentence in its many
+forms (site labels, `Σ` printed as `6`, charges as `Fe3+ 1.52` or `Cu+ 0.99`, nested sums, Russian
+wording), and a bracketed group with a stated Σ as a basis candidate. **Species evidence from
+Mindat**: the ideal formula in the offline cache decides an ambiguous oxide (FeO reduced as Fe2O3
+when the formula or the species has Fe3+, adopted only when it reproduces the formula better), and
+when no formula sentence can be read the table is reduced on the stated basis and the derived
+formula printed for a check by eye — as Calc notes, never flags. The **Write .xlsx** of the Bond
 valence tab (`pxrd bv --xlsx`) and of the EPMA tab hold the calculation as live formulas — bonds
 with R0, b and s, the sums, the hydrogen bonds; the reduction with a *method* sheet quoting the
 paper — for checking a procedure step by step.

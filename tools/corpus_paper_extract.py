@@ -6,14 +6,16 @@ basis and method vs its own formula) and against its .cif (bond-valence table). 
 import os, re, sys, glob, csv
 from pxrd_review import extra_checks as X, epma as EP, paper_extract as PE
 
-def main(roots, pdf_dirs, out_dir):
+def main(roots, pdf_dirs, out_dir, tag=''):
     """Every paper .pdf (paired with its .cif when one shares the I-number): what the extractor
     reads, the paper's formula re-derived from its own table and basis, its bond-valence table vs
     the .cif. The verdicts are the tool's, for the owner to check one by one."""
-    stats = {'pdfs': 0, 'table': 0, 'formula': 0, 'comp_checked': 0, 'comp_ok': 0, 'bv_checked': 0, 'bv_clean': 0, 'basis': 0, 'n': 0, 'D': 0, 'bvset': 0, 'pxrd': 0}
+    stats = {'pdfs': 0, 'table': 0, 'formula': 0, 'comp_checked': 0, 'comp_ok': 0, 'comp_flag': 0, 'comp_unverified': 0, 'bv_checked': 0, 'bv_clean': 0, 'basis': 0, 'n': 0, 'D': 0, 'bvset': 0, 'pxrd': 0}
     lines = []; rows = []; seen = set()
     for pd in pdf_dirs:
-        for pdf in sorted(glob.glob(os.path.join(pd, '*.pdf'))):
+        for pdf in sorted(glob.glob(os.path.join(pd, '**', '*.pdf'), recursive=True)):
+            if 'review_out' in pdf:
+                continue
             base = os.path.basename(pdf)
             if re.search(r'supp|tables?\b', base, re.I):
                 continue
@@ -21,7 +23,7 @@ def main(roots, pdf_dirs, out_dir):
             if key in seen:
                 continue
             seen.add(key)
-            cif = next((c for c in glob.glob(os.path.join(pd, '*.cif')) if any(i in os.path.basename(c) for i in ids)), None) if ids else None
+            cif = next((c for c in glob.glob(os.path.join(os.path.dirname(pdf), '*.cif')) if any(i in os.path.basename(c) for i in ids)), None) if ids else None
             try:
                 r = PE.check_paper(pdf, cif, None)
             except Exception as e:
@@ -35,10 +37,14 @@ def main(roots, pdf_dirs, out_dir):
                 stats['formula'] += 1; stats['comp_checked'] += 1
                 if c['ok']:
                     stats['comp_ok'] += 1; summary.append('composition OK')
-                else:
-                    summary.append('composition DIFF')
+                elif c.get('verified'):
+                    stats['comp_flag'] += 1; summary.append('composition FLAG')
                     for ln in c['lines'][1:]:
-                        rows.append([base, 'composition', ln.strip(), ''])
+                        rows.append([base, 'composition flag', ln.strip(), ''])
+                else:
+                    stats['comp_unverified'] += 1; summary.append('composition unverified')
+                    for ln in c['lines'][1:]:
+                        rows.append([base, 'composition unverified', ln.strip(), ''])
             elif ex['epma']:
                 summary.append('no formula sentence')
             if ex['basis']: stats['basis'] += 1
@@ -61,13 +67,13 @@ def main(roots, pdf_dirs, out_dir):
                 lines.append('     ' + ln[:220])
     lines.append(''); lines.append('STATS %s' % stats)
     os.makedirs(out_dir, exist_ok=True)
-    open(os.path.join(out_dir, 'paper_checks_report.txt'), 'w', encoding='utf-8').write(
-        'Paper self-checks (pxrd-review 0.5.2): the composition re-derived from the paper\'s own table, basis and method\n'
+    open(os.path.join(out_dir, 'paper_checks_report%s.txt' % tag), 'w', encoding='utf-8').write(
+        'Paper self-checks (pxrd-review 0.5.3): the composition re-derived from the paper\'s own table, basis and method\n'
         'against its own empirical formula; its bond-valence table (read from the pdf) against the .cif. Rerun:\n'
         '  python3 tools/corpus_paper_extract.py "<unused>" "<pdf+cif folders, comma-separated>"\n\n' + '\n'.join(lines) + '\n')
-    with open(os.path.join(out_dir, 'paper_checks_faults.tsv'), 'w', encoding='utf-8', newline='') as f:
+    with open(os.path.join(out_dir, 'paper_checks_faults%s.tsv' % tag), 'w', encoding='utf-8', newline='') as f:
         w = csv.writer(f, delimiter='\t'); w.writerow(['paper', 'kind', 'detail', 'checked / verdict']); w.writerows(rows)
     print('\n'.join(lines[-3:]))
 
 if __name__ == '__main__':
-    main(sys.argv[1].split(','), sys.argv[2].split(','), sys.argv[3] if len(sys.argv) > 3 else '/Users/travis/Desktop/Minerals_task_group/review_out')
+    main(sys.argv[1].split(','), sys.argv[2].split(','), sys.argv[3] if len(sys.argv) > 3 else '/Users/travis/Desktop/Minerals_task_group/review_out', sys.argv[4] if len(sys.argv) > 4 else '')
