@@ -1455,6 +1455,7 @@ MS = {
     'files': {},                   # key (docx stem) -> path
     'order': [],
     'cifs': {},                    # key (cif stem) -> path  (the tables mode)
+    'pdfs': {},                    # key (file name) -> path  (papers to fill the tables mode from)
     'data': {},                    # file name -> path: probe / peak-list files for the EPMA and PXRD tabs
     'tb_opts': {},                 # tables mode: per-tab options remembered in review_out/tables_opts.json
     'cache': {},                   # key -> {'fp': fingerprint, 'data': serialized analysis}
@@ -1496,7 +1497,7 @@ def ms_set_folder(folder):
     folder = os.path.abspath(folder)
     if not os.path.isdir(folder):
         return False
-    files, cifs, data = {}, {}, {}
+    files, cifs, data, pdfs = {}, {}, {}, {}
     try:
         names = sorted(os.listdir(folder), key=str.lower)
     except OSError:
@@ -1511,12 +1512,16 @@ def ms_set_folder(folder):
             cifs[os.path.splitext(fn)[0]] = os.path.join(folder, fn)
         elif low.endswith(_DATA_EXT):
             data[fn] = os.path.join(folder, fn)                 # keyed by the full name: obs.txt ≠ obs.xlsx
+        elif low.endswith('.pdf'):
+            pdfs[fn] = os.path.join(folder, fn)                 # papers the Tables mode can be filled from
+    for fn, path in pdfs.items():
+        files.setdefault(os.path.splitext(fn)[0], path)   # a paper .pdf is a manuscript too
     if not files and not cifs and not data:
         return False
     with MS['lock']:
         MS['folder'] = folder
         MS['out_dir'] = os.path.join(folder, 'review_out')
-        MS['files'] = files; MS['order'] = list(files); MS['cifs'] = cifs; MS['data'] = data
+        MS['files'] = files; MS['order'] = list(files); MS['cifs'] = cifs; MS['data'] = data; MS['pdfs'] = pdfs
         MS['cache'] = {}; MS['gen'] += 1
         _ms_load_triage()
         _tb_load_opts()
@@ -1530,8 +1535,9 @@ def ms_set_folder(folder):
 # written to review_out/<name>_tables.docx on request. Same folder as the manuscript mode — the
 # .cif files it lists — and the same rule: keys only from the page, never paths.
 from pxrd_review import tables as TB
+from pxrd_review import update as UPD
 
-from pxrd_review import epma as EP, gd as GD, pxrd_table as PX
+from pxrd_review import epma as EP, gd as GD, pxrd_table as PX, bv_check as BV
 
 _TB_TABS = ('coords', 'bvs', 'gd', 'epma', 'pxrd')
 
@@ -1607,7 +1613,7 @@ def _tb_data_kind(fn):
         return 'obs'
     return ''
 
-_TB_OUTPUT = re.compile(r'[^/\\]+_(tables|epma|gd|pxrd)\.(docx|xlsx|txt)')
+_TB_OUTPUT = re.compile(r'[^/\\]+_(tables|epma|gd|pxrd|bv)\.(docx|xlsx|txt)')
 
 def _tb_output_ok(name):
     """Only the tool's own outputs in review_out may be opened — a basename of the recognised
@@ -1616,6 +1622,29 @@ def _tb_output_ok(name):
         return None
     path = os.path.join(MS['out_dir'], name)
     return path if os.path.isfile(path) else None
+
+@app.route('/api/version')
+def api_version():
+    """The installed version and, once the launch-time check has run, what GitHub holds — the
+    header's version chip. Nothing is fetched on request; main() starts the check once."""
+    return jsonify(UPD.status())
+
+_GUI_ARGV = []                        # the server's own arguments, for the post-update relaunch
+_GUI_PORT = None
+
+@app.route('/api/update', methods=['POST'])
+def api_update():
+    """Update now: pull the checkout or pip-install main, then restart this server with the same
+    token and port so the open tab reconnects. Refused when GitHub holds nothing newer."""
+    st = UPD.status(); res = st.get('result') or {}
+    if not st.get('checkout') and not res.get('newer'):
+        return jsonify({'ok': False, 'error': 'nothing newer on GitHub'}), 409
+    r = UPD.gui_update(_GUI_ARGV, {'PXRD_GUI_TOKEN': _AUTH_TOKEN or '', 'PXRD_GUI_PORT': str(_GUI_PORT or '')})
+    return jsonify(dict(r, ok=True))
+
+@app.route('/api/update/status')
+def api_update_status():
+    return jsonify(UPD.run_status())
 
 @app.route('/api/tb/state')
 def api_tb_state():
@@ -1626,7 +1655,8 @@ def api_tb_state():
     outputs = []
     if out and os.path.isdir(out):
         outputs = sorted(fn for fn in os.listdir(out) if _TB_OUTPUT.fullmatch(fn) and not fn.endswith('.txt'))
-    return jsonify({'folder': MS['folder'], 'cifs': cifs, 'data': data, 'outputs': outputs, 'opts': MS['tb_opts'],
+    pdfs = [{'key': k, 'name': k} for k in sorted(MS.get('pdfs') or {}, key=str.lower)]
+    return jsonify({'folder': MS['folder'], 'cifs': cifs, 'data': data, 'outputs': outputs, 'opts': MS['tb_opts'], 'pdfs': pdfs,
                     'journals': [{'key': k, 'name': v['name']} for k, v in TB.JOURNALS.items()], 'default_journal': TB.DEFAULT_JOURNAL})
 
 @app.route('/api/tb/opts/<tab>', methods=['POST'])
@@ -1656,6 +1686,83 @@ def api_tb_tables(key):
     return jsonify({'ok': True, 'name': st.name, 'formula': st.formula, 'sg': st.sg,
                     'notes': st.notes, 'html': TB.render_html(tabs), 'text': TB.render_text(tabs)})
 
+@app.route('/api/tb/bvs/<key>/export', methods=['POST'])
+def api_tb_bvs_export(key):
+    """The bond-valence workbook: every bond with R0, b and s as live formulas, the anion and
+    cation sums, the hydrogen bonds — the calculation itself, to check a paper's."""
+    if key not in MS['cifs']:
+        abort(404)
+    opts = _tb_opts()
+    try:
+        st, result, anion_sum, cells, text = BV.run(MS['cifs'][key], params=opts['params'], ox=opts['ox'], cutoff=opts['cutoff'],
+                                                    include_h=opts['include_h'], out_dir=MS['out_dir'], quiet=True, xlsx=True,
+                                                    hbond=opts['hbond'], hmax=opts['hmax'], donors=opts['donors'], hb=opts['hb'], u6=opts['u6'])
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
+    return jsonify({'ok': True, 'file': key + '_bv.xlsx'})
+
+@app.route('/api/tb/extract', methods=['POST'])
+def api_tb_extract():
+    """Fill the tabs from a paper: the analytical table, the basis and the way the unmeasured
+    constituents were handled, the optics, the bond-valence parameter set, the powder table. Writes
+    the data files the EPMA and PXRD tabs read into review_out and returns the inputs to set."""
+    key = request.args.get('pdf') or ''
+    if key not in (MS.get('pdfs') or {}):
+        abort(404)
+    from pxrd_review import paper_extract as PE
+    path = MS['pdfs'][key]; stem = os.path.splitext(key)[0]
+    try:
+        ex = PE.extract(path, MS['out_dir'], stem)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': E.explain(e, path)}), 500
+    # the written data files join the folder's data list so the tabs can select them
+    with MS['lock']:
+        for fn in ex['files'].values():
+            MS['data'][fn] = os.path.join(MS['out_dir'], fn)
+    fill = {'epma': {}, 'gd': {}, 'bvs': {}, 'pxrd': {}}
+    name = ex.get('name') or stem
+    meth = ex['method']
+    if ex['files'].get('epma'):
+        fill['epma']['file'] = ex['files']['epma']
+    if ex['basis']:
+        fill['epma']['basis'] = PE.basis_string(ex['basis'])
+    if meth.get('h2o') == 'difference':
+        fill['epma']['add'] = 'H2O=difference'
+    if meth.get('charge') == 'Fe':
+        fill['epma']['charge'] = 'Fe'
+    if ex['epma'] and any(r.get('standard') for r in ex['epma']['rows']):
+        fill['epma']['standards'] = ','.join('%s=%s' % (r['constituent'], r['standard']) for r in ex['epma']['rows'] if r.get('standard'))[:400]
+    fill['epma']['name'] = name
+    fill['epma']['method'] = ' | '.join([('basis: ' + ex['basis_sentence']) if ex['basis_sentence'] else ''] + meth['sentences'][:4]).strip(' |')[:1400]
+    if ex['optics'].get('n'):
+        fill['gd']['n'] = '%.4f' % ex['optics']['n']
+    if ex['optics'].get('D_meas'):
+        fill['gd']['density'] = '%.3f' % ex['optics']['D_meas']
+    fill['gd']['name'] = name
+    cif_key = next((k for k in MS['cifs'] if name and name.split('-')[0][:6].lower() in k.lower()), None)
+    if cif_key:
+        fill['gd']['cif'] = cif_key; fill['_cif'] = cif_key           # the structure of the same mineral, when the folder has it
+    if ex['bv'].get('params'):
+        fill['bvs']['params'] = ex['bv']['params']
+    if ex['bv'].get('u6') == 'params':
+        fill['bvs']['u6set'] = '1'
+    if ex['files'].get('obs'):
+        fill['pxrd']['obs'] = ex['files']['obs']
+    if ex['files'].get('calc'):
+        fill['pxrd']['calc'] = ex['files']['calc']
+    fill['pxrd']['name'] = name
+    notes = list(ex['notes'])
+    if ex['epma']:
+        notes.append('analytical table: %d constituents (page %d)%s' % (len(ex['epma']['rows']), ex['epma']['page'], (', total %.2f' % ex['epma']['total']) if ex['epma']['total'] else ''))
+    if ex['basis_sentence']:
+        notes.append('basis: ' + PE.basis_string(ex['basis']))
+    notes += meth['sentences'][:3]
+    notes += ex['optics']['sentences'][:3]
+    notes += ex['bv']['sentences'][:2]
+    if ex['pxrd']['obs'] or ex['pxrd']['calc']:
+        notes.append('powder table: %d observed, %d calculated lines' % (ex['pxrd']['obs'], ex['pxrd']['calc']))
+    return jsonify({'ok': True, 'fill': fill, 'notes': notes, 'files': ex['files'], 'name': name})
+
 @app.route('/api/tb/word/<key>', methods=['POST'])
 def api_tb_word(key):
     if key not in MS['cifs']:
@@ -1675,7 +1782,7 @@ def _tb_epma_args():
                 anions=_qf('anions', 0.1, 500), raw_anions=a.get('raw') == '1',
                 adds=split(_q('add', '', 400)), converts=split(_q('convert', '', 200)), drop=split(_q('drop', '', 200)),
                 points=_q('points', '', 60), standards=_q('standards', '', 400), ideal=_q('ideal', '', 400),
-                name=_q('name', '', 80), sheet=_q('sheet', '', 80) or None)
+                name=_q('name', '', 80), sheet=_q('sheet', '', 80) or None, method=_q('method', '', 1400))
 
 def _tb_epma(key):
     if key not in MS['data']:
@@ -1708,7 +1815,8 @@ def api_tb_epma_export(key):
     ds, red, table, text = res
     stem = os.path.splitext(key)[0]
     try:
-        paths = EP.export(ds, red, table, text, MS['out_dir'], stem, word=fmt == 'word', xlsx=fmt == 'xlsx', journal_key=_tb_journal())
+        paths = EP.export(ds, red, table, text, MS['out_dir'], stem, word=fmt == 'word', xlsx=fmt == 'xlsx', journal_key=_tb_journal(),
+                          method=_q('method', '', 1400))
     except Exception as ex:
         return jsonify({'ok': False, 'error': E.explain(ex, path)}), 500
     return jsonify({'ok': True, 'file': os.path.basename(paths.get(fmt, paths['text']))})
@@ -1850,18 +1958,57 @@ def ms_analysis(key):
         if c and c['fp'] == fp:
             return c['data']
         comps = [MS['files'][k] for k in _ms_companions(key)]
-    doc, paras = RC.load_docx(path)
+    doc, paras = RC._load(path)
     for extra in comps:
         _, more = RC._load(extra)
         paras += [RC.Para(len(paras) + i, p.text, None, 'with:' + os.path.basename(extra)) for i, p in enumerate(more)]
     res = RC.analyze(paras)
     data = RC.serialize(paras, res)
     data['key'] = key; data['name'] = os.path.basename(path)
-    data['summary'] = {k: sum(1 for f in data['findings'] if f['kind'] == k) for k in ('orphan', 'uncited', 'pair', 'form')}
+    if path.lower().endswith('.pdf'):
+        data['findings'] += _ms_paper_findings(key, path)
+    data['summary'] = {k: sum(1 for f in data['findings'] if f['kind'] == k) for k in ('orphan', 'uncited', 'pair', 'form', 'calc', 'calcinfo')}
     with MS['lock']:
         if key in MS['files']:
             MS['cache'][key] = {'fp': fp, 'data': data}
     return data
+
+_CALC_FLAG = re.compile(r' vs |but the \.cif|blank but|not in the wt|does not|do not|disagree(?!.*0 disagree)|could not|paper \d|not follow|FAILED|is not a|listed twice|no space|zero written|not reconciled', re.I)
+
+def _ms_cif_for(key, name=''):
+    """The .cif of the same mineral in the folder: the same stem, the mineral's name, or the only one."""
+    cifs = MS.get('cifs') or {}
+    if key in cifs:
+        return cifs[key]
+    stem = key.lower(); nm = (name or '').split('-')[0].lower()[:6]
+    for k, p in cifs.items():
+        if k.lower() in stem or stem in k.lower() or (nm and nm in k.lower()):
+            return p
+    return next(iter(cifs.values())) if len(cifs) == 1 else None
+
+def _ms_paper_findings(key, path):
+    """Composition and bond-valence checks of a paper .pdf against its own numbers (and the
+    folder's .cif), as manuscript findings: 'calc' where a number does not follow, 'calcinfo' for
+    what was re-done and how."""
+    from pxrd_review import paper_extract as PE
+    out = []
+    try:
+        chk = PE.check_paper(path, _ms_cif_for(key, PE.mineral_name(PE.text_of(path))), out_dir=None)
+    except Exception as ex:
+        return [{'kind': 'calcinfo', 'fkey': 'calc:error', 'label': 'paper checks', 'msg': 'could not run (%s: %s)' % (type(ex).__name__, ex),
+                 'para': None, 'start': None, 'end': None, 'text': ''}]
+    section = ''
+    for ln in chk['lines']:
+        s = ln.strip()
+        if not s:
+            continue
+        head = not ln.startswith('  ')
+        if head:
+            section = s.split(':', 1)[0]
+        kind = 'calcinfo' if head or not _CALC_FLAG.search(s) else 'calc'
+        fkey = 'calc:' + hashlib.sha1(s.encode('utf-8')).hexdigest()[:12]
+        out.append({'kind': kind, 'fkey': fkey, 'label': section or 'paper', 'msg': s, 'para': None, 'start': None, 'end': None, 'text': ''})
+    return out
 
 def _ms_analyze_all(gen):
     for key in list(MS['order']):
@@ -1880,8 +2027,9 @@ def _ms_row(key):
     c = MS['cache'].get(key)
     t = MS['triage'].get(key) or {}
     outs = _ms_outputs(key)
+    pdf = next((k for k in (MS.get('pdfs') or {}) if os.path.splitext(k)[0] == key), None)
     row = {'key': key, 'name': os.path.basename(MS['files'][key]), 'reviewed': bool(t.get('reviewed')),
-           'has_annotated': os.path.exists(outs['annotated']), 'pending': True, 'summary': None, 'error': None}
+           'has_annotated': os.path.exists(outs['annotated']), 'pending': True, 'summary': None, 'error': None, 'pdf': pdf}
     if c and c['fp'] == _ms_fingerprint(key):
         d = c['data']
         row.update(pending=False, summary=d.get('summary') or {}, error=d.get('error'),
@@ -1985,6 +2133,10 @@ def api_ms_docx_html(key):
             path = MS['files'][key]; which = 'source'
         else:
             abort(404)
+    if path.lower().endswith('.pdf'):
+        _, paras = RC._load(path)
+        body = ''.join('<p data-p="%d">%s</p>' % (i, html.escape(p.text)) for i, p in enumerate(paras))
+        return jsonify({'html': '<div class="pdftext">%s</div>' % body, 'name': os.path.basename(path), 'which': 'source'})
     return jsonify({'html': _docx_html(path), 'name': os.path.basename(path), 'which': which})
 
 @app.route('/api/ms/report/<key>')
@@ -2121,13 +2273,22 @@ def main():
     if STATE['order']:
         start_analysis()                                # background; the server comes up at once
 
+    relaunched = os.environ.get('PXRD_GUI_PORT', '').isdigit()
+    if relaunched:
+        args.port = int(os.environ['PXRD_GUI_PORT'])          # a relaunch after Update now: same port
     port = _pick_port(args.port)
+    if relaunched and port != args.port:
+        args.no_browser = False                               # the old tab cannot find us: open a new one
     if port != args.port:
         print('[review_gui] port %d busy — using %d' % (args.port, port))
-    global _ALLOWED_HOSTS, _AUTH_TOKEN
+    global _ALLOWED_HOSTS, _AUTH_TOKEN, _GUI_ARGV, _GUI_PORT
     _ALLOWED_HOSTS = {'127.0.0.1:%d' % port, 'localhost:%d' % port}   # Host/CSRF allowlist
-    _AUTH_TOKEN = secrets.token_urlsafe(16)      # keeps other local users off the port
+    # a relaunch after Update now reuses the token so the open tab's cookie still passes
+    _AUTH_TOKEN = os.environ.pop('PXRD_GUI_TOKEN', None) or secrets.token_urlsafe(16)
+    os.environ.pop('PXRD_GUI_PORT', None)
+    _GUI_ARGV = list(sys.argv[1:]); _GUI_PORT = port
     url = 'http://127.0.0.1:%d/?t=%s' % (port, _AUTH_TOKEN)
+    UPD.start()                                      # the version chip's one-off check (PXRD_NO_UPDATE_CHECK=1 to skip)
     exit_note = '' if args.no_auto_exit else ' — closes itself when the browser does'
     print('\n[review_gui] serving on %s  (localhost only — Ctrl-C to stop%s)' % (url, exit_note))
     if not args.no_browser:

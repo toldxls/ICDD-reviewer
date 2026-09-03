@@ -16,6 +16,8 @@ const MS_KIND = {
   uncited: { sev: 'check', code: 'LISTED, NOT CITED', title: 'Listed but never cited' },
   pair:    { sev: 'flag',  code: 'MISMATCH',          title: 'Probably the same reference — year or spelling differs' },
   form:    { sev: 'check', code: 'FORM',              title: 'Citation and entry disagree in form' },
+  calc:    { sev: 'flag',  code: 'CALCULATION',       title: "Numbers that do not follow from the paper's own data (composition, bond valence)" },
+  calcinfo:{ sev: 'check', code: 'CALC NOTE',         title: 'Calculation checks — what was re-done, and how' },
 };
 
 // ---- mode toggle -------------------------------------------------------------
@@ -59,6 +61,7 @@ function msSummaryBadges(f) {
   if (s.pair) out.push({ level: 'danger', label: `${s.pair} mismatch` });
   if (s.uncited) out.push({ level: 'warn', label: `${s.uncited} uncited` });
   if (s.form) out.push({ level: 'warn', label: `${s.form} form` });
+  if (s.calc) out.push({ level: 'danger', label: `${s.calc} calc` });
   if (!out.length) out.push({ level: 'ok', label: 'clean' });
   if (f.has_annotated) out.push({ level: 'fix', label: 'annotated copy' });
   return out;
@@ -173,6 +176,12 @@ function msRenderHead(r) {
         msOpen(MSS.key);
       } }, k));
   }
+  // a paper .pdf: carry it into the Tables mode (Fill ▸ from this paper)
+  const row = MSS.files.find(f => f.key === MSS.key), tb = $('#ms-to-tables');
+  if (tb) {
+    tb.classList.toggle('hidden', !(row && row.pdf));
+    tb.onclick = () => { if (row && row.pdf) { setMode('tables'); if (typeof tbFillFromPaper === 'function') tbFillFromPaper(row.pdf); } };
+  }
   const rv = $('#ms-reviewed'); rv.checked = !!MSS.t.reviewed;
   rv.onchange = () => {
     MSS.t.reviewed = rv.checked;
@@ -194,7 +203,7 @@ function msRenderFindings() {
   const a = MSS.a, body = $('#ms-findings-body'); body.innerHTML = '';
   const hide = $('#ms-hide-dismissed').checked;
   let n = 0, hidden = 0;
-  for (const kind of ['orphan', 'pair', 'form', 'uncited']) {
+  for (const kind of ['calc', 'orphan', 'pair', 'form', 'uncited', 'calcinfo']) {
     const rows = a.findings.filter(f => f.kind === kind);
     if (!rows.length) continue;
     body.append(el('div', { class: 'ms-sec' }, `${MS_KIND[kind].title} (${rows.length})`));
@@ -232,6 +241,7 @@ $('#ms-hide-dismissed').addEventListener('change', () => { if (MSS.a) msRenderFi
 
 // '? look': scroll the docx view to the finding's paragraph (a pair alternates citation / entry)
 async function msLook(f) {
+  if (f.para == null) return;                       // a calculation finding has no paragraph to jump to
   document.querySelectorAll('#ms-findings-body .finding').forEach(d => d.classList.toggle('focus', d.getAttribute('data-fkey') === f.fkey));
   const targets = [f.para]; if (f.entry_para != null) targets.push(f.entry_para);
   const i = (MSS.lookIdx[f.fkey] || 0) % targets.length; MSS.lookIdx[f.fkey] = i + 1;

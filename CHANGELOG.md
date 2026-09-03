@@ -4,6 +4,55 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.5.2] — 2026-09-02
+
+### Added — a paper .pdf in Manuscript mode: the paper checked against itself
+Manuscript mode now takes a paper `.pdf` beside the `.docx` manuscripts. Besides the citation
+check, the paper's own numbers are re-done and reported as findings: **CALCULATION** where a
+number does not follow (a coefficient of the empirical formula that the paper's own wt% table and
+stated basis do not give; a bond-valence cell or Σ that the `.cif` does not give under any
+parameter set) and **CALC NOTE** for what was re-done and how (the basis used, the set the paper's
+table agrees best with vs the one it cites). The `.cif` of the same mineral is found in the folder
+by name. A **Tables ▸** button carries the paper into the Tables mode (Fill ▸). `pxrd paper x.pdf
+--check [--cif x.cif]` prints the same. `pxrd_review/paper_extract.check_paper` is the engine;
+`tools/corpus_paper_extract.py` runs it over a corpus into `review_out/paper_checks_*.{txt,tsv}`.
+
+### Added — Fill from paper, and the calculation workbooks
+The Tables mode can now be filled from the paper itself: pick the `.pdf` in the folder and press
+**Fill ▸**. `pxrd_review/paper_extract.py` reads the analytical table (mean, range, s.d., standard
+per constituent — through two-column layouts and a journal font that prints `=` as `¼`), the basis
+the authors normalised on ("on the basis of 7 O apfu", "U + S = 6"), how they treated the
+constituents a probe cannot give (H2O by difference / from the structure / for charge balance, the
+Fe3+/Fe2+ split), the mean refractive index and the densities, the bond-valence parameter set they
+cite, and the powder table. The means become `review_out/<paper>_paper_epma.csv`, the powder lines
+`<paper>_paper_obs.txt` / `_calc.txt`, and the tabs' inputs are set from them — basis, additions,
+standards, n, D, parameter set — with the paper's own sentences shown in the status line, so the
+reduction re-does the paper's calculation the paper's way. `pxrd paper x.pdf` prints the same.
+Two workbooks carry the whole calculation as live formulas for checking a paper's procedure:
+**`pxrd bv --xlsx`** / the Bond valence tab's *Write .xlsx* (every bond with R0, b and
+s = EXP((R0−R)/b), multiplicities and occupancies, the cation and anion sums built from those
+cells, the hydrogen bonds with s = (d/2.17)^−8.2 + 0.06, the parameters and the table note), and
+the EPMA workbook now ends with a **method** sheet quoting the paper's basis and calculated-
+constituent statements next to the basis actually applied.
+
+### Added — the version chip, Update now, and `pxrd update`
+Clicking the chip opens a small panel with **Update now**: the server pulls the checkout or
+pip-installs the newer version, then restarts itself with the same token and port, and the open
+tab reloads on its own; on Windows a helper window waits for the tool to close, runs pip and
+reopens it (the running launcher locks its own executable). Failures show pip's output and the
+command to run by hand.
+The GUI header now shows the installed version. At launch the server asks GitHub once (two
+anonymous GETs: the version on `main`, which the recommended install line tracks, and the latest
+release) and the chip turns amber — `⬆ v0.5.1 → 0.5.2` — when something newer exists; its tooltip
+carries the upgrade command and the release-notes link, and a click copies the command.
+`PXRD_NO_UPDATE_CHECK=1` turns the check off; offline, the chip says so and links the releases
+page. **`pxrd update`** installs the newer version with pip (`--check` only reports, `--release`
+takes the release's hash-pinned wheel instead of `main`, `--force` installs when nothing is newer);
+it never installs over a copy that is already current or ahead, and on a git checkout (an editable
+install, the developer's case) it runs `git pull --ff-only` there instead of pip, which would replace
+the live link with a plain copy; the chip's tooltip names `pxrd update` in every case. On Windows it hands pip to a fresh
+console, because the running `pxrd.exe` launcher cannot overwrite itself.
+
 ## [0.5.1] — 2026-09-02
 
 ### Fixed — bond-valence tables (`pxrd bv`, `pxrd tables`, the GUI's Bond valence tab)

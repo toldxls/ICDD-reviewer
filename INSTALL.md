@@ -100,6 +100,20 @@ pip install -e .
 
 The first install needs internet — pip fetches the libraries the tool depends on.
 
+### Upgrading
+
+Two ways, both fine:
+
+- In a Command Prompt: **`pxrd update`**. It looks at GitHub, says whether there is a newer
+  version, and installs it (a second window runs pip; close it when it says *Done*). When nothing
+  is newer it installs nothing. `pxrd update --check` only looks.
+- Or run install line **A** again — it always fetches the current version.
+
+You do not have to remember to look: the tool's header shows its version (top right), and the chip
+turns **amber** with an arrow — `⬆ v0.5.1 → 0.5.2` — when GitHub has something newer. Click it and
+press **Update now**: a small window installs the new version after the tool closes, the tool
+reopens by itself, and the page you had open reloads. No typing needed.
+
 ### Check it installed
 
 ```

@@ -23,6 +23,8 @@
     <div class="spacer"></div>
     <!-- Mindat cache age: the cache-backed checks find nothing when it is missing, which
          looks exactly like a clean batch — so the header always states how old it is. -->
+    <!-- installed version; amber when GitHub holds a newer one (the tooltip says how to upgrade) -->
+    <span id="version-chip" class="chip" title="pxrd-review version"></span>
     <span id="mindat-chip" class="chip hidden" title=""></span>
     <span id="rerun-status" class="muted"></span>
     <!-- Tooltips name the equivalent command, so the GUI teaches the CLI rather than hiding it. -->
@@ -67,6 +69,17 @@
   </div>
 
   <!-- folder picker: re-point the tool at a different entries folder, live -->
+  <!-- version chip panel: what is installed, what GitHub holds, Update now -->
+  <div id="updatepanel" class="panel hidden">
+    <div id="upd-text"></div>
+    <div class="set-row" id="upd-buttons">
+      <button id="upd-now" title="Pull the checkout, or pip-install the newer version from GitHub, then restart the tool. This tab reconnects by itself.">Update now</button>
+      <button id="upd-notes" title="open the release notes on GitHub">Release notes ↗</button>
+      <button id="upd-copy" title="copy the command to run it yourself in a terminal">Copy command</button>
+      <button id="upd-close">Close</button>
+    </div>
+    <pre id="upd-log" class="hidden"></pre>
+  </div>
   <div id="folderpanel" class="panel hidden">
     <div class="set-row">
       <span class="set-label">Folder</span>
@@ -128,6 +141,7 @@
               <input type="checkbox" id="ms-reviewed"> reviewed
             </label>
             <span id="ms-preview" class="preview" title="what Run will write after your triage"></span>
+            <button id="ms-to-tables" class="hidden" title="Fill the Tables mode from this paper: its analytical table, basis and method, optics, bond-valence set and powder table">Tables ▸</button>
             <button id="ms-run" title="Write review_out/<name>_refs.docx — a copy with a comment and highlight on every finding you have not dismissed (your notes go into the comments). The source is never edited.&#10;&#10;Runs:  pxrd refs &quot;<name>.docx&quot; [--with companion.docx]">Run ▸</button>
           </div>
         </section>
@@ -198,6 +212,7 @@
               <button data-tab="pxrd" title="observed + calculated powder lines, combined, eight strongest in bold">PXRD</button>
             </div>
             <span class="spacer"></span>
+            <label class="opt" title="read the paper's analytical table, basis and calculated-constituent statements, optics, bond-valence parameter set and powder table, and fill the tabs from them (the data files go to review_out)"><span class="muted">from paper</span> <select id="tb-paper"></select> <button id="tb-fill" class="ghost mini">Fill ▸</button></label>
             <label class="opt"><span class="muted">journal</span> <select id="tb-journal" title="table conventions of the journal you are submitting to (caption form, header labels, sum labels, rules, notes, font)"></select></label>
           </div>
 
@@ -248,6 +263,7 @@
             <span class="spacer"></span>
             <button data-export="xlsx" title="Write review_out/<name>_gd.xlsx with live formulas (K_C, K_P, compatibility).&#10;&#10;Runs:  pxrd gd --formula … --n … --xlsx">Write .xlsx ▸</button>
             <button data-export="word" title="Write review_out/<name>_gd.docx (the constants table with the compatibility note)">Write .docx ▸</button>
+            <button class="ghost mini" data-export="xlsx" title="the calculation as a workbook with live formulas: every bond with R0, b and s, the sums, the hydrogen bonds, the parameters">Write .xlsx</button>
             <button data-open class="ghost" title="open the last written file">open ↗</button>
           </div>
 
@@ -266,6 +282,7 @@
             <label class="opt"><span class="muted">drop</span> <input type="text" data-opt="drop" placeholder="Cl" spellcheck="false" autocomplete="off" title="constituents to leave out"></label>
             <label class="opt"><span class="muted">standards</span> <input type="text" class="w" data-opt="standards" placeholder="CaO=anorthite,UO3=UO2" spellcheck="false" autocomplete="off" title="Standard column of the published table"></label>
             <label class="opt"><span class="muted">ideal</span> <input type="text" class="w" data-opt="ideal" placeholder="CaO=3,UO3=1,CO2=3,F=1,H2O=6" spellcheck="false" autocomplete="off" title="ideal formula as constituent apfu → the Ideal column"></label>
+            <input type="hidden" data-opt="method" value="">
             <label class="opt"><span class="muted">name</span> <input type="text" class="n" data-opt="name" placeholder="mineral"></label>
             <span class="spacer"></span>
             <button data-export="xlsx" title="Write review_out/<file>_epma.xlsx — raw | reduction (live formulas, to check the maths) | table.&#10;&#10;Runs:  pxrd epma <file> --basis … --xlsx">Write .xlsx ▸</button>

@@ -1534,6 +1534,65 @@ def write_word(st, result, anion_sum, cells, path, hbonds=()):
                     run.font.size = Pt(9)
     _save_docx(doc, path)
 
+def write_xlsx(st, params, result, anion_sum, cells, hbonds, path):
+    """The bond-valence calculation as a workbook with live formulas, to check a paper's:
+    bonds (cation, anion, R, R0, b, s = EXP((R0−R)/b), multiplicities, contributions), the
+    cation and anion sums built from those cells, the hydrogen bonds (D···A, s = (d/2.17)^−8.2
+    + 0.06), and the parameters used with their sources."""
+    import openpyxl
+    from openpyxl.styles import Font
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'bonds'
+    ws.append(['cation', 'species', 'anion', 'R (Å)', 'R0', 'b', 's = exp((R0−R)/b)', '×↓ (per cation)', '×→ (per anion)',
+               'anion occ', 'cation occ', 'to the cation sum', 'to the anion sum', 'parameter source'])
+    for c in range(1, 15):
+        ws.cell(1, c).font = Font(bold=True)
+    r = 2; first = {}
+    for site, bonds, bvs, expected, mean_d in result:
+        tot_occ = sum(sp.occ for sp in site.species if sp.ox and sp.ox > 0) or 1.0
+        for b in bonds:
+            n_across = b.count * site.mult / b.anion.mult
+            for sp, sval in b.vals:
+                if sp.ox is None or sp.ox <= 0:
+                    continue
+                key = (sp.element, sp.ox, b.anion.element)
+                p = params.used.get(key)
+                if p is None:
+                    continue
+                r0, bb, rid = p
+                ws.append([site.label, '%s%+d' % (sp.element, sp.ox), b.anion.label, round(b.dist, 4), r0, bb,
+                           '=EXP((E%d-D%d)/F%d)' % (r, r, r), b.count, round(n_across, 3), min(b.anion.occ_total, 1.0),
+                           round(sp.occ / tot_occ, 4), '=G%d*H%d*J%d*K%d' % (r, r, r, r), '=G%d*I%d*K%d*MIN(1,%s)' % (r, r, r, round(min(tot_occ, 1.0), 4)),
+                           params.short_ref(rid)])
+                first.setdefault(site.label, r); r += 1
+    last = r - 1
+    for col, w in zip('ABCDEFGHIJKLMN', (10, 8, 10, 9, 8, 7, 18, 12, 12, 9, 10, 16, 16, 30)):
+        ws.column_dimensions[col].width = w
+    # sums
+    wc = wb.create_sheet('cation sums'); wc.append(['cation', 'Σ (vu)', 'expected', 'Σ/expected − 1']); wc.cell(1, 1).font = Font(bold=True)
+    for i, (site, bonds, bvs, expected, mean_d) in enumerate(result, 2):
+        wc.append([site.label, '=SUMIF(bonds!A:A,A%d,bonds!L:L)' % i, round(expected, 3), '=B%d/C%d-1' % (i, i)])
+    wa = wb.create_sheet('anion sums'); wa.append(['anion', 'cations (vu)', 'accepted H bonds (vu)', 'Σan', 'donated O–H (vu)', 'Σall']); wa.cell(1, 1).font = Font(bold=True)
+    hb_rows = {}
+    for hb in hbonds:
+        hb_rows.setdefault(hb.acceptor.label, []).append(hb)
+    don = donated(hbonds)
+    for i, an in enumerate([a for a in st.anions if any((a.label, r_[0].label) in cells for r_ in result) or a.label in hb_rows], 2):
+        wa.append([an.label, '=SUMIF(bonds!C:C,A%d,bonds!M:M)' % i, '=SUMIF(\'H bonds\'!B:B,A%d,\'H bonds\'!F:F)' % i, '=B%d+C%d' % (i, i),
+                   round(don.get(an.label, 0.0), 4), '=D%d+E%d' % (i, i)])
+    wh = wb.create_sheet('H bonds'); wh.append(['donor', 'acceptor', 'D⋯A (Å)', 's (vu) = (d/2.17)^-8.2 + 0.06', '×→ (per acceptor)', 'to the acceptor sum', 'source'])
+    wh.cell(1, 1).font = Font(bold=True)
+    for i, hb in enumerate(hbonds, 2):
+        formula = '=(C%d/2.17)^(-8.2)+0.06' % i if hb.via != 'H···A' else round(hb.s, 4)
+        wh.append([hb.donor.label, hb.acceptor.label, round(hb.d, 4), formula, hb.n_across, '=D%d*E%d' % (i, i),
+                   {'loop': 'D–H⋯A from the .cif loop', 'H': 'from the H positions', 'OO': 'PROPOSED from the O⋯O geometry (no H in the .cif)', 'H···A': 'H⋯A distance, Brown 2002'}[hb.via]])
+    wp = wb.create_sheet('parameters'); wp.append(['pair', 'R0', 'b', 'reference']); wp.cell(1, 1).font = Font(bold=True)
+    for (cat, cox, an), (r0, bb, rid) in params.used.items():
+        wp.append(['%s%+d–%s' % (cat, cox, an), r0, bb, params.refs.get(rid, rid)])
+    wp.append([]); wp.append(['table note', params.note()])
+    wp.column_dimensions['A'].width = 14; wp.column_dimensions['D'].width = 70
+    wb.save(path)
+    return path
+
 # ----------------------------------------------------------------------------- main
 
 def _parse_ox(s):
@@ -1569,7 +1628,7 @@ def _parse_hb(s):
     return out
 
 def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word=False, out_dir=None, quiet=False,
-        auto_params=True, hbond='oo', hmax=None, donors=None, hb=None, u6='burns'):
+        auto_params=True, hbond='oo', hmax=None, donors=None, hb=None, u6='burns', xlsx=False):
     st = Structure(cif, _parse_ox(ox), include_h=include_h)
     tables = read_tables(table) if table else None
     P = Params(prefer=params, u6=u6)
@@ -1620,6 +1679,11 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
         write_word(st, result, anion_sum, cells, wp, hbonds)
         if not quiet:
             print('  tables → %s' % wp)
+    if xlsx:
+        xp = os.path.join(out_dir, stem + '_bv.xlsx')
+        write_xlsx(st, P, result, anion_sum, cells, hbonds, xp)
+        if not quiet:
+            print('  workbook → %s' % xp)
     return st, result, anion_sum, cells, text
 
 def main(argv=None):
@@ -1641,11 +1705,12 @@ def main(argv=None):
     ap.add_argument('--u6', default='burns', choices=['burns', 'params'],
                     help='U6+–O parameters: burns = Burns et al. (1997), the uranyl convention (default); params = the chosen set')
     ap.add_argument('--word', action='store_true', help='also write the tables as a .docx')
+    ap.add_argument('--xlsx', action='store_true', help='also write the calculation as a workbook with live formulas (review_out/<name>_bv.xlsx)')
     ap.add_argument('--out', help='output folder (default <cif dir>/review_out)')
     a = ap.parse_args(argv)
     try:
         run(a.cif, a.table, a.params, a.ox, a.cutoff, not a.no_h, a.word, a.out,
-            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6)
+            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6, xlsx=a.xlsx)
     except ValueError as e:
         raise SystemExit('bv_check: %s' % e)
     return 0

@@ -170,6 +170,10 @@ class Rutile(unittest.TestCase):
         d = Document(os.path.join(out, 'rutile_bv.docx'))
         self.assertEqual(len(d.tables), 2)
         self.assertEqual(d.tables[1].rows[1].cells[0].text, 'O1')
+        B.run(self.cif, params='bo', out_dir=out, quiet=True, xlsx=True)
+        import openpyxl
+        ws = openpyxl.load_workbook(os.path.join(out, 'rutile_bv.xlsx'))['bonds']
+        self.assertEqual([c.value for c in ws[2]][:6], ['Ti1', 'Ti+4', 'O1', 1.9485, 1.815, 0.37])
 
 
 class HydrogenBonds(unittest.TestCase):

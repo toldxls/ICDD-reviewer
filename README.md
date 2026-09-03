@@ -108,6 +108,13 @@ Opens the review GUI in your browser — **localhost only**, auto-picks a free p
   If that snapshot is ever missing too, they are skipped cleanly — no errors, no false flags —
   and the header says so, because silently-skipped checks read exactly like a clean batch.
 
+**Staying current.** The GUI header shows the installed version; at launch the server checks GitHub
+once (the version on `main` and the latest release, nothing sent) and the chip turns amber when a
+newer version exists, with the upgrade command in its tooltip. `pxrd update` installs it
+(`--check` only reports; `--release` uses the release's hash-pinned wheel; nothing is installed when
+the copy is current, and on a git checkout it pulls with git instead of pip). `PXRD_NO_UPDATE_CHECK=1`
+disables the check. Reviewers' install and upgrade steps: `INSTALL.md`.
+
 ## Run
 > **On Windows the command is `python`, not `python3`** (which usually does not exist there):
 > `python -m pxrd_review.gui.review_gui "C:\path\to\entries"`. Reviewers should follow
@@ -373,6 +380,21 @@ cations, apfu, O apfu per constituent, factor, charge) and the empirical formula
 table — Constituent | Mean | Range | S.D. | Standard | Normalized | Ideal with the O=F and Total rows
 and the "calculated from the structure / by difference" note (`--standards`, `--ideal`). The `.xlsx`
 has `raw` (the points), `reduction` (formulas) and `table` sheets.
+
+**A paper in Manuscript mode.** Drop the paper's `.pdf` in the folder and Manuscript mode lists
+it: the citation check runs on the pdf, and two more sections appear — *Calculation* findings
+where the paper's empirical formula does not follow from its own wt% table and stated basis, or
+its bond-valence table does not follow from the `.cif` under any parameter set, and *Calc notes*
+saying what was re-done and how. **Tables ▸** carries the paper into the Tables mode.
+
+**Fill from paper.** In the GUI's Tables mode, pick the paper's `.pdf` and press **Fill ▸**: the
+analytical table, the stated basis and the treatment of the unmeasured constituents, the optics, the
+bond-valence parameter set and the powder table are read from it (`pxrd_review/paper_extract.py`;
+`pxrd paper x.pdf` prints the same) and the tabs' inputs are set from them, so the EPMA reduction
+and the tables re-do the paper's own calculation the paper's way. The **Write .xlsx** of the Bond
+valence tab (`pxrd bv --xlsx`) and of the EPMA tab hold the calculation as live formulas — bonds
+with R0, b and s, the sums, the hydrogen bonds; the reduction with a *method* sheet quoting the
+paper — for checking a procedure step by step.
 
 **`pxrd epma --check`** replicates a *published* formula from an ICDD entry's Analysis field — the
 mean wt% list followed by the empirical formula in the ICDD notation (`( Mn1.75 +2 Mg0.25 )sigma2.00

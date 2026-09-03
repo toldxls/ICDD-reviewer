@@ -27,6 +27,10 @@ long module paths, or ports.
     pxrd epma <probe.xlsx|.csv> --basis O=21 [--add H2O=structure:6 …] [--charge H2O --anions N] [--xlsx]
                                    microprobe reduction: mean/range/s.d. table, empirical formula on a
                                    basis, xlsx with live formulas
+    pxrd paper <paper.pdf>             what the Tables mode reads from a paper: the analytical table, basis,
+                                   calculated constituents, optics, bond-valence set, powder table
+    pxrd update [--check] [--release]  is a newer version on GitHub? install it (the GUI's version
+                                   chip, top right, turns amber when there is one)
     pxrd epma <entry.docx> --check | pxrd epma --check "Microprobe analysis … : formula"
                                    replicate an ICDD entry's published formula from its Analysis field
                                    and report the coefficients / constituents that do not follow
@@ -62,6 +66,8 @@ MODULE = {
     'epma':       'pxrd_review.epma',         # takes a probe export — not folder-resolved
     'gd':         'pxrd_review.gd',           # options only
     'pxrd':       'pxrd_review.pxrd_table',   # takes obs + calc lists — not folder-resolved
+    'update':     'pxrd_review.update',       # options only: --check / --release
+    'paper':      'pxrd_review.paper_extract',# takes a .pdf — not folder-resolved
 }
 NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'sweep', 'check'}
 MEM = os.path.join(P.cache_dir(), 'pxrd_last.json')   # remembered folder per sub-command
@@ -173,6 +179,7 @@ def main():
     # the child is a fresh interpreter: ensure the package is importable even when
     # not pip-installed (running via the repo's ./pxrd dev shim)
     os.environ['PYTHONPATH'] = P.repo_root() + os.pathsep + os.environ.get('PYTHONPATH', '')
+    os.environ['PXRD_LAUNCHER'] = '1'       # tells `update` its parent is the pxrd launcher (Windows locks it)
     argv = [sys.executable, '-m', MODULE[sub]] + args
     if os.name == 'nt':
         # Windows exec* doesn't replace the process: it spawns a child while joining

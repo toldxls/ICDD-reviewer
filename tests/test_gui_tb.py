@@ -48,7 +48,7 @@ class TablesMode(unittest.TestCase):
         st = self._get('/api/tb/state')
         self.assertEqual([c['key'] for c in st['cifs']], ['rutile'])
         kinds = {d['key']: d['kind'] for d in st['data']}
-        self.assertEqual(kinds, {'calc.txt': 'calc', 'obs.txt': 'obs', 'probe.csv': 'probe', 'notes.txt': ''})
+        self.assertEqual({k: kinds[k] for k in ('calc.txt', 'obs.txt', 'probe.csv', 'notes.txt')}, {'calc.txt': 'calc', 'obs.txt': 'obs', 'probe.csv': 'probe', 'notes.txt': ''})
         self.assertIn('manuscript', [j['key'] for j in st['journals']])
 
     def test_tables_part_filter(self):
@@ -112,6 +112,61 @@ class TablesMode(unittest.TestCase):
         self.assertEqual(self.c.get('/api/tb/pxrd?obs=obs.txt&calc=notes.txt').status_code, 400)
         w = self._post('/api/tb/pxrd/export?fmt=word&obs=obs.txt&calc=calc.txt&name=test')
         self.assertEqual(w['file'], 'test_pxrd.docx')
+
+    def test_version_route(self):
+        from pxrd_review import __version__
+        r = self._get('/api/version')
+        self.assertEqual(r['installed'], __version__)
+        self.assertIn(r['status'], ('idle', 'disabled'))          # the test client never starts the network check
+        from pxrd_review import update as U
+        self.assertEqual(r['command'], 'pxrd update')             # the one command, whatever the install kind
+        self.assertEqual(self._get('/api/update/status')['state'], 'idle')
+        # Update now is refused when nothing is newer (the check never ran here: no result, no checkout claim)
+        from unittest import mock
+        with mock.patch.object(U, 'status', return_value={'result': {'newer': False}, 'checkout': None}):
+            self.assertEqual(self.c.post('/api/update').status_code, 409)
+        if U.checkout():                                          # the suite itself runs from the git checkout
+            self.assertIn('git -C', r['pip']); self.assertEqual(r['checkout'], U.checkout())
+        else:
+            self.assertIn('main.zip', r['pip'])
+
+    def test_fill_from_paper_and_bv_workbook(self):
+        from tests.test_paper_extract import make_pdf
+        make_pdf(os.path.join(self.tmp, 'testite.pdf'))
+        assert self.G.ms_set_folder(self.tmp)                        # re-index: the pdf joins the folder
+        if self.G.MS['athread']:
+            self.G.MS['athread'].join(30)
+        self.assertEqual([p['key'] for p in self._get('/api/tb/state')['pdfs']], ['testite.pdf'])
+        r = self._post('/api/tb/extract?pdf=testite.pdf')
+        self.assertEqual(r['fill']['epma']['basis'], 'O=7'); self.assertEqual(r['fill']['epma']['add'], 'H2O=difference')
+        self.assertEqual(r['fill']['epma']['file'], 'testite_paper_epma.csv'); self.assertIn('wollastonite', r['fill']['epma']['standards'])
+        self.assertEqual((r['fill']['gd']['n'], r['fill']['gd']['density']), ('1.6100', '3.120'))
+        self.assertEqual(r['fill']['bvs']['params'], 'gh'); self.assertEqual(r['fill']['pxrd']['obs'], 'testite_paper_obs.txt')
+        self.assertTrue(any('basis of 7 O' in n for n in r['notes']))
+        self.assertEqual(self.c.post('/api/tb/extract?pdf=nope.pdf').status_code, 404)
+        # the same paper is a manuscript: its own numbers are checked and carried as findings
+        self.assertIn('testite', self.G.MS['files'])
+        d = self.G.ms_analysis('testite')
+        kinds = {f['kind'] for f in d['findings']}
+        self.assertIn('calcinfo', kinds)
+        self.assertTrue(any('composition' in f['msg'] for f in d['findings']))
+        row = next(r for r in self._get('/api/ms/state')['files'] if r['key'] == 'testite')
+        self.assertEqual(row['pdf'], 'testite.pdf')
+        h = self._get('/api/ms/docx/testite.html?which=source')
+        self.assertIn('data-p="0"', h['html'])
+        # the written means feed the EPMA tab, on the paper's basis, with the method sheet in the workbook
+        e = self._get('/api/tb/epma/testite_paper_epma.csv?basis=O%3D7&name=testite')
+        self.assertTrue(e['ok']); self.assertEqual(e['n_points'], 1)
+        x = self._post('/api/tb/epma/testite_paper_epma.csv/export?fmt=xlsx&basis=O%3D7&method=basis%3A+7+O+apfu+%7C+H2O+by+difference')
+        import openpyxl
+        wb = openpyxl.load_workbook(os.path.join(self.tmp, 'review_out', x['file']))
+        self.assertIn('method', wb.sheetnames); self.assertIn('H2O by difference', [c.value for c in wb['method']['A']])
+        # the bond-valence workbook
+        b = self._post('/api/tb/bvs/rutile/export?fmt=xlsx&params=bo')
+        self.assertEqual(b['file'], 'rutile_bv.xlsx')
+        wb = openpyxl.load_workbook(os.path.join(self.tmp, 'review_out', 'rutile_bv.xlsx'))
+        self.assertEqual(wb.sheetnames, ['bonds', 'cation sums', 'anion sums', 'H bonds', 'parameters'])
+        self.assertTrue(str(wb['bonds']['G2'].value).startswith('=EXP('))
 
     def test_opts_roundtrip_and_open_guard(self):
         self._post('/api/tb/opts/epma', json={'basis': 'O=21', 'file': 'probe.csv', 'junk': ['x'], 'raw': '1'})

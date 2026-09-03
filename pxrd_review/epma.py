@@ -134,8 +134,9 @@ def load_probe(path, sheet=None):
                 s = cell.strip()
                 if re.search(r'formula|total|line|number|point|sample|comment', s, re.I):
                     continue
-                m = re.match(r'^([A-Z][a-z]?\d*O\d*|H2O|CO2|F|Cl|Br|S|Se|Te)\b', s)
-                if m:
+                s = s.replace('(NH4)2O', 'N2H8O')                          # ammonium as its 'oxide'
+                m = re.match(r'^(N2H8O|[A-Z][a-z]?\d*O\d*|H2O|CO2|F|Cl|Br|S|Se|Te|[A-Z][a-z]?)(?![a-z])', s)
+                if m and (m.group(1) not in ('O', 'H', 'C', 'N') or m.group(1) == 'N2H8O'):
                     try:
                         parse_constituent(m.group(1)); heads[ci] = m.group(1)
                     except ValueError:
@@ -452,8 +453,9 @@ def report_text(red, table):
 def _basis_label(b):
     return {'O': '%s anions apfu', 'cations': '%s cations apfu'}.get(b[0], '%s').replace('%s', str(b[1]) if len(b) > 1 else '') if b[0] != 'element' else '%s = %s apfu' % (b[1], b[2])
 
-def write_xlsx(red, table, path, ds=None):
-    """raw points | reduction with live formulas | the published table."""
+def write_xlsx(red, table, path, ds=None, method=''):
+    """raw points | reduction with live formulas | the published table | method (the paper's own
+    statements of basis and treatment, when the inputs came from a paper)."""
     import openpyxl
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter as L
@@ -523,6 +525,13 @@ def write_xlsx(red, table, path, ds=None):
         wt.append(r)
     if table['note']:
         wt.append([]); wt.append([table['note']])
+    if method:
+        wm = wb.create_sheet('method')
+        wm.append(['What the paper states (basis, calculated constituents) — the reduction sheet applies it']); wm.cell(1, 1).font = Font(bold=True)
+        for part in method.split(' | '):
+            wm.append([part])
+        wm.append([]); wm.append(['basis applied', _basis_label(red.basis)])
+        wm.column_dimensions['A'].width = 120
     wb.save(path)
     return path
 
@@ -895,7 +904,7 @@ def _parse_pairs(s):
     return out
 
 def prepare(probe, basis='O=1', charge=None, anions=None, raw_anions=False, adds=(), converts=(), drop=(),
-            points=None, standards=None, ideal=None, name='', sheet=None):
+            points=None, standards=None, ideal=None, name='', sheet=None, method=''):
     """The whole reduction from CLI-style strings — shared by main() and the GUI. Returns
     (dataset, reduction, published table, report text); ValueError on any bad input."""
     ds = load_probe(probe, sheet or None)
@@ -931,7 +940,7 @@ def to_tabs(table, journal_key=None):
     return [('epma', {'n': 1, 'label': J['caption'].format(n=1), 'caption': T._title(J, table['caption'].rstrip('.')), 'journal': J,
                       'head': [T.C(h) for h in table['head']], 'rows': [[T.C(str(x)) for x in r] for r in table['rows']], 'note': note})]
 
-def export(ds, red, table, text, out_dir, stem, word=False, xlsx=False, journal_key=None):
+def export(ds, red, table, text, out_dir, stem, word=False, xlsx=False, journal_key=None, method=''):
     """Write review_out/<stem>_epma.txt (always) and the .xlsx / .docx asked for; {kind: path}."""
     os.makedirs(out_dir, exist_ok=True)
     paths = {}
@@ -939,7 +948,7 @@ def export(ds, red, table, text, out_dir, stem, word=False, xlsx=False, journal_
         f.write(text + '\n')
     paths['text'] = os.path.join(out_dir, stem + '_epma.txt')
     if xlsx:
-        paths['xlsx'] = write_xlsx(red, table, os.path.join(out_dir, stem + '_epma.xlsx'), ds)
+        paths['xlsx'] = write_xlsx(red, table, os.path.join(out_dir, stem + '_epma.xlsx'), ds, method)
     if word:
         from pxrd_review import tables as T
         paths['word'] = os.path.join(out_dir, stem + '_epma.docx'); T.write_word(None, to_tabs(table, journal_key), paths['word'])

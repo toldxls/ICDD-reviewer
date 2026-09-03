@@ -114,6 +114,108 @@ function renderMindatChip(m) {
   };
 }
 
+// ---- version chip: the installed version, amber when GitHub holds a newer one -------------
+// The server checks once at launch (two anonymous GETs; PXRD_NO_UPDATE_CHECK=1 turns it off) and
+// the page reads the result; while it is pending the chip re-asks a few times.
+async function loadVersion(tries) {
+  let r;
+  try { r = await fetch('/api/version').then(x => x.json()); } catch (_) { return; }
+  renderVersionChip(r);
+  if (r.status === 'pending' && (tries || 0) < 8) setTimeout(() => loadVersion((tries || 0) + 1), 2500);
+}
+function renderVersionChip(r) {
+  const chip = $('#version-chip');
+  if (!chip || !r) return;
+  const v = r.installed || '?', res = r.result || {};
+  const upgradeHow = 'To upgrade, in a Command Prompt / terminal run:\n  ' + r.command +
+    '\n(click to copy — then close and start the tool again)\n\nThe same, spelled out:\n  ' + r.pip;
+  let text = 'v' + v, title, warn = false, onclick = null;
+  if (r.status === 'done' && res.newer) {
+    text = '⬆ v' + v + ' → ' + res.newest;
+    warn = true;
+    title = 'A newer pxrd-review is on GitHub: ' + res.newest + ' (installed ' + v + ').\n\nClick for Update now.\n\n' + upgradeHow +
+      '\n\nWhat changed: ' + (res.release_url || r.releases_url);
+    onclick = () => openUpdatePanel(r);
+  } else if (r.status === 'done' && !res.error) {
+    text = 'v' + v + ' ✓';
+    title = 'pxrd-review ' + v + ' — up to date (GitHub: main ' + (res.main || '?') + ', latest release ' + (res.release || 'none') + ').\n\n' + upgradeHow;
+    onclick = () => openUpdatePanel(r);
+  } else if (r.status === 'done') {
+    title = 'pxrd-review ' + v + ' — could not reach GitHub to check for a newer version.\nCheck by hand: ' + r.releases_url + '\n(click to open)\n\n' + upgradeHow;
+    onclick = () => window.open(r.releases_url, '_blank', 'noopener');
+  } else if (r.status === 'pending') {
+    title = 'pxrd-review ' + v + ' — checking GitHub for a newer version…';
+  } else {
+    title = 'pxrd-review ' + v + (r.status === 'disabled' ? ' — update check off (PXRD_NO_UPDATE_CHECK=1).' : '.') + '\n\n' + upgradeHow;
+    onclick = () => copyChip(chip, r.command);
+  }
+  chip.textContent = text; chip.title = title;
+  chip.classList.toggle('chip-warn', warn);
+  chip.onclick = onclick;
+}
+// the chip's panel: what is installed / on GitHub, and Update now (pull or pip, then a restart
+// that keeps this tab's token and port so the page just reloads)
+let UPD = null;
+function openUpdatePanel(r) {
+  UPD = r;
+  const res = r.result || {}, panel = $('#updatepanel');
+  const newer = !!res.newer, co = r.checkout;
+  let html = 'Installed: <b>' + esc(r.installed) + '</b>' + (co ? ' (from the checkout ' + esc(co) + ')' : '') +
+    '<br>GitHub: main ' + esc(res.main || '?') + ', latest release ' + esc(res.release || 'none') + '.<br>';
+  html += newer ? 'A newer version is available: <b>' + esc(res.newest) + '</b>.'
+                : (co ? 'Update now pulls the checkout (git pull).' : 'Nothing newer to install.');
+  html += '<br><span class="muted">Command: ' + esc(r.command) + '</span>';
+  $('#upd-text').innerHTML = html;
+  $('#upd-now').disabled = !(newer || co);
+  $('#upd-now').textContent = co ? 'Pull now' : 'Update now';
+  $('#upd-log').classList.add('hidden'); $('#upd-log').textContent = '';
+  $('#settings').classList.add('hidden');
+  panel.classList.remove('hidden');
+}
+async function runUpdate() {
+  const btn = $('#upd-now'); btn.disabled = true; btn.textContent = 'Updating…';
+  const log = $('#upd-log'); log.classList.remove('hidden'); log.textContent = 'starting…';
+  let r;
+  try { r = await fetch('/api/update', { method: 'POST' }).then(x => x.json()); } catch (ex) { r = { ok: false, error: String(ex) }; }
+  if (!r.ok) { log.textContent = 'could not start: ' + (r.error || 'unknown'); btn.disabled = false; btn.textContent = 'Update now'; return; }
+  const poll = async () => {
+    let s;
+    try { s = await fetch('/api/update/status').then(x => x.json()); } catch (_) { s = { state: 'restarting' }; }
+    if (s.state === 'running') { log.textContent = 'running ' + (s.how || '') + '…\n' + (s.log || ''); setTimeout(poll, 1500); return; }
+    if (s.state === 'failed') {
+      log.textContent = 'FAILED (' + (s.how || '') + ', exit ' + s.rc + ')\n' + (s.log || '') + '\n\nRun it by hand:\n  ' + (UPD ? UPD.pip : '');
+      btn.disabled = false; btn.textContent = 'Update now'; return;
+    }
+    // restarting: the server relaunches itself with this tab's token and port — wait for it, then reload
+    log.textContent = 'installed — the tool is restarting; this page reloads by itself…\n' + (s.log || '');
+    let tries = 0;
+    const back = async () => {
+      tries += 1;
+      try {
+        const v = await fetch('/api/version', { cache: 'no-store' });
+        if (v.ok) { location.reload(); return; }
+      } catch (_) {}
+      if (tries < 45) setTimeout(back, 2000);
+      else log.textContent += '\n\nThe tool did not come back on its own — start it again by hand.';
+    };
+    setTimeout(back, 4000);
+  };
+  setTimeout(poll, 1500);
+}
+$('#upd-now').addEventListener('click', runUpdate);
+$('#upd-close').addEventListener('click', () => $('#updatepanel').classList.add('hidden'));
+$('#upd-notes').addEventListener('click', () => { if (UPD) window.open((UPD.result && UPD.result.release_url) || UPD.releases_url, '_blank', 'noopener'); });
+$('#upd-copy').addEventListener('click', async () => { if (UPD) { try { await navigator.clipboard.writeText(UPD.command); $('#upd-copy').textContent = 'copied ✓'; setTimeout(() => { $('#upd-copy').textContent = 'Copy command'; }, 1400); } catch (_) {} } });
+
+async function copyChip(chip, text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const was = chip.textContent;
+    chip.textContent = 'command copied ✓';
+    setTimeout(() => { chip.textContent = was; }, 1400);
+  } catch (_) { /* clipboard blocked — the tooltip still shows the command */ }
+}
+
 // ---- folder picker: re-point the tool at a different entries folder, live ---
 function openFolderPanel() {
   $('#settings').classList.add('hidden');
@@ -1525,6 +1627,7 @@ function initAppearance() {
 
 initAppearance();
 loadEntries();
+loadVersion();
 
 // Auto-shutdown: the server exits shortly after this tab CLOSES — never on idle.
 // - on unload (close / navigate / reload) beacon the server so it starts a short grace;

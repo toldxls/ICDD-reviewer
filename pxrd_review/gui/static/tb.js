@@ -6,7 +6,7 @@
 // prints and writes the same review_out/<name>_<tab>.docx / .xlsx. The server only ever receives
 // file KEYS (names it listed itself) and option strings; every option is re-validated there.
 
-const TBS = { cifs: [], data: [], outputs: [], key: null, tab: 'coords', journal: 'manuscript', journals: [],
+const TBS = { cifs: [], data: [], outputs: [], pdfs: [], key: null, tab: 'coords', journal: 'manuscript', journals: [],
               opts: {}, last: {}, epmaWt: null, seq: 0, saveTimer: null };
 const TB_TABS = ['coords', 'bvs', 'gd', 'epma', 'pxrd'];
 const TB_HINT = {
@@ -26,7 +26,7 @@ async function tbLoad() {
   $('#folder').textContent = r.folder ? ((parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/')) : '(no folder — click to choose)';
   $('#folder-ctl').title = (r.folder || '') + '  — click to change folder';
   $('#folder').dataset.path = r.folder || '';
-  TBS.cifs = r.cifs || []; TBS.data = r.data || []; TBS.outputs = r.outputs || [];
+  TBS.cifs = r.cifs || []; TBS.data = r.data || []; TBS.outputs = r.outputs || []; TBS.pdfs = r.pdfs || [];
   if (r.journals && r.journals.length && !TBS.journals.length) {
     TBS.journals = r.journals; TBS.journal = r.default_journal || TBS.journal;
     try { const j = localStorage.getItem('pxrd-tb-journal'); if (j && r.journals.some(x => x.key === j)) TBS.journal = j; } catch (_) {}
@@ -129,6 +129,7 @@ function tbFillSelects() {
     if (Array.from(sel.options).some(o => o.value === cur)) sel.value = cur;
   };
   fill($('#tb-gd-cif'), TBS.cifs, '(no .cif — measured density only)');
+  fill($('#tb-paper'), TBS.pdfs, TBS.pdfs.length ? '(choose a paper)' : '(no .pdf in the folder)');
   fill($('#tb-epma-file'), TBS.data.filter(d => d.kind !== 'obs' && d.kind !== 'calc'), '(choose the probe file)');
   fill($('#tb-pxrd-obs'), TBS.data, '(observed peak list)');
   fill($('#tb-pxrd-calc'), TBS.data, '(calculated pattern)');
@@ -159,6 +160,7 @@ function tbUrl(tab) {
 }
 function tbExportUrl(tab, fmt) {
   const q = tbQuery(tab);
+  if (tab === 'bvs' && fmt === 'xlsx') return TBS.key ? '/api/tb/bvs/' + enc(TBS.key) + '/export?' + q : null;
   if (tab === 'coords' || tab === 'bvs') return TBS.key ? '/api/tb/word/' + enc(TBS.key) + '?' + q : null;
   if (tab === 'gd') return '/api/tb/gd/export?fmt=' + fmt + '&' + q;
   if (tab === 'epma') return tbOpt('epma', 'file') ? '/api/tb/epma/' + enc(tbOpt('epma', 'file')) + '/export?fmt=' + fmt + '&' + q : null;
@@ -210,9 +212,42 @@ async function tbExport(tab, fmt) {
   TBS.last[tab] = r.file;
   msStatus('written ✓ review_out/' + r.file);
   if (!TBS.outputs.includes(r.file)) TBS.outputs.push(r.file), TBS.outputs.sort();
-  if (tab === 'coords' || tab === 'bvs') { const row = TBS.cifs.find(c => c.key === TBS.key); if (row) row.has_word = true; }
+  if ((tab === 'coords' || tab === 'bvs') && fmt !== 'xlsx') { const row = TBS.cifs.find(c => c.key === TBS.key); if (row) row.has_word = true; }
   tbRenderLists();
 }
+
+// ---- fill from paper: the extractor's inputs go into the tabs' fields (data files into review_out)
+async function tbFillFromPaper(pdfKey) {
+  if (pdfKey) {
+    if (!TBS.pdfs.length) { try { const st = await fetch('/api/tb/state').then(x => x.json()); TBS.pdfs = st.pdfs || []; tbFillSelects(); } catch (_) {} }
+    $('#tb-paper').value = pdfKey;
+  }
+  const key = $('#tb-paper').value;
+  if (!key) { msStatus('pick a paper (.pdf) first'); return; }
+  const btn = $('#tb-fill'); btn.disabled = true; btn.textContent = 'Reading…';
+  let r;
+  try { r = await fetch('/api/tb/extract?pdf=' + enc(key), { method: 'POST' }).then(x => x.json()); } catch (ex) { r = { ok: false, error: String(ex) }; }
+  btn.disabled = false; btn.textContent = 'Fill ▸';
+  if (!r.ok) { msStatus('could not read the paper' + (r.error ? ': ' + r.error : '')); return; }
+  let st = null;                                    // the written data files first, then the inputs
+  try { st = await fetch('/api/tb/state').then(x => x.json()); } catch (_) {}
+  if (st) { TBS.data = st.data || []; TBS.outputs = st.outputs || []; tbFillSelects(); }
+  if (r.fill && r.fill._cif && TBS.cifs.some(c => c.key === r.fill._cif)) TBS.key = r.fill._cif;   // the same mineral's .cif
+  for (const tab of Object.keys(r.fill || {})) {
+    if (tab.startsWith('_')) continue;
+    for (const [k, v] of Object.entries(r.fill[tab])) {
+      if (tab === 'bvs' && k === 'params') document.querySelectorAll('#tb-params button').forEach(b => b.classList.toggle('on', b.dataset.params === v));
+      tbSetOpt(tab, k, v);
+    }
+  }
+  tbRenderLists();
+  const notes = r.notes || [];
+  msStatus('filled from the paper — check each tab; the EPMA basis and additions follow what the paper states');
+  if (r.fill && r.fill.epma && r.fill.epma.file) tbSetTab('epma'); else tbRender();
+  $('#tb-status').textContent = 'filled from ' + key + (notes.length ? ' — ' + notes.join(' · ') : '');
+  $('#tb-status').title = notes.join('\n');
+}
+$('#tb-fill').addEventListener('click', tbFillFromPaper);
 async function tbOpenFile(name) {
   let ok = false;
   try { ok = (await fetch('/api/tb/open?file=' + enc(name), { method: 'POST' })).ok; } catch (_) {}
