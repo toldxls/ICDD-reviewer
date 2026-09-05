@@ -4,6 +4,81 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.5.5] — unreleased
+
+### Fixed — three things the owner hit testing 0.5.4
+- **"? look" on a calculation finding did nothing.** The composition and bond-valence findings of a
+  paper have no paragraph in a docx to jump to, so the button returned silently. It now opens the
+  paper's page (the analytical table's page, or the bond-valence table's) rendered with the
+  finding's labels highlighted, in an overlay; the button says which page. A finding with no page
+  says so in the status line instead of staying mute.
+- **A manuscript .docx is now a paper for the Tables mode.** "from paper" lists the folder's
+  .docx files with the pdfs, and Fill ▸ reads a manuscript the way it reads a paper: its tables
+  become pages of words (caption paragraph first, one line per row, cells at their column) so the
+  analytical-table reader, the powder-table reader and the transposed-table reader run unchanged;
+  its text feeds the formula, basis, optics and parameter-set readers. The manuscript's bond-
+  valence table is checked against the same mineral's .cif as part of Fill ▸ (shown on the Bond
+  valence tab, `pxrd bv --table` in the GUI at last), and the Manuscript mode runs the composition
+  and bond-valence self-checks on a .docx as it does on a .pdf.
+- **Browse took 3–4 s to show the folder dialog.** The AppleScript activated osascript itself as a
+  foreground app on every click (2 s alone, measured). The dialog is now Finder's: activating
+  Finder takes 0.1 s and the panel still comes up frontmost with keyboard focus.
+
+### Changed — the powder-table header, rethought on the corpus
+- **The header of a powder table is read through a vocabulary layer** instead of one regular
+  expression. Labels with footnote marks or letters (`dcalc*`, `Icalca`), `dcal`/`Ical`, `Dclac`,
+  `Imeass`, `Iest` (estimated by eye), `I/I0`, `I/Imax`, `100·I/Imax`, `Irel`, `dhkl`, a label split
+  from its nature (`dhkl calc`, `I (calc.)` — the column sits between the two words), `Dobs`/`Dcalc`
+  with a capital D (a bare `D` stays a difference column), and units as their own words are all read.
+  A bare `d` or `I` is calculated when the caption says the table is ("Table 4. Cont." inherits
+  Table 4's caption), observed otherwise. 2θ columns are skipped.
+- **`h k l` merge by sequence, however far apart the columns are set** (`h k i l` for a hexagonal
+  table, the redundant i dropped); the old 30 pt limit left wide headers as three columns and the
+  table to the token-order fallback, which pairs intensities into index triples like (0, 22, 8) for
+  every layout that puts the indices first. A block now begins at each `h k l` when the indices lead
+  and ends at each when they trail, so a row's d is never paired with the block beside it.
+- **An index column owns the index-like tokens out to the midpoints with its neighbours** (the three
+  digits under one `hkl` word spread wider than the word); rows are confined to the header's width,
+  so the prose of the other column of a two-column page no longer ends a table after three rows; a
+  header line with two foreign words, or a first row with them, is a sentence and not a table;
+  `001`, `2.1.10` and `01 1` index forms are read; a d value that landed in an intensity slot (the
+  header names the columns in the other order than the numbers stand) is swapped back.
+- Validated on 1006 corpus pdfs against the previous reader: observed lines 15.7k → 19.8k,
+  calculated 13.9k → 24.9k, entries with an index beyond ±30, an intensity above 1000 or a d outside
+  0.5–40 Å 1017 → 442; twelve papers lose lines, ten of them garbage the fallback made up; papers with
+  no powder table read at all 379 → 238. Still unread: two-line headers (`h k l` on one line, the
+  d/I labels on another), 2θ-only tables, and which sample of a multi-sample table is the holotype.
+
+### Fixed — what the review of the above found (ten findings, each reproduced)
+- The toolbar **Fill ▸** button never worked: it passed its click event as the paper key, which
+  reset the select, so it always answered "pick a paper first" (the Manuscript mode's → Tables
+  button was the only working route). Pre-existing; fixed.
+- `pxrd paper manuscript.docx` (without `--check`) crashed formatting the table's page, which a
+  manuscript does not have.
+- A **signed two-digit index** (`−10`) in a manuscript's powder table pushed the `h` and `k`
+  header words apart and silently dropped every calculated line. The synthetic columns are
+  tighter, and the digits under any of the three `h k l` header words now count as indices
+  rather than going to the nearest column centre — which also reads the calculated lines of
+  nine corpus papers whose wide `h k l` block lost them the same way (observed lines unchanged
+  on all 1006).
+- Text inserted under **Track Changes** was invisible to the formula / basis / optics readers
+  (python-docx sees only direct-child runs); tracked insertions are now read, deletions dropped,
+  as the citation checker already did.
+- A manuscript's data files are named `<stem>_docx_*`, so a revised `X.docx` beside the
+  published `X.pdf` no longer overwrites the paper's `X_paper_*` files (or the reverse).
+- The Manuscript mode's **bond-valence check** distinguishes four outcomes instead of two: a
+  table that names none of the .cif's cation sites is reported as a stranger's (the folder's
+  only .cif is no longer scored against it — the membership rule the pdf reader always applied);
+  a table whose labels match no bond (Ow/OH vs O) reports that and still checks its row and
+  column sums, instead of "no table found"; a .cif that will not load is reported (on Fill ▸
+  too, which used to drop it); a manuscript with nothing to check stays silent.
+- **? look** on a composition finding highlighted the bare element symbol, which PyMuPDF
+  matches case-insensitively inside every word on the page; it now highlights the constituent
+  as the table writes it (`SiO2`).
+- **Browse**: the Finder dialog is an Apple event, which macOS gates behind an Automation
+  consent. Denied, the old route is used instead of reporting a Cancel forever; a real Cancel
+  (−128) is told from a failure, and an unanswered consent sheet times out with a message.
+
 ## [0.5.4] — 2026-09-03
 
 ### Changed — five papers hand-checked with the owner, one rule each

@@ -68,10 +68,126 @@ def page_lines(page, x_lo=None, x_hi=None):
         ln['w'] = out
     return lines
 
-def text_of(pdf):
+_W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+_MC_FALLBACK = '{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback'
+
+def _para_text(p):
+    """A paragraph's text with tracked changes accepted — w:ins kept, w:del / w:moveFrom dropped —
+    the way refs_check reads a manuscript. python-docx's Paragraph.text joins only the direct-child
+    runs, so a sentence inserted under Track Changes (the normal state of a manuscript under
+    revision) would vanish from the formula / basis / optics readers. The legacy twin of a text box
+    (mc:Fallback) is skipped so its text is not read twice."""
+    out = []
+    for el in p.iter():
+        tag = el.tag
+        if tag == _W + 't':
+            if any(a.tag in (_W + 'del', _W + 'moveFrom', _MC_FALLBACK) for a in el.iterancestors()):
+                continue
+            out.append(el.text or '')
+        elif tag == _W + 'tab':
+            out.append(' ')
+        elif tag in (_W + 'br', _W + 'cr'):
+            out.append('\n')
+    return ''.join(out)
+
+def _docx_body(path):
+    """A manuscript .docx in body order: [('p', text) | ('t', python-docx Table)]."""
+    from docx import Document
+    from docx.table import Table
+    doc = Document(path); out = []
+    for child in doc.element.body.iterchildren():
+        tag = child.tag.rsplit('}', 1)[-1]
+        if tag == 'p':
+            out.append(('p', _para_text(child)))
+        elif tag == 'tbl':
+            out.append(('t', Table(child, doc)))
+    return out
+
+def _docx_cell_text(tc):
+    """A Word table cell as the reader wants it: subscripts inline ('SiO2'), a superscript of one
+    or two characters (a footnote mark, a charge) dropped, the runs joined."""
+    out = []
+    for para in tc.iter(_W + 'p'):
+        for r in para.iter(_W + 'r'):
+            t = ''.join(x.text or '' for x in r.iter(_W + 't'))
+            rpr = r.find(_W + 'rPr'); va = rpr.find(_W + 'vertAlign') if rpr is not None else None
+            if va is not None and va.get(_W + 'val') == 'superscript' and len(t.strip()) <= 2:
+                continue
+            out.append(t)
+        out.append(' ')
+    return re.sub(r'\s+', ' ', ''.join(out)).strip()
+
+def _docx_pages(path):
+    """A manuscript .docx as 'pages', one per table: the caption paragraph before it as the first
+    line, then one line per row with each cell's words at its column's x — the shape page_lines
+    gives a pdf page, so the table readers run on a manuscript unchanged."""
+    pages = []; prev = ''
+    for kind, item in _docx_body(path):
+        if kind == 'p':
+            if item.strip():
+                prev = item.strip()
+            continue
+        lines = []; y = 70.0; rows = []
+        for row in item.rows:
+            seen = []; cells = []
+            for col, c in enumerate(row.cells):
+                if any(c._tc is x for x in seen):
+                    continue                                            # a merged cell repeats across its span
+                seen.append(c._tc); t = _docx_cell_text(c._tc)
+                if t:
+                    cells.append((col, t))
+            if cells:
+                rows.append(cells)
+        # column positions as a typeset table would have them: each column as wide as its widest
+        # cell, so 'h k l' sit close together and a range column is wide. The gutter is 8 pt: with a
+        # wider one a signed two-digit index ('-10', three characters) pushes the 'h' and 'k' header
+        # words past the 30 pt within which _powder_columns reads 'h k l' as one column, and every
+        # calculated line of the table is silently lost
+        width = {}
+        for cells in rows:
+            for col, t in cells:
+                width[col] = max(width.get(col, 0), 6.0 * len(t) + 8.0)
+        col_x = {}; x = 40.0
+        for col in range(max(width) + 1 if width else 0):
+            col_x[col] = x; x += width.get(col, 20.0)
+        def line_of(cells, y):                                          # cells: [(column, text)]
+            ws = []
+            for col, text in cells:
+                x = col_x.get(col, 40.0 + 60.0 * col)
+                for tok in text.split():
+                    ws.append((x, y - 8.0, x + 6.0 * len(tok), y + 2.0, tok)); x += 6.0 * (len(tok) + 1)
+            return {'y': y, 'top': y - 8.0, 'bot': y + 2.0, 'w': ws}
+        if re.match(r'^(Table|TABLE|Tab\.|Таблица)\s*\d', prev):
+            lines.append(line_of([(0, prev)], y)); y += 14.0
+        for cells in rows:
+            lines.append(line_of(cells, y)); y += 14.0
+        prev = ''
+        if len(lines) >= 2:
+            pages.append(lines)
+    return pages
+
+def _pages(path):
+    """The document's pages as lines of words: a pdf's pages, or a manuscript .docx's tables."""
+    if path.lower().endswith('.docx'):
+        return _docx_pages(path)
     import fitz
-    doc = fitz.open(pdf)
-    t = ' '.join(page.get_text() for page in doc).replace('þ', '+')   # a journal font prints '+' as 'þ'
+    with fitz.open(path) as doc:
+        return [page_lines(page) for page in doc]
+
+def text_of(pdf):
+    if pdf.lower().endswith('.docx'):                                   # a manuscript: its paragraphs, then its tables' text
+        parts = []; cells = []
+        for kind, item in _docx_body(pdf):
+            if kind == 'p':
+                parts.append(item)
+            else:
+                for row in item.rows:
+                    cells.append(' '.join(_docx_cell_text(c._tc) for c in row.cells))
+        t = ' '.join(parts + cells).replace('þ', '+')                   # prose first: the sentence readers prefer it to a table's footnote
+    else:
+        import fitz
+        doc = fitz.open(pdf)
+        t = ' '.join(page.get_text() for page in doc).replace('þ', '+')   # a journal font prints '+' as 'þ'
     t = re.sub(r'-\n(?=[a-z])', '', t)                     # de-hyphenate line breaks
     t = re.sub(r'(?<=[A-Za-z\)])\s*¼\s*(?=\d)', ' = ', t)   # a journal font that prints '=' as '¼' ("O ¼ 32")
     return re.sub(r'\s+', ' ', t)
@@ -360,11 +476,8 @@ def epma_table(pdf, name=''):
     """The analytical table with the most constituent rows: {'rows': [{'constituent', 'mean',
     'range', 'sd', 'standard'}], 'total', 'header', 'page'}; None when no table is found.
     Both layouts are read: constituents down the rows (usual) or across a header line."""
-    import fitz
-    doc = fitz.open(pdf)
     best = None; cands = []
-    for pno, page in enumerate(doc):
-        lines = page_lines(page)
+    for pno, lines in enumerate(_pages(pdf)):
         tr = _transposed(lines, pno, name)
         if tr:
             cands.append(tr)
@@ -527,6 +640,9 @@ def epma_table(pdf, name=''):
             best = pt                                                            # the composition is in the text
     if best is not None and best['score'] <= 0 and _structural_caption(best.get('caption') or ''):
         return None                                                              # only a bond-valence / coordinates table was read: no analytical table
+    if pdf.lower().endswith('.docx'):
+        for c_ in cands:
+            c_['page'] = None                                                    # a manuscript's tables have no page
     if best is not None:
         best['candidates'] = sorted((c for c in cands if c is not best), key=lambda c: -c['score'])[:6]
     return best
@@ -647,37 +763,103 @@ def bv_statement(text):
 # ----------------------------------------------------------------------------- the powder table
 
 _HKL = re.compile(r'^[-−]?\d{1,2}$')
-_PHEAD = re.compile(r'^(I|d|2θ|2theta)_?\(?(obs|calc|meas|c|o)\)?\.?$|^(hkl|h|k|l)$', re.I)
+_PHEAD = re.compile(r'^(I|d|2θ|2theta)_?\(?(obs|calc|meas|c|o)\)?\.?$|^(hkl|h|k|l)$', re.I)   # the legacy single-token form (kept for the survey scripts)
+# the header vocabulary of a powder table, as the corpus writes it: a quantity (I, I/I0, I/Imax, Irel,
+# d, dhkl, 2θ) with or without a nature suffix (obs / meas / exp / o | calc / cal / c) that may be
+# attached ('dcalc', 'd(obs)', 'I/I0meas'), or stand alone as the next word ('dhkl calc',
+# 'I/Imax (calc)'); footnote marks after a label ('dcalc*'); units as their own words ('(Å)', '[Å]',
+# '(%)'); the indices as one token ('hkl') or as the letters h k l (h k i l for a hexagonal table),
+# however far apart the columns are set
+_PH_QTY = re.compile(r'^(?:100[⋅·×*x]?)?(I(?:/I(?:0|o|max))?|d(?:hkl)?|2θ|2theta|2th|2q|2h)(?:[_/\-]?(obs|calc|cal|clac|meas|meass|exp|est|rel|c|o)[a-f]?)?$', re.I)   # '2q', '2h': 2θ in a font that lost its Greek; 'Icalca': a footnote letter; 'Iest': estimated by eye; 'Dclac', 'Imeass': as typeset
+_PH_SUFFIX = re.compile(r'^(obs|calc|cal|clac|meas|meass|exp|est)[a-f]?$', re.I)
+_PROSE = {'and', 'the', 'for', 'with', 'are', 'was', 'were', 'from', 'that', 'this', 'not', 'only', 'which', 'has', 'have', 'been', 'also'}   # a running sentence, not a table
+_PH_WORDS = {'obs', 'calc', 'cal', 'meas', 'exp', 'rel', 'hkl', 'theta', 'int', 'intensity', 'irel', 'dhkl', 'imax', 'index', 'indices', 'bold', 'sample', 'synthetic', 'natural', 'ideal'}   # words a header line may carry beside its labels
+_PH_NATURE = {'obs': 'obs', 'meas': 'obs', 'meass': 'obs', 'exp': 'obs', 'est': 'obs', 'o': 'obs', 'calc': 'calc', 'cal': 'calc', 'clac': 'calc', 'c': 'calc'}
 
-def _powder_columns(ws):
-    """The header line of a powder table -> [(x centre, label)] with labels Iobs dobs dcalc Icalc hkl
-    (h k l as one column); [] when the line is no such header."""
-    cols = []
-    for w in ws:
-        t = w[4].replace('(', '').replace(')', '')
-        m = _PHEAD.match(t)
-        if not m:
-            continue
+def _powder_columns(ws, caption=''):
+    """The header line of a powder table -> [(x centre, label, (x first, x last))] with labels Iobs
+    dobs dcalc Icalc hkl (h k l as one column, its span from the 'h' word to the 'l' word; a 2θ column
+    is skipped); [] when the line is no such header. A quantity with
+    no nature ('d', 'I', 'Irel', 'dhkl') is calculated when the caption says the table is, observed
+    otherwise."""
+    bare = 'calc' if re.search(r'\bcalc', caption, re.I) and not re.search(r'\b(obs|meas|exp)', caption, re.I) else 'obs'
+    cols = []; run = []; used = set()                               # run: the index letters seen so far; used: the words read as labels
+    def flush():
+        letters = ''.join(l for _, _, l in run)
+        if letters in ('hkl', 'hkil'):
+            xs = [x for x, _, _ in run]
+            cols.append([sum(xs) / len(xs), 'hkl', (run[0][1][0], run[-1][1][2])])   # the span: the 'h' word's left edge to the 'l' word's right edge
+        del run[:]
+    for wi, w in enumerate(ws):
+        t2 = re.sub(r'[()\[\]]', '', w[4])                            # '(meas.)' -> 'meas'; 'dcalc**' -> 'dcalc'
+        t2 = re.sub(r'[*†‡§#]+$', '', t2).rstrip('.')
         xc = (w[0] + w[2]) / 2
-        if m.group(3):
-            lab = 'hkl'
-            if cols and cols[-1][1] == 'hkl' and xc - cols[-1][0] < 30:
-                cols[-1] = ((cols[-1][0] + xc) / 2, 'hkl'); continue
-        else:
-            lab = m.group(1)[0].upper().replace('2', 'D') + ('obs' if m.group(2).lower() in ('obs', 'meas', 'o') else 'calc')
-            lab = lab.replace('Dobs', 'dobs').replace('Dcalc', 'dcalc')
-        cols.append((xc, lab))
-    labs = [l for _, l in cols]
-    return cols if ('dobs' in labs or 'dcalc' in labs) and 'hkl' in labs else []
+        if t2 in ('h', 'k', 'l', 'i', 'H', 'K', 'L'):
+            used.add(wi)
+            letter = t2.lower()
+            if run and ('hkl'.startswith(''.join(l for _, _, l in run) + letter) or 'hkil'.startswith(''.join(l for _, _, l in run) + letter)):
+                run.append((xc, w, letter)); continue
+            flush()
+            if letter == 'h':
+                run.append((xc, w, letter))
+            continue
+        flush()
+        if t2.lower() == 'hkl':
+            used.add(wi); cols.append([xc, 'hkl', (w[0], w[2])]); continue   # one word: the three digits sit under its box
+        m = _PH_QTY.match(t2)
+        if m and t2 == 'D':
+            m = None                                                   # a bare 'D' ('D(2θ)'): a difference or a density column, never the d spacing — 'Dobs' is
+        if m and m.group(1)[0] == '2':
+            used.add(wi); continue                                     # a 2θ column is never read (no λ to turn it into d) — and '2θ' in the prose beside a table must not open one
+        if m:
+            used.add(wi); q = 'I' if m.group(1)[0] in 'iI' else 'd'    # '100⋅I/Imax' is an intensity
+            cols.append([xc, (q, _PH_NATURE.get(re.sub(r'[a-f]$', '', (m.group(2) or '').lower()) if m.group(2) and m.group(2).lower() not in _PH_NATURE else (m.group(2) or '').lower())), (w[0], w[2])]); continue
+        m = _PH_SUFFIX.match(t2)
+        if m and cols and isinstance(cols[-1][1], tuple) and cols[-1][1][1] is None:
+            used.add(wi); cols[-1][1] = (cols[-1][1][0], _PH_NATURE[m.group(1).lower()])   # 'dhkl calc', 'I/Imax (calc)': the nature as the next word
+            cols[-1][2] = (cols[-1][2][0], w[2]); cols[-1][0] = (cols[-1][2][0] + w[2]) / 2   # … and the column is the pair of words, its values under their middle
+    flush()
+    out = []
+    for xc, lab, span in cols:
+        if isinstance(lab, tuple):
+            lab = lab[0] + (lab[1] or bare)
+        out.append((xc, lab, span))
+    labs = [c[1] for c in out]
+    if not (('dobs' in labs or 'dcalc' in labs) and 'hkl' in labs):
+        return []
+    lo = min(c[2][0] for c in out) - 15; hi = max(c[2][1] for c in out) + 15
+    foreign = [w[4].rstrip('.,;:').lower() for wi, w in enumerate(ws)   # a sentence that mentions dobs, Iobs and hkl is no header: real ones hold labels, units and marks
+               if wi not in used and lo <= (w[0] + w[2]) / 2 <= hi and re.fullmatch(r'[A-Za-z]{3,}[.,;:]?', w[4]) and w[4].rstrip('.,;:').lower() not in _PH_WORDS]
+    if len(foreign) >= 2 or any(f in _PROSE for f in foreign):
+        return []
+    return out
 
 def _powder_rows_by_columns(lines, start, cols):
     """Rows under a header: tokens go to the nearest column; several blocks per line are handled
-    by walking the columns in order."""
+    by walking the columns in order — a block ends at each hkl column, or, when the header puts the
+    indices first ('h k l dcalc Icalc | h k l dcalc Icalc'), begins at each."""
     obs, calc = [], []
     order = [c for c in cols]
+    leading = order[0][1] == 'hkl'
+    x_lo = min(c[2][0] for c in order) - 15; x_hi = max(c[2][1] for c in order) + 15   # the table's own width: on a two-column page the other column's prose runs 20–30 pt beside it
+    # an index column's territory: from halfway to the column on its left to halfway to the one on
+    # its right (the three digits under one 'hkl' word spread wider than the word), for index-like
+    # tokens only — before the nearest centre decides, which would hand the 'h' digits of a wide
+    # h k l block to the column on its left (the merged centre sits nearer 'l')
+    terr = {}
+    for k, c in enumerate(order):
+        if c[1] == 'hkl':
+            terr[k] = (min(c[2][0] - 8, max(c[0] - 40, (order[k - 1][0] + c[0]) / 2)) if k else min(c[2][0] - 8, c[0] - 40),
+                       max(c[2][1] + 8, min(c[0] + 40, (c[0] + order[k + 1][0]) / 2)) if k + 1 < len(order) else max(c[2][1] + 8, c[0] + 40))
+    def in_table(w):                                             # within the header's width — or an index-like token within an index column's territory (the digits under one 'hkl' word spread past it; the prose of the next page column must not)
+        xc = (w[0] + w[2]) / 2
+        if x_lo <= xc <= x_hi:
+            return True
+        return bool(re.fullmatch(r'-?\d{1,3}|-?\d{1,2}(?:\.-?\d{1,2}){2}', w[4].replace('−', '-'))) and any(lo <= xc <= hi for lo, hi in terr.values())
     n = 0
+    first = True
     for ln in lines[start:]:
-        ws = ln['w']
+        ws = [w for w in ln['w'] if in_table(w)]
         if not ws:
             continue
         toks = [w[4].replace('−', '-') for w in ws]
@@ -685,23 +867,34 @@ def _powder_rows_by_columns(lines, start, cols):
             if n > 3:
                 break                                            # the table ended
             continue
+        if first:                                                # a sentence that happens to say 'dobs', 'Iobs' and 'hkl' is no header: the first row under a real one is numbers, not words
+            first = False
+            words = [t.rstrip('.,;:').lower() for t in toks if re.fullmatch(r'[A-Za-z]{3,}[.,;:]?', t)]
+            if len(words) >= 2 or any(t in _PROSE for t in words):
+                return obs, calc
         cells = {}
         for w in ws:
             xc = (w[0] + w[2]) / 2
-            k = min(range(len(order)), key=lambda i: abs(order[i][0] - xc))
-            if abs(order[k][0] - xc) > 40:
-                continue
+            t = w[4].replace('−', '-')
+            k = next((i for i, (lo, hi) in terr.items() if lo <= xc <= hi), None) if re.fullmatch(r'-?\d{1,3}|-?\d{1,2}(?:\.-?\d{1,2}){2}', t) else None
+            if k is None:
+                k = min(range(len(order)), key=lambda i: abs(order[i][0] - xc))
+                if abs(order[k][0] - xc) > 40:
+                    continue
             cells.setdefault(k, []).append(w[4].replace('−', '-'))
-        # blocks: consecutive columns up to and including each hkl
         block = {}
         for k in range(len(order)):
             lab = order[k][1]
+            if lab == 'hkl' and leading and block:
+                _powder_emit(block, obs, calc); n += 1; block = {}
             if k in cells:
                 block[lab] = cells[k]
-            if lab == 'hkl':
+            if lab == 'hkl' and not leading:
                 if block:
                     _powder_emit(block, obs, calc); n += 1
                 block = {}
+        if leading and block:
+            _powder_emit(block, obs, calc); n += 1
     return obs, calc
 
 def _num1(v):
@@ -711,10 +904,19 @@ def _num1(v):
         return None
 
 def _powder_emit(block, obs, calc):
-    hk = [t for t in block.get('hkl', []) if _HKL.match(t)]
-    hkl = tuple(int(t) for t in hk[-3:]) if len(hk) >= 3 else None
-    if hkl is None and len(hk) == 1 and re.fullmatch(r'-?\d{3}', hk[0]):
-        hkl = tuple(int(c) for c in hk[0].lstrip('-'))
+    raw = block.get('hkl', [])
+    hk = [t for t in raw if _HKL.match(t)]
+    hkl = tuple(int(t) for t in ((hk[0], hk[1], hk[3]) if len(hk) == 4 else hk[-3:])) if len(hk) >= 3 else None   # h k i l: i is redundant
+    if hkl is None and len(raw) == 1 and re.fullmatch(r'-?\d{3}', raw[0]):
+        hkl = tuple(int(c) for c in raw[0].lstrip('-'))                # '001' — as the only token: three of them are three intensities gone astray
+    if hkl is None and len(raw) == 1 and re.fullmatch(r'-?\d{1,2}(?:\.-?\d{1,2}){2}', raw[0]):
+        hkl = tuple(int(c) for c in raw[0].split('.'))                 # '2.1.10': two-digit indices written with dots
+    if hkl is None and 2 <= len(raw) <= 3 and all(t.isdigit() for t in raw) and len(''.join(raw)) == 3:
+        hkl = tuple(int(c) for c in ''.join(raw))                      # '01 1': one index broken off the others by the font
+    for dk, ik in (('dobs', 'Iobs'), ('dcalc', 'Icalc')):
+        dv, iv = (block.get(dk) or [''])[0], (block.get(ik) or [''])[0]
+        if re.fullmatch(r'\d+', dv) and re.fullmatch(r'\d+\.\d{3,}', iv):
+            block[dk], block[ik] = block[ik], block[dk]                # the header names the columns in the other order than the numbers stand
     d_o, i_o, d_c, i_c = (_num1(block.get(k)) for k in ('dobs', 'Iobs', 'dcalc', 'Icalc'))
     if d_o is not None:
         obs.append((d_o, i_o))
@@ -726,14 +928,20 @@ def pxrd_table(pdf):
     line (Iobs dobs dcalc Icalc h k l, in any order, one or more blocks side by side) fixes the
     columns by position; without one, the tokens' order decides: floats are d, the ints before
     the hkl triple are intensities."""
-    import fitz
-    doc = fitz.open(pdf)
+    pages = _pages(pdf)
     obs, calc = [], []
-    for page in doc:
-        lines = page_lines(page)
+    caps = {}                                                          # 'Table 4. Cont.' on a later page: the caption is the first page's
+    for lines in pages:
+        for ln in lines:
+            toks = [w[4] for w in ln['w']]
+            if len(toks) > 2 and re.match(r'^(Table|TABLE|Tab\.|Таблица)$', toks[0]) and re.match(r'^\d+\.?$', toks[1]) and not re.match(r'^\(?[Cc]ont', toks[2]):
+                caps.setdefault(toks[1].rstrip('.'), ' '.join(toks))
+    for lines in pages:
         i = 0
         while i < len(lines):
-            cols = _powder_columns(lines[i]['w'])
+            cap = _caption(lines, i)
+            m = re.match(r'^(?:Table|TABLE|Tab\.|Таблица)\s*(\d+)\.?\s*\(?[Cc]ont', cap)
+            cols = _powder_columns(lines[i]['w'], caps.get(m.group(1), cap) if m else cap)
             if cols:
                 o, c = _powder_rows_by_columns(lines, i + 1, cols)
                 if o or c:
@@ -741,8 +949,8 @@ def pxrd_table(pdf):
                     i += 1 + max(len(o), len(c)); continue
             i += 1
     if not obs and not calc:
-        for page in doc:
-            for ln in page_lines(page):
+        for lines in pages:
+            for ln in lines:
                 toks = [w[4].replace('−', '-') for w in ln['w']]
                 floats = [k for k, t in enumerate(toks) if re.fullmatch(r'\d+\.\d{2,4}', t)]
                 if not floats or not all(re.fullmatch(r'-?\d+(\.\d+)?', t) for t in toks):
@@ -1172,7 +1380,9 @@ def _check_formula(ex, text, fcand):
                 r_c = _best(wt_c)
                 if r_c is not None and (r_ is None or r_c['score'] < r_['score'] - 0.01):
                     r_ = r_c; wt_ = wt_c; e_ = dict(e_, rows=cand['rows'], total=cand['total'], header=cand['header'], page=cand['page'])
-                    notes.append('the %s reproduces the formula; the one first read did not carry every element of it' % ('table on page %d' % cand['page'] if cand.get('page') else 'composition given in the text'))
+                    notes.append('the %s reproduces the formula; the one first read did not carry every element of it' % (
+                        'composition given in the text' if (cand.get('header') or '').startswith('composition given in the text')
+                        else ('table on page %d' % cand['page']) if cand.get('page') else 'other table of the manuscript'))
                     break
         if r_ is None or r_['score'] > 0.03:
             for k_, alt in enumerate(table_alternatives(e_, wt_)):
@@ -1580,56 +1790,115 @@ def check_paper(pdf, cif=None, out_dir=None):
     are what a manuscript review prints under 'Composition' and 'Bond valence'."""
     text = text_of(pdf)
     ex = extract(pdf, out_dir, None, write=bool(out_dir))
-    out = {'extract': ex, 'composition': check_composition(ex, text), 'bv': None, 'lines': []}
+    out = {'extract': ex, 'composition': check_composition(ex, text), 'bv': None, 'bv_status': None, 'lines': []}
     if out['composition']:
         out['lines'] += out['composition']['lines']
     elif ex.get('epma'):
         out['lines'].append('composition: an analytical table was read but no empirical formula sentence was found to check it against')
     if cif:
-        try:
-            from pxrd_review import bv_check as B
-            from pxrd_review.tables import journal
-            st = B.Structure(cif)
-            tabs = bv_tables(pdf, st)
-            if tabs:
-                cited = (ex['bv'].get('params') or 'gh', ex['bv'].get('u6') or 'burns')
-                best = None
-                for key in ('gh', 'bo', 'ba'):
-                    for u6 in ('burns', 'params'):
-                        P = B.Params(prefer=key, u6=u6); notes = list(st.notes)
-                        rk = B.compute(st, P, None, 'oo'); st.notes[:] = notes
-                        lines = B.check_bvs_table(st, rk[0], rk[2], rk[1], [t['rows'] for t in tabs], B.PARAM_NAMES[key])
-                        hits = [re.search(r'(\d+) cells compared, (\d+) disagree', ln) for ln in lines]
-                        n = sum(int(m.group(1)) for m in hits if m); bad = sum(int(m.group(2)) for m in hits if m)
-                        if n and (best is None or (bad, 0 if (key, u6) == cited else 1) < best[:2]):
-                            best = (bad, 0 if (key, u6) == cited else 1, key, u6, P, lines, n)
-                if best is not None:
-                    bad, _, key, u6, P, lines, n = best
-                    out['bv'] = {'tables': len(tabs), 'lines': lines, 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad}
-                    head = 'bond valence: the paper\'s table (p%d) vs the .cif — agrees best with %s%s' % (
-                        tabs[0]['page'], P.note(), '' if (key, u6) == cited else ' (the paper cites %s%s)' % (B.PARAM_NAMES.get(cited[0], cited[0]), ', U6+ from Burns' if cited[1] == 'burns' else ''))
-                    out['lines'] += [head] + ['  ' + ln for ln in lines]
-            else:
-                out['lines'].append('bond valence: no bond-valence table found in the pdf (nothing to check against the .cif)')
-        except Exception as ex_:
-            out['lines'].append('bond valence: could not check (%s)' % ex_)
+        bc = bv_check_paper(pdf, cif, ex)
+        out['bv_status'] = bc['status']
+        if bc.get('lines') is None:
+            out['lines'].append('bond valence: ' + bc['message'])
+        else:
+            out['bv'] = {k: bc[k] for k in ('tables', 'lines', 'params', 'u6', 'cited', 'compared', 'disagree')}
+            out['lines'] += [bc['head']] + ['  ' + ln for ln in bc['lines']]
     return out
+
+_AN_RE = re.compile(r'^(O|OH|OW|Ow|W|Wat|F|Cl|OD|Oh|Hw|H2O)\d*[A-Za-z]?\d*$')
+
+def _bv_norm(t):
+    from pxrd_review import bv_check as B
+    return B._norm_label(t.replace('−', '-').replace('–', '-'))
+
+def _cation_labels(st):
+    """The structure's cation site labels as bv_check normalises them (hydrogen left out)."""
+    cats = {_bv_norm(x) for r in st.cations for x in r.label.split('/')} | {_bv_norm(r.label) for r in st.cations}
+    return {c for c in cats if not c.startswith('H')}
+
+def _names_cations(rows, st):
+    """Whether a Word table belongs to this structure — the rule bv_tables applies to a pdf's
+    lines: one of its first three rows names ≥2 distinct cation sites of the .cif (every one of
+    them, for a structure with a single cation site). check_bvs_table alone accepts any table with
+    one matching header label and an anion row, which scores a stranger's table against the wrong
+    .cif when the folder holds only one."""
+    cats = _cation_labels(st)
+    n_sites = len({r.label for r in st.cations if not _bv_norm(r.label).startswith('H')})   # 'Mg/Mn' is one site, three labels
+    for row in rows[:3]:
+        hits = {_bv_norm(x) for x in row if _bv_norm(x) in cats}
+        if len(hits) >= 2 or (hits and n_sites <= 1):
+            return True
+    return False
+
+def _bv_like(rows):
+    """A table that reads like a bond-valence table (anion-labelled rows, valences below 1 vu)."""
+    an = sum(1 for r in rows if r and _AN_RE.match(r[0].strip()))
+    vu = sum(1 for r in rows for c in r[1:] if re.match(r'^\s*0\.\d\d', c))
+    return an >= 2 and vu >= 4
+
+def bv_check_paper(path, cif, ex):
+    """The paper's bond-valence table (a pdf's, read from the page; a manuscript .docx's, from
+    its Word table) against the .cif, under every parameter set — the one that agrees best wins,
+    the cited one on a tie. -> {'status', …}:
+      'checked'   {'head', 'lines', 'tables', 'params', 'u6', 'cited', 'compared', 'disagree'}
+      'unmatched' the same keys, compared 0: a table was read but none of its cells matched a
+                  bond of the .cif (the labels differ — Ow/OH vs O); its row and column sums are
+                  still in the lines, so a wrong Σ is not lost with them
+      'foreign'   {'message'}: a bond-valence-like table that names none of the .cif's cations
+      'none'      {'message'}: no table;  'error' {'message'}: the .cif will not compute."""
+    try:
+        from pxrd_review import bv_check as B
+        if path.lower().endswith('.docx'):
+            all_tabs = [t for t in B.read_tables(path) if len(t) >= 3]
+            if not any(sum(1 for r in t for c in r if re.match(r'^\s*0\.\d\d', c)) >= 4 for t in all_tabs):   # no table with valences in it: the .cif is not needed, so a broken one is no finding
+                return {'status': 'none', 'message': 'no bond-valence table found in the manuscript (nothing to check against the .cif)'}
+            st = B.Structure(cif)
+            tabs = [{'page': None, 'rows': t} for t in all_tabs if _names_cations(t, st)]
+            if not tabs and any(_bv_like(t) for t in all_tabs):
+                return {'status': 'foreign', 'message': 'a bond-valence-like table was read but it names none of the .cif\'s cation sites (%s) — is that the right structure?'
+                        % ', '.join(sorted(r.label for r in st.cations if not r.label.upper().startswith('H')))[:80]}
+        else:
+            st = B.Structure(cif)
+            tabs = bv_tables(path, st)
+        if not tabs:
+            return {'status': 'none', 'message': 'no bond-valence table found in the paper (nothing to check against the .cif)'}
+        where = ('the paper\'s table (p%d)' % tabs[0]['page']) if tabs[0].get('page') else 'the manuscript\'s table'
+        cited = (ex['bv'].get('params') or 'gh', ex['bv'].get('u6') or 'burns')
+        best = None; as_cited = None
+        for key in ('gh', 'bo', 'ba'):
+            for u6 in ('burns', 'params'):
+                P = B.Params(prefer=key, u6=u6); notes = list(st.notes)
+                rk = B.compute(st, P, None, 'oo'); st.notes[:] = notes
+                lines = B.check_bvs_table(st, rk[0], rk[2], rk[1], [t['rows'] for t in tabs], B.PARAM_NAMES[key])
+                hits = [re.search(r'(\d+) cells compared, (\d+) disagree', ln) for ln in lines]
+                n = sum(int(m.group(1)) for m in hits if m); bad = sum(int(m.group(2)) for m in hits if m)
+                if (key, u6) == cited or as_cited is None:
+                    as_cited = (key, u6, lines)
+                if n and (best is None or (bad, 0 if (key, u6) == cited else 1) < best[:2]):
+                    best = (bad, 0 if (key, u6) == cited else 1, key, u6, P, lines, n)
+        if best is None:
+            key, u6, lines = as_cited
+            lines = [ln for ln in lines if not ln.startswith('no bond-valence table found')]   # the head below says why
+            head = ('bond valence: %s was read but none of its cells matched a bond of the .cif — the site labels may differ '
+                    '(Ow/OH in the table vs O in the .cif); the row and column sums below were still checked' % where)
+            return {'status': 'unmatched', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': 0, 'disagree': 0}
+        bad, _, key, u6, P, lines, n = best
+        head = 'bond valence: %s vs the .cif — agrees best with %s%s' % (
+            where, P.note(), '' if (key, u6) == cited else ' (the paper cites %s%s)' % (B.PARAM_NAMES.get(cited[0], cited[0]), ', U6+ from Burns' if cited[1] == 'burns' else ''))
+        return {'status': 'checked', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad}
+    except Exception as ex_:
+        return {'status': 'error', 'message': 'could not check (%s)' % ex_}
 
 def bv_tables(pdf, st):
     """The paper's bond-valence tables (anion rows × cation columns) as row lists, read from the
     pdf by word positions: the header line names ≥2 of the structure's cations; columns are the
     data tokens' x-clusters labelled by the nearest header token."""
-    import fitz
     from pxrd_review import bv_check as B
-    norm = lambda t: B._norm_label(t.replace('−', '-').replace('–', '-'))
-    cats = {norm(x) for r in st.cations for x in r.label.split('/')} | {norm(r.label) for r in st.cations}
-    cats = {c for c in cats if not c.startswith('H')}
+    norm = _bv_norm; cats = _cation_labels(st)
     anions = {norm(x) for a in st.anions for x in a.label.split('/')} | {norm(a.label) for a in st.anions}
-    an_re = re.compile(r'^(O|OH|OW|Ow|W|Wat|F|Cl|OD|Oh|Hw|H2O)\d*[A-Za-z]?\d*$')
+    an_re = _AN_RE
     out = []
-    doc = fitz.open(pdf)
-    for pno, page in enumerate(doc):
-        lines = page_lines(page)
+    for pno, lines in enumerate(_pages(pdf)):
         i = 0
         while i < len(lines):
             toks = [w[4] for w in lines[i]['w']]
@@ -1713,9 +1982,10 @@ def extract(pdf, out_dir=None, stem=None, write=True):
     'method', 'optics', 'bv', 'pxrd': {'obs': n, 'calc': n}, 'files': {...}, 'notes': [...]}.
     With write=True the data files the EPMA and PXRD tabs read are written to out_dir:
     <stem>_paper_epma.csv (constituents as columns, one row = the means), <stem>_paper_obs.txt and
-    <stem>_paper_calc.txt."""
+    <stem>_paper_calc.txt — <stem>_docx_* from a manuscript .docx, so a revised manuscript beside
+    the published paper of the same name never overwrites its files (or the other way round)."""
     text = text_of(pdf)
-    stem = stem or os.path.splitext(os.path.basename(pdf))[0]
+    stem = (stem or os.path.splitext(os.path.basename(pdf))[0]) + ('_docx_' if pdf.lower().endswith('.docx') else '_paper_')
     name = mineral_name(text)
     out = {'name': name, 'epma': epma_table(pdf, name), 'method': method_statements(text), 'optics': optics(text),
            'bv': bv_statement(text), 'files': {}, 'notes': []}
@@ -1725,24 +1995,24 @@ def extract(pdf, out_dir=None, stem=None, write=True):
     if write and out_dir:
         os.makedirs(out_dir, exist_ok=True)
         if out['epma'] and out['epma']['rows']:
-            p = os.path.join(out_dir, stem + '_paper_epma.csv')
+            p = os.path.join(out_dir, stem + 'epma.csv')
             rows = out['epma']['rows']
             with open(p, 'w', encoding='utf-8') as f:
                 f.write(','.join(r['constituent'] for r in rows) + '\n')
                 f.write(','.join('%g' % r['mean'] for r in rows) + '\n')
             out['files']['epma'] = os.path.basename(p)
         if o:
-            p = os.path.join(out_dir, stem + '_paper_obs.txt')
+            p = os.path.join(out_dir, stem + 'obs.txt')
             with open(p, 'w', encoding='utf-8') as f:
                 f.write('d I\n' + ''.join('%.4f %g\n' % (d, I if I is not None else 0) for d, I in o))
             out['files']['obs'] = os.path.basename(p)
         if c:
-            p = os.path.join(out_dir, stem + '_paper_calc.txt')
+            p = os.path.join(out_dir, stem + 'calc.txt')
             with open(p, 'w', encoding='utf-8') as f:
                 f.write('d I h k l\n' + ''.join('%.4f %g %d %d %d\n' % (d, I if I is not None else 0, h[0], h[1], h[2]) for d, I, h in c))
             out['files']['calc'] = os.path.basename(p)
     if not out['epma']:
-        out['notes'].append('no analytical table found in the pdf')
+        out['notes'].append('no analytical table found in the paper')
     if not out['basis']:
         out['notes'].append('no normalisation basis stated — the EPMA tab keeps its own')
     return out
@@ -1770,7 +2040,7 @@ def main(argv=None):
     e = out['epma']
     print('mineral: %s' % (out['name'] or '?'))
     if e:
-        print('analytical table (page %d, %d constituents; header: %s):' % (e['page'], len(e['rows']), e['header'][:80]))
+        print('analytical table (%s, %d constituents; header: %s):' % (('page %d' % e['page']) if e.get('page') else 'a table of the manuscript', len(e['rows']), e['header'][:80]))
         for r in e['rows']:
             print('  %-8s %8.2f  %s  %s  %s' % (r['constituent'], r['mean'], ('%g–%g' % r['range']) if r['range'] else '', ('sd %g' % r['sd']) if r['sd'] is not None else '', r['standard'] or ''))
         if e['total'] is not None:

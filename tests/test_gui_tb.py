@@ -185,3 +185,75 @@ class TablesMode(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DocxPaper(unittest.TestCase):
+    """A manuscript .docx is a paper for the Tables mode: listed with the pdfs under "from paper",
+    and Fill ▸ reads its analytical table (and checks its bond-valence table against the .cif)."""
+    @classmethod
+    def setUpClass(cls):
+        from docx import Document
+        from pxrd_review.gui import review_gui as G
+        cls.G = G
+        G._ALLOWED_HOSTS = set()
+        cls.tmp = tempfile.mkdtemp(prefix='tbgui_')
+        with open(os.path.join(cls.tmp, 'rutile.cif'), 'w', encoding='utf-8') as f:
+            f.write(RUTILE)
+        doc = Document()
+        doc.add_paragraph('Rutile, a mineral from Nowhere')
+        doc.add_paragraph('The empirical formula, calculated on the basis of 2 O apfu, is Ti1.00O2.')
+        doc.add_paragraph('Table 1. Chemical data (wt%) for rutile.')
+        t = doc.add_table(rows=1, cols=4)
+        for c, h in zip(t.rows[0].cells, ('Constituent', 'Mean', 'Range', 'S.D.')):
+            c.text = h
+        for row in (('TiO2', '99.10', '98.80–99.40', '0.21'), ('FeO', '0.40', '0.30–0.50', '0.07'), ('SiO2', '0.30', '0.20–0.40', '0.06'), ('Total', '99.80', '', '')):
+            cells = t.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.add_paragraph('Table 2. Bond-valence analysis for rutile.')
+        t2 = doc.add_table(rows=0, cols=3)
+        for row in (('Atom', 'Ti1', 'Σ'), ('O1', '0.70×4↓×2→, 0.64×2↓', '2.03'), ('Σ', '4.07', '')):
+            cells = t2.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.save(os.path.join(cls.tmp, 'Rutile manuscript.docx'))
+        cls.c = G.app.test_client()
+        assert G.ms_set_folder(cls.tmp)
+        if G.MS['athread']:
+            G.MS['athread'].join(60)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_docx_listed_and_filled(self):
+        st = json.loads(self.c.get('/api/tb/state').data)
+        self.assertEqual([d['name'] for d in st['pdfs']], ['Rutile manuscript.docx'])
+        r = self.c.post('/api/tb/extract?pdf=Rutile%20manuscript')
+        self.assertEqual(r.status_code, 200, r.data[:200]); d = json.loads(r.data)
+        self.assertTrue(d['ok']); self.assertEqual(d['fill']['epma']['file'], 'Rutile manuscript_docx_epma.csv')
+        self.assertEqual(d['fill']['epma']['basis'], 'O=2'); self.assertEqual(d['fill']['_cif'], 'rutile')
+        self.assertTrue(any('3 constituents' in n for n in d['notes']), d['notes'])
+        self.assertIn('bond valence:', d['bvcheck'] or ''); self.assertIn('1 cells compared, 0 disagree', d['bvcheck'])
+        with open(os.path.join(self.tmp, 'review_out', d['fill']['epma']['file']), encoding='utf-8') as f:
+            self.assertEqual(f.read().splitlines(), ['TiO2,FeO,SiO2', '99.1,0.4,0.3'])
+        self.assertEqual(self.c.post('/api/tb/extract?pdf=nope').status_code, 404)
+        self.assertEqual(self.c.get('/api/ms/pdf/nope.pdf/page/1.png').status_code, 404)   # a page only of the folder's own papers
+
+    def test_strangers_table_is_not_scored(self):
+        """A manuscript whose bond-valence table names other cations than the folder's only .cif is
+        not scored against it (nor reported as having no table)."""
+        from docx import Document
+        from pxrd_review import paper_extract as PE
+        doc = Document()
+        doc.add_paragraph('Table 1. Bond-valence analysis for otherite.')
+        t = doc.add_table(rows=0, cols=4)
+        for row in (('Atom', 'Cu1', 'Al1', 'Σ'), ('O1', '0.45', '0.52', '0.97'), ('O2', '0.41', '0.55', '0.96'), ('OH3', '0.38', '0.49', '0.87'), ('Σ', '1.24', '1.56', '')):
+            cells = t.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        path = os.path.join(self.tmp, 'Otherite manuscript.docx'); doc.save(path)
+        bc = PE.bv_check_paper(path, os.path.join(self.tmp, 'rutile.cif'), {'bv': {}})
+        self.assertEqual(bc['status'], 'foreign'); self.assertIn('Ti1', bc['message'])
+        bc = PE.bv_check_paper(os.path.join(self.tmp, 'Rutile manuscript.docx'), os.path.join(self.tmp, 'rutile.cif'), {'bv': {}})
+        self.assertEqual(bc['status'], 'checked'); self.assertEqual(bc['compared'], 1)

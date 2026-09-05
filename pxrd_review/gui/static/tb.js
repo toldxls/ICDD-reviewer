@@ -129,7 +129,7 @@ function tbFillSelects() {
     if (Array.from(sel.options).some(o => o.value === cur)) sel.value = cur;
   };
   fill($('#tb-gd-cif'), TBS.cifs, '(no .cif — measured density only)');
-  fill($('#tb-paper'), TBS.pdfs, TBS.pdfs.length ? '(choose a paper)' : '(no .pdf in the folder)');
+  fill($('#tb-paper'), TBS.pdfs, TBS.pdfs.length ? '(choose a paper)' : '(no .pdf or .docx in the folder)');
   fill($('#tb-epma-file'), TBS.data.filter(d => d.kind !== 'obs' && d.kind !== 'calc'), '(choose the probe file)');
   fill($('#tb-pxrd-obs'), TBS.data, '(observed peak list)');
   fill($('#tb-pxrd-calc'), TBS.data, '(calculated pattern)');
@@ -198,6 +198,13 @@ async function tbRender() {
   $('#tb-status').textContent = status; $('#tb-status').title = status;
   const html = r.html + (r.text && tab !== 'coords' && tab !== 'bvs' ? '<details class="tb-text"><summary class="muted">reduction / working (as pxrd prints it)</summary><pre>' + esc(r.text) + '</pre></details>' : '');
   tbRenderBody(html);
+  if (tab === 'bvs' && TBS.mscheck && TBS.mscheck.key === TBS.key) tbShowCheck(TBS.mscheck);
+}
+
+// ---- the manuscript's own tables against the .cif (pxrd bv --table): the report goes above the tool's tables
+function tbShowCheck(c) {
+  const body = $('#tb-body'); const old = body.querySelector('.tb-mscheck'); if (old) old.remove();
+  body.prepend(el('details', { class: 'tb-text tb-mscheck', open: 'open' }, el('summary', { class: 'muted' }, 'manuscript table check — ' + c.name), el('pre', {}, c.text)));
 }
 
 async function tbExport(tab, fmt) {
@@ -223,7 +230,7 @@ async function tbFillFromPaper(pdfKey) {
     $('#tb-paper').value = pdfKey;
   }
   const key = $('#tb-paper').value;
-  if (!key) { msStatus('pick a paper (.pdf) first'); return; }
+  if (!key) { msStatus('pick a paper (.pdf or a manuscript .docx) first'); return; }
   const btn = $('#tb-fill'); btn.disabled = true; btn.textContent = 'Reading…';
   let r;
   try { r = await fetch('/api/tb/extract?pdf=' + enc(key), { method: 'POST' }).then(x => x.json()); } catch (ex) { r = { ok: false, error: String(ex) }; }
@@ -233,6 +240,7 @@ async function tbFillFromPaper(pdfKey) {
   try { st = await fetch('/api/tb/state').then(x => x.json()); } catch (_) {}
   if (st) { TBS.data = st.data || []; TBS.outputs = st.outputs || []; tbFillSelects(); }
   if (r.fill && r.fill._cif && TBS.cifs.some(c => c.key === r.fill._cif)) TBS.key = r.fill._cif;   // the same mineral's .cif
+  TBS.mscheck = r.bvcheck && TBS.key ? { key: TBS.key, name: key, text: r.bvcheck } : null;     // the paper's bond-valence table vs that .cif: shown on the Bond valence tab
   for (const tab of Object.keys(r.fill || {})) {
     if (tab.startsWith('_')) continue;
     for (const [k, v] of Object.entries(r.fill[tab])) {
@@ -247,7 +255,7 @@ async function tbFillFromPaper(pdfKey) {
   $('#tb-status').textContent = 'filled from ' + key + (notes.length ? ' — ' + notes.join(' · ') : '');
   $('#tb-status').title = notes.join('\n');
 }
-$('#tb-fill').addEventListener('click', tbFillFromPaper);
+$('#tb-fill').addEventListener('click', () => tbFillFromPaper());   // not the event: a truthy pdfKey would reset the select
 async function tbOpenFile(name) {
   let ok = false;
   try { ok = (await fetch('/api/tb/open?file=' + enc(name), { method: 'POST' })).ok; } catch (_) {}

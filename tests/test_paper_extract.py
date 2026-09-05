@@ -738,3 +738,53 @@ class ReviewFixes(unittest.TestCase):
                           (256, [(40, 'Te'), (120, '1.05'), (160, '0.98'), (200, '6.01')]), (270, [(40, 'Total'), (120, '2.00'), (160, '1.76'), (200, '')])])
         e = PE.epma_table(path, 'andychristyite')
         self.assertIsNotNone(e); self.assertTrue(e.get('prose')); self.assertEqual(e['rows'][0]['constituent'], 'PbO')
+
+
+class DocxPaper(unittest.TestCase):
+    """A manuscript .docx read like a pdf: its tables become pages of words, its text the paper's."""
+    def test_docx_tables_and_text(self):
+        from docx import Document
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'testite.docx')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = Document()
+        doc.add_paragraph('Testite, a new mineral from Nowhere')
+        doc.add_paragraph('The empirical formula, calculated on the basis of 8 O apfu, is Ca1.00Mg2.01Si2.99O7(OH)0.98. '
+                          'H2O was calculated by difference. Optical: alpha = 1.600, beta = 1.610, gamma = 1.620.')
+        doc.add_paragraph('Table 1. Chemical data (wt%) for testite.')
+        t = doc.add_table(rows=1, cols=5)
+        for c, h in zip(t.rows[0].cells, ('Constituent', 'Mean', 'Range', 'S.D.', 'Standard')):
+            c.text = h
+        for row in (('CaO', '17.23', '16.90–17.50', '0.21', 'wollastonite'), ('MgO', '24.88', '24.50–25.20', '0.30', 'forsterite'),
+                    ('SiO2', '55.18', '54.80–55.60', '0.28', 'quartz'), ('H2O', '2.71', '', '', ''), ('Total', '100.00', '', '', '')):
+            cells = t.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.add_paragraph('Table 2. Powder X-ray diffraction data for testite.')
+        t2 = doc.add_table(rows=0, cols=7)
+        for row in (('Iobs', 'dobs', 'dcalc', 'Icalc', 'h', 'k', 'l'), ('100', '3.4550', '3.4531', '92', '1', '1', '0'), ('35', '2.9800', '2.9791', '40', '0', '2', '1'),
+                    ('12', '2.5010', '2.4997', '9', '2', '0', '0'), ('8', '1.0210', '1.0204', '6', '−10', '1', '2')):   # a signed two-digit index: h and k must still read as one column
+            cells = t2.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.save(path)
+        e = PE.epma_table(path, 'testite')
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'CaO': 17.23, 'MgO': 24.88, 'SiO2': 55.18, 'H2O': 2.71})
+        self.assertEqual(e['total'], 100.0); self.assertIsNone(e['page']); self.assertIn('Chemical data', e['caption'])
+        self.assertEqual(next(r for r in e['rows'] if r['constituent'] == 'CaO')['standard'], 'wollastonite')
+        o, c = PE.pxrd_table(path); self.assertEqual((len(o), len(c)), (4, 4)); self.assertEqual(c[-1][2], (-10, 1, 2))
+        ex = PE.extract(path, tmp, 'testite'); self.assertEqual(ex['basis'][:2], ('O', 8.0)); self.assertEqual(ex['files']['epma'], 'testite_docx_epma.csv')   # never the paper's file name
+        r = PE.check_paper(path, None, None); self.assertTrue(r['composition']['ok'], r['lines'])
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(PE.main([path, '--out', tmp]), 0)             # the CLI on a manuscript: no page to print
+        self.assertIn('analytical table (a table of the manuscript, 4 constituents', buf.getvalue())
+        # the formula sentence inserted under Track Changes is still read
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+        p = doc.paragraphs[1]._p
+        ins = OxmlElement('w:ins'); ins.set(qn('w:id'), '1'); ins.set(qn('w:author'), 'reviewer'); ins.set(qn('w:date'), '2026-09-05T00:00:00Z')
+        for r_ in list(p.findall(qn('w:r'))):
+            p.remove(r_); ins.append(r_)
+        p.append(ins); doc.save(path)
+        self.assertEqual(PE.extract(path, None, None, write=False)['basis'][:2], ('O', 8.0))

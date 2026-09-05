@@ -227,7 +227,7 @@ function msRow(f, t) {
   const rec = () => { const x = (MSS.t.findings[f.fkey] = MSS.t.findings[f.fkey] || {}); x.label = label; return x; };
   const mk = (v, lbl) => el('button', { class: 'tbtn ' + v + (t.verdict === v ? ' on' : ''),
     onclick: ev => { ev.stopPropagation(); const x = rec(); x.verdict = (x.verdict === v ? null : v); msSaveTriage(); msRenderFindings(); msPreview(); } }, lbl);
-  const look = el('button', { class: 'tbtn look', onclick: ev => { ev.stopPropagation(); msLook(f); } }, '? look');
+  const look = el('button', { class: 'tbtn look', onclick: ev => { ev.stopPropagation(); msLook(f); } }, f.para == null && f.page ? '? look (pdf p. ' + f.page + ')' : '? look');
   const note = el('input', { class: 'tnote', type: 'text', placeholder: 'note…', value: t.note || '',
     onclick: ev => ev.stopPropagation(), oninput: ev => { rec().note = ev.target.value; msSaveTriage(); } });
   return el('div', { class: 'finding lvl-' + sev, 'data-fkey': f.fkey, onclick: () => msLook(f) },
@@ -241,7 +241,10 @@ $('#ms-hide-dismissed').addEventListener('change', () => { if (MSS.a) msRenderFi
 
 // '? look': scroll the docx view to the finding's paragraph (a pair alternates citation / entry)
 async function msLook(f) {
-  if (f.para == null) return;                       // a calculation finding has no paragraph to jump to
+  if (f.para == null) {                             // a calculation finding has no paragraph: show the paper's page instead
+    if (f.page && f.pdf) { msShowPage(f); return; }
+    msStatus('this finding comes from the calculation checks — there is no place in the docx to jump to'); return;
+  }
   document.querySelectorAll('#ms-findings-body .finding').forEach(d => d.classList.toggle('focus', d.getAttribute('data-fkey') === f.fkey));
   const targets = [f.para]; if (f.entry_para != null) targets.push(f.entry_para);
   const i = (MSS.lookIdx[f.fkey] || 0) % targets.length; MSS.lookIdx[f.fkey] = i + 1;
@@ -263,6 +266,22 @@ async function msLook(f) {
       p.classList.remove('docx-flash'); void p.offsetWidth; p.classList.add('docx-flash');
     });
   });
+}
+
+// the paper's page for a calculation finding: the pdf page rendered with the finding's labels
+// highlighted, in an overlay (click or Escape closes it)
+function msShowPage(f) {
+  let ov = $('#ms-page-overlay');
+  if (!ov) {
+    ov = el('div', { id: 'ms-page-overlay', onclick: () => { ov.classList.add('hidden'); } });
+    document.body.append(ov);
+    document.addEventListener('keydown', ev => { if (ev.key === 'Escape') ov.classList.add('hidden'); });
+  }
+  ov.innerHTML = '';
+  const url = '/api/ms/pdf/' + enc(f.pdf) + '/page/' + f.page + '.png' + (f.find ? '?find=' + enc(f.find) : '');
+  ov.append(el('div', { class: 'cap' }, f.pdf + ' — page ' + f.page + (f.find ? ' · ' + f.find.replace(/\|/g, ', ') + ' highlighted' : '') + ' · click to close'),
+            el('img', { src: url, alt: 'page ' + f.page + ' of ' + f.pdf }));
+  ov.classList.remove('hidden');
 }
 
 // eased scroll of a container to `top` over `ms` milliseconds (ease-in-out); a newer call on the

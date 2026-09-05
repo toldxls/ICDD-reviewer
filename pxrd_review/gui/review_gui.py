@@ -1231,15 +1231,28 @@ def api_pick_folder():
             if not (start and os.path.isdir(start)) or any(c in start for c in '\r\n'):
                 start = os.path.expanduser('~')
             loc = start.replace('\\', '\\\\').replace('"', '\\"')
-            script = ('tell me to activate\n'
-                      'set f to choose folder with prompt '
+            # The panel is Finder's, not osascript's: 'tell me to activate' registers osascript as a
+            # foreground app on every click (2 s before the panel shows); activating Finder, which
+            # already runs, takes 0.1 s and gives the panel focus just the same
+            choose = ('set f to choose folder with prompt '
                       '"Choose the entries folder — go UP via the folder-name menu below (or ⌘↑)" '
-                      'default location (POSIX file "%s")\n'
-                      'POSIX path of f' % loc)
-            r = subprocess.run(['osascript', '-e', script],
-                               capture_output=True, text=True, timeout=300)
+                      'default location (POSIX file "%s")\n' % loc)
+            via_finder = 'tell application "Finder"\nactivate\n' + choose + 'end tell\nPOSIX path of f'
+            via_self = 'tell me to activate\n' + choose + 'POSIX path of f'      # the old route: 2 s slower, needs no consent
+            run = lambda s: subprocess.run(['osascript', '-e', s], capture_output=True, text=True, timeout=300)
+            try:
+                r = run(via_finder)
+                # Telling Finder anything is an Apple event, which macOS gates behind an Automation
+                # consent ("Terminal wants access to control Finder"). Denied (-1743) or otherwise
+                # refused, the old route still works — only a Cancel (-128) is the user's answer.
+                if r.returncode != 0 and '-128' not in (r.stderr or ''):
+                    r = run(via_self)
+            except subprocess.TimeoutExpired:
+                return jsonify({'ok': False, 'error': 'the folder dialog got no answer in 5 minutes (a consent sheet may be waiting behind another window)'}), 504
             if r.returncode != 0:
-                return jsonify({'ok': False, 'cancelled': True})     # user hit Cancel
+                if '-128' in (r.stderr or ''):
+                    return jsonify({'ok': False, 'cancelled': True})     # user hit Cancel
+                return jsonify({'ok': False, 'error': 'the folder dialog could not open: ' + (r.stderr or '').strip()[-200:]}), 500
             return jsonify({'ok': True, 'folder': r.stdout.strip()})
         if os.name == 'nt':                                          # Windows: Shell folder dialog
             ps = ('$s = New-Object -ComObject Shell.Application; '
@@ -1656,6 +1669,7 @@ def api_tb_state():
     if out and os.path.isdir(out):
         outputs = sorted(fn for fn in os.listdir(out) if _TB_OUTPUT.fullmatch(fn) and not fn.endswith('.txt'))
     pdfs = [{'key': k, 'name': k} for k in sorted(MS.get('pdfs') or {}, key=str.lower)]
+    pdfs += [{'key': k, 'name': os.path.basename(v)} for k, v in sorted(MS['files'].items(), key=lambda kv: kv[0].lower()) if v.lower().endswith('.docx')]   # a manuscript .docx is a paper too
     return jsonify({'folder': MS['folder'], 'cifs': cifs, 'data': data, 'outputs': outputs, 'opts': MS['tb_opts'], 'pdfs': pdfs,
                     'journals': [{'key': k, 'name': v['name']} for k, v in TB.JOURNALS.items()], 'default_journal': TB.DEFAULT_JOURNAL})
 
@@ -1701,16 +1715,22 @@ def api_tb_bvs_export(key):
         return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
     return jsonify({'ok': True, 'file': key + '_bv.xlsx'})
 
+def _tb_docx_path(key):
+    """One of the folder's manuscript .docx files by key (never a path from the page)."""
+    path = MS['files'].get(key) if key else None
+    return path if path and path.lower().endswith('.docx') else None
+
 @app.route('/api/tb/extract', methods=['POST'])
 def api_tb_extract():
     """Fill the tabs from a paper: the analytical table, the basis and the way the unmeasured
     constituents were handled, the optics, the bond-valence parameter set, the powder table. Writes
     the data files the EPMA and PXRD tabs read into review_out and returns the inputs to set."""
     key = request.args.get('pdf') or ''
-    if key not in (MS.get('pdfs') or {}):
+    path = (MS.get('pdfs') or {}).get(key) or _tb_docx_path(key)
+    if not path:
         abort(404)
     from pxrd_review import paper_extract as PE
-    path = MS['pdfs'][key]; stem = os.path.splitext(key)[0]
+    stem = os.path.splitext(os.path.basename(path))[0]
     try:
         ex = PE.extract(path, MS['out_dir'], stem)
     except Exception as e:
@@ -1753,7 +1773,16 @@ def api_tb_extract():
     fill['pxrd']['name'] = name
     notes = list(ex['notes'])
     if ex['epma']:
-        notes.append('analytical table: %d constituents (page %d)%s' % (len(ex['epma']['rows']), ex['epma']['page'], (', total %.2f' % ex['epma']['total']) if ex['epma']['total'] else ''))
+        notes.append('analytical table: %d constituents (%s)%s' % (len(ex['epma']['rows']), ('page %d' % ex['epma']['page']) if ex['epma'].get('page') else 'a table of the manuscript',
+                                                                  (', total %.2f' % ex['epma']['total']) if ex['epma']['total'] else ''))
+    bvcheck = None
+    if cif_key:                                                          # the paper's bond-valence table against the same mineral's .cif
+        bc = PE.bv_check_paper(path, MS['cifs'][cif_key], ex)
+        if bc.get('lines') is None:
+            notes.append('bond valence: ' + bc['message'])                # no table / a stranger's table / the .cif failed: say which
+        else:
+            notes.append(bc['head'])
+            bvcheck = bc['head'] + '\n' + '\n'.join('  ' + ln for ln in bc['lines'])
     if ex['basis_sentence']:
         notes.append('basis: ' + PE.basis_string(ex['basis']))
     notes += meth['sentences'][:3]
@@ -1761,7 +1790,7 @@ def api_tb_extract():
     notes += ex['bv']['sentences'][:2]
     if ex['pxrd']['obs'] or ex['pxrd']['calc']:
         notes.append('powder table: %d observed, %d calculated lines' % (ex['pxrd']['obs'], ex['pxrd']['calc']))
-    return jsonify({'ok': True, 'fill': fill, 'notes': notes, 'files': ex['files'], 'name': name})
+    return jsonify({'ok': True, 'fill': fill, 'notes': notes, 'files': ex['files'], 'name': name, 'bvcheck': bvcheck})
 
 @app.route('/api/tb/word/<key>', methods=['POST'])
 def api_tb_word(key):
@@ -1965,7 +1994,7 @@ def ms_analysis(key):
     res = RC.analyze(paras)
     data = RC.serialize(paras, res)
     data['key'] = key; data['name'] = os.path.basename(path)
-    if path.lower().endswith('.pdf'):
+    if path.lower().endswith(('.pdf', '.docx')):                 # a paper's or a manuscript's own numbers against themselves
         data['findings'] += _ms_paper_findings(key, path)
     data['summary'] = {k: sum(1 for f in data['findings'] if f['kind'] == k) for k in ('orphan', 'uncited', 'pair', 'form', 'calc', 'calcinfo')}
     with MS['lock']:
@@ -1997,7 +2026,22 @@ def _ms_paper_findings(key, path):
     except Exception as ex:
         return [{'kind': 'calcinfo', 'fkey': 'calc:error', 'label': 'paper checks', 'msg': 'could not run (%s: %s)' % (type(ex).__name__, ex),
                  'para': None, 'start': None, 'end': None, 'text': ''}]
-    section = ''
+    epma = (chk.get('extract') or {}).get('epma') or {}
+    if chk['composition'] is None and not epma and chk.get('bv_status') in (None, 'none'):
+        return []                                                   # nothing to check: no analytical table, no bond-valence table (a manuscript without tables) — a failed or foreign check still reports
+    from pxrd_review import epma as EP
+    def constituents_of(el):                                        # 'Si' -> ['SiO2']: the element's constituents as the paper's table writes them
+        out_ = []
+        for r in epma.get('rows') or []:
+            try:
+                if EP.parse_constituent(r.get('constituent') or '').element == el:
+                    out_.append(r['constituent'])
+            except Exception:
+                pass
+        return out_
+    section = ''; page = None
+    pdf_name = os.path.basename(path) if path.lower().endswith('.pdf') and os.path.basename(path) in (MS.get('pdfs') or {}) else None
+    epma_page = ((chk.get('extract') or {}).get('epma') or {}).get('page')
     for ln in chk['lines']:
         s = ln.strip()
         if not s:
@@ -2005,10 +2049,34 @@ def _ms_paper_findings(key, path):
         head = not ln.startswith('  ')
         if head:
             section = s.split(':', 1)[0]
+            m = re.search(r'\(p(\d+)\)', s)                                      # 'the paper's table (p6) vs the .cif'
+            page = int(m.group(1)) if m else (epma_page if section.startswith('composition') else None)
         kind = 'calcinfo' if head or not _CALC_FLAG.search(s) or '[unverified]' in s or s.startswith('not verifiable') else 'calc'
         fkey = 'calc:' + hashlib.sha1(s.encode('utf-8')).hexdigest()[:12]
-        out.append({'kind': kind, 'fkey': fkey, 'label': section or 'paper', 'msg': s, 'para': None, 'start': None, 'end': None, 'text': ''})
+        # what '? look' highlights on the page: the bond's two labels, or the constituents of a composition line
+        find = None
+        if section.startswith('bond'):                                     # 'O1–Pb4 0.02 vs 0.06', 'Σ for O7': the site labels
+            m = re.search(r'([A-Z][A-Za-z]*\d+)[–-]([A-Z][A-Za-z]*\d+)', s) or re.search(r'Σ for ([A-Z][A-Za-z]*\d+)', s)
+            find = '|'.join(g for g in m.groups() if g) if m else None
+        else:                                                              # 'Si: paper 2.99, …' -> 'SiO2': the bare symbol would light every 'si' on the page
+            m = re.match(r'([A-Z][a-z]?)(?: \(informational\))?:', s)
+            find = '|'.join(constituents_of(m.group(1))[:3]) or None if m else None
+        out.append({'kind': kind, 'fkey': fkey, 'label': section or 'paper', 'msg': s, 'para': None, 'start': None, 'end': None, 'text': '',
+                    'page': page if pdf_name else None, 'pdf': pdf_name, 'find': find})
     return out
+
+@app.route('/api/ms/pdf/<key>/page/<int:n>.png')
+def api_ms_pdf_page(key, n):
+    """Page n (1-based) of one of the folder's papers, the finding's terms highlighted — what
+    '? look' shows for a calculation finding, which has no paragraph in a docx to jump to."""
+    path = (MS.get('pdfs') or {}).get(key)
+    if not path:
+        abort(404)
+    terms = [t for t in (request.args.get('find') or '').split('|') if t][:6]
+    png = PW.run(PW.page_png, path, n - 1, terms, default=None)
+    if png is None:
+        abort(404)
+    return Response(png, mimetype='image/png')
 
 def _ms_analyze_all(gen):
     for key in list(MS['order']):
@@ -2027,7 +2095,7 @@ def _ms_row(key):
     c = MS['cache'].get(key)
     t = MS['triage'].get(key) or {}
     outs = _ms_outputs(key)
-    pdf = next((k for k in (MS.get('pdfs') or {}) if os.path.splitext(k)[0] == key), None)
+    pdf = next((k for k in (MS.get('pdfs') or {}) if os.path.splitext(k)[0] == key), None) or (key if _tb_docx_path(key) else None)   # what the Tables mode can be filled from
     row = {'key': key, 'name': os.path.basename(MS['files'][key]), 'reviewed': bool(t.get('reviewed')),
            'has_annotated': os.path.exists(outs['annotated']), 'pending': True, 'summary': None, 'error': None, 'pdf': pdf}
     if c and c['fp'] == _ms_fingerprint(key):

@@ -562,3 +562,10 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 .pubtable td { padding: 2px 10px 2px 4px; white-space: nowrap; }
 .pubtable sup, .pubtable sub { font-size: .72em; }
 .pubnote { font-size: .8em; color: var(--muted); margin-top: 5px; max-width: 900px; }
+
+/* Manuscript mode: the paper's page behind a calculation finding ('? look') */
+#ms-page-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, .72); display: flex; align-items: flex-start; justify-content: center; overflow: auto; padding: 36px 24px 24px; cursor: zoom-out; }
+#ms-page-overlay img { max-width: min(96vw, 1100px); height: auto; background: #fff; box-shadow: 0 8px 40px rgba(0, 0, 0, .5); }
+#ms-page-overlay .cap { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); color: #fff; font-size: 12px; background: rgba(0, 0, 0, .55); padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
+.tb-mscheck { margin-bottom: 12px; }
+.tb-mscheck pre { white-space: pre-wrap; }
