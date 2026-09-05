@@ -216,6 +216,13 @@ class DocxPaper(unittest.TestCase):
             cells = t2.add_row().cells
             for c, v in zip(cells, row):
                 c.text = v
+        doc.add_paragraph('Table 3. Powder X-ray diffraction data for rutile.')
+        t3 = doc.add_table(rows=0, cols=7)
+        for row in (('Iobs', 'dobs', 'Icalc', 'dcalc', 'h', 'k', 'l'), ('100', '3.248', '100', '3.2482', '1', '1', '0'), ('50', '2.487', '48', '2.4874', '1', '0', '1'),
+                    ('8', '2.297', '7', '2.2696', '2', '0', '0'), ('20', '2.187', '19', '2.1873', '1', '1', '1'), ('60', '1.687', '58', '1.6874', '2', '1', '1')):
+            cells = t3.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
         doc.save(os.path.join(cls.tmp, 'Rutile manuscript.docx'))
         cls.c = G.app.test_client()
         assert G.ms_set_folder(cls.tmp)
@@ -239,6 +246,14 @@ class DocxPaper(unittest.TestCase):
             self.assertEqual(f.read().splitlines(), ['TiO2,FeO,SiO2', '99.1,0.4,0.3'])
         self.assertEqual(self.c.post('/api/tb/extract?pdf=nope').status_code, 404)
         self.assertEqual(self.c.get('/api/ms/pdf/nope.pdf/page/1.png').status_code, 404)   # a page only of the folder's own papers
+
+    def test_powder_table_finding(self):
+        """The mistyped d of the manuscript's powder table is a red finding whose '? look' term is that d."""
+        f = self.G._ms_paper_findings('Rutile manuscript', os.path.join(self.tmp, 'Rutile manuscript.docx'))
+        heads = [x['msg'] for x in f if x['label'].startswith('powder')]
+        self.assertTrue(any(m.startswith('powder table: 5 indexed lines vs the .cif cell') for m in heads), heads)
+        red = [x for x in f if x['kind'] == 'calc' and x['label'].startswith('powder')]
+        self.assertEqual(len(red), 1); self.assertTrue(red[0]['msg'].startswith('2.2696 (2 0 0) does not follow')); self.assertEqual(red[0]['find'], '2.2696')
 
     def test_strangers_table_is_not_scored(self):
         """A manuscript whose bond-valence table names other cations than the folder's only .cif is

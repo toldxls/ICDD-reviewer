@@ -2027,8 +2027,8 @@ def _ms_paper_findings(key, path):
         return [{'kind': 'calcinfo', 'fkey': 'calc:error', 'label': 'paper checks', 'msg': 'could not run (%s: %s)' % (type(ex).__name__, ex),
                  'para': None, 'start': None, 'end': None, 'text': ''}]
     epma = (chk.get('extract') or {}).get('epma') or {}
-    if chk['composition'] is None and not epma and chk.get('bv_status') in (None, 'none'):
-        return []                                                   # nothing to check: no analytical table, no bond-valence table (a manuscript without tables) — a failed or foreign check still reports
+    if chk['composition'] is None and not epma and chk.get('bv_status') in (None, 'none') and chk.get('powder_status') in (None, 'none'):
+        return []                                                   # nothing to check: no analytical, bond-valence or powder table (a manuscript without tables) — a failed or foreign check still reports
     from pxrd_review import epma as EP
     def constituents_of(el):                                        # 'Si' -> ['SiO2']: the element's constituents as the paper's table writes them
         out_ = []
@@ -2058,6 +2058,9 @@ def _ms_paper_findings(key, path):
         if section.startswith('bond'):                                     # 'O1–Pb4 0.02 vs 0.06', 'Σ for O7': the site labels
             m = re.search(r'([A-Z][A-Za-z]*\d+)[–-]([A-Z][A-Za-z]*\d+)', s) or re.search(r'Σ for ([A-Z][A-Za-z]*\d+)', s)
             find = '|'.join(g for g in m.groups() if g) if m else None
+        elif section.startswith('powder'):                                 # '2.2696 (2 0 0) does not follow …', 'observed 3.456: …': the d as printed
+            m = re.match(r'(?:observed )?(\d+\.\d+)', s)
+            find = m.group(1) if m else None
         else:                                                              # 'Si: paper 2.99, …' -> 'SiO2': the bare symbol would light every 'si' on the page
             m = re.match(r'([A-Z][a-z]?)(?: \(informational\))?:', s)
             find = '|'.join(constituents_of(m.group(1))[:3]) or None if m else None

@@ -788,3 +788,73 @@ class DocxPaper(unittest.TestCase):
             p.remove(r_); ins.append(r_)
         p.append(ins); doc.save(path)
         self.assertEqual(PE.extract(path, None, None, write=False)['basis'][:2], ('O', 8.0))
+
+    def test_cell_check(self):
+        """The powder table's calculated lines against the cell: the .cif's, else the one the text
+        states (a and c only: tetragonal or hexagonal, the table decides); a mistyped d is named."""
+        from docx import Document
+        from tests.test_bv_check import RUTILE
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'rutile.docx'); cif = os.path.join(tmp, 'rutile.cif')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        with open(cif, 'w', encoding='utf-8') as f:
+            f.write(RUTILE)
+        doc = Document()
+        doc.add_paragraph('Rutile from Nowhere. The powder pattern was indexed on a tetragonal cell, a = 4.5937(2), c = 2.9587(1) Å, V = 62.43 Å3.')
+        doc.add_paragraph('Table 2. Powder X-ray diffraction data for rutile.')
+        t = doc.add_table(rows=0, cols=7)
+        for row in (('Iobs', 'dobs', 'Icalc', 'dcalc', 'h', 'k', 'l'), ('100', '3.248', '100', '3.2482', '1', '1', '0'), ('50', '2.487', '48', '2.4874', '1', '0', '1'),
+                    ('8', '2.297', '7', '2.2696', '2', '0', '0'), ('20', '2.187', '19', '2.1873', '1', '1', '1'), ('10', '2.054', '9', '2.0544', '2', '1', '0'), ('60', '1.687', '58', '1.6874', '2', '1', '1')):
+            cells = t.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.save(path)
+        cc = PE.cell_check(path, None)
+        self.assertEqual((cc['status'], cc['source'], cc['n'], cc['agree'], cc['loose']), ('checked', 'powder', 6, 5, 6))
+        self.assertAlmostEqual(cc['cell']['γ'], 90.0); self.assertEqual(cc['bad'][0][2], (2, 0, 0))
+        self.assertTrue(any(ln.startswith('2.2696 (2 0 0) does not follow the cell: it gives 2.2968') for ln in cc['lines']), cc['lines'])
+        self.assertEqual(cc['unmatched_obs'], [])                                       # 2.297 observed is the (2 0 0) the cell gives
+        cc = PE.cell_check(path, cif)
+        self.assertEqual((cc['source'], cc['agree'], len(cc['bad'])), ('.cif', 5, 1))
+        r = PE.check_paper(path, cif, None)
+        self.assertEqual(r['powder_status'], 'checked'); self.assertTrue(any(l.startswith('powder table: 6 indexed lines vs the .cif cell') for l in r['lines']), r['lines'])
+        self.assertEqual(cc['wild'], 0)
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            PE.main([path, '--check', '--cif', cif])
+        self.assertIn('does not follow the cell', buf.getvalue())
+
+    def test_powder_table_by_content(self):
+        """The columns are typed by what they hold: an unlabelled calculated pattern, a two-line
+        header, indices written as one word, and a second sample's columns left out."""
+        from docx import Document
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'contentite.docx')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = Document()
+        doc.add_paragraph('Table 2. Calculated powder diffraction pattern of contentite.')
+        t = doc.add_table(rows=0, cols=5)
+        for row in (('h', 'k', 'l', 'dhkl', 'Irel'), ('1', '1', '0', '6.2345', '100'), ('0', '2', '0', '5.1200', '35'), ('−1', '1', '1', '4.0010', '12'), ('2', '0', '−1', '3.4550', '8'), ('1', '3', '0', '3.1020', '4')):
+            cells = t.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.add_paragraph('Table 3. Powder X-ray diffraction data for contentite.')
+        t2 = doc.add_table(rows=0, cols=5)
+        for row in (('Iobs', 'dobs', 'Icalc', 'dcalc', ''), ('', '(Å)', '', '(Å)', 'hkl'), ('100', '6.23', '100', '6.2345', '110'), ('30', '5.12', '35', '5.1200', '020'),
+                    ('10', '4.00', '12', '4.0010', '2.1.10'), ('7', '3.45', '8', '3.4550', '201'), ('3', '3.10', '4', '3.1020', '130')):
+            cells = t2.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.add_paragraph('Table 4. Powder data for contentite (this study) and for the Elliott (2018) sample.')
+        t3 = doc.add_table(rows=0, cols=5)
+        for row in (('hkl', 'dobs', 'Iobs', 'dobs', 'Iobs'), ('110', '6.23', '100', '6.24', '90'), ('020', '5.12', '30', '5.13', '28'), ('111', '4.00', '10', '4.01', '11'), ('201', '3.45', '7', '3.46', '6')):
+            cells = t3.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.save(path)
+        pages = PE._pages(path)
+        o, c = PE._pt_read(pages[0], lambda i: PE._caption(pages[0], i))
+        self.assertEqual((len(o), len(c)), (0, 5)); self.assertEqual(c[2], (4.001, 12.0, (-1, 1, 1)))      # the caption says calculated: bare dhkl / Irel are calc
+        o, c = PE._pt_read(pages[1], lambda i: PE._caption(pages[1], i))
+        self.assertEqual((len(o), len(c)), (5, 5)); self.assertEqual(o[0], (6.23, 100.0)); self.assertEqual(c[2], (4.001, 12.0, (2, 1, 10)))   # a two-line header; '2.1.10'
+        o, c = PE._pt_read(pages[2], lambda i: PE._caption(pages[2], i))
+        self.assertEqual([d for d, _ in o], [6.23, 5.12, 4.0, 3.45]); self.assertEqual(c, [])            # this study's sample only; no calc without a calc column

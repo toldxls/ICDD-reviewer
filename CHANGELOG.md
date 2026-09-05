@@ -49,6 +49,41 @@ package version in `pyproject.toml`.
   no powder table read at all 379 → 238. Still unread: two-line headers (`h k l` on one line, the
   d/I labels on another), 2θ-only tables, and which sample of a multi-sample table is the holotype.
 
+- **A second reader types the columns by what they hold**, for the pages where no header line is
+  recognised (a two-line header with `h k l` on one line and the d and I labels on another, a
+  table with no header, a spelling the vocabulary does not know): a column of floats between
+  0.5 and 40 Å that falls down the rows is d, one bounded by 100 is an intensity, three
+  neighbouring columns of small integers are `h k l` (four with |h + k| = |i| are `h k i l`; three
+  digits set so close they cluster as one column; `001` and `2.1.10` as one word), floats that
+  rise are 2θ and are skipped; the header words above, when any, say which d and I are observed
+  and which calculated, else two d columns are told apart by their decimals and a lone one by
+  the caption. A block without indices needs a header word for its d (a bond-length or chemical
+  table also has a falling float column); a second sample's columns beside the first are left
+  out. Glued signed indices (`0-1`, `-1-3`) are split for both readers. It replaces the
+  token-order fallback, which made up index triples. Against the header reader alone, on the
+  694 distinct corpus pdfs: observed lines 14.1k → 15.2k, calculated 17.9k → 18.4k, suspect
+  entries 316 → 30, and — the check that matters — for the 4,900 calculated rows of papers whose
+  .cif is in the corpus, d recomputed from the cell and the parsed h k l agrees with the parsed
+  d within 0.5 % for 78 % of rows, as before (the rest are largely cells in another setting).
+  Three papers lose lines, one of them a table whose rows the pdf splits across baselines.
+
+### Added — the powder table against the cell
+- **Every calculated line of a paper's powder table is a statement about the cell**: d follows
+  from h k l and the cell parameters exactly. `check_paper` (the Manuscript mode's findings,
+  `pxrd paper --check`) now recomputes it for every indexed line — against the .cif's cell when
+  the folder has one and it reproduces the table, else against the cell the paper states (the
+  powder one first; `a` and `c` alone are tried as tetragonal and as hexagonal) — and names the
+  isolated lines that do not follow within 0.5 % (up to 15 %): a mis-indexed or mistyped line,
+  red in the Manuscript mode, its d the `? look` term. A table whose lines sit 0.5–1.5 % off
+  throughout was computed with a slightly different cell, and one that follows no cell the paper
+  gives is one grey note, not fifty red lines; a line off by more than 15 % is the reader's own
+  pairing, counted and left out; a .cif whose cell reproduces the table worse than the paper's own is reported as another
+  setting or determination (the table is then checked against the paper's cell). An observed
+  line with no calculated line within 0.5 % is noted, unverified (a typo, or a line the table
+  leaves unindexed). A sign the pdf extraction lost (an overbar) is tried before a line is
+  blamed. Works the same for a manuscript .docx. `pxrd_table` can return the pages its lines came
+  from; the token-order fallback that used to make up index triples is gone.
+
 ### Fixed — what the review of the above found (ten findings, each reproduced)
 - The toolbar **Fill ▸** button never worked: it passed its click event as the paper key, which
   reset the select, so it always answered "pick a paper first" (the Manuscript mode's → Tables

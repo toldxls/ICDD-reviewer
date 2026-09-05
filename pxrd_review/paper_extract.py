@@ -18,7 +18,7 @@ filled from the paper and its own calculations re-done its own way:
 Everything is best effort and every value carries the line or sentence it was read from, so the
 reviewer can see why. Nothing here decides — the EPMA / GD / PXRD tools take these as inputs.
 """
-import os, re, sys, json, argparse
+import os, re, sys, json, math, argparse
 from collections import OrderedDict
 
 from pxrd_review import epma as EP
@@ -770,19 +770,17 @@ _PHEAD = re.compile(r'^(I|d|2θ|2theta)_?\(?(obs|calc|meas|c|o)\)?\.?$|^(hkl|h|k
 # 'I/Imax (calc)'); footnote marks after a label ('dcalc*'); units as their own words ('(Å)', '[Å]',
 # '(%)'); the indices as one token ('hkl') or as the letters h k l (h k i l for a hexagonal table),
 # however far apart the columns are set
-_PH_QTY = re.compile(r'^(?:100[⋅·×*x]?)?(I(?:/I(?:0|o|max))?|d(?:hkl)?|2θ|2theta|2th|2q|2h)(?:[_/\-]?(obs|calc|cal|clac|meas|meass|exp|est|rel|c|o)[a-f]?)?$', re.I)   # '2q', '2h': 2θ in a font that lost its Greek; 'Icalca': a footnote letter; 'Iest': estimated by eye; 'Dclac', 'Imeass': as typeset
-_PH_SUFFIX = re.compile(r'^(obs|calc|cal|clac|meas|meass|exp|est)[a-f]?$', re.I)
+_PH_QTY = re.compile(r'^(?:100[⋅·×*x]?)?(I(?:/I(?:0|o|max))?|d(?:hkl)?|2θ|2theta|2th|2q|2h)(?:[_/\-]?(obs|calc|cal|clac|cacl|meas|meass|exp|est|rel|c|o)[a-f]?)?$', re.I)   # '2q', '2h': 2θ in a font that lost its Greek; 'Icalca': a footnote letter; 'Iest': estimated by eye; 'Dclac', 'Imeass': as typeset
+_PH_SUFFIX = re.compile(r'^(obs|calc|cal|clac|cacl|meas|meass|exp|est)[a-f]?$', re.I)
 _PROSE = {'and', 'the', 'for', 'with', 'are', 'was', 'were', 'from', 'that', 'this', 'not', 'only', 'which', 'has', 'have', 'been', 'also'}   # a running sentence, not a table
 _PH_WORDS = {'obs', 'calc', 'cal', 'meas', 'exp', 'rel', 'hkl', 'theta', 'int', 'intensity', 'irel', 'dhkl', 'imax', 'index', 'indices', 'bold', 'sample', 'synthetic', 'natural', 'ideal'}   # words a header line may carry beside its labels
-_PH_NATURE = {'obs': 'obs', 'meas': 'obs', 'meass': 'obs', 'exp': 'obs', 'est': 'obs', 'o': 'obs', 'calc': 'calc', 'cal': 'calc', 'clac': 'calc', 'c': 'calc'}
+_PH_NATURE = {'obs': 'obs', 'meas': 'obs', 'meass': 'obs', 'exp': 'obs', 'est': 'obs', 'o': 'obs', 'calc': 'calc', 'cal': 'calc', 'clac': 'calc', 'cacl': 'calc', 'c': 'calc'}
 
-def _powder_columns(ws, caption=''):
-    """The header line of a powder table -> [(x centre, label, (x first, x last))] with labels Iobs
-    dobs dcalc Icalc hkl (h k l as one column, its span from the 'h' word to the 'l' word; a 2θ column
-    is skipped); [] when the line is no such header. A quantity with
-    no nature ('d', 'I', 'Irel', 'dhkl') is calculated when the caption says the table is, observed
-    otherwise."""
-    bare = 'calc' if re.search(r'\bcalc', caption, re.I) and not re.search(r'\b(obs|meas|exp)', caption, re.I) else 'obs'
+def _header_labels(ws):
+    """The labelled columns of one line -> ([(x centre, ('d' | 'I', 'obs' | 'calc' | None) | 'hkl',
+    (x first, x last))], the other words of three or more letters among them). h k l (or h k i l) as
+    separate words are one column, its span from the 'h' word to the 'l' word; a 2θ column is
+    skipped; a quantity's nature is None when the header does not say ('d', 'I', 'Irel', 'dhkl')."""
     cols = []; run = []; used = set()                               # run: the index letters seen so far; used: the words read as labels
     def flush():
         letters = ''.join(l for _, _, l in run)
@@ -819,17 +817,23 @@ def _powder_columns(ws, caption=''):
             used.add(wi); cols[-1][1] = (cols[-1][1][0], _PH_NATURE[m.group(1).lower()])   # 'dhkl calc', 'I/Imax (calc)': the nature as the next word
             cols[-1][2] = (cols[-1][2][0], w[2]); cols[-1][0] = (cols[-1][2][0] + w[2]) / 2   # … and the column is the pair of words, its values under their middle
     flush()
-    out = []
-    for xc, lab, span in cols:
-        if isinstance(lab, tuple):
-            lab = lab[0] + (lab[1] or bare)
-        out.append((xc, lab, span))
+    if not cols:
+        return [], []
+    lo = min(c[2][0] for c in cols) - 15; hi = max(c[2][1] for c in cols) + 15
+    foreign = [w[4].rstrip('.,;:').lower() for wi, w in enumerate(ws)   # a sentence that mentions dobs, Iobs and hkl is no header: real ones hold labels, units and marks
+               if wi not in used and lo <= (w[0] + w[2]) / 2 <= hi and re.fullmatch(r'[A-Za-z]{3,}[.,;:]?', w[4]) and w[4].rstrip('.,;:').lower() not in _PH_WORDS]
+    return [(xc, lab, span) for xc, lab, span in cols], foreign
+
+def _powder_columns(ws, caption=''):
+    """The header line of a powder table -> [(x centre, label, (x first, x last))] with labels Iobs
+    dobs dcalc Icalc hkl; [] when the line is no such header (no d, no hkl, or a sentence). A
+    quantity with no nature is calculated when the caption says the table is, observed otherwise."""
+    bare = 'calc' if re.search(r'\bcalc', caption, re.I) and not re.search(r'\b(obs|meas|exp)', caption, re.I) else 'obs'
+    cols, foreign = _header_labels(ws)
+    out = [(xc, lab if lab == 'hkl' else lab[0] + (lab[1] or bare), span) for xc, lab, span in cols]
     labs = [c[1] for c in out]
     if not (('dobs' in labs or 'dcalc' in labs) and 'hkl' in labs):
         return []
-    lo = min(c[2][0] for c in out) - 15; hi = max(c[2][1] for c in out) + 15
-    foreign = [w[4].rstrip('.,;:').lower() for wi, w in enumerate(ws)   # a sentence that mentions dobs, Iobs and hkl is no header: real ones hold labels, units and marks
-               if wi not in used and lo <= (w[0] + w[2]) / 2 <= hi and re.fullmatch(r'[A-Za-z]{3,}[.,;:]?', w[4]) and w[4].rstrip('.,;:').lower() not in _PH_WORDS]
     if len(foreign) >= 2 or any(f in _PROSE for f in foreign):
         return []
     return out
@@ -904,7 +908,7 @@ def _num1(v):
         return None
 
 def _powder_emit(block, obs, calc):
-    raw = block.get('hkl', [])
+    raw = [p for t in block.get('hkl', []) for p in _split_glued(t)]
     hk = [t for t in raw if _HKL.match(t)]
     hkl = tuple(int(t) for t in ((hk[0], hk[1], hk[3]) if len(hk) == 4 else hk[-3:])) if len(hk) >= 3 else None   # h k i l: i is redundant
     if hkl is None and len(raw) == 1 and re.fullmatch(r'-?\d{3}', raw[0]):
@@ -923,73 +927,507 @@ def _powder_emit(block, obs, calc):
     if d_c is not None and hkl is not None:
         calc.append((d_c, i_c, hkl))
 
-def pxrd_table(pdf):
-    """Observed (d, I) and calculated (d, I, hkl) powder lines from the paper's table. The header
-    line (Iobs dobs dcalc Icalc h k l, in any order, one or more blocks side by side) fixes the
-    columns by position; without one, the tokens' order decides: floats are d, the ints before
-    the hkl triple are intensities."""
-    pages = _pages(pdf)
+# ----------------------------------------------------------------------------- the powder table by its contents
+# The header's spelling is the fragile part of reading a powder table — every journal writes the
+# labels its own way, some put 'h k l' on one line and the d and I labels on another, some have no
+# header at all. The columns can be typed from what stands in them: a column of floats between
+# 0.5 and 40 that falls down the rows is d; a column bounded by 100 is an intensity; three
+# neighbouring columns of small integers are h k l (four with h + k + i = 0 are h k i l); floats that
+# rise down the rows are 2θ. The header words, when found, only say which d and I are observed and
+# which calculated; the caption and the number of decimals stand in when they are missing.
+
+_PT_TOKEN = re.compile(r'^([-−–¯]?)(\d+)(?:\.(\d+))?(?:\((\d+)\))?[a-z*†‡§]?[,;]?$')
+_PT_DOTTED = re.compile(r'^[-−]?\d{1,2}(?:\.[-−]?\d{1,2}){2}$')
+_PT_IWORDS = ('vvs', 'vs', 's', 'ms', 'm', 'mw', 'w', 'vw', 'vvw', 'b', 'br', 'sh', 'd', 'tr')
+_PT_GLUED = re.compile(r'^[-−]?\d{1,2}(?:[-−]\d{1,2})+$')
+
+def _split_glued(t):
+    """'0-1' -> ['0', '-1'], '-1-3' -> ['-1', '-3'], '2-41' -> ['2', '-4', '1']: a negative index the
+    extraction glued to the one before it. Two-digit parts are split when fewer than three come out."""
+    t = t.replace('−', '-')
+    if not _PT_GLUED.match(t):
+        return [t]
+    parts = re.findall(r'-?\d+', t)
+    if len(parts) < 3 and any(len(p.lstrip('-')) > 1 for p in parts):
+        out = []
+        for p in parts:
+            sign, digits = ('-', p[1:]) if p.startswith('-') else ('', p)
+            out += [sign + digits[0]] + list(digits[1:])
+        parts = out
+    return parts
+
+def _split_words(ws):
+    """The words of a line with glued indices split, each part given its share of the word's box."""
+    out = []
+    for w in ws:
+        parts = _split_glued(w[4]) if _PT_GLUED.match(w[4].replace('−', '-')) else [w[4]]
+        if len(parts) == 1:
+            out.append(w); continue
+        step = (w[2] - w[0]) / len(parts)
+        for k, p in enumerate(parts):
+            out.append((w[0] + k * step, w[1], w[0] + (k + 1) * step, w[3], p))
+    return out
+
+def _pt_token(t):
+    """A table token -> ('num', value, decimals, signed, has_esd) | ('dot', 'h.k.l') | ('word', t) | None."""
+    t = t.replace('̄', '-').replace('¯', '-')
+    if _PT_DOTTED.match(t.replace('−', '-')):
+        return ('dot', t.replace('−', '-'))
+    m = _PT_TOKEN.match(t)
+    if m:
+        v = float(m.group(2) + ('.' + m.group(3) if m.group(3) else ''))
+        return ('num', -v if m.group(1) else v, len(m.group(3) or ''), bool(m.group(1)), bool(m.group(4)))
+    if t.lower() in _PT_IWORDS or re.fullmatch(r'n\.?d\.?|[–—-]', t):
+        return ('word', t)
+    return None
+
+def _pt_regions(lines):
+    """Runs of lines that read like table rows (≥3 numeric tokens; gaps of up to two other lines),
+    at least four rows long -> [(first, last)]. A header line inside a run splits it."""
+    tab = []
+    for ln in lines:
+        kinds = [_pt_token(w[4]) for w in ln['w']]
+        n = sum(1 for k in kinds if k and k[0] in ('num', 'dot'))
+        hdr = len(_header_labels(ln['w'])[0]) >= 2 and n < 3
+        tab.append('h' if hdr else 't' if n >= 3 else '-')
+    out = []; i = 0
+    while i < len(tab):
+        if tab[i] != 't':
+            i += 1; continue
+        j = i; last = i
+        while j < len(tab) and tab[j] != 'h' and (tab[j] == 't' or j - last <= 2):
+            if tab[j] == 't':
+                last = j
+            j += 1
+        if sum(1 for k in range(i, last + 1) if tab[k] == 't') >= 4:
+            out.append((i, last))
+        i = last + 1
+    return out
+
+def _pt_columns(lines, first, last):
+    """The x-clusters of the numeric tokens of a region: [{'x', 'lo', 'hi', 'cells': {line: [tokens]}}],
+    left to right, those present on at least 40 % of the region's rows."""
+    pts = []
+    rows = 0
+    for li in range(first, last + 1):
+        ws = _split_words(lines[li]['w'])
+        if sum(1 for w in ws if (_pt_token(w[4]) or (None,))[0] in ('num', 'dot')) < 2:
+            continue
+        rows += 1
+        for w in ws:
+            k = _pt_token(w[4])
+            if k and k[0] != 'word' or (k and k[0] == 'word' and k[1].lower() in _PT_IWORDS):
+                pts.append(((w[0] + w[2]) / 2, w[0], w[2], li, w[4]))
+    pts.sort()
+    cols = []
+    for x, x0, x1, li, t in pts:
+        if cols and x - cols[-1]['xs'][-1] <= 9.0:
+            c = cols[-1]
+        else:
+            c = {'xs': [], 'lo': x0, 'hi': x1, 'cells': {}}; cols.append(c)
+        c['xs'].append(x); c['lo'] = min(c['lo'], x0); c['hi'] = max(c['hi'], x1)
+        c['cells'].setdefault(li, []).append(t)
+    out = []
+    for c in cols:
+        if rows and len(c['cells']) >= max(3, 0.15 * rows):           # observed lines are sparser than calculated ones; a stray number in the prose is rarer still
+            c['x'] = sum(c['xs']) / len(c['xs']); del c['xs']; out.append(c)
+    return out, rows
+
+def _pt_type(col):
+    """What a column holds: 'd' | 'theta' | 'I' | 'idx' | 'idx3' | 'dot' | 'hkl3' (three small ints per
+    cell) | 'rownum' | 'other'."""
+    cells = list(col['cells'].values())
+    n = len(cells)
+    per = [len(c) for c in cells]
+    toks = [_pt_token(t) for c in cells for t in c]
+    nums = [k for k in toks if k and k[0] == 'num']
+    if n and sum(1 for p in per if 2 <= p <= 4) >= 0.8 * n and sum(1 for p in per if p == 3) >= 0.6 * n \
+            and sum(1 for k in toks if k and k[0] == 'num' and k[2] == 0 and abs(k[1]) <= 30) >= 0.9 * len(toks):
+        return 'hkl3'                                                  # the three indices set so close they cluster as one column (a row or two glued or split)
+    raw = [t.replace('−', '-') for c in cells for t in c]
+    three = [t for t in raw if re.fullmatch(r'-?\d{3}', t)]
+    dotted = sum(1 for t in raw if _PT_DOTTED.match(t))
+    if n and len(three) + dotted >= 0.8 * len(raw) and len(raw) == n and (dotted or any(t.lstrip('-').startswith('0') for t in three) or sum(1 for t in three if abs(int(t)) > 100) >= 0.5 * len(three)):
+        return 'idx3'                                                  # '001', '110', '2.1.10': indices as one word — an intensity column is not all three-digit, nor above 100
+    if not nums or len(nums) < 0.7 * len(toks):
+        return 'other'
+    vals = [k[1] for k in nums]
+    ints = sum(1 for k in nums if k[2] == 0); dec2 = sum(1 for k in nums if k[2] >= 2)
+    signed = any(k[3] for k in nums)
+    seq = [vals[i] for i in range(len(vals))]
+    dec = sum(1 for a, b in zip(seq, seq[1:]) if a > b); inc = sum(1 for a, b in zip(seq, seq[1:]) if a < b)
+    pairs = max(1, len(seq) - 1)
+    if ints == len(nums) and len(seq) >= 4 and all(b - a == 1 for a, b in zip(seq, seq[1:])) and seq[0] in (1, 0):
+        return 'rownum'
+    if dec2 >= 0.8 * len(nums) and sum(1 for v in vals if 0.5 <= v <= 40) >= 0.9 * len(vals) and (dec >= 0.5 * pairs or len(seq) <= 3):
+        return 'd'
+    if dec2 >= 0.5 * len(nums) and sum(1 for v in vals if 2 <= v <= 170) >= 0.9 * len(vals) and inc >= 0.6 * pairs and not signed:
+        return 'theta'
+    if ints == len(nums) and sum(1 for v in vals if abs(v) <= 30) >= 0.95 * len(vals):
+        return 'idx'
+    if sum(1 for k in nums if k[2] <= 2) >= 0.9 * len(nums) and sum(1 for v in vals if 0 <= v <= 100) >= 0.9 * len(vals) and not signed and dec < 0.8 * pairs:
+        return 'I'
+    if sum(1 for k in nums if k[2] <= 1) >= 0.9 * len(nums) and sum(1 for v in vals if 0 <= v <= 1000) >= 0.95 * len(vals) and not signed and dec < 0.8 * pairs:
+        return 'I'
+    return 'other'
+
+def _pt_labels(lines, first):
+    """The header words above a region: the labelled columns of the up to three lines above it
+    (a caption or another table's rows stop the search) -> [(x, label, span)], any line."""
+    out = []
+    for k in range(first - 1, max(-1, first - 4), -1):
+        ws = lines[k]['w']
+        if not ws:
+            continue
+        toks = [w[4] for w in ws]
+        if re.match(r'^(Table|TABLE|Tab\.|Таблица)$', toks[0]) or sum(1 for w in ws if (_pt_token(w[4]) or (None,))[0] in ('num', 'dot')) >= 3:
+            break
+        labs, _ = _header_labels(ws)
+        out += labs
+    return out
+
+def _pt_blocks(cols, labels, bare):
+    """Typed columns -> blocks, each {'d': [(col, nature)], 'I': [(col, nature)], 'hkl': [cols] | None}."""
+    typed = []
+    for c in cols:
+        c['type'] = _pt_type(c)
+    # h k l groups: runs of neighbouring idx columns, three (or four with h + k + i = 0) at a time
+    i = 0; groups = []
+    while i < len(cols):
+        if cols[i]['type'] == 'idx':
+            j = i
+            while j + 1 < len(cols) and cols[j + 1]['type'] == 'idx' and cols[j + 1]['x'] - cols[j]['x'] <= 75:
+                j += 1
+            run = []
+            for c in cols[i:j + 1]:
+                if any(lab != 'hkl' and lab[0] == 'I' and abs(lx - c['x']) <= 25 for lx, lab, _ in labels):
+                    c['type'] = 'I'                                    # a small-valued intensity column beside the indices is not one of them when its header says so
+                else:
+                    run.append(c)
+            while len(run) >= 3:
+                take = run[:4] if len(run) >= 4 else run[:3]
+                if len(take) == 4:
+                    rows = [li for li in take[0]['cells'] if all(li in c['cells'] for c in take)]
+                    def iv(c, li):
+                        k = _pt_token(c['cells'][li][0]); return k[1] if k and k[0] == 'num' else None
+                    hkil = sum(1 for li in rows if all(iv(c, li) is not None for c in take[:3]) and abs(iv(take[0], li) + iv(take[1], li)) == abs(iv(take[2], li)))   # i = −(h + k); the overbar is lost in extraction, so by magnitude
+                    if not (rows and hkil >= 0.7 * len(rows)):
+                        k0 = min(range(len(run) - 2), key=lambda k: run[k + 2]['x'] - run[k]['x'])   # not h k i l: the three set closest together are the indices
+                        take = run[k0:k0 + 3]
+                        for c in run[:k0]:
+                            c['type'] = 'I'
+                        run = run[k0:]
+                for c in take:
+                    c['type'] = 'hkl'
+                groups.append(take); run = run[len(take):]
+            for c in run:                                              # a leftover small-int column beside the indices: an intensity when it looks like one
+                c['type'] = 'I' if not any(_pt_token(t)[3] for cc in [c] for t in [x for v in cc['cells'].values() for x in v] if _pt_token(t) and _pt_token(t)[0] == 'num') else 'other'
+            i = j + 1
+        else:
+            i += 1
+    for c in cols:
+        if c['type'] in ('idx3', 'dot', 'hkl3'):
+            groups.append([c]); c['type'] = 'hkl'
+    # labels: the nearest compatible header word within 25 pt of the column (a group: of its middle)
+    def label_for(x, kinds):
+        best = None
+        for lx, lab, span in labels:
+            kind = lab if lab == 'hkl' else lab[0]
+            if kind in kinds:
+                dist = 0 if span[0] - 4 <= x <= span[1] + 4 else abs(lx - x)
+                if dist <= 25 and (best is None or dist < best[0]):
+                    best = (dist, lab)
+        return best[1] if best else None
+    blocks = []; cur = None
+    def new():
+        return {'d': [], 'I': [], 'hkl': None, 'labelled': False, 'closed': False}
+    for c in cols:
+        t = c['type']
+        if t not in ('d', 'I', 'hkl'):
+            continue
+        if t == 'hkl':
+            grp = next(g for g in groups if c in g)
+            if grp[0] is not c:
+                continue                                               # the group's other members
+            if cur is None or cur['hkl'] is not None:
+                cur = new(); blocks.append(cur)
+            cur['hkl'] = grp
+            if cur['d'] or cur['I']:
+                cur['closed'] = True                                   # the indices end a block ('Iobs dobs dcalc hkl | Iobs …'); leading ones open it
+            continue
+        if cur is None or cur['closed'] or len(cur[t]) >= 2:
+            cur = new(); blocks.append(cur)
+        lab = label_for(c['x'], t)
+        cur[t].append((c, lab[1] if lab else None))
+        if t == 'd' and lab:
+            cur['labelled'] = True
+    # natures: the label, else two d columns by their decimals (the calculated one has more), else the caption
+    for b in blocks:
+        ds = b['d']
+        if len(ds) == 2 and any(n is None for _, n in ds):
+            (c1, n1), (c2, n2) = ds
+            if n1 is None and n2 is None:
+                dc = lambda c: sorted(k[2] for k in (_pt_token(t) for v in c['cells'].values() for t in v) if k and k[0] == 'num')
+                m1 = dc(c1); m2 = dc(c2); m1 = m1[len(m1) // 2] if m1 else 0; m2 = m2[len(m2) // 2] if m2 else 0
+                n1, n2 = ('obs', 'calc') if m1 <= m2 else ('calc', 'obs')
+            elif n1 is None:
+                n1 = 'calc' if n2 == 'obs' else 'obs'
+            else:
+                n2 = 'calc' if n1 == 'obs' else 'obs'
+            b['d'] = [(c1, n1), (c2, n2)]
+        elif len(ds) == 1 and ds[0][1] is None:
+            b['d'] = [(ds[0][0], bare)]
+        for k, (c, n) in enumerate(b['I']):
+            if n is None:
+                n = b['d'][k][1] if k < len(b['d']) else (b['d'][0][1] if b['d'] else bare)
+                b['I'][k] = (c, n)
+    return [b for b in blocks if b['d'] and (b['hkl'] or (b['I'] and b['labelled']))]
+
+def _pt_num(c, li):
+    k = _pt_token(c['cells'][li][0]) if li in c['cells'] else None
+    return k[1] if k and k[0] == 'num' else None
+
+def _pt_hkl(grp, li):
+    if len(grp) == 1:
+        raw = grp[0]['cells'].get(li, [])
+        if len(raw) == 1:
+            t = raw[0].replace('−', '-').replace('̄', '-').replace('¯', '-')
+            if re.fullmatch(r'-?\d{3}', t):
+                return tuple(int(ch) for ch in t.lstrip('-')) if not t.startswith('-') else (-int(t[1]), int(t[2]), int(t[3]))
+            if _PT_DOTTED.match(t):
+                return tuple(int(x) for x in t.split('.'))
+        ks = [_pt_token(t) for t in raw]
+        if len(ks) in (3, 4) and all(k and k[0] == 'num' and k[2] == 0 for k in ks):
+            v = [int(k[1]) for k in ks]
+            return (v[0], v[1], v[3]) if len(v) == 4 else tuple(v)
+        return None
+    vs = []
+    for c in grp:
+        k = _pt_token(c['cells'][li][0]) if li in c['cells'] and len(c['cells'][li]) == 1 else None
+        if not (k and k[0] == 'num' and k[2] == 0):
+            return None
+        vs.append(int(k[1]))
+    return (vs[0], vs[1], vs[3]) if len(vs) == 4 else tuple(vs)
+
+def _pt_read(lines, caption_of):
+    """Observed (d, I) and calculated (d, I, hkl) lines from one page's table regions; caption_of(i)
+    is the caption over line i (a 'Table N. Cont.' resolved to Table N's)."""
     obs, calc = [], []
+    for first, last in _pt_regions(lines):
+        cols, rows = _pt_columns(lines, first, last)
+        if not cols:
+            continue
+        cap = caption_of(first)
+        bare_here = 'calc' if re.search(r'\bcalc', cap, re.I) and not re.search(r'\b(obs|meas|exp)', cap, re.I) else 'obs'
+        blocks = _pt_blocks(cols, _pt_labels(lines, first), bare_here)
+        obs_done = False                                               # a second sample's columns (no indices of their own, after a block that had them) are not the holotype's: its observed lines stay out
+        for b in blocks:
+            if b['hkl'] is None and obs_done:
+                continue
+            # a bond-length or a chemical table has a word on every row: those are not powder rows
+            xs = [c['x'] for c, _ in b['d'] + b['I']] + [c['x'] for c in (b['hkl'] or [])]
+            lo, hi = min(xs) - 20, max(xs) + 20
+            words = rows_in = 0
+            for li in range(first, last + 1):
+                ws = [w for w in lines[li]['w'] if lo <= (w[0] + w[2]) / 2 <= hi]
+                if ws:
+                    rows_in += 1
+                    words += 1 if any(re.fullmatch(r'[A-Za-z][A-Za-z–\-]{2,}.*', w[4]) and w[4].lower() not in _PT_IWORDS for w in ws) else 0
+            if rows_in and words > 0.2 * rows_in:
+                continue
+            d_obs = next((c for c, n in b['d'] if n == 'obs'), None); d_calc = next((c for c, n in b['d'] if n == 'calc'), None)
+            i_obs = next((c for c, n in b['I'] if n == 'obs'), None); i_calc = next((c for c, n in b['I'] if n == 'calc'), None)
+            for li in range(first, last + 1):
+                if d_obs is not None and li in d_obs['cells']:
+                    v = _pt_num(d_obs, li)
+                    if v is not None:
+                        obs.append((v, _pt_num(i_obs, li) if i_obs is not None else None)); obs_done = True
+                if d_calc is not None and b['hkl'] and li in d_calc['cells']:
+                    v = _pt_num(d_calc, li); h = _pt_hkl(b['hkl'], li)
+                    if v is not None and h is not None:
+                        calc.append((v, _pt_num(i_calc, li) if i_calc is not None else None, h))
+    return obs, calc
+
+def pxrd_table(pdf, with_pages=False):
+    """Observed (d, I) and calculated (d, I, hkl) powder lines from the paper's table — by a header
+    line the reader knows (Iobs dobs dcalc Icalc h k l, in any order, one or more blocks side by
+    side) where the page has one, else by what the columns hold. With with_pages, also the 1-based
+    numbers of the pages the lines came from."""
+    pages = _pages(pdf)
+    obs, calc, hit = [], [], []
     caps = {}                                                          # 'Table 4. Cont.' on a later page: the caption is the first page's
     for lines in pages:
         for ln in lines:
             toks = [w[4] for w in ln['w']]
             if len(toks) > 2 and re.match(r'^(Table|TABLE|Tab\.|Таблица)$', toks[0]) and re.match(r'^\d+\.?$', toks[1]) and not re.match(r'^\(?[Cc]ont', toks[2]):
                 caps.setdefault(toks[1].rstrip('.'), ' '.join(toks))
-    for lines in pages:
-        i = 0
-        while i < len(lines):
-            cap = _caption(lines, i)
-            m = re.match(r'^(?:Table|TABLE|Tab\.|Таблица)\s*(\d+)\.?\s*\(?[Cc]ont', cap)
-            cols = _powder_columns(lines[i]['w'], caps.get(m.group(1), cap) if m else cap)
+    def full_caption(lines, i):
+        cap = _caption(lines, i)
+        m = re.match(r'^(?:Table|TABLE|Tab\.|Таблица)\s*(\d+)\.?\s*\(?[Cc]ont', cap)
+        return caps.get(m.group(1), cap) if m else cap
+    for pno, lines in enumerate(pages):
+        i = 0; got = False
+        while i < len(lines):                                          # by a header line, where the page has one the reader knows
+            cols = _powder_columns(lines[i]['w'], full_caption(lines, i))
             if cols:
                 o, c = _powder_rows_by_columns(lines, i + 1, cols)
                 if o or c:
-                    obs += o; calc += c
+                    obs += o; calc += c; got = True
                     i += 1 + max(len(o), len(c)); continue
             i += 1
-    if not obs and not calc:
-        for lines in pages:
-            for ln in lines:
-                toks = [w[4].replace('−', '-') for w in ln['w']]
-                floats = [k for k, t in enumerate(toks) if re.fullmatch(r'\d+\.\d{2,4}', t)]
-                if not floats or not all(re.fullmatch(r'-?\d+(\.\d+)?', t) for t in toks):
-                    continue
-                lead = floats[0]                                   # ints before the first d: intensities
-                k = 0
-                while k < len(toks):
-                    j = k; fl = []; ints = []
-                    seen_hkl = False
-                    while j < len(toks):
-                        t = toks[j]
-                        if '.' in t:
-                            if ints and fl and len(ints) >= 3 + lead and False:
-                                break
-                            fl.append(float(t)); ints_after = 0
-                        else:
-                            ints.append(int(float(t)))
-                        j += 1
-                        # a chunk ends after the hkl triple plus the next chunk's leading ints
-                        after = [t2 for t2 in toks[j:j + lead + 1]]
-                        if fl and len(ints) >= (1 if len(fl) == 2 else 0) + 3 + (lead if len(fl) == 1 and k == 0 else 0) and (j >= len(toks) or (after and '.' in after[-1] if lead else '.' in toks[j])):
-                            break
-                    if not fl:
-                        break
-                    body = ints[:len(ints) - (lead if j < len(toks) else 0)] if lead and j < len(toks) else ints
-                    if len(body) < 3:
-                        break
-                    hkl = tuple(body[-3:]); ivals = body[:-3]
-                    if len(fl) >= 2:
-                        obs.append((fl[0], float(ivals[0]) if ivals else None)); calc.append((fl[1], float(ivals[1]) if len(ivals) > 1 else (float(ivals[0]) if ivals else None), hkl))
-                    else:
-                        calc.append((fl[0], float(ivals[-1]) if ivals else None, hkl))
-                    k = j - (lead if j < len(toks) else 0)
+        if not got:                                                    # else by what the columns hold (a two-line header, an unlabelled table)
+            o, c = _pt_read(lines, lambda i, lines=lines: full_caption(lines, i))
+            obs += o; calc += c; got = bool(o or c)
+        if got:
+            hit.append(pno + 1)
     seen = set(); obs2 = []
     for d, I in obs:
         if (round(d, 3), I) in seen:
             continue
         seen.add((round(d, 3), I)); obs2.append((d, I))
-    return obs2, calc
+    return (obs2, calc, hit) if with_pages else (obs2, calc)
+
+# ----------------------------------------------------------------------------- the powder table vs the cell
+# Every calculated line of a powder table is a statement about the cell: d follows from h k l and
+# the cell parameters exactly. Recomputing it is the one rigorous check of the table — a line that
+# does not follow is mis-indexed or mistyped, a table that does not follow at all was computed
+# from another cell (or another setting) than the one given.
+_CELL_TOL = 0.005
+
+def _cell_floats(cell):
+    """{'a','b','c','α','β','γ'} as the .cif / the text state them (esds allowed) -> floats, the
+    angles defaulting to 90; None when an axis is missing."""
+    try:
+        v = {k: float(re.sub(r'\(.*', '', str(cell[k]).replace(' ', ''))) for k in ('a', 'b', 'c')}
+        for k in ('α', 'β', 'γ'):
+            v[k] = float(re.sub(r'\(.*', '', str(cell[k]).replace(' ', ''))) if cell.get(k) else 90.0
+        return v if all(v[k] > 0 for k in v) else None
+    except (KeyError, ValueError, TypeError):
+        return None
+
+def _paper_cells(text):
+    """The cells the text states, the powder one first -> [(context, cell floats)]."""
+    from pxrd_review import cell_lambda_check as CL
+    out = []; seen = set()
+    for cc in CL.find_cells(text):
+        variants = [{'a': cc.a, 'b': cc.b, 'c': cc.c, 'α': cc.al, 'β': cc.be, 'γ': cc.ga}]
+        if cc.b is None and cc.c is not None and cc.ga is None:       # 'a = 4.59, c = 2.96': tetragonal (γ 90) or hexagonal / trigonal (γ 120) — the table decides
+            variants = [{'a': cc.a, 'b': cc.a, 'c': cc.c, 'α': cc.al, 'β': cc.be, 'γ': '90'},
+                        {'a': cc.a, 'b': cc.a, 'c': cc.c, 'α': cc.al, 'β': cc.be, 'γ': '120'}]
+        for v in variants:
+            cell = _cell_floats(v)
+            if not cell:
+                continue
+            key = tuple(round(cell[k], 3) for k in ('a', 'b', 'c', 'α', 'β', 'γ'))
+            if key in seen:
+                continue
+            seen.add(key); out.append((cc.context or 'stated', cell))
+    return sorted(out, key=lambda x: 0 if x[0] == 'powder' else 1)
+
+def _cell_str(cell):
+    ang = ', '.join('%s=%g' % (k, cell[k]) for k in ('α', 'β', 'γ') if abs(cell[k] - 90) > 1e-6)
+    return 'a=%g, b=%g, c=%g%s' % (cell['a'], cell['b'], cell['c'], (', ' + ang) if ang else '')
+
+def _d_variants(cell, hkl):
+    """d for (hkl) and for the sign changes that give a different d — an overbar lost in the
+    extraction turns −1 into 1, which is the extraction's fault, not the paper's."""
+    from pxrd_review.extra_checks import _dstar2
+    h, k, l = hkl; out = []
+    for sh in ((1, 1, 1), (-1, 1, 1), (1, -1, 1), (1, 1, -1)):
+        s2 = _dstar2(cell['a'], cell['b'], cell['c'], cell['α'], cell['β'], cell['γ'], h * sh[0], k * sh[1], l * sh[2])
+        if s2 > 0:
+            out.append((1 / math.sqrt(s2), sh != (1, 1, 1)))
+    return out
+
+def _cell_score(cell, calc):
+    rows = []
+    for d, I, hkl in calc:
+        if hkl == (0, 0, 0) or not d or d <= 0:
+            continue
+        ds = _d_variants(cell, hkl)
+        if not ds:
+            continue
+        dc, flipped = min(ds, key=lambda x: abs(x[0] - d))
+        rows.append((d, I, hkl, dc, (dc - d) / d, flipped))
+    return len(rows), sum(1 for r in rows if abs(r[4]) <= _CELL_LOOSE), rows
+
+_CELL_LOOSE = 0.015                                                    # a table computed with a cell slightly different from the stated one sits within this
+_CELL_WILD = 0.15                                                      # beyond this the reader paired a d with the wrong indices — its fault, not the paper's
+
+_CELL_SRC = {'.cif': 'the .cif cell', 'powder': "the paper's powder cell", 'single': "the paper's single-crystal cell"}
+
+def cell_check(path, cif=None, text=None):
+    """The paper's powder table against a unit cell: every calculated line's d recomputed from its
+    h k l and the cell — the .cif's when given and it reproduces the table, else the cell the paper
+    states (the powder one first) — and every observed line looked for among the calculated ones.
+    A paper is blamed only for isolated lines off by more than five times the table's own median
+    deviation (never under 0.5 %, up to 15 %: a mistyped or mis-indexed line); a
+    table whose lines sit 0.5–1.5 % off throughout was computed with a slightly different cell, and
+    one that follows no cell the paper gives is reported as such, both unverified; a line off by
+    more than 15 % is the reader's pairing, counted and left out.
+    -> {'status': 'checked' | 'none' (no table) | 'unindexed' (no h k l) | 'nocell', 'head', 'lines',
+    'source', 'cell', 'n', 'agree' (within 0.5 %), 'loose' (within 1.5 %), 'bad': [(d, I, hkl,
+    d_cell, dev, sign_flipped)] (the lines blamed), 'wild': n, 'unmatched_obs', 'pages', 'tried'}."""
+    obs, calc, pages = pxrd_table(path, with_pages=True)
+    where = ' (p%d)' % pages[0] if pages and not path.lower().endswith('.docx') else ''   # a manuscript's "pages" are its tables
+    if not obs and not calc:
+        return {'status': 'none', 'lines': [], 'pages': pages}
+    if not calc:
+        return {'status': 'unindexed', 'pages': pages, 'lines': [],
+                'head': 'powder table%s: %d observed lines, none indexed — nothing to check against a cell' % (where, len(obs))}
+    cells = []
+    if cif:
+        from pxrd_review import extra_checks as X
+        cc = _cell_floats((X.parse_cif(cif) or {}).get('cell') or {})
+        if cc:
+            cells.append(('.cif', cc))
+    cells += _paper_cells(text_of(path) if text is None else text)[:6]
+    if not cells:
+        return {'status': 'nocell', 'pages': pages, 'n': len(calc), 'lines': [],
+                'head': 'powder table%s: %d indexed lines but no cell to check them against (no .cif, none stated in the text)' % (where, len(calc))}
+    scored = [(lab, cell) + _cell_score(cell, calc) for lab, cell in cells]
+    scored = [x for x in scored if x[2]]
+    if not scored:
+        return {'status': 'nocell', 'pages': pages, 'n': len(calc), 'lines': [],
+                'head': 'powder table%s: %d indexed lines but no cell to check them against' % (where, len(calc))}
+    good = [x for x in scored if x[3] >= 0.8 * x[2]]
+    ref = next((x for x in good if x[0] == '.cif'), None) or (good[0] if good else max(scored, key=lambda x: x[3] / x[2]))
+    lab, cell, n, loose, rows = ref
+    src = _CELL_SRC.get(lab, 'the cell the paper states')
+    tight = [r for r in rows if abs(r[4]) <= _CELL_TOL]
+    wild = [r for r in rows if abs(r[4]) > _CELL_WILD]
+    devs = sorted(abs(r[4]) for r in rows if abs(r[4]) <= _CELL_LOOSE)
+    tol = max(_CELL_TOL, 5 * devs[len(devs) // 2]) if devs else _CELL_TOL   # an outlier is judged against the table's own scatter: five times its median deviation, never under 0.5 %
+    systematic = n - len(tight) > max(5, 0.1 * n)                     # most lines beyond 0.5 %: the cell, not the lines
+    off = [r for r in rows if (max(tol, 0.03) if systematic else tol) < abs(r[4]) <= _CELL_WILD]
+    lines = []
+    cif_row = next((x for x in scored if x[0] == '.cif'), None)
+    if cif_row and lab != '.cif':
+        lines.append("the .cif's cell (%s) reproduces only %d of %d lines — another setting or determination than the powder cell; the table was checked against the paper's" % (_cell_str(cif_row[1]), cif_row[3], cif_row[2]))
+    bad = []
+    if loose < 0.8 * n:
+        head = 'powder table%s: %d indexed lines vs %s (%s) — only %d follow it within 1.5 %%' % (where, n, src, _cell_str(cell), loose)
+        lines.append('the table follows no cell the paper gives (best of %d tried) — the cell, the indexing, or the reading of the table is off [unverified]' % len(scored))
+    else:
+        head = 'powder table%s: %d indexed lines vs %s (%s) — %d agree within 0.5 %%, %d within 1.5 %%' % (where, n, src, _cell_str(cell), len(tight), loose)
+        if systematic:
+            shifted = [r for r in rows if _CELL_TOL < abs(r[4]) <= _CELL_LOOSE]
+            lines.append('%d of %d lines sit 0.5–%.1f %% off — computed with a cell slightly different from the one given, or the cell is quoted to too few figures [unverified]'
+                         % (len(shifted), n, max(abs(r[4]) for r in shifted) * 100 if shifted else _CELL_LOOSE * 100))
+        bad = sorted(off, key=lambda r: -abs(r[4]))
+        for d, I, hkl, dc, dev, flipped in bad:
+            lines.append('%g (%d %d %d) does not follow the cell: it gives %.4f (%+.1f %%)%s' % (d, hkl[0], hkl[1], hkl[2], dc, dev * 100, ' — a weak line' if I is not None and I <= 5 else ''))
+    if wild:
+        lines.append('%d line%s the reader could not pair with the cell (off by more than 15 %%: a row it read across two blocks) — left out' % (len(wild), 's' if len(wild) > 1 else ''))
+    unmatched = []
+    if obs and loose >= 0.8 * n:
+        cds = [dc for _, _, _, dc, _, _ in rows] + [d for d, _, _ in calc]
+        unmatched = [d for d, I in obs if not any(abs(d - dc) / d <= _CELL_TOL for dc in cds)]
+        if len(unmatched) <= max(3, 0.1 * len(obs)):                   # a table that pairs its observed lines with calculated ones, but for a few: those few are worth a look
+            for d in unmatched[:6]:
+                lines.append('observed %g: no calculated line within 0.5 %% — a typo, or a line the table leaves unindexed [unverified]' % d)
+    return {'status': 'checked', 'source': lab, 'cell': cell, 'n': n, 'agree': len(tight), 'loose': loose, 'bad': bad, 'wild': len(wild), 'unmatched_obs': unmatched,
+            'head': head, 'lines': lines, 'pages': pages, 'tried': [(x[0], x[3], x[2]) for x in scored]}
 
 # ----------------------------------------------------------------------------- the paper's empirical formula
 
@@ -1786,11 +2224,12 @@ def _derived_composition(ex, wt, species):
     return {'ok': False, 'verified': False, 'lines': lines, 'formula': '', 'basis': ex['basis'], 'result': None, 'doubts': ['no formula read'], 'derived': red.formula()}
 
 def check_paper(pdf, cif=None, out_dir=None):
-    """The paper against itself and its .cif: {'extract', 'composition', 'bv', 'lines'} — the lines
-    are what a manuscript review prints under 'Composition' and 'Bond valence'."""
+    """The paper against itself and its .cif: {'extract', 'composition', 'bv', 'powder', 'lines'} — the
+    lines are what a manuscript review prints under 'Composition', 'Bond valence' and 'Powder table'
+    (the table's calculated lines vs the cell, see cell_check)."""
     text = text_of(pdf)
     ex = extract(pdf, out_dir, None, write=bool(out_dir))
-    out = {'extract': ex, 'composition': check_composition(ex, text), 'bv': None, 'bv_status': None, 'lines': []}
+    out = {'extract': ex, 'composition': check_composition(ex, text), 'bv': None, 'bv_status': None, 'powder': None, 'powder_status': None, 'lines': []}
     if out['composition']:
         out['lines'] += out['composition']['lines']
     elif ex.get('epma'):
@@ -1803,6 +2242,14 @@ def check_paper(pdf, cif=None, out_dir=None):
         else:
             out['bv'] = {k: bc[k] for k in ('tables', 'lines', 'params', 'u6', 'cited', 'compared', 'disagree')}
             out['lines'] += [bc['head']] + ['  ' + ln for ln in bc['lines']]
+    try:
+        cc = cell_check(pdf, cif, text)
+    except Exception as ex_:
+        cc = {'status': 'error', 'head': 'powder table: could not check (%s)' % ex_, 'lines': []}
+    out['powder_status'] = cc['status']
+    if cc.get('head'):
+        out['powder'] = cc
+        out['lines'] += [cc['head']] + ['  ' + ln for ln in cc['lines']]
     return out
 
 _AN_RE = re.compile(r'^(O|OH|OW|Ow|W|Wat|F|Cl|OD|Oh|Hw|H2O)\d*[A-Za-z]?\d*$')
