@@ -4,7 +4,7 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
-## [0.5.5] — unreleased
+## [0.5.5] — 2026-09-05
 
 ### Fixed — three things the owner hit testing 0.5.4
 - **"? look" on a calculation finding did nothing.** The composition and bond-valence findings of a
