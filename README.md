@@ -404,6 +404,20 @@ valence tab (`pxrd bv --xlsx`) and of the EPMA tab hold the calculation as live 
 with R0, b and s, the sums, the hydrogen bonds; the reduction with a *method* sheet quoting the
 paper — for checking a procedure step by step.
 
+**What vouches for a reading.** Every value the paper reader takes carries a record — the value,
+where it was read, and which oracle adjudicated it — and `pxrd paper --check` (Manuscript mode, and
+Fill ▸ in the Tables mode) prints them first: `readers: table ✓ (p6) · formula ✓ · basis ? · n ✓ ·
+D_calc ✓ · cell ✓ · powder ✓ (p7) · name ✓`. ✓ agrees, ✗ disagrees, ? looked at with doubts, · nothing
+could check it. The oracles: the composition re-derived from the paper's own table, basis and
+method (table, formula, basis, method); the powder table against the cell — the .cif's, else the one
+the paper states — for the calculated lines, and every reflection the cell allows for the observed
+ones (a line the table leaves unindexed is fine if it sits on the cell); the bond-valence table
+against the .cif; Gladstone–Dale for n and the densities; the cell against its own printed volume
+and, with Z (from the paper's other cell statement or the .cif when the powder cell omits it), the
+density from the formula; the measured and calculated densities against each other (4 %); and
+Mindat's species for the name. A rule the tool keeps: a red line needs an oracle behind it, and a
+reading no oracle reached is a dot, never a verdict.
+
 **`pxrd epma --check`** replicates a *published* formula from an ICDD entry's Analysis field — the
 mean wt% list followed by the empirical formula in the ICDD notation (`( Mn1.75 +2 Mg0.25 )sigma2.00
 ( P O4 )4 … !3.9 H2 O`): `pxrd epma "I003246(...).docx" --check` reads the field from the entry,

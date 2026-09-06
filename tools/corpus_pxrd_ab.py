@@ -4,11 +4,10 @@ from the .cif cell and the parsed h k l must agree with the parsed d within 0.5 
 test of whether the indices are paired with the right d. Output: review_out/pxrd_ab_<tag>.json + .txt.
 
     python3 tools/corpus_pxrd_ab.py "<pdf folders, comma-separated>" [--baseline path/to/paper_extract.py]
-                                    [--pages fitz|docling] [--out DIR] [--tag TAG]
+                                    [--out DIR] [--tag TAG]
 
 --baseline is a copy of an earlier paper_extract.py (e.g. `git show v0.5.5:pxrd_review/paper_extract.py
-> /tmp/pe_0.5.5.py`); without it the run reports the current reader alone. --pages docling reads the
-tables through the layout reader (pxrd_review.layout_reader) for the B side.
+> /tmp/pe_0.5.5.py`); without it the run reports the current reader alone.
 
 Per paper: [obs, calc, suspect, calc rows with a cell, of which consistent]. Suspect = an index beyond
 ±30, an intensity above 1000, or a d outside 0.5–40 Å — garbage a reader made up. ALWAYS read the
@@ -74,18 +73,13 @@ def stats(o, c):
     return [len(o), len(c), bad]
 
 
-def run(folders, baseline=None, pages='fitz', out_dir=DEFAULT_OUT, tag='', with_cif=False, limit=0):
+def run(folders, baseline=None, out_dir=DEFAULT_OUT, tag='', with_cif=False, limit=0):
     pdfs, cifs = find_pdfs_and_cifs(folders)
     if with_cif:                                                         # only the papers the cell metric can judge
         pdfs = {n: p for n, p in pdfs.items() if cell_of(n, cifs)}
     if limit:
         pdfs = dict(sorted(pdfs.items())[:limit])
     A = load_module(baseline) if baseline else None
-    if pages.startswith('docling'):
-        from pxrd_review import layout_reader as LR
-        if not LR.available():
-            sys.exit('--pages docling: the layout reader is not available (pip install "pxrd-review[layout]")')
-        PE.set_pages_reader(LR.pages, 'replace' if pages == 'docling-replace' else 'fallback')
     agg = {'A': [0] * 5, 'B': [0] * 5}; cases = []; t0 = time.time(); secs = []
     for i, (name, p) in enumerate(sorted(pdfs.items())):
         cell = cell_of(name, cifs)
@@ -111,8 +105,8 @@ def run(folders, baseline=None, pages='fitz', out_dir=DEFAULT_OUT, tag='', with_
             print('%d/%d %.0fs' % (i, len(pdfs), time.time() - t0), flush=True)
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.join(out_dir, 'pxrd_ab' + ('_' + tag if tag else ''))
-    json.dump({'folders': folders, 'baseline': baseline, 'pages': pages, 'agg': agg, 'cases': cases}, open(stem + '.json', 'w'), indent=0)
-    lines = ['pxrd_table over %d papers (%d with a .cif cell)%s' % (len(pdfs), sum(1 for c in cases if c.get('B') and c['B'][3]), ' — pages: ' + pages),
+    json.dump({'folders': folders, 'baseline': baseline, 'agg': agg, 'cases': cases}, open(stem + '.json', 'w'), indent=0)
+    lines = ['pxrd_table over %d papers (%d with a .cif cell)' % (len(pdfs), sum(1 for c in cases if c.get('B') and c['B'][3])),
              'totals [obs, calc, suspect, calc rows with a cell, consistent]:']
     if A is not None:
         lines.append('  A (baseline %s): %s' % (os.path.basename(baseline), agg['A']))
@@ -141,10 +135,9 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('folders', help='pdf folders, comma-separated (searched recursively)')
     ap.add_argument('--baseline', help='a copy of an earlier paper_extract.py for the A side')
-    ap.add_argument('--pages', default='fitz', choices=['fitz', 'docling', 'docling-replace'], help='docling = fitz first, the layout model where fitz reads no table on a page; docling-replace = every page through the layout model')
     ap.add_argument('--out', default=DEFAULT_OUT)
     ap.add_argument('--tag', default='')
     ap.add_argument('--with-cif', action='store_true', help='only the papers whose .cif is beside them (the cell metric)')
     ap.add_argument('--limit', type=int, default=0, help='the first N papers (a timing run)')
     a = ap.parse_args()
-    run([f.strip() for f in a.folders.split(',') if f.strip()], a.baseline, a.pages, a.out, a.tag, a.with_cif, a.limit)
+    run([f.strip() for f in a.folders.split(',') if f.strip()], a.baseline, a.out, a.tag, a.with_cif, a.limit)

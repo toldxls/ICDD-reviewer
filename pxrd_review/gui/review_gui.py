@@ -1739,6 +1739,12 @@ def api_tb_extract():
         return jsonify({'ok': False, 'error': E.explain(e, path)}), 500
     ex = r['extract']; F = r.get('fields') or {}
     st = lambda k: (F.get(k) or {}).get('status', 'none')
+    if cif_key and st('name') == 'unverified':                           # the .cif was picked by a name that is another mineral's (a running head): not this paper's structure
+        cif_key = None
+        try:
+            r = PE.check_paper(path, None, MS['out_dir']); ex = r['extract']; F = r.get('fields') or {}
+        except Exception as e:
+            return jsonify({'ok': False, 'error': E.explain(e, path)}), 500
     # the written data files join the folder's data list so the tabs can select them
     with MS['lock']:
         for fn in ex['files'].values():
@@ -1815,6 +1821,7 @@ def api_tb_extract():
         notes.append('not filled: ' + '; '.join(left_out))
     checks = '\n'.join(ln for ln in r['lines'] if not ln.startswith('bond valence:') and not (ln.startswith('  ') and r.get('bv') and ln.strip() in r['bv']['lines']))
     return jsonify({'ok': True, 'fill': fill, 'notes': notes, 'files': ex['files'], 'name': name, 'bvcheck': bvcheck, 'status': status,
+                    'bv_from_paper': bool(r.get('paper_structure')) and not cif_key,   # checked against the structure the paper prints, not a .cif of the folder
                     'readers': r['lines'][0] if r['lines'] else '', 'checks': checks, 'left_out': left_out})
 
 @app.route('/api/tb/word/<key>', methods=['POST'])
@@ -2076,6 +2083,8 @@ def _ms_paper_findings(key, path):
             section = s.split(':', 1)[0]
             m = re.search(r'\(p(\d+)\)', s)                                      # 'the paper's table (p6) vs the .cif'
             page = int(m.group(1)) if m else (epma_page if section.startswith('composition') else None)
+            if section == 'readers':
+                page = None                                                       # 'readers: table ✓ (p6) · powder ✓ (p9)': a line on every reader, anchored to none
         kind = 'calcinfo' if head or not _CALC_FLAG.search(s) or '[unverified]' in s or s.startswith('not verifiable') else 'calc'
         fkey = 'calc:' + hashlib.sha1(s.encode('utf-8')).hexdigest()[:12]
         # what '? look' highlights on the page: the bond's two labels, or the constituents of a composition line

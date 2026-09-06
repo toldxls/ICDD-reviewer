@@ -19,11 +19,6 @@ dependencies = [
     "openpyxl>=3.1",    # xlsx in/out for the EPMA, Gladstone–Dale and PXRD tables (MIT)
 ]
 
-[project.optional-dependencies]
-# the layout model behind `pxrd paper --pages docling` / the Tables mode's layout option: pdf tables
-# with their cell structure, fully local (MIT); needs Python 3.10, downloads its models on first use
-layout = ["docling; python_version >= '3.10'"]
-
 [project.urls]
 Homepage = "https://github.com/toldxls/ICDD-reviewer"
 Source = "https://github.com/toldxls/ICDD-reviewer"

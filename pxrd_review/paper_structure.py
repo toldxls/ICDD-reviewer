@@ -21,7 +21,7 @@ bond-valence sums within 0.05 vu. That is note-grade, not flag-grade, and the to
 every line this produces is marked [unverified]. With composition closure required as well, 4
 papers pass and all 13 of their sites are exact — flag-grade, but too few to rely on.
 """
-import os, re, tempfile
+import os, re, shutil, tempfile
 
 from pxrd_review import bv_check as B
 from pxrd_review import epma as EP
@@ -389,7 +389,11 @@ def build(pdf, text=None):
         _discard(keep, tmp)
         return None, {'why': 'no cell and operator set gave a structure'}
     st, gii, cell, sym, n = best
-    info = {'gii': gii, 'cell': cell, 'sym': sym, 'sites': n, 'closure': closure(st, counts), 'path': keep, 'dir': tmp}
+    try:
+        info = {'gii': gii, 'cell': cell, 'sym': sym, 'sites': n, 'closure': closure(st, counts), 'path': keep, 'dir': tmp}
+    except Exception:
+        _discard(keep, tmp)                              # the caller sees the exception, not a leaked directory
+        raise
     if gii > GII_GATE:
         _discard(keep, tmp)
         return None, dict(info, path=None, why='the structure the paper prints does not hold together '
@@ -406,10 +410,8 @@ def _discard(path, tmpdir):
                 os.unlink(f_)
             except OSError:
                 pass
-    try:
-        os.rmdir(tmpdir)
-    except OSError:
-        pass
+    if tmpdir and os.path.basename(tmpdir).startswith('pxrd_ps_'):
+        shutil.rmtree(tmpdir, ignore_errors=True)         # the tool's own directory, whatever a failed build left in it
 
 
 def discard(info):

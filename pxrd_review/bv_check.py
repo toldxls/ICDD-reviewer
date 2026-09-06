@@ -272,7 +272,7 @@ def _cell(block):
         raise ValueError('the .cif has no complete unit cell')
     return vals
 
-def _symops(block):
+def _symops(block, notes=None):
     tags, rows = _loop(block, '_space_group_symop_operation_xyz')
     if rows is None:
         tags, rows = _loop(block, '_symmetry_equiv_pos_as_xyz')
@@ -289,6 +289,11 @@ def _symops(block):
     from pxrd_review import symops as SO
     var = SO.lookup(sg)
     if var:
+        if len(var) > 1 and notes is not None:
+            notes.append('no symmetry-operator loop in the .cif: operators taken from the space-group table for %s, which has %d '
+                         'settings (origin choices) — setting 1 of %d was used; check the origin against the coordinates' % (sg, len(var), len(var)))
+        elif notes is not None:
+            notes.append('no symmetry-operator loop in the .cif: operators taken from the space-group table for %s' % sg)
         return [(rot, tr) for rot, tr in var[0]], len(var[0])   # the commonest setting of that symbol
     raise ValueError('the .cif lists no symmetry operators (_space_group_symop_operation_xyz) and the space '
                      'group %r is not in the operator table — add the operator loop (SHELXL, JANA and '
@@ -306,9 +311,9 @@ class Structure:
         self.sg = (b['items'].get('_space_group_name_h-m_alt') or b['items'].get('_symmetry_space_group_name_h-m')
                    or b['items'].get('_space_group_name_h-m') or '?')
         self.cell = _cell(b)
-        self.ops, self.n_ops = _symops(b)
-        self._metric()
         self.notes = []
+        self.ops, self.n_ops = _symops(b, self.notes)
+        self._metric()
         self.include_h = include_h
         self._sites(ox_override or {})
 

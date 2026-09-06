@@ -198,14 +198,14 @@ async function tbRender() {
   $('#tb-status').textContent = status; $('#tb-status').title = status;
   const html = r.html + (r.text && tab !== 'coords' && tab !== 'bvs' ? '<details class="tb-text"><summary class="muted">reduction / working (as pxrd prints it)</summary><pre>' + esc(r.text) + '</pre></details>' : '');
   tbRenderBody(html);
-  if (tab === 'bvs' && TBS.mscheck && TBS.mscheck.key === TBS.key) tbShowCheck(TBS.mscheck);
+  if (tab === 'bvs' && TBS.mscheck && (TBS.mscheck.fromPaper || TBS.mscheck.key === TBS.key)) tbShowCheck(TBS.mscheck);
   if (tab === 'epma' && TBS.papercheck) tbShowCheck(TBS.papercheck, 'what the paper says, checked against itself');
 }
 
 // ---- the manuscript's own tables against the .cif (pxrd bv --table): the report goes above the tool's tables
 function tbShowCheck(c, what) {
   const body = $('#tb-body'); const old = body.querySelector('.tb-mscheck'); if (old) old.remove();
-  body.prepend(el('details', { class: 'tb-text tb-mscheck', open: 'open' }, el('summary', { class: 'muted' }, (what || 'manuscript table check') + ' — ' + c.name), el('pre', {}, c.text)));
+  body.prepend(el('details', { class: 'tb-text tb-mscheck', open: 'open' }, el('summary', { class: 'muted' }, (what || (c.fromPaper ? 'manuscript table check against the structure the paper itself prints (no .cif of this mineral in the folder)' : 'manuscript table check')) + ' — ' + c.name), el('pre', {}, c.text)));
 }
 
 async function tbExport(tab, fmt) {
@@ -241,7 +241,7 @@ async function tbFillFromPaper(pdfKey) {
   try { st = await fetch('/api/tb/state').then(x => x.json()); } catch (_) {}
   if (st) { TBS.data = st.data || []; TBS.outputs = st.outputs || []; tbFillSelects(); }
   if (r.fill && r.fill._cif && TBS.cifs.some(c => c.key === r.fill._cif)) TBS.key = r.fill._cif;   // the same mineral's .cif
-  TBS.mscheck = r.bvcheck && TBS.key ? { key: TBS.key, name: key, text: r.bvcheck } : null;     // the paper's bond-valence table vs that .cif: shown on the Bond valence tab
+  TBS.mscheck = r.bvcheck && (r.bv_from_paper || TBS.key) ? { key: r.bv_from_paper ? 'paper:' + key : TBS.key, name: key, text: r.bvcheck, fromPaper: !!r.bv_from_paper } : null;   // the paper's bond-valence table vs that .cif — or vs the structure the paper prints, keyed to no .cif: shown on the Bond valence tab
   TBS.papercheck = r.checks ? { name: key, text: r.checks } : null;                            // what was read and what vouched for it: shown on the EPMA tab
   document.querySelectorAll('.tb-opts .opt[data-verified]').forEach(l => l.removeAttribute('data-verified'));
   for (const tab of Object.keys(r.fill || {})) {

@@ -179,10 +179,12 @@ _pages_reader = None
 _pages_mode = 'fallback'
 
 def set_pages_reader(fn, mode='fallback'):
-    """Install a second pdf page reader (fn(path) -> pages as page_lines gives them, e.g. the layout
-    reader's tables); None removes it. mode 'fallback' (the default, and what the corpus supports):
-    the table readers try fitz's page first and the other reader's page only where fitz read no
-    table; 'replace': every page comes from the other reader. A .docx is never routed through it."""
+    """Install a second pdf page reader (fn(path) -> pages as page_lines gives them); None removes
+    it. mode 'fallback' (the default): the table readers try fitz's page first and the other
+    reader's page only where fitz read no table; 'replace': every page comes from the other reader.
+    A .docx is never routed through it. A hook only — the tool ships no second reader: a local
+    layout model (docling) was measured on the corpus in 0.5.6 and read the tables worse than the
+    pdf text on both the powder and the coordinates tables, and was removed."""
     global _pages_reader, _pages_mode
     _pages_reader = fn; _pages_mode = mode
 
@@ -430,20 +432,28 @@ def _drop_totals(rows):
                 out.remove(first)                                  # the split has a value in the total's own column: the total goes
     return out
 
-_PROSE_CORE = r'(\(NH4\)2O|H2O[+\-]?|CO2|SO3|[A-Z][a-z]?\d*O\d*|[A-Z][a-z]?)\s*=?\s*(\d+\.\d+)(?:\s*\(\d+\))?\s*(?:wt\.?\s*%)?\s*'
+_PROSE_CONST = r'(\(NH4\)2O|H2O[+\-]?|CO2|SO3|[A-Z][a-z]?\d*O\d*|[A-Z][a-z]?)'
+_PROSE_PAREN = r'(?:\s*\((?:\d+|\d+\.\d+\s*[–\-]\s*\d+\.\d+(?:[,;]\s*\d+\.\d+)?)\))?'          # '(8)' an esd; '(8.03–9.01, 0.25)' the range and s.d.
+_PROSE_CORE = _PROSE_CONST + r'\s*=?\s*(\d+\.\d+)' + _PROSE_PAREN + r'\s*(?:wt\.?\s*%)?\s*'
 _PROSE_SEP = r'(?:[,;]|\band\b|(?=\s+(?:\(NH4\)2O|H2O|CO2|SO3|[A-Z][a-z]?\d*O\d*|[A-Z][a-z]?)\s*\d+\.\d+))\s*(?:and\s+)?'
 _PROSE_ITEM = re.compile(_PROSE_CORE)
 _PROSE_RUN = re.compile('(?:' + _PROSE_CORE + _PROSE_SEP + '){3,}' + _PROSE_CORE)
+_PROSE_CORE_R = r'(\d+\.\d+)' + _PROSE_PAREN + r'\s*(?:wt\.?\s*%\s*)?' + _PROSE_CONST + r'(?![a-z])\s*'   # '0.03 Na2O, 3.70 K2O': the value first
+_PROSE_SEP_R = r'(?:[,;]|\band\b)\s*(?:and\s+)?'
+_PROSE_ITEM_R = re.compile(_PROSE_CORE_R)
+_PROSE_RUN_R = re.compile('(?:' + _PROSE_CORE_R + _PROSE_SEP_R + '){3,}' + _PROSE_CORE_R)
 
 def prose_table(text):
     """A composition given in the running text ('MnO 14.78, Ce2O3 34.19, P2O5 29.57, and H2O 21.46,
     total 100.00'): the longest run of at least four constituent–value pairs, as a table candidate."""
     best = None
-    for m in _PROSE_RUN.finditer(text):
+    runs = [(m, [(c, v) for c, v in _PROSE_ITEM.findall(m.group(0))]) for m in _PROSE_RUN.finditer(text)]
+    runs += [(m, [(c, v) for v, c in _PROSE_ITEM_R.findall(m.group(0))]) for m in _PROSE_RUN_R.finditer(text)]
+    for m, pairs in runs:
         seg = m.group(0); rows = []
         if re.search(r'requires|ideal|theoretical|calculated for|end[- ]member', text[max(0, m.start() - 80):m.start()], re.I):
             continue                                                # the ideal formula's composition, not the analysis
-        for c, v in _PROSE_ITEM.findall(seg):
+        for c, v in pairs:
             c2, kind = _constituent_ok(c)
             if kind == 'constituent' and c2 not in [r['constituent'] for r in rows]:
                 rows.append({'constituent': 'N2H8O' if c2 == '(NH4)2O' else c2.rstrip('+-'), 'mean': float(v), 'range': None, 'sd': None, 'standard': None})
@@ -455,8 +465,24 @@ def prose_table(text):
             if mt:
                 tot = float(mt.group(1))
             best = {'rows': rows, 'total': tot, 'header': 'composition given in the text: ' + seg[:120], 'page': None, 'n': len(rows),
-                    'score': len(rows) + (5 if 88 <= sum(r['mean'] for r in rows) <= 104 else 0), 'prose': True}
+                    'score': len(rows) + (5 if 88 <= sum(r['mean'] for r in rows) <= 104 else 0), 'prose': True, 'end': m.end()}
     return best
+
+def _prose_before(text, ctx):
+    """The composition the paper lists in the sentences right before its formula sentence ('… SiO2 29.35,
+    F 2.41, H2O 0.26, total 101.18. The empirical formula is …'): the formula's context holds only its
+    last 200 characters, and a list of twenty oxides is longer than that, so the run is looked for in
+    the 1400 characters before the formula and must end within 350 of it. -> a table candidate or None."""
+    if not ctx:
+        return None
+    tn = _norm_text(text); tail = ctx[-150:]; p = tn.find(tail)
+    if p < 0:
+        return prose_table(ctx)
+    end = p + len(tail); window = tn[max(0, end - 1400):end]
+    pt = prose_table(window)
+    if pt and pt.get('end', 0) >= len(window) - 350:
+        return pt
+    return prose_table(ctx)
 
 _CAP_YES = re.compile(r'chemical|composition|analy|EPMA|EMPA|electron|microprobe|wt\.?\s*%|WDS|LA-ICP', re.I)
 _CAP_NO = re.compile(r'coordinat|displacement|bond|powder|diffraction|crystal data|refinement|Raman|infrared|\bIR\b|unit[- ]cell|reflection|optical|physical propert|Mössbauer|site popul|occupanc', re.I)
@@ -547,7 +573,17 @@ def epma_table(pdf, name=''):
                     if k >= 0:
                         head = [w[4] for w in lines[k]['w']] + head; head_ws = list(lines[k]['w']) + head_ws
                 head_cells = []
-                for k in (i - 3, i - 2, i - 1):                                  # a caption ('Table 1. Composition of X') is not a column header, even mid-line
+                above = [i - 3, i - 2, i - 1]
+                for k in (i - 4, i - 5, i - 6):                                  # a names row further up ('Burnettite Melilite Paqueite …' over 'Constituent wt% n = 5 SD'): header-shaped, below the caption
+                    if k < 0 or lines[k]['y'] < 60:
+                        break
+                    toks_k = [w[4] for w in lines[k]['w']]
+                    if re.match(r'^(Table|TABLE|Tab\.|Таблица)$', toks_k[0] if toks_k else '') or len(toks_k) > 14 or re.search(r'[.;:]$', toks_k[-1] if toks_k else '.'):
+                        break
+                    if not re.search(r'[A-Za-z]{4,}ite\b|\bn\s*=|sample|analys|holotype|type', ' '.join(toks_k), re.I):
+                        break
+                    above.insert(0, k)
+                for k in above:                                                  # a caption ('Table 1. Composition of X') is not a column header, even mid-line
                     if k < 0:
                         continue
                     ws_k = lines[k]['w']
@@ -1391,6 +1427,33 @@ _CELL_WILD = 0.15                                                      # beyond 
 
 _CELL_SRC = {'.cif': 'the .cif cell', 'powder': "the paper's powder cell", 'single': "the paper's single-crystal cell"}
 
+def _reflection_ds(cell, dmin):
+    """Every d-spacing the cell allows down to dmin (no extinction rule applied: a line the table
+    leaves unindexed is judged by whether ANY reflection of the cell sits there), sorted."""
+    from pxrd_review import extra_checks as X
+    a, b, c = cell['a'], cell['b'], cell['c']; al, be, ga = cell['α'], cell['β'], cell['γ']
+    dmin = max(dmin, 0.8)
+    hm, km, lm = (int(1.2 * x / dmin) + 1 for x in (a, b, c))
+    while (2 * hm + 1) * (2 * km + 1) * (2 * lm + 1) > 300000:                    # a huge cell: the enumeration is capped, the finest lines go unchecked
+        dmin *= 1.25; hm, km, lm = (int(1.2 * x / dmin) + 1 for x in (a, b, c))
+    ds = []
+    for h in range(-hm, hm + 1):
+        for k in range(-km, km + 1):
+            for l in range(0, lm + 1):                                            # Friedel: (hkl) and (-h-k-l) share a d
+                if l == 0 and (k < 0 or (k == 0 and h <= 0)):
+                    continue
+                s2 = X._dstar2(a, b, c, al, be, ga, h, k, l)
+                if s2 > 0 and s2 <= 1 / (dmin * dmin):
+                    ds.append(1 / math.sqrt(s2))
+    ds.sort()
+    return ds
+
+def _on_cell(ds, d, tol):
+    """Whether some reflection of the cell (ds sorted) lies within tol of d."""
+    import bisect
+    i = bisect.bisect_left(ds, d * (1 - tol))
+    return i < len(ds) and ds[i] <= d * (1 + tol)
+
 def cell_check(path, cif=None, text=None, table=None):
     """The paper's powder table against a unit cell: every calculated line's d recomputed from its
     h k l and the cell — the .cif's when given and it reproduces the table, else the cell the paper
@@ -1455,14 +1518,28 @@ def cell_check(path, cif=None, text=None, table=None):
     if wild:
         lines.append('%d line%s the reader could not pair with the cell (off by more than 15 %%: a row it read across two blocks) — left out [unverified]'
                      % (len(wild), 's' if len(wild) > 1 else ''))     # the reader's fault, not the paper's: never a flag
-    unmatched = []
+    unmatched = []; off_cell = []
     if obs and loose >= 0.8 * n:
         cds = [dc for _, _, _, dc, _, _ in rows] + [d for d, _, _ in calc]
-        unmatched = [d for d, I in obs if not any(abs(d - dc) / d <= _CELL_TOL for dc in cds)]
-        if len(unmatched) <= max(3, 0.1 * len(obs)):                   # a table that pairs its observed lines with calculated ones, but for a few: those few are worth a look
-            for d in unmatched[:6]:
-                lines.append('observed %g: no calculated line within 0.5 %% — a typo, or a line the table leaves unindexed [unverified]' % d)
-    return {'status': 'checked', 'source': lab, 'cell': cell, 'n': n, 'agree': len(tight), 'loose': loose, 'bad': bad, 'wild': len(wild), 'unmatched_obs': unmatched,
+        tol_obs = _CELL_LOOSE if systematic else tol                     # an observed line pairs within the table's own scatter
+        unmatched = [d for d, I in obs if not any(abs(d - dc) / d <= tol_obs for dc in cds)]
+        if unmatched:
+            # a table lists observed lines it never indexes (weak ones, or all of them in a separate
+            # table): they are judged against every reflection the cell allows — the reading of the
+            # column is vouched for when they sit on the cell, and a line on no reflection is worth a look
+            try:
+                allowed = _reflection_ds(cell, 0.98 * min(d for d, _ in obs))
+                off_cell = [d for d in unmatched if not _on_cell(allowed, d, tol_obs)]
+            except Exception:
+                off_cell = []
+            on_cell = len(unmatched) - len(off_cell)
+            if on_cell:
+                lines.append('%d observed line%s without a calculated partner in the table lie%s on reflections of the cell — left unindexed by the table' % (on_cell, 's' if on_cell > 1 else '', '' if on_cell > 1 else 's'))
+            for d in off_cell[:6]:
+                lines.append('observed %g: no calculated line within %.1f %% and no reflection of the cell there — a typo, or another phase [unverified]' % (d, 100 * tol_obs))
+            if len(off_cell) > 6:
+                lines.append('… and %d more observed lines on no reflection of the cell [unverified]' % (len(off_cell) - 6))
+    return {'status': 'checked', 'source': lab, 'cell': cell, 'n': n, 'agree': len(tight), 'loose': loose, 'bad': bad, 'wild': len(wild), 'unmatched_obs': unmatched, 'off_cell': off_cell,
             'head': head, 'lines': lines, 'pages': pages, 'tried': [(x[0], x[3], x[2]) for x in scored]}
 
 # ----------------------------------------------------------------------------- the paper's empirical formula
@@ -1652,6 +1729,7 @@ def _journal_to_icdd(f):
     f = re.sub(r'\(([A-Z][a-z]?),([A-Z][a-z]?)\)(?:\d\+)?\s*(\d+\.\d+)', r'\1\3', f)     # '(Th,U)4+ 0.54': the first element carries the count
     f = re.sub(r'·\s*n\s*H2O', '', f)                                                    # '·nH2O': an unstated hydrate
     f = re.sub(r'([)\]])\s*R(?=\s*\d)', r'\1 Σ', f)                                     # a Σ printed as R
+    f = re.sub(r'([)\]])\s*6\s*=\s*(?=\d)', r'\1 Σ', f)                                  # ')6=0.96': a Σ printed as 6 (font), with its '='
     f = re.sub(r'Σ\s*=\s*', 'Σ', f)                                                       # 'Σ=48.49'
     f = re.sub(r'(?<![A-Za-z])[AMXTRZ]\d?(?:\+[AMXTRZ]\d?)?\s*(?=[\(\[]|Σ|6\d)', ' ', f)   # site labels A1[…], M2+M3(…), M3 Σ3.95(…), ')61.00Y('
     f = re.sub(r'(?<![A-Za-z])[YVW](?=[\(\[])', ' ', f)                                  # Y / V / W site labels right before a bracket (the elements keep their counts)
@@ -1798,14 +1876,21 @@ def _check_formula(ex, text, fcand):
         return _derived_composition(ex, wt, species)
     if 'S' in counts and not any(_parses(c) and EP.parse_constituent(c).element == 'S' for c in wt) and re.search(r'\sS\d\.\d\d', ftxt):
         counts = {k: v for k, v in counts.items() if k != 'S'}      # 'Fe2+ 0.14Ti0.18 S3.00': a Σ printed as S, the brackets lost; the table has no sulfur
-    if re.search(r'(?<![A-Za-z])(REE|Ln|TR)\*?\d*\.\d', ftxt) and not any(el in counts for el in _LN if el != 'Ce'):
-        ln_rows = [c for c in wt if _parses(c) and EP.parse_constituent(c).element in _LN]
-        if ln_rows:
-            ce = EP.parse_constituent('Ce2O3')
-            tot = sum(wt[c] * (ce.mw / EP.parse_constituent(c).mw) * (EP.parse_constituent(c).n_cat / 2) for c in ln_rows)
-            for c in ln_rows:
-                wt.pop(c)
-            wt['Ce2O3'] = round(tot, 3)                              # the lanthanides as one Ce2O3-equivalent
+    grouped_ln = bool(re.search(r'(?<![A-Za-z])(REE|Ln|TR)\*?\d*\.\d', ftxt)) and not any(el in counts for el in _LN if el != 'Ce')
+    def _fold_ln(wt_):
+        """A formula that writes the lanthanides as one REE: the table's Ln2O3 rows as one Ce2O3-equivalent."""
+        if not grouped_ln:
+            return wt_
+        ln_rows = [c for c in wt_ if _parses(c) and EP.parse_constituent(c).element in _LN]
+        if not ln_rows:
+            return wt_
+        wt_ = dict(wt_); ce = EP.parse_constituent('Ce2O3')
+        tot = sum(wt_[c] * (ce.mw / EP.parse_constituent(c).mw) * (EP.parse_constituent(c).n_cat / 2) for c in ln_rows)
+        for c in ln_rows:
+            wt_.pop(c)
+        wt_['Ce2O3'] = round(tot, 3)
+        return wt_
+    wt = _fold_ln(wt)
     bases = [ex['basis']] if ex.get('basis') else []
     groups = {}
     for grp, tot in re.findall(r'[\(\[]([^()\[\]]*)[\)\]]\s*Σ\s*(\d+(?:\.\d+)?)', _journal_to_icdd(ftxt)):
@@ -1852,7 +1937,7 @@ def _check_formula(ex, text, fcand):
     def _resolve(wt0, e0):
         """One starting column through the whole chain: the best basis, another table of the paper
         that carries every element of the formula, the other columns, the oxide forms."""
-        notes = []; cn = None; wt_ = dict(wt0); e_ = e0
+        notes = []; cn = None; wt_ = _fold_ln(dict(wt0)); e_ = e0
         r_ = _best(wt_)
         have = set(EP.parse_constituent(c).element for c in wt_ if _parses(c))
         if (r_ is None or r_['score'] > 0.03 or not need <= have) and e_.get('candidates'):
@@ -1889,9 +1974,9 @@ def _check_formula(ex, text, fcand):
 
     hints = sample_hints(f_ctx, text); hints['domains'] = legend_columns(text, ex.get('name')) + headline_domains(text, ex.get('name'))
     cands_named = headline_columns(e, ex.get('name'), hints)
-    pt_ctx = prose_table(f_ctx) if f_ctx else None
-    if pt_ctx and len(pt_ctx['rows']) >= 4 and not cands_named:
-        cands_named = [({r_['constituent']: r_['mean'] for r_ in pt_ctx['rows']}, 'the wt% the formula sentence itself lists')]   # '… Ni 17.09, Fe 9.76, … which corresponds to (Rh4.50…)'
+    pt_ctx = _prose_before(text, f_ctx) if f_ctx else None
+    if pt_ctx and len(pt_ctx['rows']) >= 4:
+        cands_named.insert(0, ({r_['constituent']: r_['mean'] for r_ in pt_ctx['rows']}, 'the wt% the formula sentence itself lists'))   # '… Ni 17.09, Fe 9.76, … which corresponds to (Rh4.50…)': the paper's own word on which analysis, before any header
     r, wt_used, e_used, notes_used, column_note = _resolve(wt, e)
     first_named = None
     if _clean(r):
@@ -2261,6 +2346,27 @@ def species_lines(species, table_els, formula_els, ox_paper):
 def _plain_html(h):
     return re.sub(r'<[^>]+>', '', h or '')
 
+def _species_mass(rec):
+    """The molar mass of Mindat's ideal formula, read from its HTML ('Ca<sub>2</sub>(UO<sub>2</sub>)<sub>3</sub>
+    (CO<sub>3</sub>)<sub>5</sub>·8H<sub>2</sub>O'): subscripts expanded, charges dropped, groups and the hydrate
+    read by the formula parser. A token scan of the raw HTML dropped every subscript (abelsonite came out at
+    86 instead of 519) and that number stood in as 'an ideal formula' for the density oracle. None when it
+    does not parse."""
+    h = (rec or {}).get('formula') or ''
+    if not h:
+        return None
+    plain = re.sub(r'<sub>\s*(\d+(?:\.\d+)?)\s*</sub>', r'\1', h)
+    plain = re.sub(r'<sup>[^<]*</sup>', '', plain)
+    plain = _plain_html(plain).replace('&middot;', '·').replace('&nbsp;', ' ')
+    try:
+        norm = _journal_to_icdd(plain)
+        counts, _ox, issues = EP.parse_icdd_formula(norm, has_sulfur='S' in counts_guess(norm))
+    except Exception:
+        return None
+    if not counts or any('garbled' in x for x in issues):
+        return None
+    return _formula_mass_counts(counts)
+
 def _derived_composition(ex, wt, species):
     """No empirical formula could be read: reduce the table on the paper's basis (the species'
     ideal formula deciding an ambiguous oxide) and print the formula that gives, for the reviewer
@@ -2456,12 +2562,16 @@ def cell_consistency(text, counts=None, cif=None, D_calc=None, verified_formula=
     vs the D_calc it prints — M from the empirical counts, and from every other formula in `masses`
     [(label, M)]: papers compute D_calc from the ideal formula as often as from the empirical one)
     and against the .cif (sorted axes within 3 %, the powder-vs-single-crystal tolerance).
-    -> {'status', 'cell', 'lines', 'detail', 'red'}. Only a D_calc off by 3–15 % from every formula's
-    D, with a verified formula, is a finding; beyond 15 % the cell and the formula are not each
-    other's (another phase's cell, a formula per two units) and it is a doubt; so is a volume that
-    does not follow (a misread axis or a misprint)."""
+    -> {'status', 'cell_status', 'cell', 'lines', 'detail', 'red', 'D'}. Only a D_calc off by 5–15 %
+    from every formula's D, with a verified anhydrous formula, the paper's own Z beside the cell and
+    a cell whose printed volume (or the .cif) vouches for the axes, is a finding — on the corpus a red
+    line without those guards blamed the paper for an axis the reader had misread, a Z borrowed from
+    another statement, or a hydrate count the text layer had lost; beyond 15 % the cell
+    and the formula are not each other's (another phase's cell, a formula per two units) and it is a
+    doubt; so is a volume that does not follow (a misread axis or a misprint). 'cell_status' is the
+    cell's own standing (volume, .cif) apart from the density; 'D' what the density check found."""
     from pxrd_review import cell_lambda_check as CL
-    out = {'status': 'nooracle', 'cell': None, 'lines': [], 'detail': '', 'red': False}
+    out = {'status': 'nooracle', 'cell': None, 'lines': [], 'detail': '', 'red': False, 'D': None, 'cell_status': 'nooracle'}
     cands = CL.find_cells(text)
     if not cands:
         return dict(out, status='none')
@@ -2471,12 +2581,24 @@ def cell_consistency(text, counts=None, cif=None, D_calc=None, verified_formula=
         cif_cell = _cell_floats((X.parse_cif(cif) or {}).get('cell') or {})
     Ms = [('the formula', _formula_mass_counts(counts))] + [(lab, m) for lab, m in (masses or []) if m]
     Ms = [(lab, m) for lab, m in Ms if m]
+    # Z belongs to the structure, not to one cell statement: a powder cell quoted without it takes the
+    # single Z the paper states elsewhere — beside its single-crystal cell, or in the crystal-data table
+    zs = sorted({int(CL.num_val(c_.Z)) for c_ in cands if c_.Z and CL.num_val(c_.Z)})
+    if not zs:
+        zs = sorted({int(z_) for z_ in re.findall(r'(?<![A-Za-z])Z\s*=\s*(\d{1,2})(?![\d.])', text)})
+    if not zs and cif:
+        from pxrd_review import extra_checks as X
+        z_cif = (X.parse_cif(cif) or {}).get('Z')                      # the .cif's own Z, when the paper prints none the reader finds
+        zs = [int(z_cif)] if z_cif and str(z_cif).isdigit() else []
+    Z_paper = zs[0] if len(zs) == 1 and 1 <= zs[0] <= 64 else None
+    hydrous = bool((counts or {}).get('H'))
     best = None
     for cc in sorted(cands, key=lambda c: 0 if c.context == 'powder' else 1):
         variants = [{'a': cc.a, 'b': cc.b, 'c': cc.c, 'α': cc.al, 'β': cc.be, 'γ': cc.ga}]
         if cc.b is None and cc.c is not None and cc.ga is None:
             variants = [dict(variants[0], b=cc.a, γ='90'), dict(variants[0], b=cc.a, γ='120')]
-        V_stated = CL.num_val(cc.V) if cc.V else None; Z = CL.num_val(cc.Z) if cc.Z else None
+        V_stated = CL.num_val(cc.V) if cc.V else None; Z = (CL.num_val(cc.Z) if cc.Z else None) or Z_paper
+        z_borrowed = not cc.Z                                          # a borrowed Z supports a verdict of agreement or a doubt, never a red line
         for v in variants:
             cell = _cell_floats(v)
             if not cell:
@@ -2500,22 +2622,34 @@ def cell_consistency(text, counts=None, cif=None, D_calc=None, verified_formula=
             if cif_cell:
                 ax = sorted([cell['a'], cell['b'], cell['c']]); cx = sorted([cif_cell['a'], cif_cell['b'], cif_cell['c']])
                 cif_ok = all(abs(x - y) / y <= 0.03 for x, y in zip(ax, cx)); detail.append('.cif axes %s' % ('agree' if cif_ok else 'differ'))
+            v_ok = next((c[1] for c in checks if c[0] == 'V'), None)
+            anchored = bool(v_ok) or bool(cif_ok)                          # the cell as read reproduces its printed volume, or the .cif's axes: the axes are not misread
             if not checks:
                 status = 'nooracle' if cif_ok is None else ('agrees' if cif_ok else 'unverified')
             elif all(c[1] for c in checks):
                 status = 'agrees'
-            elif any(c[0] == 'D' and not c[1] and 0.03 < c[2] <= 0.15 for c in checks) and verified_formula and len(Ms) >= 2:
-                status = 'disagrees'                                   # off from every formula tried — the empirical AND an ideal one; with one formula alone it is a doubt
+            elif any(c[0] == 'D' and not c[1] and 0.05 < c[2] <= 0.15 for c in checks) and verified_formula and len(Ms) >= 2 and anchored and not z_borrowed and not hydrous:
+                status = 'disagrees'                                   # off from every formula tried — the empirical AND an ideal one — with the paper's own Z, a cell whose axes are vouched for, and no H in the formula (a hydrate count is what the text layer loses); anything less is a doubt
             else:
                 status = 'unverified'
-            score = (0 if status == 'agrees' else 1 if status == 'unverified' else 2, 0 if cc.context == 'powder' else 1)
+            # the cell's own standing: its printed volume and the .cif anchor it, and a density that follows
+            # from it vouches for it too; a density that does not is the formula's or Z's doubt, not the cell's
+            d_ok = next((c[1] for c in checks if c[0] == 'D'), None)
+            cell_status = 'unverified' if v_ok is False or cif_ok is False else 'agrees' if (v_ok or cif_ok or d_ok) else 'nooracle'
+            # the cell statement that stands: one that agrees, else an anchored one with doubts, else a red one
+            # (anchored by construction), else a variant whose printed volume the axes do not give (the wrong γ)
+            score = (0 if status == 'agrees' else 1 if status == 'unverified' and anchored else 2 if status == 'disagrees' else 3, 0 if cc.context == 'powder' else 1)
             if best is None or score < best[0]:
-                best = (score, cc, cell, V, V_stated, Z, D, checks, cif_ok, status, '; '.join(detail))
+                best = (score, cc, cell, V, V_stated, Z, D, checks, cif_ok, status, '; '.join(detail), cell_status)
     if best is None:
         return dict(out, status='none')
-    _, cc, cell, V, V_stated, Z, D, checks, cif_ok, status, detail = best
+    _, cc, cell, V, V_stated, Z, D, checks, cif_ok, status, detail, cell_status = best
+    z_borrowed_best = not cc.Z
     src = {'powder': 'powder', 'single': 'single-crystal'}.get(cc.context, 'stated')
-    out.update(status=status, cell=cell, detail=detail)
+    out.update(status=status, cell=cell, detail=detail, cell_status=cell_status)
+    dchk = next((c for c in checks if c[0] == 'D'), None)
+    if dchk:
+        out['D'] = {'computed': D, 'printed': D_calc, 'Z': Z, 'ok': dchk[1], 'dev': dchk[2]}   # what the density oracle found, for the D_calc record
     lines = ['cell: %s (%s) — %s' % (_cell_str(cell), src, detail or 'nothing printed to check it against')]
     for c in checks:
         if c[0] == 'V' and not c[1]:
@@ -2524,6 +2658,9 @@ def cell_consistency(text, counts=None, cif=None, D_calc=None, verified_formula=
             if status == 'disagrees':
                 lines.append('D_calc %.3f does not follow from the cell, Z = %g and any formula the paper gives: the closest gives %.3f (%+.1f %%)' % (D_calc, Z, D, (D - D_calc) / D_calc * 100))
                 out['red'] = True
+            elif z_borrowed_best or hydrous:
+                lines.append('D_calc %.3f vs %.3f from the cell, Z = %g and the formula (%+.1f %%)%s [unverified]' % (D_calc, D, Z, (D - D_calc) / D_calc * 100,
+                             ' — Z taken from another statement of the paper' if z_borrowed_best else ' — the hydrate count is read from the text layer'))
             elif c[2] > 0.15:
                 lines.append('D_calc %.3f vs %.3f from the cell, Z = %g and the formula (%+.0f %%) — not each other\'s: another phase\'s cell, or a formula per two units [unverified]' % (D_calc, D, Z, (D - D_calc) / D_calc * 100))
             else:
@@ -2593,8 +2730,12 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
             good = powder['loose'] >= 0.8 * powder['n']
             _set(f, 'pxrd.calc', 'agrees' if good else 'unverified', 'cell', powder.get('head', '')[:200])
             nobs = ex['pxrd']['obs']
-            _set(f, 'pxrd.obs', ('agrees' if len(powder.get('unmatched_obs') or []) <= 0.1 * nobs else 'unverified') if (good and nobs) else 'unverified' if nobs else 'none', 'cell',
-                 '%d observed lines without a calculated partner' % len(powder.get('unmatched_obs') or []))
+            um = len(powder.get('unmatched_obs') or []); off = len(powder.get('off_cell') or [])
+            # the observed column is vouched for when its lines sit on the cell — paired with a calculated
+            # line of the table, or on a reflection the cell allows (a line the table leaves unindexed);
+            # a stray or two in ten is a typo or another phase (each is noted), more is a doubt about the column read
+            _set(f, 'pxrd.obs', ('agrees' if off <= max(2, 0.1 * nobs) else 'unverified') if (good and nobs) else 'unverified' if nobs else 'none', 'cell',
+                 '%d observed lines: %d paired with a calculated line, %d on reflections of the cell, %d on none' % (nobs, nobs - um, um - off, off))
             if good and powder.get('source') not in (None, '.cif'):
                 _set(f, 'cell', 'agrees', 'cell', 'the powder table follows it (%d of %d lines within 1.5 %%)' % (powder['loose'], powder['n']), value=_cell_str(powder['cell']))
         elif ps in ('unindexed', 'nocell'):
@@ -2633,12 +2774,29 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
             masses.append((kind or 'another formula', _formula_mass_counts(counts_)))
     rec = species_record(ex.get('name')) if ex.get('name') else None
     if rec and rec.get('formula'):
-        from pxrd_review import extra_checks as X
-        masses.append(("Mindat's ideal formula", X._formula_mass(re.sub(r'[·\s]', ' ', rec['formula']))))
+        masses.append(("Mindat's ideal formula", _species_mass(rec)))
     cc = cell_consistency(text, (comp or {}).get('counts'), cif, (ex.get('optics') or {}).get('D_calc'), bool((comp or {}).get('verified') and (comp or {}).get('ok')), masses=masses)
     if f.get('cell') and f['cell']['status'] != 'agrees':                # the powder table's word, when it spoke, outranks the arithmetic
-        _set(f, 'cell', cc['status'], 'cell_consistency' if cc['status'] != 'nooracle' else None, cc['detail'], value=_cell_str(cc['cell']) if cc.get('cell') else None)
+        cs = cc.get('cell_status', cc['status'])                          # the cell's own standing (volume, .cif); the density check speaks through the D_calc record
+        _set(f, 'cell', cs, 'cell_consistency' if cs != 'nooracle' else None, cc['detail'], value=_cell_str(cc['cell']) if cc.get('cell') else None)
     lines += _section(cc['lines'])
+    # the density from the cell, Z and the formula vouches for the printed D_calc (when the cell check
+    # agreed, that is what it agreed on); and the two printed densities vouch for each other: a measured
+    # density within 4 % of the calculated one is the usual case, and a misread value (another mineral's
+    # density, a digit lost) is far outside it. Only for a field no other oracle adjudicated.
+    if f.get('optics.D_calc', {}).get('status') == 'nooracle' and cc.get('D'):
+        dd = cc['D']
+        _set(f, 'optics.D_calc', 'disagrees' if cc.get('red') else 'agrees' if dd['ok'] else 'unverified', 'cell_consistency',
+             'D from Z = %g, the cell and the formula %.3f vs %.3f printed (%+.1f %%)' % (dd['Z'], dd['computed'], dd['printed'], (dd['computed'] - dd['printed']) / dd['printed'] * 100))
+    Dm, Dc = o.get('D_meas'), o.get('D_calc')
+    if Dm and Dc and 1.0 <= Dm <= 25.0 and 1.0 <= Dc <= 25.0:
+        gap = abs(Dm - Dc) / Dc
+        for key in ('optics.D_meas', 'optics.D_calc'):
+            if f.get(key, {}).get('status') == 'nooracle':
+                _set(f, key, 'agrees' if gap <= 0.04 else 'unverified', 'density',
+                     'D_meas %.3f vs D_calc %.3f (%+.1f %%)%s' % (Dm, Dc, (Dm - Dc) / Dc * 100, '' if gap <= 0.04 else ' — beyond the usual 4 %'))
+        if gap > 0.04 and gap <= 0.5:
+            lines.append('density: D_meas %.3f vs D_calc %.3f (%+.1f %%) — beyond the usual agreement; a misread value, or a porous or impure sample [unverified]' % (Dm, Dc, (Dm - Dc) / Dc * 100))
     # the species
     sp = species_check(ex, comp)
     _set(f, 'name', sp['status'], 'species' if sp['status'] != 'nooracle' else None, sp['detail'])
@@ -2970,13 +3128,7 @@ def main(argv=None):
     ap.add_argument('pdf'); ap.add_argument('--out', help='where the data files go (default <pdf dir>/review_out)')
     ap.add_argument('--check', action='store_true', help="check the paper against itself: its formula from its own table and basis, its bond-valence table against the .cif")
     ap.add_argument('--cif', help='the structure .cif, for the bond-valence check')
-    ap.add_argument('--pages', choices=['fitz', 'docling'], default='fitz', help='how the tables are read: the pdf text (fitz) or the layout model (docling, pip install "pxrd-review[layout]")')
     a = ap.parse_args(argv)
-    if a.pages == 'docling':
-        from pxrd_review import layout_reader as LR
-        if not LR.available():
-            sys.exit('--pages docling: the layout reader is not installed (pip install "pxrd-review[layout]")')
-        set_pages_reader(LR.pages, 'fallback')
     if a.check:
         r = check_paper(a.pdf, a.cif, None)
         print('\n'.join(r['lines']) or 'nothing to check: no analytical table or formula sentence found')

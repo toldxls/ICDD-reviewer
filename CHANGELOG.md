@@ -19,8 +19,8 @@ package version in `pyproject.toml`.
   `nooracle`. A refractive index outside 1.3–3.0 or a density outside 1–25 is marked unverified
   before any oracle sees it. `check_paper` prints a first line `readers: table ✓ (p6) · formula ✓ ·
   basis ? · n ✓ · …` and two new sections, `Gladstone–Dale:` and `cell:`. The only new red line is a
-  D_calc that follows from none of the paper's formulas (empirical and ideal) with the cell and Z, off
-  by 3–15 %: four papers on the corpus. The compatibility index is never red — on the corpus a strict
+  D_calc that follows from none of the paper's formulas (empirical and ideal) with the cell and Z
+  (tightened on 2026-09-06, below: 5–15 %, the paper's own Z, an anchored cell, an anhydrous formula). The compatibility index is never red — on the corpus a strict
   comparison flagged fifty papers, K_C at fault in most — it agrees within 0.03 or is a doubt.
 - **Fill ▸ runs the checks.** The Tables mode fills from `check_paper` instead of the bare reader:
   each filled input carries a mark — ✓ an oracle agrees, ? unverified, ✗ disagrees — with the
@@ -31,25 +31,25 @@ package version in `pyproject.toml`.
   is replaced by the one that does, marked ?.
 - **The corpus harness reports a per-reader verified rate** (`tools/corpus_paper_extract.py` →
   `paper_checks_readers.csv`): read / verified / agree / disagree / unverified / nooracle per field —
-  the standing metric for the readers from here on. Two of today's validation scripts joined the
-  tools: `tools/corpus_pxrd_ab.py` (the powder reader against a baseline copy of itself, with the
-  cell metric: d from the .cif cell vs the parsed h k l and d) and `tools/corpus_cell_survey.py`
-  (what `cell_check` says on every paper). Baseline recorded on the 694 distinct corpus pdfs:
+  the standing metric for the readers from here on. It also writes a per-paper record
+  (`paper_checks_papers<tag>.json`) and `--baseline <that json>` diffs a run against an earlier one,
+  reader by reader and paper by paper — the A/B for a reader change, with no worktree or module copy
+  (the baseline is the old code's record). The same run carries what a separate cell survey used to
+  (`tools/corpus_cell_survey.py`, retired): the powder-vs-cell statuses and the red list.
+  `tools/corpus_pxrd_ab.py` remains for the powder reader itself (against a baseline copy of the
+  module, with the cell metric: d from the .cif cell vs the parsed h k l and d). Baseline recorded on the 694 distinct corpus pdfs:
   obs 15,225 / calc 18,374 / suspect 30 / cell-consistent 4,379 of 4,887 calc rows (90 %, a lost
   overbar tolerated); `cell_check` red on 19 papers.
 - `paper_extract.set_pages_reader(fn)` — a hook to swap the pdf page reader (for a layout model),
   mirroring `cell_lambda_check.set_pdf_reader`.
-- **A layout model for the tables, as an option** (`pip install "pxrd-review[layout]"`, docling, MIT,
-  fully local, Python ≥ 3.10; `pxrd paper --pages docling`; `pxrd_review.layout_reader`): a page's
-  tables come back with their cell structure and are handed to the same table readers as a grid, the
-  way a manuscript .docx already is; converted once per pdf (cached under `.cache/layout`). Measured
-  on the 171 corpus papers with a .cif cell: as a replacement for the pdf-text reader it loses more
-  than it gains (cell-consistent calculated rows 89.6 % → 85.3 %, the largest tables truncated), so
-  it is not that; as a fallback — the pdf text first, the model only on a page where nothing was
-  read — it adds lines to four papers and takes none away (consistency 89.6 % → 88.8 %, one of the
-  four a table it mis-structured). That is what `--pages docling` does; it stays off by default and
-  out of the GUI. Median 12 s per paper on this Mac after the first, but a 6-page supplement took
-  16 minutes: not for reviewers' machines.
+- **A layout model for the tables was tried and is not shipped.** docling (MIT, fully local) was
+  built in as `pxrd_review.layout_reader` behind `pip install "pxrd-review[layout]"` and measured on
+  the corpus: as a replacement for the pdf-text reader it loses more than it gains (cell-consistent
+  calculated rows 89.6 % → 85.3 %, the largest tables truncated); as a fallback it adds lines to
+  four papers and takes none away; on the coordinates tables of the paper-structure harness it read
+  worse again; and a 6-page supplement took 16 minutes. Removed before release — the extra, the
+  module, `--pages docling` and the GUI option are gone; `paper_extract.set_pages_reader` stays as
+  the hook for a second page reader.
 - **A paper without a .cif can still have its bond-valence table checked — against the structure
   the paper itself prints** (`pxrd_review/paper_structure.py`). Roughly half the corpus's papers
   print a coordinates table, a space-group symbol and a cell; the other half deposit them with the
@@ -69,6 +69,63 @@ package version in `pyproject.toml`.
   public tool must not offer to upload one. Both readers that remain — the pdf-text reader and the
   optional layout model — run on the reviewer's machine. The record layer keeps the `reader` field
   it was given, so a future reader is a local one.
+
+### Changed — the readers' remaining gaps, closed where the corpus could reach them (2026-09-06)
+Six gaps were named after the record layer landed; each was measured on the 1,077-paper corpus
+(`tools/corpus_paper_extract.py … --baseline`, the old code's record against the new) and fixed where
+a fix was reachable:
+- **Composition: the paper's own word on which numbers, read whole.** Papers list the analysis in
+  prose right before the formula sentence ('… SiO2 29.35, F 2.41, H2O 0.26, total 101.18. The
+  empirical formula is …' — 218 corpus papers do); the formula's context held only its last 200
+  characters, so a long list was truncated and the tool fell back to fitting a table column. The
+  prose run is now looked for in the 1,400 characters before the formula (`_prose_before`), in
+  either order ('0.03 Na2O, 3.70 K2O' as well as 'Na2O 0.03'), with a parenthesised range and s.d.
+  after a value, and it is the first candidate whenever it exists — before any header-named column.
+  A formula that writes the lanthanides as one REE folds the table's Ln2O3 rows for every candidate,
+  not only the first read; a Σ printed as `6=` (font) is read; and a names row above the header
+  ('Burnettite Melilite Paqueite …' over 'Constituent wt% n = 5 SD') is part of the header when it
+  sits below the caption and reads like one. Composition on the corpus: 587 → 597 of 713 papers reproduce exactly, 108 → 104 unverified, the same 12 flags.
+- **The observed powder lines have an oracle.** An observed line without a calculated partner in the
+  table used to count against the reading (a tenth of them and the column was 'unverified'), but
+  tables legitimately list lines they never index — on the corpus the median such table left 29 % of
+  its observed lines unindexed. An unpaired line is now looked for among every reflection the cell
+  allows (`_reflection_ds`, no extinction rule; pairing within the table's own scatter): a line on the
+  cell is 'left unindexed by the table', a line on no reflection is a note ('a typo, or another
+  phase'), and the column is vouched for unless more than one in twenty sits on none. `pxrd.obs`
+  verified 35 % → 62 % (194 → 341 of 551 readings), no new red line.
+- **The densities are adjudicated.** Z belongs to the structure, so a powder cell quoted without it
+  borrows the one Z the paper states elsewhere (its single-crystal sentence, its crystal-data table,
+  or the .cif's `_cell_formula_units_Z`) — 200 corpus papers printed a Z the cell reader had not
+  attached; the D_calc record now takes the cell oracle's verdict (Z, the cell and the formula
+  against the printed value: agrees / a doubt / the existing red line), not only Gladstone–Dale's;
+  and the two printed densities vouch for each other: a measured density within 4 % of the
+  calculated one is the usual case, and a misread value is far outside it. `optics.D_calc`
+  verified 20 % → 62 % (103 → 326 of 526 agree), `optics.D_meas` 31 % → 58 %, and the cell 72 % → 74 %. The D_calc red line
+  is tightened at the same time: it needs the paper's own Z beside the cell (a borrowed one supports a
+  ✓ or a doubt, never a red line), a cell whose printed volume or .cif vouches for the axes, an
+  anhydrous formula (a hydrate count is what the text layer loses) and 5–15 % off — the first pass
+  without those guards drew eleven red lines, five of them on cells whose axes the reader had
+  misread. One paper stays red on the corpus (I003395, −5.4 %), unvetted by hand; two more were
+  red until the Mindat-mass defect below was fixed — their D_calc follows from the ideal formula.
+- **Six defects a cross-file review of the unreleased 0.5.6 code found, fixed** (a medium `/code-review`;
+  its other angles did not finish): Mindat's ideal formula is HTML, and its mass was read by a token scan
+  that dropped every subscript (abelsonite 86 instead of 519) — that garbage stood in as "an ideal
+  formula" for the density oracle's two-formula guard; it is now read by the formula parser
+  (`_species_mass`). A .cif that a space-group symbol with two origin choices stands in for is
+  noted as such (`bv_check`: "setting 1 of 2 — check the origin"). Fill ▸ dropped a name Mindat
+  rejected as another mineral's but kept the .cif that name had chosen, so the bond-valence check and
+  the Gladstone–Dale cell were that other mineral's; the .cif goes with the name. The bond-valence
+  check against the structure the paper itself prints was shown under whichever .cif the Tables mode
+  had selected; it is now labelled as the paper's own structure and shown whatever is selected. The
+  `readers:` line was a finding anchored to the first page it mentioned; it is anchored to none. A
+  paper-structure build that failed after its loop left its temporary directory behind; it is removed.
+- **Bond valence: the gap is in the files, not the reader.** 923 corpus papers have no .cif beside
+  them at all; of the 40 with .cif files sharing no I-number, matching by cell finds three. Nothing
+  more to read: a paper without its .cif is checked against the structure it prints (0.5.6) or not
+  at all.
+- **Manuscript mode's ground truth** is what a .cif and Mindat give: the cell, Z and space group
+  from the .cif, the species from Mindat, and the paper's own arithmetic; a manuscript with an
+  internally consistent error and no .cif still passes — there is no entry to compare it with.
 
 ## [0.5.5] — 2026-09-05
 

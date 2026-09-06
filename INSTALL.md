@@ -176,11 +176,7 @@ act on; this is the only one the tool writes.
 
 ---
 
-## 4. Two optional readers for the paper checker (Python 3.10+) — for the owner, not needed by reviewers
-
-- **Layout model** — `pip install "pxrd-review[layout]"` installs docling (MIT, runs fully on your
-  machine; downloads its models on first use, ~1 GB). Then `pxrd paper --pages docling …` reads a
-  paper's tables through it. Off unless asked for.
+## 4. Where a paper's text goes
 
 **Every paper is parsed on your machine.** The tool reads a paper's tables and sentences with its own
 code; nothing about a paper — not the file, not its text, not a value read from it — is sent to any

@@ -905,3 +905,94 @@ class DocxPaper(unittest.TestCase):
         self.assertEqual((len(o), len(c)), (5, 5)); self.assertEqual(o[0], (6.23, 100.0)); self.assertEqual(c[2], (4.001, 12.0, (2, 1, 10)))   # a two-line header; '2.1.10'
         o, c = PE._pt_read(pages[2], lambda i: PE._caption(pages[2], i))
         self.assertEqual([d for d, _ in o], [6.23, 5.12, 4.0, 3.45]); self.assertEqual(c, [])            # this study's sample only; no calc without a calc column
+
+
+class GapFixes(unittest.TestCase):
+    """The 2026-09-06 gap work: the prose composition before the formula sentence read whole and in
+    either order; a Σ printed as '6='; an observed line judged against the cell's own reflections; Z
+    borrowed from the paper's other cell statement or the .cif; the two densities vouching for each
+    other; D_calc adjudicated by the cell, Z and the formula."""
+
+    def test_prose_value_first_and_parenthesised_ranges(self):
+        pt = PE.prose_table('The composition (wt %) is: 0.03 Na2O, 3.70 K2O, 12.18 Rb2O, 2.02 Cs2O, 4.0 Li2O and 53.14 SiO2, total 100.30.')
+        self.assertEqual([(r['constituent'], r['mean']) for r in pt['rows']][:3], [('Na2O', 0.03), ('K2O', 3.7), ('Rb2O', 12.18)])
+        self.assertEqual(pt['total'], 100.3)
+        pt = PE.prose_table('La2O3 8.54 (8.03–9.01, 0.25), Ce2O3 14.12 (13.03–14.90, 0.46), Pr2O3 4.59 (4.19–4.98, 0.19), Nd2O3 3.91 (3.54–4.31, 0.15), total 99.1')
+        self.assertEqual([r['mean'] for r in pt['rows']], [8.54, 14.12, 4.59, 3.91])
+        self.assertIsNone(PE.prose_table('at 2.5 V, 3.1 K and 4.0 T, 7.2 mA'))                     # units, not constituents
+
+    def test_prose_before_the_formula_is_read_whole(self):
+        oxides = ', '.join('%s %.2f' % (c, v) for c, v in (('SiO2', 40.12), ('TiO2', 0.51), ('ZrO2', 0.11), ('Al2O3', 20.05), ('Cr2O3', 0.12), ('V2O3', 0.05), ('Fe2O3', 3.10), ('FeO', 7.10), ('MnO', 0.30), ('MgO', 18.10), ('NiO', 0.04), ('ZnO', 0.03), ('CaO', 0.90), ('SrO', 0.02), ('BaO', 0.02), ('Na2O', 0.22), ('K2O', 0.10), ('Rb2O', 0.01), ('P2O5', 0.05), ('La2O3', 0.02), ('Ce2O3', 0.03), ('Nd2O3', 0.02), ('Y2O3', 0.02), ('SnO2', 0.01), ('PbO', 0.02), ('F', 0.10), ('Cl', 0.02), ('H2O', 9.80)))
+        text = 'Text before. The mean composition (wt.%) is: ' + oxides + ', total 100.42. The empirical formula (based on 14 O apfu) is Mg2.68Fe0.59Al2.35Si3.99O14. More text.'
+        fs = PE._formulas(text, 'newmineralite')
+        self.assertTrue(fs)
+        pt = PE._prose_before(text, fs[0][5])
+        self.assertEqual(len(pt['rows']), 28); self.assertEqual(pt['rows'][0]['constituent'], 'SiO2')
+        self.assertLess(len(PE.prose_table(fs[0][5])['rows']), 28)                                       # the context alone holds only the tail of the list
+
+    def test_sigma_printed_as_six_equals(self):
+        f = PE._journal_to_icdd('A(Na0.79K0.16Pb0.01)6=0.96B(Ca1.26Na0.72)6=2.00')
+        self.assertIn('Σ0.96', f); self.assertIn('Σ2.00', f); self.assertNotIn('6=', f)
+
+    def test_observed_lines_on_the_cell(self):
+        cell = {'a': 4.5937, 'b': 4.5937, 'c': 2.9587, 'α': 90.0, 'β': 90.0, 'γ': 90.0}          # rutile
+        ds = PE._reflection_ds(cell, 1.6)
+        self.assertTrue(PE._on_cell(ds, 3.247, 0.005)); self.assertTrue(PE._on_cell(ds, 1.6874, 0.005))   # (110), (211)
+        self.assertFalse(PE._on_cell(ds, 3.05, 0.005)); self.assertFalse(PE._on_cell(ds, 4.9, 0.005))      # nothing there; beyond the largest d
+        from docx import Document
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'rutile.docx')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = Document()
+        doc.add_paragraph('Rutile. The powder pattern was indexed on a tetragonal cell, a = 4.5937(2), c = 2.9587(1) Å, V = 62.43 Å3, Z = 2.')
+        doc.add_paragraph('Table 2. Powder X-ray diffraction data for rutile.')
+        t = doc.add_table(rows=0, cols=7)
+        for row in (('Iobs', 'dobs', 'Icalc', 'dcalc', 'h', 'k', 'l'), ('100', '3.248', '100', '3.2482', '1', '1', '0'), ('50', '2.487', '48', '2.4874', '1', '0', '1'),
+                    ('3', '2.297', '', '', '', '', ''), ('20', '2.187', '19', '2.1873', '1', '1', '1'), ('2', '2.100', '', '', '', '', ''), ('10', '2.054', '9', '2.0544', '2', '1', '0'), ('60', '1.687', '58', '1.6874', '2', '1', '1')):
+            cells = t.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.save(path)
+        cc = PE.cell_check(path, None)
+        self.assertEqual(cc['status'], 'checked'); self.assertEqual(sorted(cc['unmatched_obs']), [2.1, 2.297])
+        self.assertEqual(cc['off_cell'], [2.1])                                                        # 2.297 is the unindexed (200); 2.100 lies on nothing
+        self.assertTrue(any(l.startswith('1 observed line without a calculated partner in the table lies on reflections') for l in cc['lines']), cc['lines'])
+        self.assertTrue(any(l.startswith('observed 2.1: no calculated line within 0.5 % and no reflection') for l in cc['lines']), cc['lines'])
+        r = PE.check_paper(path, None, None)
+        self.assertEqual(r['fields']['pxrd.obs']['status'], 'agrees')                                    # one stray in seven: the column is vouched for
+        self.assertIn('7 observed lines: 5 paired', r['fields']['pxrd.obs']['detail'])
+
+    def test_z_borrowed_and_the_densities_vouch(self):
+        # the powder cell carries no Z; the single-crystal sentence does — the density oracle uses it
+        text = ('The structure was refined in P42/mnm with a = 4.594(1), c = 2.959(1) Å, Z = 2. The powder pattern was indexed on '
+                'a tetragonal cell, a = 4.5937(2), c = 2.9587(1) Å, V = 62.43 Å3 (powder data).')
+        cc = PE.cell_consistency(text, {'Ti': 1, 'O': 2}, None, 4.25, verified_formula=True)
+        self.assertEqual(cc['status'], 'agrees'); self.assertEqual(cc['D']['Z'], 2); self.assertTrue(cc['D']['ok'])
+        cc = PE.cell_consistency('a = 4.5937(2), c = 2.9587(1) Å, V = 62.43 Å3. Z = 2 for the structure.', {'Ti': 1, 'O': 2}, None, 4.25, verified_formula=True)
+        self.assertEqual(cc['D']['Z'], 2)                                                                # a Z stated anywhere, when it is the paper's only one
+        cc = PE.cell_consistency('a = 4.5937(2), c = 2.9587(1) Å. ' + 'filler words ' * 30 + 'Z = 2 for one phase and Z = 4 for the other.', {'Ti': 1, 'O': 2}, None, 4.25, verified_formula=True)
+        self.assertIsNone(cc['D'])                                                                       # two Zs: none borrowed
+        # the record layer: D_calc from the cell, and D_meas vouched for by D_calc
+        from docx import Document
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'rutile.docx')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = Document()
+        doc.add_paragraph('Rutile from Nowhere. Rutile is tetragonal, a = 4.5937(2), c = 2.9587(1) Å, V = 62.43 Å3, Z = 2. '
+                          'The density measured by flotation is 4.23(2) g/cm3; the calculated density is 4.25 g/cm3 for the empirical formula. '
+                          'The empirical formula (based on 2 O apfu) is Ti1.00O2.')
+        doc.add_paragraph('Table 1. Analytical data for rutile.')
+        t = doc.add_table(rows=0, cols=3)
+        for row in (('Constituent', 'wt%', 'Range'), ('TiO2', '99.80', '99.5–100.1'), ('FeO', '0.10', '0.0–0.2'), ('SiO2', '0.05', '0.0–0.1'), ('Total', '99.95', '')):
+            cells = t.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.save(path)
+        r = PE.check_paper(path, None, None); F = r['fields']
+        self.assertEqual((F['optics.D_calc']['status'], F['optics.D_calc']['verified_by']), ('agrees', 'cell_consistency'))
+        self.assertEqual((F['optics.D_meas']['status'], F['optics.D_meas']['verified_by']), ('agrees', 'density'))
+
+    def test_species_mass_from_mindat_html(self):
+        M = PE._species_mass({'formula': 'Ni<sup>2+</sup>C<sub>31</sub>H<sub>32</sub>N<sub>4</sub>'})           # abelsonite
+        self.assertAlmostEqual(M, 58.693 + 31 * 12.011 + 32 * 1.008 + 4 * 14.007, delta=1.0)
+        M = PE._species_mass({'formula': 'Ca<sub>2</sub>(UO<sub>2</sub>)<sub>3</sub>(CO<sub>3</sub>)<sub>5</sub>·8H<sub>2</sub>O'})
+        self.assertAlmostEqual(M, 2 * 40.078 + 3 * (238.029 + 2 * 15.999) + 5 * (12.011 + 3 * 15.999) + 8 * 18.015, delta=2.0)
+        self.assertIsNone(PE._species_mass({'formula': ''})); self.assertIsNone(PE._species_mass(None))
