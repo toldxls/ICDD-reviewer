@@ -318,8 +318,22 @@ def _op_str(op):
 GATE = float(os.environ.get('GII_GATE', '0.25'))       # a structure whose valences do not come out is refused
 
 
+def _use_layout_reader():
+    """PAGES=docling reads the tables through the layout model instead of the pdf's word positions —
+    a coordinates table is dense and gridded, the case a word-position reader finds hardest."""
+    if os.environ.get('PAGES') != 'docling':
+        return False
+    from pxrd_review import layout_reader as LR
+    if not LR.available():
+        print('PAGES=docling asked for but docling is not installed'); return False
+    PE.set_pages_reader(LR.pages, 'replace')
+    return True
+
+
 def main(folders):
     stat = collections.Counter(); rows = []
+    if _use_layout_reader():
+        print('reading pages through the layout model (docling)\n')
     tmpdir = tempfile.mkdtemp(prefix='paperstruct_')
     for folder in folders:
         for cif, pdfs in pairs(folder):

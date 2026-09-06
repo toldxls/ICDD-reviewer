@@ -1951,7 +1951,11 @@ def _check_formula(ex, text, fcand):
     n_means = max(len(re.findall(r'\b(mean|average|aver\.?|avg\.?)\b', hdr, re.I)), len(re.findall(r'\bsample\b|#\d|\bn\s*=\s*\d', hdr, re.I)))
     if n_means >= 2 and r['score'] > 0.02 and r['diffs']:
         doubts.append('the table holds %d samples and the first fits the formula only to %.0f%% — the formula may belong to another' % (n_means, 100 * r['score']))
-    if r['diffs'] and not re.search(r'wt\.?\s*%|mean|average|range|s\.?d\.?|standard|oxide|constituent|element|component|composition|analys', hdr, re.I) and not e.get('prose'):
+    # the doubt this raises is "we may have grabbed a column of numbers that is not the analysis".
+    # A transposed table settles it by construction — its header IS the constituent row — and so
+    # does a caption that names the table as the chemical one; neither carries the words below.
+    hdr_unknown = not re.search(r'wt\.?\s*%|mean|average|range|s\.?d\.?|standard|oxide|constituent|element|component|composition|analys', hdr, re.I)
+    if r['diffs'] and hdr_unknown and not e.get('prose') and not e.get('transposed') and not _CAP_YES.search(e.get('caption') or ''):
         doubts.append('the table\'s header was not recognised — the values used may be one analysis rather than the mean')
     # H comes from hydrate and hydroxyl notation the text extraction mangles, and is usually the
     # authors' own calculation: informational, never a flag on its own
@@ -1965,6 +1969,16 @@ def _check_formula(ex, text, fcand):
     extra = sorted(set(EP.parse_constituent(c).element for c, v in wt.items() if _parses(c) and v >= 1.0 and EP.parse_constituent(c).kind != 'water') - set(counts) - {'O', 'H'})
     if extra:
         doubts.append('the table has %s at 1 wt%% or more that the formula read does not carry — a simplified or another formula sentence was read' % ', '.join(extra))
+    # A basis the paper does not state is one the tool chose, and a cation or element sum that is
+    # not a round number was not chosen — it was read off the formula's own printed Σ (Ni+Co+Fe =
+    # 18.03, Pd+Cu = 2.02). Normalising a formula to the sum of its own cations reproduces those
+    # cations by construction, so a deviation against it is not evidence of anything. No paper
+    # normalises to 18.03; a stated basis, or an inferred round one, still can be a finding.
+    if r['diffs'] and not ex.get('basis') and r['basis'] and r['basis'][0] in ('cations', 'element'):
+        n_ = r['basis'][-1]
+        if abs(n_ - round(n_)) > 0.02:
+            doubts.append('the paper states no basis and the one that reproduces its formula, %s, is the formula\'s own '
+                          'printed sum — a deviation against it is circular' % EP._basis_label(r['basis']))
     verified = not doubts
     lines = []
     b = r['basis']
