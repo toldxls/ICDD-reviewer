@@ -43,7 +43,8 @@ jobs:
                   'pxrd_review.extra_checks', 'pxrd_review.annotate_review', 'pxrd_review.mindat',
                   'pxrd_review.paths', 'pxrd_review.errors', 'pxrd_review.sweep',
                   'pxrd_review.candidate_groups', 'pxrd_review.regression_check',
-                  'pxrd_review.gui.review_gui', 'pxrd_review.gui._pdf_worker')
+                  'pxrd_review.gui.review_gui', 'pxrd_review.gui._pdf_worker',
+                  'pxrd_review.paper_extract', 'pxrd_review.layout_reader')   # the layout reader imports without docling
           for m in mods:
               importlib.import_module(m)
           from pxrd_review import __version__ as v
@@ -74,7 +75,7 @@ jobs:
           # the one .cif that BELONGS in the wheel: Brown's bond-valence parameter table
           BUNDLED = {'pxrd_review/data/bvparm2020.cif'}
           leak = [n for n in names if n not in BUNDLED and any(s in n.lower() for s in
-                  ('mindat_key', '.cache', 'scratch', '.docx', '.pdf', '.cif', '.dft'))]
+                  ('mindat_key', 'anthropic_key', '.cache', 'scratch', '.docx', '.pdf', '.cif', '.dft'))]
           assert not leak, 'secret/corpus leaked into the wheel: %s' % leak
           assert any(n.endswith('.json.gz') for n in names), 'bundled Mindat snapshot missing'
           assert BUNDLED <= set(names), 'bond-valence parameter table missing from the wheel'

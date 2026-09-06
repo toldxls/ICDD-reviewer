@@ -1,4 +1,5 @@
 .mindat_key
+.anthropic_key
 .cache/
 # local analysis scratch (mined DC fields etc. — derived from the private corpus)
 .scratch/

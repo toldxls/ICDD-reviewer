@@ -176,7 +176,18 @@ act on; this is the only one the tool writes.
 
 ---
 
-## 4. Mindat API key — optional
+## 4. Two optional readers for the paper checker (Python 3.10+) — for the owner, not needed by reviewers
+
+- **Layout model** — `pip install "pxrd-review[layout]"` installs docling (MIT, runs fully on your
+  machine; downloads its models on first use, ~1 GB). Then `pxrd paper --pages docling …` reads a
+  paper's tables through it. Off unless asked for.
+
+**Every paper is parsed on your machine.** The tool reads a paper's tables and sentences with its own
+code; nothing about a paper — not the file, not its text, not a value read from it — is sent to any
+outside service. The only network calls the tool makes are to the Mindat API for the mineral-species
+cache (section 5), and to GitHub to check for a new version (`PXRD_NO_UPDATE_CHECK=1` turns that off).
+
+## 5. Mindat API key — optional
 
 **Skip this unless you want fresher Mindat data.** The tool ships with a Mindat snapshot and
 works fully offline without a key; the header tells you how old that snapshot is. A key only

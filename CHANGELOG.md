@@ -4,6 +4,58 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+## [0.5.6] — unreleased
+
+### Added — what was read, and what vouches for it
+- **A record behind every reading.** `extract()` returns `fields`: for the table, formula, basis,
+  method, n, D_meas, D_calc, cell, bond-valence set, powder lines and name — the value, where it was
+  read, which reader read it, and what vouched for it: the composition re-derived from the table
+  (`check_composition`), the powder table against the cell (`cell_check`), the bond-valence table
+  against the .cif (`bv_check_paper`), Gladstone–Dale for the optics (new `gd_check`, with the
+  paper's own compatibility statement read by `gd_statement`), the cell against its own printed
+  volume, its density from Z and the formula, and the .cif (new `cell_consistency`), and Mindat's
+  species for the name (new `species_check`). A field an oracle adjudicated is `agrees` or
+  `disagrees`; one it looked at with doubts is `unverified`; one nothing could check is
+  `nooracle`. A refractive index outside 1.3–3.0 or a density outside 1–25 is marked unverified
+  before any oracle sees it. `check_paper` prints a first line `readers: table ✓ (p6) · formula ✓ ·
+  basis ? · n ✓ · …` and two new sections, `Gladstone–Dale:` and `cell:`. The only new red line is a
+  D_calc that follows from none of the paper's formulas (empirical and ideal) with the cell and Z, off
+  by 3–15 %: four papers on the corpus. The compatibility index is never red — on the corpus a strict
+  comparison flagged fifty papers, K_C at fault in most — it agrees within 0.03 or is a doubt.
+- **Fill ▸ runs the checks.** The Tables mode fills from `check_paper` instead of the bare reader:
+  each filled input carries a mark — ✓ an oracle agrees, ? unverified, ✗ disagrees — with the
+  reason as its tooltip, the EPMA tab shows the check text, and the status line starts with the
+  `readers:` summary. What Fill ▸ now leaves out, and says so: a name whose Mindat species has
+  elements the paper lacks (a running head's mineral), a table whose total is outside 85–112 wt%,
+  an n outside 1.3–3.0, a density outside 1–25; a stated basis that does not reproduce the formula
+  is replaced by the one that does, marked ?.
+- **The corpus harness reports a per-reader verified rate** (`tools/corpus_paper_extract.py` →
+  `paper_checks_readers.csv`): read / verified / agree / disagree / unverified / nooracle per field —
+  the standing metric for the readers from here on. Two of today's validation scripts joined the
+  tools: `tools/corpus_pxrd_ab.py` (the powder reader against a baseline copy of itself, with the
+  cell metric: d from the .cif cell vs the parsed h k l and d) and `tools/corpus_cell_survey.py`
+  (what `cell_check` says on every paper). Baseline recorded on the 694 distinct corpus pdfs:
+  obs 15,225 / calc 18,374 / suspect 30 / cell-consistent 4,379 of 4,887 calc rows (90 %, a lost
+  overbar tolerated); `cell_check` red on 19 papers.
+- `paper_extract.set_pages_reader(fn)` — a hook to swap the pdf page reader (for a layout model),
+  mirroring `cell_lambda_check.set_pdf_reader`.
+- **A layout model for the tables, as an option** (`pip install "pxrd-review[layout]"`, docling, MIT,
+  fully local, Python ≥ 3.10; `pxrd paper --pages docling`; `pxrd_review.layout_reader`): a page's
+  tables come back with their cell structure and are handed to the same table readers as a grid, the
+  way a manuscript .docx already is; converted once per pdf (cached under `.cache/layout`). Measured
+  on the 171 corpus papers with a .cif cell: as a replacement for the pdf-text reader it loses more
+  than it gains (cell-consistent calculated rows 89.6 % → 85.3 %, the largest tables truncated), so
+  it is not that; as a fallback — the pdf text first, the model only on a page where nothing was
+  read — it adds lines to four papers and takes none away (consistency 89.6 % → 88.8 %, one of the
+  four a table it mis-structured). That is what `--pages docling` does; it stays off by default and
+  out of the GUI. Median 12 s per paper on this Mac after the first, but a 6-page supplement took
+  16 minutes: not for reviewers' machines.
+- **A paper is parsed locally, always.** A hosted-model reader was built and measured against the
+  same oracles, and then removed before release: a paper under review is unpublished work, and a
+  public tool must not offer to upload one. Both readers that remain — the pdf-text reader and the
+  optional layout model — run on the reviewer's machine. The record layer keeps the `reader` field
+  it was given, so a future reader is a local one.
+
 ## [0.5.5] — 2026-09-05
 
 ### Fixed — three things the owner hit testing 0.5.4

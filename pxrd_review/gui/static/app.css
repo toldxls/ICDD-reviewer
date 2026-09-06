@@ -544,6 +544,10 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 .tb-pane { flex-wrap: wrap; row-gap: 6px; }
 .tb-pane.hidden { display: none; }
 .tb-opts .opt { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.tb-opts .opt[data-verified]::after { font-weight: 700; font-size: 12px; margin-left: 2px; }
+.tb-opts .opt[data-verified="agrees"]::after { content: "✓"; color: #2e8b57; }
+.tb-opts .opt[data-verified="disagrees"]::after { content: "✗"; color: #d08a00; }
+.tb-opts .opt[data-verified="unverified"]::after, .tb-opts .opt[data-verified="nooracle"]::after { content: "?"; color: #8a8a8a; }
 .tb-opts input.n { width: 64px; }
 .tb-opts input.w { width: 280px; }
 .tb-opts .mini { padding: 1px 6px; }

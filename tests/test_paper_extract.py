@@ -824,6 +824,53 @@ class DocxPaper(unittest.TestCase):
             PE.main([path, '--check', '--cif', cif])
         self.assertIn('does not follow the cell', buf.getvalue())
 
+    def test_records_and_oracles(self):
+        """Every reading carries a record; the oracles fill them: the composition for the table and
+        formula, the cell for the powder table, Gladstone–Dale for the optics, the cell's own volume
+        and density, Mindat for the name."""
+        from docx import Document
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'rutile.docx')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = Document()
+        doc.add_paragraph('Rutile from Nowhere. Rutile is tetragonal, a = 4.5937(2), c = 2.9587(1) Å, V = 62.43 Å3, Z = 2. '
+                          'The calculated density is 4.248 g/cm3. Optically uniaxial (+), ω = 2.616, ε = 2.903. '
+                          'The compatibility index, 1 − (KP/KC), is superior. '
+                          'The empirical formula, calculated on the basis of 2 O apfu, is Ti1.00O2.')
+        doc.add_paragraph('Table 1. Chemical data (wt%) for rutile.')
+        t = doc.add_table(rows=1, cols=4)
+        for c, h in zip(t.rows[0].cells, ('Constituent', 'Mean', 'Range', 'S.D.')):
+            c.text = h
+        for row in (('TiO2', '99.10', '98.80–99.40', '0.21'), ('FeO', '0.40', '0.30–0.50', '0.07'), ('SiO2', '0.30', '0.20–0.40', '0.06'), ('Total', '99.80', '', '')):
+            cells = t.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.add_paragraph('Table 2. Powder X-ray diffraction data for rutile.')
+        t2 = doc.add_table(rows=0, cols=7)
+        for row in (('Iobs', 'dobs', 'Icalc', 'dcalc', 'h', 'k', 'l'), ('100', '3.248', '100', '3.2482', '1', '1', '0'), ('50', '2.487', '48', '2.4874', '1', '0', '1'),
+                    ('8', '2.297', '7', '2.2969', '2', '0', '0'), ('20', '2.187', '19', '2.1873', '1', '1', '1'), ('60', '1.687', '58', '1.6874', '2', '1', '1')):
+            cells = t2.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.save(path)
+        r = PE.check_paper(path, None, None); F = r['fields']
+        self.assertTrue(r['lines'][0].startswith('readers: table ✓'), r['lines'][0])
+        self.assertEqual({k: F[k]['status'] for k in ('epma', 'formula', 'basis', 'method', 'optics.n', 'optics.D_calc', 'cell', 'pxrd.calc', 'pxrd.obs')},
+                         {'epma': 'agrees', 'formula': 'agrees', 'basis': 'agrees', 'method': 'none', 'optics.n': 'agrees', 'optics.D_calc': 'agrees', 'cell': 'agrees', 'pxrd.calc': 'agrees', 'pxrd.obs': 'agrees'}, r['lines'])
+        self.assertIn(F['name']['status'], ('agrees', 'nooracle', 'none')); self.assertEqual(F['optics.D_meas']['status'], 'none'); self.assertEqual(F['bv.params']['status'], 'none')
+        self.assertEqual((F['epma']['verified_by'], F['pxrd.calc']['verified_by'], F['optics.n']['verified_by']), ('composition', 'cell', 'gd'))
+        self.assertTrue(any(l.startswith('cell: a=4.5937') and 'V from the axes 62.4 vs 62.4' in l and 'D from Z=2' in l for l in r['lines']), r['lines'])
+        self.assertTrue(any(l.startswith('Gladstone–Dale: n 2.7117') for l in r['lines']), r['lines'])
+        # the unit pieces
+        g = PE.gd_statement('The compatibility index, 1 − (KP/KC), is −0.012, in the superior range of Mandarino (1981).')
+        self.assertEqual((g['ci'], g['category']), (-0.012, 'superior'))
+        cc = PE.cell_consistency('The cell is a = 4.5937, c = 2.9587 Å, V = 62.43 Å3, Z = 2 (powder data).', {'Ti': 1, 'O': 2}, None, 4.60, verified_formula=True)
+        self.assertEqual(cc['status'], 'unverified'); self.assertFalse(cc['red'])                    # one formula tried: a doubt, not a finding
+        cc = PE.cell_consistency('The cell is a = 4.5937, c = 2.9587 Å, V = 62.43 Å3, Z = 2 (powder data).', {'Ti': 1, 'O': 2}, None, 4.60, verified_formula=True, masses=[('the ideal formula', 79.9)])
+        self.assertEqual(cc['status'], 'disagrees'); self.assertTrue(cc['red']); self.assertTrue(any('D_calc 4.600 does not follow' in l for l in cc['lines']), cc['lines'])   # off from every formula: red
+        cc = PE.cell_consistency('The cell is a = 4.5937, c = 2.9587 Å, V = 70.0 Å3 (powder data).', None, None, None)
+        self.assertEqual(cc['status'], 'unverified'); self.assertTrue(any('does not follow from the axes' in l for l in cc['lines']))
+        self.assertTrue(PE._same_basis(('O', 8.0), ('O', 8))); self.assertFalse(PE._same_basis(('O', 8.0), ('cations', 8.0)))
+
     def test_powder_table_by_content(self):
         """The columns are typed by what they hold: an unlabelled calculated pattern, a two-line
         header, indices written as one word, and a second sample's columns left out."""

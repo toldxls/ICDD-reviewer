@@ -199,12 +199,13 @@ async function tbRender() {
   const html = r.html + (r.text && tab !== 'coords' && tab !== 'bvs' ? '<details class="tb-text"><summary class="muted">reduction / working (as pxrd prints it)</summary><pre>' + esc(r.text) + '</pre></details>' : '');
   tbRenderBody(html);
   if (tab === 'bvs' && TBS.mscheck && TBS.mscheck.key === TBS.key) tbShowCheck(TBS.mscheck);
+  if (tab === 'epma' && TBS.papercheck) tbShowCheck(TBS.papercheck, 'what the paper says, checked against itself');
 }
 
 // ---- the manuscript's own tables against the .cif (pxrd bv --table): the report goes above the tool's tables
-function tbShowCheck(c) {
+function tbShowCheck(c, what) {
   const body = $('#tb-body'); const old = body.querySelector('.tb-mscheck'); if (old) old.remove();
-  body.prepend(el('details', { class: 'tb-text tb-mscheck', open: 'open' }, el('summary', { class: 'muted' }, 'manuscript table check — ' + c.name), el('pre', {}, c.text)));
+  body.prepend(el('details', { class: 'tb-text tb-mscheck', open: 'open' }, el('summary', { class: 'muted' }, (what || 'manuscript table check') + ' — ' + c.name), el('pre', {}, c.text)));
 }
 
 async function tbExport(tab, fmt) {
@@ -231,31 +232,41 @@ async function tbFillFromPaper(pdfKey) {
   }
   const key = $('#tb-paper').value;
   if (!key) { msStatus('pick a paper (.pdf or a manuscript .docx) first'); return; }
-  const btn = $('#tb-fill'); btn.disabled = true; btn.textContent = 'Reading…';
+  const btn = $('#tb-fill'); const label = btn.textContent; btn.disabled = true; btn.textContent = 'Reading…';
   let r;
   try { r = await fetch('/api/tb/extract?pdf=' + enc(key), { method: 'POST' }).then(x => x.json()); } catch (ex) { r = { ok: false, error: String(ex) }; }
-  btn.disabled = false; btn.textContent = 'Fill ▸';
+  btn.disabled = false; btn.textContent = label;
   if (!r.ok) { msStatus('could not read the paper' + (r.error ? ': ' + r.error : '')); return; }
   let st = null;                                    // the written data files first, then the inputs
   try { st = await fetch('/api/tb/state').then(x => x.json()); } catch (_) {}
   if (st) { TBS.data = st.data || []; TBS.outputs = st.outputs || []; tbFillSelects(); }
   if (r.fill && r.fill._cif && TBS.cifs.some(c => c.key === r.fill._cif)) TBS.key = r.fill._cif;   // the same mineral's .cif
   TBS.mscheck = r.bvcheck && TBS.key ? { key: TBS.key, name: key, text: r.bvcheck } : null;     // the paper's bond-valence table vs that .cif: shown on the Bond valence tab
+  TBS.papercheck = r.checks ? { name: key, text: r.checks } : null;                            // what was read and what vouched for it: shown on the EPMA tab
+  document.querySelectorAll('.tb-opts .opt[data-verified]').forEach(l => l.removeAttribute('data-verified'));
   for (const tab of Object.keys(r.fill || {})) {
     if (tab.startsWith('_')) continue;
     for (const [k, v] of Object.entries(r.fill[tab])) {
       if (tab === 'bvs' && k === 'params') document.querySelectorAll('#tb-params button').forEach(b => b.classList.toggle('on', b.dataset.params === v));
       tbSetOpt(tab, k, v);
+      tbMark(tab, k, ((r.status || {})[tab] || {})[k]);
     }
   }
   tbRenderLists();
   const notes = r.notes || [];
-  msStatus('filled from the paper — check each tab; the EPMA basis and additions follow what the paper states');
+  msStatus((r.readers || 'filled from the paper') + ' — ✓ an oracle agrees, ? unverified, ✗ disagrees');
   if (r.fill && r.fill.epma && r.fill.epma.file) tbSetTab('epma'); else tbRender();
   $('#tb-status').textContent = 'filled from ' + key + (notes.length ? ' — ' + notes.join(' · ') : '');
   $('#tb-status').title = notes.join('\n');
 }
 $('#tb-fill').addEventListener('click', () => tbFillFromPaper());   // not the event: a truthy pdfKey would reset the select
+// the mark beside a filled input: what vouched for the value (an oracle agrees / disagrees, or nothing could)
+const TB_MARK_TITLE = { agrees: 'an oracle agrees with this reading', disagrees: 'an oracle disagrees with this reading — see the checks', unverified: 'read, but not verified — check it', nooracle: 'read; nothing to check it against' };
+function tbMark(tab, name, status) {
+  const i = tbPane(tab).querySelector('[data-opt="' + name + '"]'); if (!i || !status || status === 'none') return;
+  const lab = i.closest('.opt'); if (!lab) return;
+  lab.setAttribute('data-verified', status); lab.title = TB_MARK_TITLE[status] || status;
+}
 async function tbOpenFile(name) {
   let ok = false;
   try { ok = (await fetch('/api/tb/open?file=' + enc(name), { method: 'POST' })).ok; } catch (_) {}

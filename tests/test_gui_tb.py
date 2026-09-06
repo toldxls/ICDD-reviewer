@@ -138,7 +138,9 @@ class TablesMode(unittest.TestCase):
             self.G.MS['athread'].join(30)
         self.assertEqual([p['key'] for p in self._get('/api/tb/state')['pdfs']], ['testite.pdf'])
         r = self._post('/api/tb/extract?pdf=testite.pdf')
-        self.assertEqual(r['fill']['epma']['basis'], 'O=7'); self.assertEqual(r['fill']['epma']['add'], 'H2O=difference')
+        self.assertEqual(r['fill']['epma']['basis'], 'O=8'); self.assertEqual(r['fill']['epma']['add'], 'H2O=difference')   # the paper says 7 O, its formula holds 8 anions: the basis that reproduces it is filled, marked
+        self.assertEqual(r['status']['epma']['basis'], 'unverified'); self.assertTrue(any(n.startswith('not filled: the stated basis O=7') for n in r['notes']), r['notes'])
+        self.assertTrue(r['readers'].startswith('readers: table'), r['readers']); self.assertIn(r['status']['gd']['n'], ('agrees', 'unverified', 'nooracle'))
         self.assertEqual(r['fill']['epma']['file'], 'testite_paper_epma.csv'); self.assertIn('wollastonite', r['fill']['epma']['standards'])
         self.assertEqual((r['fill']['gd']['n'], r['fill']['gd']['density']), ('1.6100', '3.120'))
         self.assertEqual(r['fill']['bvs']['params'], 'gh'); self.assertEqual(r['fill']['pxrd']['obs'], 'testite_paper_obs.txt')
@@ -240,6 +242,7 @@ class DocxPaper(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.data[:200]); d = json.loads(r.data)
         self.assertTrue(d['ok']); self.assertEqual(d['fill']['epma']['file'], 'Rutile manuscript_docx_epma.csv')
         self.assertEqual(d['fill']['epma']['basis'], 'O=2'); self.assertEqual(d['fill']['_cif'], 'rutile')
+        self.assertEqual((d['status']['epma']['file'], d['status']['epma']['basis'], d['status']['pxrd']['calc']), ('agrees', 'agrees', 'agrees'))
         self.assertTrue(any('3 constituents' in n for n in d['notes']), d['notes'])
         self.assertIn('bond valence:', d['bvcheck'] or ''); self.assertIn('1 cells compared, 0 disagree', d['bvcheck'])
         with open(os.path.join(self.tmp, 'review_out', d['fill']['epma']['file']), encoding='utf-8') as f:

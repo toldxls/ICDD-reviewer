@@ -12,6 +12,7 @@ def main(roots, pdf_dirs, out_dir, tag=''):
     the .cif. The verdicts are the tool's, for the owner to check one by one."""
     stats = {'pdfs': 0, 'table': 0, 'formula': 0, 'comp_checked': 0, 'comp_ok': 0, 'comp_flag': 0, 'comp_unverified': 0, 'bv_checked': 0, 'bv_clean': 0, 'basis': 0, 'n': 0, 'D': 0, 'bvset': 0, 'pxrd': 0}
     lines = []; rows = []; seen = set()
+    readers = {}                                                          # field -> {status: count}: the per-reader verified rate, the standing metric
     for pd in pdf_dirs:
         for pdf in sorted(glob.glob(os.path.join(pd, '**', '*.pdf'), recursive=True)):
             if 'review_out' in pdf:
@@ -30,6 +31,8 @@ def main(roots, pdf_dirs, out_dir, tag=''):
                 lines.append('==== %-40s ERROR %s' % (base, e)); rows.append([base, 'error', str(e)[:200], '']); continue
             stats['pdfs'] += 1
             ex = r['extract']; summary = []
+            for fld, rec in (r.get('fields') or {}).items():
+                readers.setdefault(fld, {}); readers[fld][rec['status']] = readers[fld].get(rec['status'], 0) + 1
             if ex['epma']:
                 stats['table'] += 1; summary.append('table %d' % len(ex['epma']['rows']))
             c = r['composition']
@@ -67,8 +70,17 @@ def main(roots, pdf_dirs, out_dir, tag=''):
                 lines.append('     ' + ln[:220])
     lines.append(''); lines.append('STATS %s' % stats)
     os.makedirs(out_dir, exist_ok=True)
+    table = [['reader', 'read', 'verified', 'agree', 'disagree', 'unverified', 'nooracle', 'verified rate']]
+    for fld in ('epma', 'formula', 'basis', 'method', 'optics.n', 'optics.D_meas', 'optics.D_calc', 'cell', 'bv.params', 'pxrd.obs', 'pxrd.calc', 'name'):
+        c = readers.get(fld, {}); read = sum(v for k, v in c.items() if k != 'none'); ver = c.get('agrees', 0) + c.get('disagrees', 0)
+        table.append([fld, read, ver, c.get('agrees', 0), c.get('disagrees', 0), c.get('unverified', 0), c.get('nooracle', 0), '%.0f %%' % (100.0 * ver / read) if read else '—'])
+    lines.append('READERS (what was read, and how much of it an oracle adjudicated):')
+    for row in table:
+        lines.append('  ' + '  '.join('%-14s' % str(x) for x in row))
+    with open(os.path.join(out_dir, 'paper_checks_readers%s.csv' % tag), 'w', encoding='utf-8', newline='') as f:
+        csv.writer(f).writerows(table)
     open(os.path.join(out_dir, 'paper_checks_report%s.txt' % tag), 'w', encoding='utf-8').write(
-        'Paper self-checks (pxrd-review 0.5.4): the composition re-derived from the paper\'s own table, basis and method\n'
+        'Paper self-checks (pxrd-review 0.5.5+): the composition re-derived from the paper\'s own table, basis and method\n'
         'against its own empirical formula; its bond-valence table (read from the pdf) against the .cif. Rerun:\n'
         '  python3 tools/corpus_paper_extract.py "<unused>" "<pdf+cif folders, comma-separated>"\n\n' + '\n'.join(lines) + '\n')
     with open(os.path.join(out_dir, 'paper_checks_faults%s.tsv' % tag), 'w', encoding='utf-8', newline='') as f:

@@ -117,6 +117,37 @@ def _docx_cell_text(tc):
         out.append(' ')
     return re.sub(r'\s+', ' ', ''.join(out)).strip()
 
+def _grid_lines(caption, rows, y0=70.0):
+    """A table as lines of words, the shape page_lines gives a pdf page: the caption first, then one
+    line per row with each cell's words at its column's x. rows: [[(column, text), …], …].
+    Column positions as a typeset table would have them: each column as wide as its widest cell, so
+    'h k l' sit close together and a range column is wide. The gutter is 8 pt: with a wider one a
+    signed two-digit index ('-10', three characters) pushes the 'h' and 'k' header words past the
+    30 pt within which _powder_columns reads 'h k l' as one column."""
+    width = {}
+    for cells in rows:
+        for col, t in cells:
+            width[col] = max(width.get(col, 0), 6.0 * len(t) + 8.0)
+    col_x = {}; x = 40.0
+    for col in range(max(width) + 1 if width else 0):
+        col_x[col] = x; x += width.get(col, 20.0)
+    def line_of(cells, y):                                              # cells: [(column, text)]
+        ws = []
+        for col, text in cells:
+            x = col_x.get(col, 40.0 + 60.0 * col)
+            for tok in text.split():
+                ws.append((x, y - 8.0, x + 6.0 * len(tok), y + 2.0, tok)); x += 6.0 * (len(tok) + 1)
+        return {'y': y, 'top': y - 8.0, 'bot': y + 2.0, 'w': ws}
+    lines = []; y = y0
+    if caption:
+        lines.append(line_of([(0, caption)], y)); y += 14.0
+    for cells in rows:
+        lines.append(line_of(cells, y)); y += 14.0
+    return lines
+
+def _empty_line(y):
+    return {'y': y, 'top': y - 8.0, 'bot': y + 2.0, 'w': []}
+
 def _docx_pages(path):
     """A manuscript .docx as 'pages', one per table: the caption paragraph before it as the first
     line, then one line per row with each cell's words at its column's x — the shape page_lines
@@ -127,7 +158,7 @@ def _docx_pages(path):
             if item.strip():
                 prev = item.strip()
             continue
-        lines = []; y = 70.0; rows = []
+        rows = []
         for row in item.rows:
             seen = []; cells = []
             for col, c in enumerate(row.cells):
@@ -138,38 +169,29 @@ def _docx_pages(path):
                     cells.append((col, t))
             if cells:
                 rows.append(cells)
-        # column positions as a typeset table would have them: each column as wide as its widest
-        # cell, so 'h k l' sit close together and a range column is wide. The gutter is 8 pt: with a
-        # wider one a signed two-digit index ('-10', three characters) pushes the 'h' and 'k' header
-        # words past the 30 pt within which _powder_columns reads 'h k l' as one column, and every
-        # calculated line of the table is silently lost
-        width = {}
-        for cells in rows:
-            for col, t in cells:
-                width[col] = max(width.get(col, 0), 6.0 * len(t) + 8.0)
-        col_x = {}; x = 40.0
-        for col in range(max(width) + 1 if width else 0):
-            col_x[col] = x; x += width.get(col, 20.0)
-        def line_of(cells, y):                                          # cells: [(column, text)]
-            ws = []
-            for col, text in cells:
-                x = col_x.get(col, 40.0 + 60.0 * col)
-                for tok in text.split():
-                    ws.append((x, y - 8.0, x + 6.0 * len(tok), y + 2.0, tok)); x += 6.0 * (len(tok) + 1)
-            return {'y': y, 'top': y - 8.0, 'bot': y + 2.0, 'w': ws}
-        if re.match(r'^(Table|TABLE|Tab\.|Таблица)\s*\d', prev):
-            lines.append(line_of([(0, prev)], y)); y += 14.0
-        for cells in rows:
-            lines.append(line_of(cells, y)); y += 14.0
+        lines = _grid_lines(prev if re.match(r'^(Table|TABLE|Tab\.|Таблица)\s*\d', prev) else '', rows)
         prev = ''
         if len(lines) >= 2:
             pages.append(lines)
     return pages
 
+_pages_reader = None
+_pages_mode = 'fallback'
+
+def set_pages_reader(fn, mode='fallback'):
+    """Install a second pdf page reader (fn(path) -> pages as page_lines gives them, e.g. the layout
+    reader's tables); None removes it. mode 'fallback' (the default, and what the corpus supports):
+    the table readers try fitz's page first and the other reader's page only where fitz read no
+    table; 'replace': every page comes from the other reader. A .docx is never routed through it."""
+    global _pages_reader, _pages_mode
+    _pages_reader = fn; _pages_mode = mode
+
 def _pages(path):
     """The document's pages as lines of words: a pdf's pages, or a manuscript .docx's tables."""
     if path.lower().endswith('.docx'):
         return _docx_pages(path)
+    if _pages_reader is not None and _pages_mode == 'replace':
+        return _pages_reader(path)
     import fitz
     with fitz.open(path) as doc:
         return [page_lines(page) for page in doc]
@@ -1265,20 +1287,33 @@ def pxrd_table(pdf, with_pages=False):
         cap = _caption(lines, i)
         m = re.match(r'^(?:Table|TABLE|Tab\.|Таблица)\s*(\d+)\.?\s*\(?[Cc]ont', cap)
         return caps.get(m.group(1), cap) if m else cap
-    for pno, lines in enumerate(pages):
-        i = 0; got = False
+    def read_page(lines):
+        o_all, c_all = [], []
+        i = 0
         while i < len(lines):                                          # by a header line, where the page has one the reader knows
             cols = _powder_columns(lines[i]['w'], full_caption(lines, i))
             if cols:
                 o, c = _powder_rows_by_columns(lines, i + 1, cols)
                 if o or c:
-                    obs += o; calc += c; got = True
+                    o_all += o; c_all += c
                     i += 1 + max(len(o), len(c)); continue
             i += 1
-        if not got:                                                    # else by what the columns hold (a two-line header, an unlabelled table)
-            o, c = _pt_read(lines, lambda i, lines=lines: full_caption(lines, i))
-            obs += o; calc += c; got = bool(o or c)
-        if got:
+        if not (o_all or c_all):                                       # else by what the columns hold (a two-line header, an unlabelled table)
+            o_all, c_all = _pt_read(lines, lambda i, lines=lines: full_caption(lines, i))
+        return o_all, c_all
+    other = None                                                       # the second reader's pages, only when a page needs them
+    for pno, lines in enumerate(pages):
+        o, c = read_page(lines)
+        if not (o or c) and _pages_reader is not None and _pages_mode == 'fallback' and not pdf.lower().endswith('.docx'):
+            if other is None:
+                try:
+                    other = _pages_reader(pdf)
+                except Exception:
+                    other = []
+            if pno < len(other) and other[pno] is not lines:
+                o, c = read_page(other[pno])
+        obs += o; calc += c
+        if o or c:
             hit.append(pno + 1)
     seen = set(); obs2 = []
     for d, I in obs:
@@ -1356,7 +1391,7 @@ _CELL_WILD = 0.15                                                      # beyond 
 
 _CELL_SRC = {'.cif': 'the .cif cell', 'powder': "the paper's powder cell", 'single': "the paper's single-crystal cell"}
 
-def cell_check(path, cif=None, text=None):
+def cell_check(path, cif=None, text=None, table=None):
     """The paper's powder table against a unit cell: every calculated line's d recomputed from its
     h k l and the cell — the .cif's when given and it reproduces the table, else the cell the paper
     states (the powder one first) — and every observed line looked for among the calculated ones.
@@ -1368,7 +1403,7 @@ def cell_check(path, cif=None, text=None):
     -> {'status': 'checked' | 'none' (no table) | 'unindexed' (no h k l) | 'nocell', 'head', 'lines',
     'source', 'cell', 'n', 'agree' (within 0.5 %), 'loose' (within 1.5 %), 'bad': [(d, I, hkl,
     d_cell, dev, sign_flipped)] (the lines blamed), 'wild': n, 'unmatched_obs', 'pages', 'tried'}."""
-    obs, calc, pages = pxrd_table(path, with_pages=True)
+    obs, calc, pages = table if table is not None else pxrd_table(path, with_pages=True)   # extract() has read it already
     where = ' (p%d)' % pages[0] if pages and not path.lower().endswith('.docx') else ''   # a manuscript's "pages" are its tables
     if not obs and not calc:
         return {'status': 'none', 'lines': [], 'pages': pages}
@@ -1418,7 +1453,8 @@ def cell_check(path, cif=None, text=None):
         for d, I, hkl, dc, dev, flipped in bad:
             lines.append('%g (%d %d %d) does not follow the cell: it gives %.4f (%+.1f %%)%s' % (d, hkl[0], hkl[1], hkl[2], dc, dev * 100, ' — a weak line' if I is not None and I <= 5 else ''))
     if wild:
-        lines.append('%d line%s the reader could not pair with the cell (off by more than 15 %%: a row it read across two blocks) — left out' % (len(wild), 's' if len(wild) > 1 else ''))
+        lines.append('%d line%s the reader could not pair with the cell (off by more than 15 %%: a row it read across two blocks) — left out [unverified]'
+                     % (len(wild), 's' if len(wild) > 1 else ''))     # the reader's fault, not the paper's: never a flag
     unmatched = []
     if obs and loose >= 0.8 * n:
         cds = [dc for _, _, _, dc, _, _ in rows] + [d for d, _, _ in calc]
@@ -1867,7 +1903,7 @@ def _check_formula(ex, text, fcand):
     wt = wt_used; e = e_used; converted += notes_used
     if r is None:
         return {'ok': False, 'verified': False, 'lines': ['composition: not verifiable — the wt% table read (%d constituents) and the formula read could not be reconciled on any basis; check the table and the formula sentence by eye' % len(wt)],
-                'formula': ftxt, 'basis': None, 'result': None}
+                'formula': ftxt, 'basis': None, 'result': None, 'doubts': ['not reconcilable on any basis'], 'wt': wt, 'counts': counts}
     # confidence: only a clean read with a specific deviation is a finding; anything doubtful is a note
     doubts = []; notes = []
     an = [x for x in f_issues if x.startswith('anion group sum')]
@@ -1942,7 +1978,7 @@ def _check_formula(ex, text, fcand):
     ok = not r['diffs'] and not f_issues
     if ok:
         lines.append('  every coefficient of the published formula follows from the published wt%')
-    return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts}
+    return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts, 'wt': wt, 'counts': counts}
 
 def _without_elements(e, excluded):
     """The table candidate without the constituents of the given elements ('calculated without Al'),
@@ -2221,19 +2257,395 @@ def _derived_composition(ex, wt, species):
         lines.append('  ' + '; '.join(conv))
     lines += species_lines(species, set(k.element for k in cons), set(), {})
     lines.append('  not verifiable: compare the derived formula with the paper\'s by eye — the formula sentence takes a form the tool does not read')
-    return {'ok': False, 'verified': False, 'lines': lines, 'formula': '', 'basis': ex['basis'], 'result': None, 'doubts': ['no formula read'], 'derived': red.formula()}
+    return {'ok': False, 'verified': False, 'lines': lines, 'formula': '', 'basis': ex['basis'], 'result': None, 'doubts': ['no formula read'], 'derived': red.formula(), 'wt': wt, 'counts': {}}
+
+# ----------------------------------------------------------------------------- what was read, and what vouches for it
+# Every value the readers take from a paper is a guess about the text until something outside
+# the text agrees with it. Each field carries a record: the value, where it was read, which reader
+# read it, and what vouched for it — the composition re-derived from the table, the powder table
+# against the cell, the bond-valence table against the .cif, Gladstone–Dale for the optics, the
+# cell against its own volume and density, Mindat for the species. A field an oracle adjudicated
+# is 'agrees' or 'disagrees'; one it looked at with doubts is 'unverified'; one nothing could check
+# is 'nooracle'; one not read is 'none'. A misread value that fails its oracle is then a doubt to
+# report, never a verdict.
+FIELDS = ('name', 'formula', 'basis', 'method', 'epma', 'optics.n', 'optics.D_meas', 'optics.D_calc', 'cell', 'bv.params', 'pxrd.obs', 'pxrd.calc')
+STATUSES = ('agrees', 'disagrees', 'unverified', 'nooracle', 'none')
+
+def _record(value, source='', page=None, reader='regex'):
+    empty = value in (None, '', 0) or value == [] or value == {}
+    return {'value': value, 'source': (source or '')[:200], 'page': page, 'reader': reader, 'verified_by': None,
+            'status': 'none' if empty else 'nooracle', 'detail': ''}
+
+def _fields_init(ex, text):
+    """A record per field from what extract() read (statuses 'none' / 'nooracle' until verify runs)."""
+    e = ex.get('epma') or {}; o = ex.get('optics') or {}; m = ex.get('method') or {}; bv = ex.get('bv') or {}
+    fs = _formulas(text, ex.get('name') or '')
+    cells = _paper_cells(text)
+    f = {'name': _record(ex.get('name'), 'the paper\'s head'),
+         'formula': _record(fs[0][0] if fs else None, fs[0][5] if fs else ''),
+         'basis': _record(ex.get('basis'), ex.get('basis_sentence') or ''),
+         'method': _record(m.get('h2o') or m.get('charge') or ((m.get('sentences') or [None])[0]), (m.get('sentences') or [''])[0]),
+         'epma': _record(len(e['rows']) if e and e.get('rows') else None, e.get('header') or '', e.get('page')),
+         'optics.n': _record(o.get('n'), o.get('n_from') or ''),
+         'optics.D_meas': _record(o.get('D_meas'), next((s_ for s_ in o.get('sentences') or [] if 'meas' in s_.lower() or 'float' in s_.lower() or 'pycno' in s_.lower()), '')),
+         'optics.D_calc': _record(o.get('D_calc'), next((s_ for s_ in o.get('sentences') or [] if 'calc' in s_.lower()), '')),
+         'cell': _record(_cell_str(cells[0][1]) if cells else None, cells[0][0] if cells else ''),
+         'bv.params': _record(bv.get('params'), (bv.get('sentences') or [''])[0]),
+         'pxrd.obs': _record(ex['pxrd']['obs'] or None), 'pxrd.calc': _record(ex['pxrd']['calc'] or None)}
+    if ex.get('_table') and ex['_table'][2] and not str(ex.get('_path', '')).lower().endswith('.docx'):
+        f['pxrd.obs']['page'] = f['pxrd.calc']['page'] = ex['_table'][2][0]
+    return f
+
+def _set(fields, name, status, by=None, detail='', value=None):
+    r = fields.get(name)
+    if r is None:
+        return
+    if r['status'] == 'none' and value is None and status != 'none':
+        return                                                         # nothing was read: an oracle cannot vouch for an absence
+    r['status'] = status; r['verified_by'] = by; r['detail'] = detail[:200]
+    if value is not None:
+        r['value'] = value
+
+def _same_basis(a, b):
+    if not a or not b or a[0] != b[0]:
+        return False
+    return all(abs(float(x) - float(y)) < 1e-6 if isinstance(x, (int, float)) else x == y for x, y in zip(a[1:], b[1:]))
+
+# --- Gladstone–Dale: the optics against the composition and the density
+_GD_CATS = ('superior', 'excellent', 'good', 'fair', 'poor')
+
+def gd_statement(text):
+    """The paper's own compatibility statement: {'ci': 1 − K_P/K_C as stated or None, 'category':
+    Mandarino's word or None, 'sentence'}. The category word is taken only in the sentence that
+    speaks of the compatibility index (every paper has a 'good' somewhere)."""
+    t = text.replace('−', '-').replace('–', '-')
+    out = {'ci': None, 'category': None, 'sentence': ''}
+    for m in re.finditer(r'(?:compatibility index|1\s*-\s*\(?\s*K\s*_?[Pp]\s*/\s*K\s*_?[Cc]\s*\)?)((?:[^.]|\.(?=\d)){0,120})', t):   # the sentence, a decimal point allowed
+        seg = m.group(1)
+        num = re.search(r'(-?\s?0?\.\d{2,4})', seg)
+        if num and out['ci'] is None:
+            out['ci'] = float(num.group(1).replace(' ', '')); out['sentence'] = t[max(0, m.start() - 20):m.end()].strip()
+        cat = re.search(r'\b(superior|excellent|good|fair|poor)\b', seg, re.I)
+        if cat and out['category'] is None:
+            out['category'] = cat.group(1).lower(); out['sentence'] = out['sentence'] or t[max(0, m.start() - 20):m.end()].strip()
+        if out['ci'] is not None and out['category']:
+            break
+    if out['category'] is None:
+        m = re.search(r'\b(superior|excellent|good|fair|poor)\b[^.]{0,60}(?:compatib|Mandarino|Gladstone)', t, re.I)
+        if m:
+            out['category'] = m.group(1).lower(); out['sentence'] = out['sentence'] or t[max(0, m.start() - 20):m.end()].strip()
+    return out
+
+def gd_check(ex, comp, stmt=None):
+    """The mean refractive index and the densities against the composition: K_C from the wt% the
+    composition oracle used, K_P = (n − 1)/D, 1 − K_P/K_C for each density the paper gives. Against
+    the paper's own stated index or category when it gives one, else against Mandarino's 'poor'
+    boundary — a misread n or D moves the index by a tenth. -> {'status': {field: status},
+    'ci': {'meas': x, 'calc': y}, 'KC', 'lines', 'red': bool}."""
+    from pxrd_review import gd as GD
+    o = ex.get('optics') or {}; n = o.get('n'); stmt = stmt or {}
+    st = {'optics.n': 'nooracle', 'optics.D_meas': 'nooracle', 'optics.D_calc': 'nooracle'}
+    out = {'status': st, 'ci': {}, 'KC': None, 'lines': [], 'red': False}
+    wt = (comp or {}).get('wt') or {}
+    if not n or not wt:
+        out['lines'] = [] if not n else ['Gladstone–Dale: n %.4f read but no wt%% table to check it against' % n]
+        return out
+    try:
+        KC, rows = GD.kc({c: v for c, v in wt.items() if v})
+    except Exception as ex_:
+        out['lines'] = ['Gladstone–Dale: could not compute K_C (%s)' % ex_]
+        return out
+    if not KC:
+        return out
+    out['KC'] = KC
+    verified = bool((comp or {}).get('verified'))
+    parts = []; best = None
+    for key in ('meas', 'calc'):
+        D = o.get('D_' + key)
+        if not D:
+            continue
+        ci = 1 - ((n - 1) / D) / KC; out['ci'][key] = ci
+        parts.append('D_%s %.3f → %+.3f (%s)' % (key, D, ci, GD.category(ci)))
+        if best is None or abs(ci) < abs(best[1]):
+            best = (key, ci)
+    if best is None:
+        out['lines'] = ['Gladstone–Dale: n %.4f and K_C %.4f from the wt%% table, but no density to check them against' % (n, KC)]
+        return out
+    head = 'Gladstone–Dale: n %.4f (%s), K_C %.4f from the wt%% table — 1 − K_P/K_C with %s' % (n, o.get('n_from') or 'n', KC, '; '.join(parts))
+    lines = [head]
+    def status_all(s, detail):
+        st['optics.n'] = s
+        for key in ('meas', 'calc'):
+            if o.get('D_' + key):
+                st['optics.D_' + key] = s
+        out['detail'] = detail
+    if stmt.get('ci') is not None:
+        theirs = stmt['ci']; key, ci = min(out['ci'].items(), key=lambda kv: abs(kv[1] - theirs))
+        gap = abs(ci - theirs)
+        # never red: K_C depends on which constituents the table lists and which constants the file
+        # has, and the paper's own index often used another density or wt% column — on the corpus a
+        # strict comparison flagged 50 papers, most of them with K_C, not the paper, at fault
+        if gap <= 0.03:
+            status_all('agrees', 'the paper states %+.3f, this gives %+.3f' % (theirs, ci))
+            lines.append('the paper states %+.3f (%s): reproduced with D_%s' % (theirs, GD.category(theirs), key))
+        else:
+            status_all('unverified', 'the paper states %+.3f, this gives %+.3f' % (theirs, ci))
+            lines.append('the paper states %+.3f, this gives %+.3f with D_%s — the wt%% column, a constant, or the n or D read may differ from the paper\'s [unverified]' % (theirs, ci, key))
+    elif stmt.get('category'):
+        theirs = stmt['category']; key, ci = best; ours = GD.category(ci)
+        dist = abs(_GD_CATS.index(ours) - _GD_CATS.index(theirs))
+        if dist <= 1:
+            status_all('agrees', 'the paper says %s, this gives %s' % (theirs, ours))
+            lines.append('the paper calls it %s: this gives %s with D_%s' % (theirs, ours, key))
+        else:
+            status_all('unverified', 'the paper says %s, this gives %s' % (theirs, ours))
+            lines.append('the paper calls it %s, this gives %s with D_%s — n, D or the wt%% column may be misread [unverified]' % (theirs, ours, key))
+    else:
+        key, ci = best
+        if abs(ci) < 0.08:
+            status_all('agrees', 'consistent: %+.3f (%s)' % (ci, GD.category(ci)))
+        else:
+            status_all('unverified', 'poor compatibility: %+.3f' % ci)
+            lines.append('the optics, density and wt%% read are not compatible (%+.3f, %s) — a misread value, or a genuinely poor index [unverified]' % (ci, GD.category(ci)))
+    out['lines'] = lines
+    return out
+
+# --- the cell against its own volume, the density, and the .cif
+def _volume(cell):
+    ca, cb, cg = (math.cos(math.radians(cell[k])) for k in ('α', 'β', 'γ'))
+    fac = 1 - ca * ca - cb * cb - cg * cg + 2 * ca * cb * cg
+    return cell['a'] * cell['b'] * cell['c'] * math.sqrt(fac) if fac > 0 else None
+
+def _formula_mass_counts(counts):
+    M = 0.0
+    for el, n in (counts or {}).items():
+        w = EP.ATOMIC_WEIGHTS.get(el)
+        if w is None:
+            return None
+        M += w * float(n)
+    return M or None
+
+def cell_consistency(text, counts=None, cif=None, D_calc=None, verified_formula=False, masses=None):
+    """The cells the paper states, each against itself (V from a b c α β γ vs the V it prints), against the formula (D = 1.66054·Z·M/V
+    vs the D_calc it prints — M from the empirical counts, and from every other formula in `masses`
+    [(label, M)]: papers compute D_calc from the ideal formula as often as from the empirical one)
+    and against the .cif (sorted axes within 3 %, the powder-vs-single-crystal tolerance).
+    -> {'status', 'cell', 'lines', 'detail', 'red'}. Only a D_calc off by 3–15 % from every formula's
+    D, with a verified formula, is a finding; beyond 15 % the cell and the formula are not each
+    other's (another phase's cell, a formula per two units) and it is a doubt; so is a volume that
+    does not follow (a misread axis or a misprint)."""
+    from pxrd_review import cell_lambda_check as CL
+    out = {'status': 'nooracle', 'cell': None, 'lines': [], 'detail': '', 'red': False}
+    cands = CL.find_cells(text)
+    if not cands:
+        return dict(out, status='none')
+    cif_cell = None
+    if cif:
+        from pxrd_review import extra_checks as X
+        cif_cell = _cell_floats((X.parse_cif(cif) or {}).get('cell') or {})
+    Ms = [('the formula', _formula_mass_counts(counts))] + [(lab, m) for lab, m in (masses or []) if m]
+    Ms = [(lab, m) for lab, m in Ms if m]
+    best = None
+    for cc in sorted(cands, key=lambda c: 0 if c.context == 'powder' else 1):
+        variants = [{'a': cc.a, 'b': cc.b, 'c': cc.c, 'α': cc.al, 'β': cc.be, 'γ': cc.ga}]
+        if cc.b is None and cc.c is not None and cc.ga is None:
+            variants = [dict(variants[0], b=cc.a, γ='90'), dict(variants[0], b=cc.a, γ='120')]
+        V_stated = CL.num_val(cc.V) if cc.V else None; Z = CL.num_val(cc.Z) if cc.Z else None
+        for v in variants:
+            cell = _cell_floats(v)
+            if not cell:
+                continue
+            V = _volume(cell)
+            if not V:
+                continue
+            checks = []; status = 'nooracle'; detail = []
+            if V_stated:
+                dv = abs(V - V_stated) / V_stated
+                checks.append(('V', dv <= 0.003)); detail.append('V from the axes %.1f vs %.1f printed' % (V, V_stated))
+            D = None; Dlab = ''
+            if Z and Ms and D_calc:
+                Dlab, D = min(((lab, 1.66054 * Z * m / V) for lab, m in Ms), key=lambda x: abs(x[1] - D_calc))   # the formula the paper used is the one that reproduces its D
+            elif Z and Ms:
+                Dlab, D = Ms[0][0], 1.66054 * Z * Ms[0][1] / V
+            if D and D_calc:
+                dd = abs(D - D_calc) / D_calc
+                checks.append(('D', dd <= 0.015, dd)); detail.append('D from Z=%g and %s %.3f vs %.3f printed' % (Z, Dlab, D, D_calc))
+            cif_ok = None
+            if cif_cell:
+                ax = sorted([cell['a'], cell['b'], cell['c']]); cx = sorted([cif_cell['a'], cif_cell['b'], cif_cell['c']])
+                cif_ok = all(abs(x - y) / y <= 0.03 for x, y in zip(ax, cx)); detail.append('.cif axes %s' % ('agree' if cif_ok else 'differ'))
+            if not checks:
+                status = 'nooracle' if cif_ok is None else ('agrees' if cif_ok else 'unverified')
+            elif all(c[1] for c in checks):
+                status = 'agrees'
+            elif any(c[0] == 'D' and not c[1] and 0.03 < c[2] <= 0.15 for c in checks) and verified_formula and len(Ms) >= 2:
+                status = 'disagrees'                                   # off from every formula tried — the empirical AND an ideal one; with one formula alone it is a doubt
+            else:
+                status = 'unverified'
+            score = (0 if status == 'agrees' else 1 if status == 'unverified' else 2, 0 if cc.context == 'powder' else 1)
+            if best is None or score < best[0]:
+                best = (score, cc, cell, V, V_stated, Z, D, checks, cif_ok, status, '; '.join(detail))
+    if best is None:
+        return dict(out, status='none')
+    _, cc, cell, V, V_stated, Z, D, checks, cif_ok, status, detail = best
+    src = {'powder': 'powder', 'single': 'single-crystal'}.get(cc.context, 'stated')
+    out.update(status=status, cell=cell, detail=detail)
+    lines = ['cell: %s (%s) — %s' % (_cell_str(cell), src, detail or 'nothing printed to check it against')]
+    for c in checks:
+        if c[0] == 'V' and not c[1]:
+            lines.append('the volume printed (%.1f) does not follow from the axes and angles read (%.1f) — a misread axis, or a misprint [unverified]' % (V_stated, V))
+        if c[0] == 'D' and not c[1]:
+            if status == 'disagrees':
+                lines.append('D_calc %.3f does not follow from the cell, Z = %g and any formula the paper gives: the closest gives %.3f (%+.1f %%)' % (D_calc, Z, D, (D - D_calc) / D_calc * 100))
+                out['red'] = True
+            elif c[2] > 0.15:
+                lines.append('D_calc %.3f vs %.3f from the cell, Z = %g and the formula (%+.0f %%) — not each other\'s: another phase\'s cell, or a formula per two units [unverified]' % (D_calc, D, Z, (D - D_calc) / D_calc * 100))
+            else:
+                lines.append('D_calc %.3f vs %.3f from the cell, Z = %g and the formula (%+.1f %%) [unverified]' % (D_calc, D, Z, (D - D_calc) / D_calc * 100))
+    if cif_ok is False:
+        lines.append('the .cif\'s cell (%s) differs from the paper\'s by more than 3 %% on an axis — another determination or setting [unverified]' % _cell_str(cif_cell))
+    out['lines'] = lines
+    return out
+
+# --- the mineral name against Mindat
+def species_check(ex, comp):
+    """The species Mindat knows under the name read: its essential elements must all be in the
+    paper's table or formula, else the name read is another mineral's (a running head, a related
+    phase). -> {'status', 'detail'}; nooracle for a name Mindat does not have (a new mineral)."""
+    name = ex.get('name')
+    if not name:
+        return {'status': 'none', 'detail': ''}
+    rec = species_record(name)
+    if not rec or not rec.get('elements'):
+        return {'status': 'nooracle', 'detail': 'not in the Mindat cache'}
+    have = set((comp or {}).get('counts') or {})
+    for r in ((ex.get('epma') or {}).get('rows') or []):
+        c = r.get('constituent') or ''
+        if _parses(c):
+            have.add(EP.parse_constituent(c).element)
+    if not have:
+        return {'status': 'nooracle', 'detail': 'no table or formula to compare the species with'}
+    ess = {el for el in rec['elements'] if el not in ('O', 'H')}
+    missing = sorted(ess - have)
+    if not missing:
+        return {'status': 'agrees', 'detail': 'Mindat\'s %s: %s' % (name, rec['formula'])}
+    return {'status': 'unverified', 'detail': 'Mindat\'s %s has %s, absent from the paper\'s table and formula — another mineral\'s name?' % (name, ', '.join(missing))}
+
+def _section(lines):
+    """An oracle's lines as check_paper prints a section: the head as it is, its findings indented
+    under it — the shape the composition, bond-valence and powder sections already have, and what a
+    reader of those lines (the manuscript review) takes a head apart from a finding by."""
+    return lines[:1] + ['  ' + ln for ln in lines[1:]]
+
+def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
+    """Fill the records of ex['fields'] from the oracles (those already run are passed in; the
+    Gladstone–Dale, cell and species ones run here). -> {'lines': the new sections' lines, 'gd', 'cell', 'species'}."""
+    f = ex.get('fields') or {}
+    lines = []
+    # the composition oracle: table, formula, basis, method
+    if comp:
+        s = 'agrees' if comp.get('verified') and comp.get('ok') else 'disagrees' if comp.get('verified') else 'unverified'
+        det = '; '.join(comp.get('doubts') or []) or ('the formula follows from the table' if s == 'agrees' else 'the formula deviates from the table')
+        _set(f, 'epma', s, 'composition', det); _set(f, 'formula', s, 'composition', det, value=comp.get('formula') or None)
+        b = comp.get('basis')
+        if comp.get('verified') and b:
+            if not ex.get('basis'):
+                _set(f, 'basis', 'unverified', 'composition', 'inferred — the paper states no basis; %s reproduces the formula' % basis_string(b), value=b)
+            elif _same_basis(b, ex.get('basis')):
+                _set(f, 'basis', s, 'composition', 'the reduction on this basis reproduces the formula')
+            else:
+                _set(f, 'basis', 'unverified', 'composition', 'the stated basis does not reproduce the formula; %s does' % basis_string(b), value=b)
+        else:
+            _set(f, 'basis', 'unverified' if b or ex.get('basis') else 'none', 'composition', det)
+        _set(f, 'method', s if comp.get('verified') else 'unverified', 'composition', det)
+    elif ex.get('epma'):
+        _set(f, 'epma', 'nooracle', None, 'no formula sentence to check the table against')
+    # the powder table and the cell
+    if powder:
+        ps = powder.get('status')
+        if ps == 'checked':
+            good = powder['loose'] >= 0.8 * powder['n']
+            _set(f, 'pxrd.calc', 'agrees' if good else 'unverified', 'cell', powder.get('head', '')[:200])
+            nobs = ex['pxrd']['obs']
+            _set(f, 'pxrd.obs', ('agrees' if len(powder.get('unmatched_obs') or []) <= 0.1 * nobs else 'unverified') if (good and nobs) else 'unverified' if nobs else 'none', 'cell',
+                 '%d observed lines without a calculated partner' % len(powder.get('unmatched_obs') or []))
+            if good and powder.get('source') not in (None, '.cif'):
+                _set(f, 'cell', 'agrees', 'cell', 'the powder table follows it (%d of %d lines within 1.5 %%)' % (powder['loose'], powder['n']), value=_cell_str(powder['cell']))
+        elif ps in ('unindexed', 'nocell'):
+            _set(f, 'pxrd.calc', 'nooracle' if ps == 'nocell' else 'none', None, powder.get('head', '')[:200])
+            _set(f, 'pxrd.obs', 'nooracle', None, 'no cell, or no indices, to check the lines against')
+    # the bond-valence parameter set
+    if bv:
+        bs = bv.get('status')
+        if bs == 'checked':
+            cited = bv.get('cited') or ('gh', 'burns')
+            same = (bv.get('params'), bv.get('u6')) == tuple(cited)
+            _set(f, 'bv.params', 'agrees' if same else 'disagrees', 'bv', 'the table agrees best with %s' % bv.get('params'))
+        elif bs in ('unmatched', 'foreign'):
+            _set(f, 'bv.params', 'unverified', 'bv', bv.get('message') or bv.get('head', '')[:120])
+        else:
+            _set(f, 'bv.params', 'nooracle', None, (bv.get('message') or '')[:120])
+    elif f.get('bv.params', {}).get('status') == 'nooracle':
+        f['bv.params']['detail'] = 'no .cif to check the table against'
+    # Gladstone–Dale — after a sanity range: no mineral has n outside 1.3–3.0 or D outside 1–25 g/cm³
+    o = ex.get('optics') or {}
+    gd = gd_check(ex, comp, gd_statement(text))
+    for k, s in gd['status'].items():
+        v = o.get(k.split('.')[1])
+        if v and not ((1.3 <= v <= 3.0) if k == 'optics.n' else (1.0 <= v <= 25.0)):
+            _set(f, k, 'unverified', 'range', '%g is outside the range of minerals — misread' % v); continue
+        _set(f, k, s, 'gd' if s != 'nooracle' else None, gd.get('detail') or ('no n to check it against' if k != 'optics.n' and not o.get('n') else 'no density, or no wt% table, to check it against' if s == 'nooracle' else ''))
+    lines += _section(gd['lines'])
+    # the cell against itself and the density
+    masses = []
+    for ftxt, counts_, _i, _o, kind, _c in _formulas(text, ex.get('name') or ''):
+        if counts_ and counts_ != (comp or {}).get('counts'):
+            masses.append((kind or 'another formula', _formula_mass_counts(counts_)))
+    rec = species_record(ex.get('name')) if ex.get('name') else None
+    if rec and rec.get('formula'):
+        from pxrd_review import extra_checks as X
+        masses.append(("Mindat's ideal formula", X._formula_mass(re.sub(r'[·\s]', ' ', rec['formula']))))
+    cc = cell_consistency(text, (comp or {}).get('counts'), cif, (ex.get('optics') or {}).get('D_calc'), bool((comp or {}).get('verified') and (comp or {}).get('ok')), masses=masses)
+    if f.get('cell') and f['cell']['status'] != 'agrees':                # the powder table's word, when it spoke, outranks the arithmetic
+        _set(f, 'cell', cc['status'], 'cell_consistency' if cc['status'] != 'nooracle' else None, cc['detail'], value=_cell_str(cc['cell']) if cc.get('cell') else None)
+    lines += _section(cc['lines'])
+    # the species
+    sp = species_check(ex, comp)
+    _set(f, 'name', sp['status'], 'species' if sp['status'] != 'nooracle' else None, sp['detail'])
+    if sp['status'] == 'unverified':
+        lines.append('name: %s' % sp['detail'] + ' [unverified]')
+    return {'lines': lines, 'gd': gd, 'cell': cc, 'species': sp}
+
+_READER_LABELS = (('epma', 'table'), ('formula', 'formula'), ('basis', 'basis'), ('optics.n', 'n'), ('optics.D_meas', 'D_meas'), ('optics.D_calc', 'D_calc'),
+                  ('cell', 'cell'), ('bv.params', 'bond-valence set'), ('pxrd.calc', 'powder'), ('name', 'name'))
+_MARK = {'agrees': '✓', 'disagrees': '✗', 'unverified': '?', 'nooracle': '·', 'none': '—'}
+
+def readers_line(fields):
+    """One line on what was read and what vouched for it: 'readers: table ✓ (p6) · formula ✓ · …'."""
+    parts = []
+    for key, label in _READER_LABELS:
+        r = fields.get(key)
+        if not r or r['status'] == 'none':
+            continue
+        page = ' (p%d)' % r['page'] if r.get('page') else ''
+        why = '' if r['status'] in ('agrees', 'disagrees') else (' (%s)' % r['detail'][:60] if r['status'] == 'nooracle' and r['detail'] else '')
+        parts.append('%s %s%s%s' % (label, _MARK[r['status']], page, why))
+    return 'readers: ' + (' · '.join(parts) if parts else 'nothing read')
 
 def check_paper(pdf, cif=None, out_dir=None):
-    """The paper against itself and its .cif: {'extract', 'composition', 'bv', 'powder', 'lines'} — the
-    lines are what a manuscript review prints under 'Composition', 'Bond valence' and 'Powder table'
-    (the table's calculated lines vs the cell, see cell_check)."""
+    """The paper against itself and its .cif: {'extract', 'composition', 'bv', 'bv_status', 'powder',
+    'powder_status', 'fields', 'lines'} — the lines are what a manuscript review prints: a 'readers:'
+    line on what was read and what vouched for it, then 'composition', 'bond valence', 'powder table',
+    'Gladstone–Dale', 'cell' and 'name' sections; ex['fields'] holds the record per field (see verify)."""
     text = text_of(pdf)
     ex = extract(pdf, out_dir, None, write=bool(out_dir))
-    out = {'extract': ex, 'composition': check_composition(ex, text), 'bv': None, 'bv_status': None, 'powder': None, 'powder_status': None, 'lines': []}
+    out = {'extract': ex, 'composition': check_composition(ex, text), 'bv': None, 'bv_status': None, 'powder': None, 'powder_status': None,
+           'fields': ex.get('fields') or {}, 'lines': []}
     if out['composition']:
         out['lines'] += out['composition']['lines']
     elif ex.get('epma'):
         out['lines'].append('composition: an analytical table was read but no empirical formula sentence was found to check it against')
+    bc = None
     if cif:
         bc = bv_check_paper(pdf, cif, ex)
         out['bv_status'] = bc['status']
@@ -2243,13 +2655,19 @@ def check_paper(pdf, cif=None, out_dir=None):
             out['bv'] = {k: bc[k] for k in ('tables', 'lines', 'params', 'u6', 'cited', 'compared', 'disagree')}
             out['lines'] += [bc['head']] + ['  ' + ln for ln in bc['lines']]
     try:
-        cc = cell_check(pdf, cif, text)
+        cc = cell_check(pdf, cif, text, table=ex.get('_table'))
     except Exception as ex_:
         cc = {'status': 'error', 'head': 'powder table: could not check (%s)' % ex_, 'lines': []}
     out['powder_status'] = cc['status']
     if cc.get('head'):
         out['powder'] = cc
         out['lines'] += [cc['head']] + ['  ' + ln for ln in cc['lines']]
+    try:
+        v = verify(ex, text, cif, comp=out['composition'], bv=bc, powder=cc if cc.get('status') != 'error' else None)
+        out['lines'] += v['lines']
+    except Exception as ex_:
+        out['lines'].append('readers: could not verify the readings (%s)' % ex_)
+    out['lines'].insert(0, readers_line(out['fields']))
     return out
 
 _AN_RE = re.compile(r'^(O|OH|OW|Ow|W|Wat|F|Cl|OD|Oh|Hw|H2O)\d*[A-Za-z]?\d*$')
@@ -2437,8 +2855,8 @@ def extract(pdf, out_dir=None, stem=None, write=True):
     out = {'name': name, 'epma': epma_table(pdf, name), 'method': method_statements(text), 'optics': optics(text),
            'bv': bv_statement(text), 'files': {}, 'notes': []}
     out['basis'], out['basis_sentence'] = basis_statement(text)
-    o, c = pxrd_table(pdf)
-    out['pxrd'] = {'obs': len(o), 'calc': len(c)}
+    o, c, hit = pxrd_table(pdf, with_pages=True)
+    out['pxrd'] = {'obs': len(o), 'calc': len(c)}; out['_table'] = (o, c, hit)
     if write and out_dir:
         os.makedirs(out_dir, exist_ok=True)
         if out['epma'] and out['epma']['rows']:
@@ -2462,6 +2880,8 @@ def extract(pdf, out_dir=None, stem=None, write=True):
         out['notes'].append('no analytical table found in the paper')
     if not out['basis']:
         out['notes'].append('no normalisation basis stated — the EPMA tab keeps its own')
+    out['_path'] = pdf                                                 # the records' page guard: a manuscript's "pages" are its tables, not pages
+    out['fields'] = _fields_init(out, text)
     return out
 
 def basis_string(b):
@@ -2478,7 +2898,13 @@ def main(argv=None):
     ap.add_argument('pdf'); ap.add_argument('--out', help='where the data files go (default <pdf dir>/review_out)')
     ap.add_argument('--check', action='store_true', help="check the paper against itself: its formula from its own table and basis, its bond-valence table against the .cif")
     ap.add_argument('--cif', help='the structure .cif, for the bond-valence check')
+    ap.add_argument('--pages', choices=['fitz', 'docling'], default='fitz', help='how the tables are read: the pdf text (fitz) or the layout model (docling, pip install "pxrd-review[layout]")')
     a = ap.parse_args(argv)
+    if a.pages == 'docling':
+        from pxrd_review import layout_reader as LR
+        if not LR.available():
+            sys.exit('--pages docling: the layout reader is not installed (pip install "pxrd-review[layout]")')
+        set_pages_reader(LR.pages, 'fallback')
     if a.check:
         r = check_paper(a.pdf, a.cif, None)
         print('\n'.join(r['lines']) or 'nothing to check: no analytical table or formula sentence found')

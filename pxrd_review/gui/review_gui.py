@@ -1732,34 +1732,53 @@ def api_tb_extract():
     from pxrd_review import paper_extract as PE
     stem = os.path.splitext(os.path.basename(path))[0]
     try:
-        ex = PE.extract(path, MS['out_dir'], stem)
+        name0 = PE.mineral_name(PE.text_of(path)) or stem
+        cif_key = next((k for k in MS['cifs'] if name0 and name0.split('-')[0][:6].lower() in k.lower()), None)
+        r = PE.check_paper(path, MS['cifs'][cif_key] if cif_key else None, MS['out_dir'])   # the readings and what vouches for them
     except Exception as e:
         return jsonify({'ok': False, 'error': E.explain(e, path)}), 500
+    ex = r['extract']; F = r.get('fields') or {}
+    st = lambda k: (F.get(k) or {}).get('status', 'none')
     # the written data files join the folder's data list so the tabs can select them
     with MS['lock']:
         for fn in ex['files'].values():
             MS['data'][fn] = os.path.join(MS['out_dir'], fn)
-    fill = {'epma': {}, 'gd': {}, 'bvs': {}, 'pxrd': {}}
+    fill = {'epma': {}, 'gd': {}, 'bvs': {}, 'pxrd': {}}; left_out = []
     name = ex.get('name') or stem
+    if st('name') == 'unverified':                                       # Mindat's species under that name has other elements: a running head's mineral, not this one
+        left_out.append('name %s (%s)' % (name, F['name']['detail'][:80])); name = stem
     meth = ex['method']
+    total = (ex.get('epma') or {}).get('total')
     if ex['files'].get('epma'):
-        fill['epma']['file'] = ex['files']['epma']
-    if ex['basis']:
-        fill['epma']['basis'] = PE.basis_string(ex['basis'])
+        if total and not (85 <= total <= 112):
+            left_out.append('the analytical table (total %.1f)' % total)
+        else:
+            fill['epma']['file'] = ex['files']['epma']
+    basis = (F.get('basis') or {}).get('value') or ex['basis']            # the basis that reproduces the formula, when the stated one does not
+    if basis:
+        fill['epma']['basis'] = PE.basis_string(basis)
+        if ex['basis'] and not PE._same_basis(basis, ex['basis']):
+            left_out.append('the stated basis %s (it does not reproduce the formula; %s does and is filled)' % (PE.basis_string(ex['basis']), PE.basis_string(basis)))
     if meth.get('h2o') == 'difference':
         fill['epma']['add'] = 'H2O=difference'
     if meth.get('charge') == 'Fe':
         fill['epma']['charge'] = 'Fe'
-    if ex['epma'] and any(r.get('standard') for r in ex['epma']['rows']):
-        fill['epma']['standards'] = ','.join('%s=%s' % (r['constituent'], r['standard']) for r in ex['epma']['rows'] if r.get('standard'))[:400]
+    if ex['epma'] and any(r_.get('standard') for r_ in ex['epma']['rows']):
+        fill['epma']['standards'] = ','.join('%s=%s' % (r_['constituent'], r_['standard']) for r_ in ex['epma']['rows'] if r_.get('standard'))[:400]
     fill['epma']['name'] = name
     fill['epma']['method'] = ' | '.join([('basis: ' + ex['basis_sentence']) if ex['basis_sentence'] else ''] + meth['sentences'][:4]).strip(' |')[:1400]
-    if ex['optics'].get('n'):
-        fill['gd']['n'] = '%.4f' % ex['optics']['n']
-    if ex['optics'].get('D_meas'):
-        fill['gd']['density'] = '%.3f' % ex['optics']['D_meas']
+    n = ex['optics'].get('n'); D = ex['optics'].get('D_meas')
+    if n:
+        if 1.3 <= n <= 3.0:
+            fill['gd']['n'] = '%.4f' % n
+        else:
+            left_out.append('n = %g' % n)
+    if D:
+        if 1.0 <= D <= 25.0:
+            fill['gd']['density'] = '%.3f' % D
+        else:
+            left_out.append('D = %g' % D)
     fill['gd']['name'] = name
-    cif_key = next((k for k in MS['cifs'] if name and name.split('-')[0][:6].lower() in k.lower()), None)
     if cif_key:
         fill['gd']['cif'] = cif_key; fill['_cif'] = cif_key           # the structure of the same mineral, when the folder has it
     if ex['bv'].get('params'):
@@ -1771,18 +1790,20 @@ def api_tb_extract():
     if ex['files'].get('calc'):
         fill['pxrd']['calc'] = ex['files']['calc']
     fill['pxrd']['name'] = name
+    status = {'epma': {'file': st('epma'), 'basis': st('basis'), 'name': st('name'), 'method': st('method')},
+              'gd': {'n': st('optics.n'), 'density': st('optics.D_meas'), 'name': st('name'), 'cif': st('cell')},
+              'bvs': {'params': st('bv.params')},
+              'pxrd': {'obs': st('pxrd.obs'), 'calc': st('pxrd.calc'), 'name': st('name')}}
     notes = list(ex['notes'])
     if ex['epma']:
         notes.append('analytical table: %d constituents (%s)%s' % (len(ex['epma']['rows']), ('page %d' % ex['epma']['page']) if ex['epma'].get('page') else 'a table of the manuscript',
                                                                   (', total %.2f' % ex['epma']['total']) if ex['epma']['total'] else ''))
     bvcheck = None
-    if cif_key:                                                          # the paper's bond-valence table against the same mineral's .cif
-        bc = PE.bv_check_paper(path, MS['cifs'][cif_key], ex)
-        if bc.get('lines') is None:
-            notes.append('bond valence: ' + bc['message'])                # no table / a stranger's table / the .cif failed: say which
-        else:
-            notes.append(bc['head'])
-            bvcheck = bc['head'] + '\n' + '\n'.join('  ' + ln for ln in bc['lines'])
+    if r.get('bv'):
+        bvcheck = next((ln for ln in r['lines'] if ln.startswith('bond valence:')), '') + '\n' + '\n'.join('  ' + ln for ln in r['bv']['lines'])
+        notes.append(bvcheck.split('\n')[0])
+    elif cif_key:
+        notes += [ln for ln in r['lines'] if ln.startswith('bond valence:')][:1]
     if ex['basis_sentence']:
         notes.append('basis: ' + PE.basis_string(ex['basis']))
     notes += meth['sentences'][:3]
@@ -1790,7 +1811,11 @@ def api_tb_extract():
     notes += ex['bv']['sentences'][:2]
     if ex['pxrd']['obs'] or ex['pxrd']['calc']:
         notes.append('powder table: %d observed, %d calculated lines' % (ex['pxrd']['obs'], ex['pxrd']['calc']))
-    return jsonify({'ok': True, 'fill': fill, 'notes': notes, 'files': ex['files'], 'name': name, 'bvcheck': bvcheck})
+    if left_out:
+        notes.append('not filled: ' + '; '.join(left_out))
+    checks = '\n'.join(ln for ln in r['lines'] if not ln.startswith('bond valence:') and not (ln.startswith('  ') and r.get('bv') and ln.strip() in r['bv']['lines']))
+    return jsonify({'ok': True, 'fill': fill, 'notes': notes, 'files': ex['files'], 'name': name, 'bvcheck': bvcheck, 'status': status,
+                    'readers': r['lines'][0] if r['lines'] else '', 'checks': checks, 'left_out': left_out})
 
 @app.route('/api/tb/word/<key>', methods=['POST'])
 def api_tb_word(key):
