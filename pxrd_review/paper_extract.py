@@ -1827,10 +1827,22 @@ def _check_formula(ex, text, fcand):
             pass
     has_s = any(c in ('S', 'SO3', 'SO2') for c in wt)
     # a flag needs a deviation beyond what rounding, atomic weights and oxide conventions give: 5 % / 0.03 apfu
+    stated = ex.get('basis')
+    def _rep(wt_, bs):
+        return EP.replicate_formula(wt_, counts, bs, ex.get('name') or 'paper', tol_abs=0.03, tol_rel=0.05) if bs else None
     def _best(wt_):
-        r_ = EP.replicate_formula(wt_, counts, bases, ex.get('name') or 'paper', tol_abs=0.03, tol_rel=0.05) if bases else None
+        # The basis the paper states wins whenever it reproduces the formula. A Σ-group sum read off
+        # the formula ('(Sc0.90Mn0.08Fe0.01Pb0.01)Σ1.00' -> Sc+Mn+Fe+Pb=1) normalises cations to their
+        # own printed sum, so it reproduces them by construction and outscores a true anion basis in
+        # the third decimal — on the corpus that discarded a correct 'based on 6 O apfu' 58 times in
+        # 245 papers and reported the paper's own basis as failing. Group sums and derived candidates
+        # are a fallback for a stated basis that genuinely fails, never a competitor to one that works.
+        r_ = _rep(wt_, [stated]) if stated else None
+        if r_ is not None and r_['score'] <= 0.03 and not r_.get('factor'):
+            return r_
+        r_ = _rep(wt_, bases) or r_
         if r_ is None or r_['score'] > 0.03 or r_.get('factor'):
-            alt = EP.replicate_formula(wt_, counts, [b for b in EP.basis_candidates(counts) if b not in bases], ex.get('name') or 'paper', tol_abs=0.03, tol_rel=0.05)
+            alt = _rep(wt_, [b for b in EP.basis_candidates(counts) if b not in bases])
             if alt is not None and (r_ is None or alt['score'] < r_['score'] - 0.01):
                 r_ = alt
         return r_
