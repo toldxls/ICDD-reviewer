@@ -118,6 +118,74 @@ def _scan(lines):
             best = rows
     return best
 
+def _ndec(t):
+    """How many decimals a token is printed to — 0.12345(7) -> 5. The one thing that separates a
+    coordinates table from its neighbours: coordinates are given to 4-5 decimals, bond valences to
+    2-3, and a displacement parameter is small as well as short."""
+    m = re.match(r'^-?\d*\.(\d+)', t.replace('\u2212', '-'))
+    return len(m.group(1)) if m else 0
+
+
+def _scan_by_content(lines):
+    """A coordinates table found by what its columns hold, for the papers that print no header the
+    reader knows. A row is a site label followed by three numbers in [-1, 1]; a run of at least
+    three such rows is a table, and it is only accepted when the numbers are printed to four
+    decimals or more — which is what tells it from a bond-valence table (2-3 decimals, and its rows
+    are anions) or a displacement-parameter table (small values, and the same labels again)."""
+    cand = []
+    for i, ln in enumerate(lines):
+        ws = ln['w']
+        vals = [(w, _val(w[4])) for w in ws]
+        nums = [(w, v) for w, v in vals if v is not None and abs(v) <= FRACT_MAX]
+        if len(nums) < 3:
+            cand.append(None); continue
+        first_x = min((w[0] + w[2]) / 2 for w, _v in nums)
+        lab = next((w[4].strip() for w in ws
+                    if (w[0] + w[2]) / 2 < first_x and _label_ok(w[4].strip())), None)
+        cand.append((lab, nums) if lab else None)
+    best = []
+    i = 0
+    while i < len(cand):
+        if cand[i] is None:
+            i += 1; continue
+        j = i; rows = []; seen = set(); gap = 0
+        while j < len(cand) and gap <= 2:
+            if cand[j] is None:
+                gap += 1; j += 1; continue
+            lab, nums = cand[j]
+            key = lab.upper().strip('*†‡§,')
+            if key in seen:
+                break                                   # the same site again: the next table
+            seen.add(key); rows.append((j, lab, nums)); gap = 0; j += 1
+        if len(rows) >= 3:
+            xs = sorted((w[0] + w[2]) / 2 for _j, _l, nums in rows for w, _v in nums)
+            cols = []
+            for x in xs:
+                if cols and x - cols[-1][-1] <= 10:
+                    cols[-1].append(x)
+                else:
+                    cols.append([x])
+            cols = [sum(c) / len(c) for c in cols if len(c) >= max(2, 0.5 * len(rows))][:3]
+            decs = [_ndec(w[4]) for _j, _l, nums in rows for w, _v in nums if _ndec(w[4])]
+            if len(cols) == 3 and decs and sorted(decs)[len(decs) // 2] >= 4:
+                out = []
+                for _j, lab, nums in rows:
+                    got = {}
+                    for w, v in nums:
+                        xc = (w[0] + w[2]) / 2
+                        k = min(range(3), key=lambda k_: abs(cols[k_] - xc))
+                        if abs(cols[k] - xc) <= 26 and k not in got:
+                            got[k] = (v, w)
+                    if len(got) == 3:
+                        zx = cols[2]
+                        tail = ' '.join(w[4] for w, _v in nums if (w[0] + w[2]) / 2 > zx + 14)
+                        out.append((lab, got[0][0], got[1][0], got[2][0], tail))
+                if len(out) > len(best):
+                    best = out
+        i = max(j, i + 1)
+    return best
+
+
 def paper_sites(pdf):
     """The paper's atom-site table, tried on the whole page and on each text column of it."""
     best = []
@@ -131,9 +199,9 @@ def paper_sites(pdf):
             continue
         mid = (min(xs) + max(xs)) / 2
         for view in (lines, _view(lines, -1e9, mid + 8), _view(lines, mid - 8, 1e9)):
-            r = _scan(view)
-            if len(r) > len(best):
-                best = r
+            for r in (_scan(view), _scan_by_content(view)):
+                if len(r) > len(best):
+                    best = r
     return best
 
 ELEM = re.compile(r'([A-Z][a-z]?)(\d*\.?\d*)')
@@ -259,6 +327,8 @@ def structure_from_paper(pdf, tmpdir):
         return None, {'why': 'space group %s not in the operator table' % sym}
     name = PE.mineral_name(text)
     charges = element_charges(text, name)
+    fs = PE._formulas(text, name)
+    counts = fs[0][1] if fs else {}
     sites = []
     for lab, x, y, z, tail in rows:
         el = site_element(lab, tail)
@@ -291,7 +361,8 @@ def structure_from_paper(pdf, tmpdir):
     if best is None:
         return None, {'why': 'no cell and operator set gave a structure'}
     st, gii, cell, sym, n = best
-    return st, {'gii': gii, 'cell': cell, 'sym': sym, 'sites': n, 'cells_tried': len(cands)}
+    return st, {'gii': gii, 'cell': cell, 'sym': sym, 'sites': n, 'cells_tried': len(cands),
+                'closure': closure(st, counts)}
 
 
 def _op_str(op):
@@ -313,6 +384,33 @@ def _op_str(op):
             t += '+%d/%d' % (num // g, 12 // g)
         parts.append(t or '0')
     return ', '.join(parts)
+
+
+def closure(st, counts):
+    """The structure against the paper's own formula: the sites, taken with their multiplicities,
+    must hold the elements in the proportions the formula states. Compared as ratios to the most
+    abundant cation, so no Z is needed. -> mean relative deviation, or None when nothing to compare.
+
+    This catches what the instability index cannot: a coordinates table read only in part still
+    gives sound valences for the sites it did read, but its composition is not the mineral's."""
+    if not counts:
+        return None
+    cell = {}
+    for site in list(st.cations) + list(st.anions):
+        for sp in site.species:
+            cell[sp.element] = cell.get(sp.element, 0.0) + site.mult * sp.occ
+    cell.pop('H', None)
+    want = {k: v for k, v in counts.items() if k not in ('H',) and v > 0}
+    if not cell or not want:
+        return None
+    ref = max((k for k in want if k in cell), key=lambda k: want[k], default=None)
+    if ref is None or not cell.get(ref):
+        return None
+    devs = []
+    for el, v in want.items():
+        mine = cell.get(el, 0.0) / cell[ref] * want[ref]
+        devs.append(abs(mine - v) / max(v, 0.05))
+    return sum(devs) / len(devs)
 
 
 GATE = float(os.environ.get('GII_GATE', '0.25'))       # a structure whose valences do not come out is refused
@@ -353,6 +451,7 @@ def main(folders):
                 stat[info['why']] += 1; rows.append((name, info['why'], None)); continue
             stat['structure built from the paper'] += 1
             mine, gii = bvs_map(st)
+            clo = info.get('closure')
             if gii > GATE:
                 stat['refused by the instability gate'] += 1
                 rows.append((name, 'built, but GII %.2f vu > %.2f — refused' % (gii, GATE), None)); continue
@@ -373,8 +472,9 @@ def main(folders):
             worst = max(abs(x - y) for _a, _b, x, y in pairs_)
             stat['compared'] += 1
             stat['every site within 0.05 vu'] += (ok == len(pairs_))
-            rows.append((name, 'GII %.3f | sites %d matched of %d | BVS %d/%d within 0.05 vu, worst %.3f'
-                         % (gii, len(pairs_), len(truth), ok, len(pairs_), worst), (ok, len(pairs_), worst)))
+            rows.append((name, 'GII %.3f | closure %s | sites %d matched of %d | BVS %d/%d within 0.05 vu, worst %.3f'
+                         % (gii, ('%.2f' % clo) if clo is not None else '  - ', len(pairs_), len(truth), ok, len(pairs_), worst),
+                         (ok, len(pairs_), worst, clo)))
     print('=== per pair')
     for n, msg, _ in rows:
         print('  %-34s %s' % (n[:34], msg))
