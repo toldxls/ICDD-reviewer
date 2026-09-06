@@ -50,6 +50,20 @@ package version in `pyproject.toml`.
   four a table it mis-structured). That is what `--pages docling` does; it stays off by default and
   out of the GUI. Median 12 s per paper on this Mac after the first, but a 6-page supplement took
   16 minutes: not for reviewers' machines.
+- **A paper without a .cif can still have its bond-valence table checked — against the structure
+  the paper itself prints** (`pxrd_review/paper_structure.py`). Roughly half the corpus's papers
+  print a coordinates table, a space-group symbol and a cell; the other half deposit them with the
+  CCDC or CSD. Where one is printed it is built: the coordinates as typeset, the operators the
+  symbol stands for (the new `symops` table), the element of each site from the site-occupancy
+  column (a paper names sites A1/M2/T3 and puts the elements there), the charges from the paper's
+  own formula, and the cell chosen by trying each one the paper prints and keeping whichever gives
+  the soundest valences — the structure judging its own cell. Two gates guard it: the global
+  instability index (0.15 vu) and composition closure, which is what catches a coordinates table
+  read only in part, since its sites still give sound valences while its composition is not the
+  mineral's. **Note-grade, and treated so**: measured over 176 papers that have both a printed
+  structure and a .cif to score against, 17 pass the gate and 49 of their 54 cation sites (91 %)
+  reproduce the .cif's sums within 0.05 vu — so every line it produces is marked `[unverified]`
+  and its record never reads `agrees`. Corpus: papers with a bond-valence check 48 -> 60.
 - **A paper is parsed locally, always.** A hosted-model reader was built and measured against the
   same oracles, and then removed before release: a paper under review is unpublished work, and a
   public tool must not offer to upload one. Both readers that remain — the pdf-text reader and the

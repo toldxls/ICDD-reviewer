@@ -2606,7 +2606,11 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
         if bs == 'checked':
             cited = bv.get('cited') or ('gh', 'burns')
             same = (bv.get('params'), bv.get('u6')) == tuple(cited)
-            _set(f, 'bv.params', 'agrees' if same else 'disagrees', 'bv', 'the table agrees best with %s' % bv.get('params'))
+            if bv.get('from_paper'):
+                # checked against the structure the paper prints, not a .cif — a doubt, never a verdict
+                _set(f, 'bv.params', 'unverified', 'bv', 'checked against the structure the paper itself prints, not a .cif')
+            else:
+                _set(f, 'bv.params', 'agrees' if same else 'disagrees', 'bv', 'the table agrees best with %s' % bv.get('params'))
         elif bs in ('unmatched', 'foreign'):
             _set(f, 'bv.params', 'unverified', 'bv', bv.get('message') or bv.get('head', '')[:120])
         else:
@@ -2658,6 +2662,24 @@ def readers_line(fields):
         parts.append('%s %s%s%s' % (label, _MARK[r['status']], page, why))
     return 'readers: ' + (' · '.join(parts) if parts else 'nothing read')
 
+def _paper_cif(pdf, text, out):
+    """A .cif written from the structure the paper itself prints, for a paper that comes without
+    one. Note-grade: on the corpus 91 % of its cation sites reproduced a real .cif's bond-valence
+    sums, so whatever it supports is a doubt to look at, never a verdict. -> a path or None; the
+    caller records it in out['paper_structure'] so it can be cleaned up."""
+    if pdf.lower().endswith('.docx'):
+        return None
+    try:
+        from pxrd_review import paper_structure as PS
+        st, info = PS.build(pdf, text)
+    except Exception:
+        return None
+    if st is None or not info.get('path'):
+        return None
+    out['paper_structure'] = info
+    return info['path']
+
+
 def check_paper(pdf, cif=None, out_dir=None):
     """The paper against itself and its .cif: {'extract', 'composition', 'bv', 'bv_status', 'powder',
     'powder_status', 'fields', 'lines'} — the lines are what a manuscript review prints: a 'readers:'
@@ -2672,8 +2694,31 @@ def check_paper(pdf, cif=None, out_dir=None):
     elif ex.get('epma'):
         out['lines'].append('composition: an analytical table was read but no empirical formula sentence was found to check it against')
     bc = None
-    if cif:
-        bc = bv_check_paper(pdf, cif, ex)
+    # no .cif — but roughly half the papers print a structure of their own. It stands in for the
+    # BOND-VALENCE check only: the cell check and verify must not be handed the paper's own cell
+    # back as if it were independent evidence. Note-grade throughout (91 % of sites on the corpus).
+    bv_cif = cif or _paper_cif(pdf, text, out)
+    if bv_cif:
+        bc = bv_check_paper(pdf, bv_cif, ex)
+    if out.get('paper_structure'):                       # bv_check_paper has read it; the file goes now
+        from pxrd_review import paper_structure as _PS
+        ps_ = out['paper_structure']
+        _PS.discard(ps_)
+        out['paper_structure'] = {k: v for k, v in ps_.items() if k not in ('path', 'dir')}
+        if bc is not None:
+            bc['from_paper'] = True                      # verify() must not read this as a verdict
+            where = 'the structure the paper itself prints (%s, %s; instability index %.2f vu)' % (
+                ps_.get('sym', '?'), _cell_str(dict(zip(('a', 'b', 'c', 'α', 'β', 'γ'), ps_['cell']))), ps_['gii'])
+            def _note(t, full):
+                t = t.replace('the .cif', where if full else "the paper's own structure")
+                t = t.replace('.cif', where if full else "the paper's own structure")
+                return t if '[unverified]' in t else t + ' [unverified]'
+            for k_ in ('head', 'message'):
+                if bc.get(k_):
+                    bc[k_] = _note(bc[k_], True)         # the head says which structure, once
+            if bc.get('lines'):
+                bc['lines'] = [_note(ln, False) for ln in bc['lines']]
+    if bc is not None:
         out['bv_status'] = bc['status']
         if bc.get('lines') is None:
             out['lines'].append('bond valence: ' + bc['message'])
