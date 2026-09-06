@@ -2839,7 +2839,8 @@ def mineral_name(text):
         return max(cands, key=lambda w: (low.count(w.split('-')[0]), -cands.index(w)))
     names = re.findall(r'\b([a-z]{4,}ite(?:-\([a-z]+\))?)\b', text.lower())
     if names:
-        return max(set(names), key=names.count)
+        uniq = list(dict.fromkeys(names))                              # first mention first: a set's order is the run's hash seed, and two names tie often (cassiterite and reedmergnerite, 6 each)
+        return max(uniq, key=lambda w: (names.count(w), -uniq.index(w)))
     return ''
 
 def extract(pdf, out_dir=None, stem=None, write=True):
