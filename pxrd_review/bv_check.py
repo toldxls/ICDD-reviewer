@@ -280,14 +280,18 @@ def _symops(block):
         col = _col(tags, rows, '_space_group_symop_operation_xyz' if '_space_group_symop_operation_xyz' in tags
                    else '_symmetry_equiv_pos_as_xyz')
         return [parse_symop(s) for s in col], len(col)
-    # no operator list: only P1 / P-1 can be handled without a space-group table
+    # no operator list: the space-group table stands in for it
     sg = (block['items'].get('_space_group_name_h-m_alt') or block['items'].get('_symmetry_space_group_name_h-m')
           or block['items'].get('_space_group_name_h-m') or '').replace(' ', '')
     if sg in ('P1', 'P-1'):
         ops = [parse_symop('x, y, z')] + ([parse_symop('-x, -y, -z')] if sg == 'P-1' else [])
         return ops, len(ops)
+    from pxrd_review import symops as SO
+    var = SO.lookup(sg)
+    if var:
+        return [(rot, tr) for rot, tr in var[0]], len(var[0])   # the commonest setting of that symbol
     raise ValueError('the .cif lists no symmetry operators (_space_group_symop_operation_xyz) and the space '
-                     'group %r cannot be expanded without them — add the operator loop (SHELXL, JANA and '
+                     'group %r is not in the operator table — add the operator loop (SHELXL, JANA and '
                      'CrysAlisPro write it)' % sg)
 
 class Structure:
