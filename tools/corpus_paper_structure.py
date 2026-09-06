@@ -19,7 +19,7 @@ marginal (p25 0.000, median 0.004, p75 0.810 vu), so a gate can refuse them.
 import os, re, sys, glob, tempfile, collections
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from pxrd_review import bv_check as B, paper_extract as PE, epma as EP
+from pxrd_review import bv_check as B, paper_extract as PE, epma as EP, symops as SO
 
 HDR = re.compile(r'(?<![A-Za-z])(x/a|y/b|z/c|x|y|z|U ?eq|U ?iso|B ?iso|Wyck\w*|Site|Atom|occ\.?|s\.o\.f\.?)(?![A-Za-z])', re.I)
 AXIS = re.compile(r'^\(?([xyz])(?:/[abc])?\)?$', re.I)      # 'x', 'x/a', '(x)'
@@ -85,13 +85,15 @@ def _scan(lines):
                 if abs(cols[k] - xc) <= 26 and k not in got:
                     got[k] = v
             if _label_ok(lab) and len(got) == 3:
+                zx = cols['z']
+                tail = ' '.join(w[4] for w in rest if (w[0] + w[2]) / 2 > zx + 14)   # Uiso, then the occupancy
                 key = lab.upper().strip('*†‡§,')
                 if key in seen_lab:
                     break            # the same site again: the scan has walked into the NEXT table —
                                      # anisotropic displacement parameters carry the same labels and
                                      # values in the same range, and would be read as coordinates
                 seen_lab.add(key)
-                rows.append((lab, got['x'], got['y'], got['z'])); miss = 0
+                rows.append((lab, got['x'], got['y'], got['z'], tail)); miss = 0
             else:
                 miss += 1
                 if rows and miss >= 4:
@@ -118,6 +120,45 @@ def paper_sites(pdf):
                 best = r
     return best
 
+ELEM = re.compile(r'([A-Z][a-z]?)(\d*\.?\d*)')
+
+def site_element(label, tail):
+    """The element a site carries. A paper labels sites crystallographically — A1, M2, T3 — and
+    names the elements in the site-occupancy column ('Ca0.674(11)Mn0.326(11)'): the dominant one is
+    the site's element. Only when that column says nothing does the label have to carry it."""
+    best = None
+    for el, num in ELEM.findall(re.sub(r'\(\d+\)', '', tail or '')):
+        if el not in EP.ATOMIC_WEIGHTS:
+            continue
+        v = float(num) if num else 1.0
+        if best is None or v > best[1]:
+            best = (el, v)
+    if best:
+        return best[0]
+    m = re.match(r'([A-Z][a-z]?)', label)
+    if m and m.group(1) in EP.ATOMIC_WEIGHTS:
+        return m.group(1)
+    return (label[:1] if label[:1] in EP.ATOMIC_WEIGHTS else None)
+
+def element_charges(text, name=None):
+    """{element: oxidation state} from the paper's own formulas — 'Fe3+1.52' states the charge — and
+    from the species' ideal formula on Mindat when the paper's does not say."""
+    ox = {}
+    try:
+        for _t, _c, _i, charges, _k, _s in PE._formulas(text, name or ''):
+            for el, chs in (charges or {}).items():
+                if len(chs) == 1:
+                    ox.setdefault(el, sorted(chs)[0])
+    except Exception:
+        pass
+    try:
+        rec = PE.species_record(name) if name else None
+        for el, ch in re.findall(r'([A-Z][a-z]?)(\d)\+', (rec or {}).get('formula') or ''):
+            ox.setdefault(el, int(ch))
+    except Exception:
+        pass
+    return ox
+
 def norm(lab):
     return re.sub(r'[^A-Za-z0-9]', '', lab).upper()
 
@@ -140,9 +181,12 @@ def symop_text(block):
         return None
     return tag, B._col(tags, rows, tag)
 
-def synth_cif(cell, symtag, ops, sites):
-    """A CIF carrying the paper's cell and coordinates, the .cif's operators and type symbols."""
+def synth_cif(cell, symtag, ops, sites, formula=''):
+    """A CIF carrying the paper's cell, coordinates and site elements (with the charges its formula
+    states), and the operators its space-group symbol stands for."""
     L = ['data_paper']
+    if formula:
+        L.append("_chemical_formula_sum '%s'" % formula)
     for k, v in zip(('a', 'b', 'c'), cell[:3]):
         L.append('_cell_length_%s %.5f' % (k, v))
     for k, v in zip(('alpha', 'beta', 'gamma'), cell[3:]):
@@ -156,9 +200,18 @@ def synth_cif(cell, symtag, ops, sites):
     return '\n'.join(L) + '\n'
 
 def bvs_map(st):
+    """{site: (bvs, expected valence)} for every cation, plus the global instability index."""
     P = B.Params(prefer='gh', u6='burns')
     res, anion_sum, cells, hb = B.compute(st, P, None, 'oo')
-    return {norm(c.label): bvs for c, bonds, bvs, exp, md in res}
+    out = {}
+    for c, bonds, bvs, exp, md in res:
+        fx, fy, fz = c.frac
+        out[norm(c.label)] = (bvs, exp, fx, fy, fz)
+    gii = 0.0
+    if out:
+        gii = (sum((v[0] - v[1]) ** 2 for v in out.values()) / len(out)) ** 0.5
+    return out, gii
+
 
 def pairs(folder):
     cifs = glob.glob(os.path.join(folder, '*.cif')); pdfs = glob.glob(os.path.join(folder, '*.pdf'))
@@ -170,87 +223,141 @@ def pairs(folder):
             out.append((c, sorted(m)))
     return out
 
-CELL_FROM = os.environ.get('CELL_FROM', 'paper')
+
+def structure_from_paper(pdf, tmpdir):
+    """A structure built from nothing but the paper: its coordinates table, the space group its text
+    states (expanded through the operator table), the cell it prints, and the charges its formula
+    gives. Several cells may be printed — a powder one, a single-crystal one, another phase's — so
+    each is tried and the one whose bond valences come out closest to the expected ones is kept.
+    That is the structure judging its own cell: a wrong cell gives an absurd instability index.
+    -> (Structure, info dict) or (None, why)."""
+    text = PE.text_of(pdf)
+    rows = paper_sites(pdf)
+    if len(rows) < 3:
+        return None, {'why': 'no coordinate table read'}
+    sym, phrase = SO.find_in_text(text)
+    if not sym:
+        return None, {'why': 'no space group the operator table knows'}
+    ops_variants = SO.lookup(sym)
+    if not ops_variants:
+        return None, {'why': 'space group %s not in the operator table' % sym}
+    name = PE.mineral_name(text)
+    charges = element_charges(text, name)
+    sites = []
+    for lab, x, y, z, tail in rows:
+        el = site_element(lab, tail)
+        if not el:
+            continue
+        ch = charges.get(el)
+        sites.append((lab, '%s%d+' % (el, ch) if ch else el, x, y, z))
+    if len(sites) < 3:
+        return None, {'why': 'no site element could be named'}
+    cands = [c for _ctx, c in PE._paper_cells(text)][:6]
+    if not cands:
+        return None, {'why': 'no cell in the text'}
+    best = None
+    for ci, cd in enumerate(cands):
+        cell = [cd[k] for k in ('a', 'b', 'c', 'α', 'β', 'γ')]
+        for vi, ops in enumerate(ops_variants):
+            path = os.path.join(tmpdir, 'p%d_%d.cif' % (ci, vi))
+            try:
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(synth_cif(cell, '_space_group_symop_operation_xyz',
+                                      ['%s' % _op_str(o) for o in ops], sites, ''))
+                st = B.Structure(path)
+                m, gii = bvs_map(st)
+            except Exception:
+                continue
+            if not m:
+                continue
+            if best is None or gii < best[1]:
+                best = (st, gii, cell, sym, len(sites))
+    if best is None:
+        return None, {'why': 'no cell and operator set gave a structure'}
+    st, gii, cell, sym, n = best
+    return st, {'gii': gii, 'cell': cell, 'sym': sym, 'sites': n, 'cells_tried': len(cands)}
+
+
+def _op_str(op):
+    """(rot, tr) -> 'x, y+1/2, -z' for the synthetic CIF."""
+    rot, tr = op
+    parts = []
+    for i in range(3):
+        t = ''
+        for j, v in enumerate(('x', 'y', 'z')):
+            c = rot[i][j]
+            if abs(c) < 1e-6:
+                continue
+            t += ('-' if c < 0 else ('+' if t else '')) + (v if abs(abs(c) - 1) < 1e-6 else '%g%s' % (abs(c), v))
+        f = tr[i] - int(tr[i])
+        if f > 1e-6:
+            num = int(round(f * 12))
+            from math import gcd
+            g = gcd(num, 12)
+            t += '+%d/%d' % (num // g, 12 // g)
+        parts.append(t or '0')
+    return ', '.join(parts)
+
+
+GATE = float(os.environ.get('GII_GATE', '0.25'))       # a structure whose valences do not come out is refused
+
 
 def main(folders):
     stat = collections.Counter(); rows = []
+    tmpdir = tempfile.mkdtemp(prefix='paperstruct_')
     for folder in folders:
         for cif, pdfs in pairs(folder):
-            name = os.path.basename(cif)
-            stat['pairs'] += 1
+            name = os.path.basename(cif); stat['pairs'] += 1
             try:
-                cs, block = cif_sites(cif)
-                sy = symop_text(block)
-                cell_cif = B._cell(block)
+                truth, gii_cif = bvs_map(B.Structure(cif))
             except Exception as e:
-                stat['cif unusable'] += 1; rows.append((name, 'cif unusable: %s' % e, None)); continue
-            if not sy:
-                stat['cif has no symop loop'] += 1; rows.append((name, 'cif has no symop loop', None)); continue
-            ps = []
+                stat['cif unusable'] += 1; rows.append((name, 'cif unusable: %s' % str(e)[:48], None)); continue
+            if not truth:
+                stat['cif has no cations'] += 1; continue
+            st = None
             for pdf in pdfs:
-                ps = paper_sites(pdf)
-                if len(ps) >= 3:
+                st, info = structure_from_paper(pdf, tmpdir)
+                if st is not None:
                     break
-            if len(ps) < 3:
-                stat['no coordinate table read'] += 1; rows.append((name, 'no coordinate table read', None)); continue
-            stat['coordinate table read'] += 1
-            # the paper's cell, when it states one
-            cell, used_paper_cell = cell_cif, False
-            if CELL_FROM == 'paper':
-                try:
-                    pc = PE._paper_cells(PE.text_of(pdf))
-                    # the single-crystal cell is the one the coordinates belong to, not the powder one
-                    pick = next((c for ctx, c in pc if ctx == 'single'), None) or (pc[0][1] if pc else None)
-                    if pick:
-                        cell = [pick[k] for k in ('a', 'b', 'c', 'α', 'β', 'γ')]; used_paper_cell = True
-                        if any(abs(cell[i] - cell_cif[i]) / cell_cif[i] > 0.02 for i in range(3)):
-                            stat['paper cell disagrees with the .cif >2%'] += 1
-                except Exception:
-                    pass
-            bylab = {norm(l): (l, t, x, y, z) for l, t, x, y, z in cs}
-            matched = []; dmax = 0.0
-            for lab, x, y, z in ps:
-                k = norm(lab)
-                if k in bylab:
-                    L, t, cx, cy, cz = bylab[k]
-                    matched.append((L, t, x, y, z))
-                    dmax = max(dmax, max(abs(x - cx), abs(y - cy), abs(z - cz)))
-            if len(matched) < max(3, 0.6 * len(cs)):
-                stat['too few sites matched'] += 1
-                rows.append((name, 'matched %d of %d .cif sites' % (len(matched), len(cs)), None)); continue
-            stat['sites matched'] += 1
-            try:
-                tmp = tempfile.NamedTemporaryFile('w', suffix='.cif', delete=False)
-                tmp.write(synth_cif(cell, sy[0], sy[1], matched)); tmp.close()
-                a = bvs_map(B.Structure(cif)); b = bvs_map(B.Structure(tmp.name))
-                os.unlink(tmp.name)
-            except Exception as e:
-                stat['compute failed'] += 1; rows.append((name, 'compute failed: %s' % e, None)); continue
-            common = sorted(set(a) & set(b))
-            if not common:
-                stat['no common cation site'] += 1; rows.append((name, 'no common cation site', None)); continue
-            diffs = [abs(a[k] - b[k]) for k in common]
-            worst = max(diffs); ok = sum(1 for d in diffs if d <= 0.05)
+            if st is None:
+                stat[info['why']] += 1; rows.append((name, info['why'], None)); continue
+            stat['structure built from the paper'] += 1
+            mine, gii = bvs_map(st)
+            if gii > GATE:
+                stat['refused by the instability gate'] += 1
+                rows.append((name, 'built, but GII %.2f vu > %.2f — refused' % (gii, GATE), None)); continue
+            stat['passed the gate'] += 1
+            # match sites by POSITION, not by label: a paper names sites A1/M2/T3, a .cif by element
+            pairs_ = []
+            for k, (bv, exp, x, y, z) in mine.items():
+                bestm = None
+                for k2, (bv2, exp2, x2, y2, z2) in truth.items():
+                    d = max(abs((x - x2 + .5) % 1 - .5), abs((y - y2 + .5) % 1 - .5), abs((z - z2 + .5) % 1 - .5))
+                    if bestm is None or d < bestm[0]:
+                        bestm = (d, k2, bv2)
+                if bestm and bestm[0] < 0.02:
+                    pairs_.append((k, bestm[1], bv, bestm[2]))
+            if not pairs_:
+                stat['no site matched by position'] += 1; rows.append((name, 'no site matched by position', None)); continue
+            ok = sum(1 for _a, _b, x, y in pairs_ if abs(x - y) <= 0.05)
+            worst = max(abs(x - y) for _a, _b, x, y in pairs_)
             stat['compared'] += 1
-            stat['all sites within 0.05 vu'] += (ok == len(common))
-            rows.append((name, 'sites %d/%d, coord dmax %.4f, cell %s | BVS %d/%d within 0.05 vu, worst %.3f'
-                         % (len(matched), len(cs), dmax, 'paper' if used_paper_cell else '.cif', ok, len(common), worst),
-                         (ok, len(common), worst)))
+            stat['every site within 0.05 vu'] += (ok == len(pairs_))
+            rows.append((name, 'GII %.3f | sites %d matched of %d | BVS %d/%d within 0.05 vu, worst %.3f'
+                         % (gii, len(pairs_), len(truth), ok, len(pairs_), worst), (ok, len(pairs_), worst)))
     print('=== per pair')
     for n, msg, _ in rows:
         print('  %-34s %s' % (n[:34], msg))
     print('\n=== totals')
-    for k in ('pairs', 'cif unusable', 'cif has no symop loop', 'no coordinate table read', 'coordinate table read',
-              'too few sites matched', 'sites matched', 'compute failed', 'no common cation site', 'compared',
-              'all sites within 0.05 vu'):
-        if stat[k]:
-            print('  %4d  %s' % (stat[k], k))
+    for k, v in stat.most_common():
+        print('  %4d  %s' % (v, k))
     good = [r[2] for r in rows if r[2]]
     if good:
         tot = sum(g[1] for g in good); okk = sum(g[0] for g in good)
         print('\n  cation sites compared: %d; within 0.05 vu: %d (%.0f %%)' % (tot, okk, 100.0 * okk / tot))
         print('  worst deviation per structure: median %.3f vu, max %.3f vu'
               % (sorted(g[2] for g in good)[len(good) // 2], max(g[2] for g in good)))
+
 
 if __name__ == '__main__':
     main(sys.argv[1:])
