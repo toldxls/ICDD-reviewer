@@ -24,9 +24,16 @@ from pxrd_review import bv_check as B, paper_extract as PE, epma as EP, symops a
 HDR = re.compile(r'(?<![A-Za-z])(x/a|y/b|z/c|x|y|z|U ?eq|U ?iso|B ?iso|Wyck\w*|Site|Atom|occ\.?|s\.o\.f\.?)(?![A-Za-z])', re.I)
 AXIS = re.compile(r'^\(?([xyz])(?:/[abc])?\)?$', re.I)      # 'x', 'x/a', '(x)'
 VAL = re.compile(r'^([-−]?(?:\d*\.\d+|[01](?:\.0*)?|\d/\d))(?:\((\d+)\))?$')
+VULGAR = {'½': 0.5, '⅓': 1 / 3.0, '⅔': 2 / 3.0, '¼': 0.25, '¾': 0.75, '⅙': 1 / 6.0, '⅚': 5 / 6.0,
+          '⅛': 0.125, '⅜': 0.375, '⅝': 0.625, '⅞': 0.875}
 def _val(t):
     """'0.12345(7)' -> 0.12345; '1/2' -> 0.5; '-0.0123' -> -0.0123; None when not a coordinate."""
-    m = VAL.match(t.replace('\u2212', '-').rstrip(','))
+    t = t.replace('\u2212', '-').rstrip(',')
+    if t in VULGAR:
+        return VULGAR[t]
+    if t.startswith('-') and t[1:] in VULGAR:
+        return -VULGAR[t[1:]]
+    m = VAL.match(t)
     if not m:
         return None
     v = m.group(1)
@@ -66,12 +73,21 @@ def _scan(lines):
                 cols[m.group(1).lower()] = (w[0] + w[2]) / 2
         if len(cols) < 3:
             continue
+        labx = next(((w[0] + w[2]) / 2 for w in ln['w']
+                     if re.fullmatch(r'Site|Atom|Label|Ion|Position', w[4].strip('*.'), re.I)), None)
         rows = []; miss = 0; seen_lab = set()
         for ln2 in lines[i + 1:]:
             ws = ln2['w']
             if not ws:
                 continue
+            xcol = cols['x']
             lab = ws[0][4].strip()
+            if not _label_ok(lab):
+                # a two-column page can leave the neighbouring column's digits at the head of the
+                # line; then the label is the last label-like token still left of the x column
+                cands = [w for w in ws if (w[0] + w[2]) / 2 < xcol - 6 and _label_ok(w[4].strip())]
+                if cands:
+                    lab = cands[-1][4].strip()
             rest = ws[1:]
             if rest and WYCK.match(rest[0][4]):
                 rest = rest[1:]
