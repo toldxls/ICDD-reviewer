@@ -1605,12 +1605,43 @@ def water_from_structure(st, result, cells):
     z = _z_from_formula(st)
     if not z:
         return None
-    # what the .cif itself says, where its H were located — the score this can be checked against
-    located = None
-    if any(s.element == 'H' for s in st.sites):
-        located = sum(s.mult * min(s.occ_total, 1.0) for s in st.sites if s.element == 'H') / z
+    located = _located_h(st, z)
     return {'H': round((n_oh + 2 * n_w) / z, 2), 'OH': round(n_oh / z, 2), 'H2O': round(n_w / z, 2),
             'Z': z, 'sites': sites, 'located': None if located is None else round(located, 2)}
+
+
+def _located_h(st, z):
+    """The hydrogen a refinement actually placed ON OXYGEN, per formula unit — or None if it placed
+    none. Counted per oxygen rather than by summing H sites, because both ways of writing a
+    disordered hydrogen would otherwise be miscounted:
+
+      * a hydrogen split over two alternative positions is TWO half-occupied H sites and ONE
+        hydrogen — summing occupancies per oxygen gets that right, and gurzhiy's uranyl phosphate
+        writes every one of its ten H that way;
+      * hydrogen on ammonium or an organic group is on nitrogen or carbon, and belongs to the
+        formula but not to the oxygens, so counting H sites blindly credits an oxygen with it.
+
+    Each oxygen's hydrogen is the sum of the occupancies bonded to it, capped at two."""
+    if not any(s_.element == 'H' for s_ in st.sites):
+        return None
+    total = 0.0
+    for a in st.anions:
+        if a.element != 'O':
+            continue
+        try:
+            occ = sum(o.occ_total for o, d, _n in st.neighbours(a, 1.3)
+                      if d < 1.3 and o.element == 'H')
+        except Exception:
+            continue
+        # The occupancy sum itself, not a rounded one. Both ways a refiner writes disorder come out
+        # right: a hydrogen split over two alternative positions is two half-occupied sites summing
+        # to one, and a site that is genuinely half hydroxyl is half a hydrogen. Rounding, or a floor
+        # of one, breaks the second — measured, it took the partly-occupied structures from 90 % to
+        # 29 % agreement with their own formula sums. Capped at two: an oxygen holds no more.
+        n_h = min(occ, 2.0)
+        if n_h:
+            total += n_h * a.mult * min(a.occ_total, 1.0)
+    return round(total / z, 2)
 
 
 def _z_from_formula(st):

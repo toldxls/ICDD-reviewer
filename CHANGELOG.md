@@ -43,6 +43,16 @@ organic hydrogen are skipped since they never sit on an oxygen. **Note-grade**: 
 what the paper reports about how the sample was treated — the owner's point, that the confirmation
 is in prose a person reads rather than anything to code.
 
+**Disordered hydrogen is counted per oxygen, by occupancy** (`_located_h`). Summing H sites is
+wrong twice over: a hydrogen split across two alternative positions is two half-occupied sites and
+one hydrogen, and hydrogen on ammonium or an organic group belongs to the formula but not to any
+oxygen. Counting each oxygen's own H, as the plain sum of the occupancies bonded to it and capped at
+two, gets both right. Rounding that sum, or flooring it at one, does not: it credits a genuinely
+half-occupied hydroxyl with a whole hydrogen, and measured, that took the partly-occupied structures
+from 90 % agreement with their own formula sums to 29 %. Against structures whose formula hydrogen
+can only sit on oxygen, the count now matches the .cif's own formula sum for 39 of 45, and 5 of the
+7 whose H sites are partly occupied.
+
 Not yet done: the physical arbiters (Gladstone-Dale and density at the ideal water content) and the
 comparison against the ideal formula rather than the empirical one.
 
