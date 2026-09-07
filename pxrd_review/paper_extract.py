@@ -226,6 +226,15 @@ _RANGE1 = re.compile(r'^(\d+\.\d+)\s*[-–—]\s*(\d+\.\d+)$')
 _NA = re.compile(r'^(n\.?d\.?|b\.?d\.?l?\.?|[-–—]|bdl|nd|n/a)$', re.I)
 
 _CYR = str.maketrans('ОСНРКВАЕМТаеорсух', 'OCHPKBAEMTaeopcyx')       # Cyrillic lookalikes in a Russian-typeset 'Na2О'
+_DASHES = str.maketrans('−–—‒‐', '-----')      # minus, en, em, figure, non-breaking hyphen -> ASCII
+
+def _dash(t):
+    """Every dash a journal sets, as the one `float()` accepts.
+
+    `_NUM` has always admitted an en dash as a minus sign, so '–0.09' passed the guard and then
+    broke `float()` two lines later; the same half-normalisation (only U+2212) crashed the
+    word-position reader on a negative cell. Normalise once, here, rather than at each call."""
+    return (t or '').translate(_DASHES)
 
 def _constituent_ok(tok):
     t = re.sub(r'\([^)]*\)$', '', tok.translate(_CYR))               # 'Fe2O3(tot)', 'H2O(calc)': a qualifier
@@ -264,14 +273,14 @@ def _numbers(tokens):
     """Fold 'a – b' triples into ranges; return [(kind, value)] with kind num | range | text."""
     out = []; i = 0
     while i < len(tokens):
-        t = tokens[i].replace('−', '-').replace('–', '-').replace('—', '-')
+        t = _dash(tokens[i])
         if t.endswith('%') and _NUM.match(t[:-1]):
             t = t[:-1]                                          # '7.84%': the unit glued to the value
         m = _RANGE1.match(t)
         if m:
             out.append(('range', (float(m.group(1)), float(m.group(2))))); i += 1; continue
-        if _NUM.match(t) and i + 2 < len(tokens) and tokens[i + 1] in ('-', '–', '—', '−') and _NUM.match(tokens[i + 2].replace('−', '-')):
-            out.append(('range', (float(t), float(tokens[i + 2].replace('−', '-'))))); i += 3; continue
+        if _NUM.match(t) and i + 2 < len(tokens) and _dash(tokens[i + 1]) == '-' and _NUM.match(_dash(tokens[i + 2])):
+            out.append(('range', (float(t), float(_dash(tokens[i + 2]))))); i += 3; continue
         if _NUM.match(t):
             out.append(('num', float(t))); i += 1; continue
         if re.fullmatch(r'\(\d+\.\d+\)', t):
@@ -353,14 +362,15 @@ def _numlike(t):
     """'12.3', '29(3)', '(13.16)', '−0.5': a value cell."""
     if t.endswith('%') and len(t) > 1:
         t = t[:-1]
-    t = t.replace('−', '-')
+    t = _dash(t)
     return bool(_NUM.match(t) or _NUM_ESD.match(t) or re.fullmatch(r'\(\d+\.\d+\)', t))
 
 def _num_x(w):
-    t = w[4].replace('−', '-')
+    t = _dash(w[4])
     if not _numlike(t):
         return None
-    return float(re.match(r'-?\d+\.?\d*', t.lstrip('(')).group(0)), (w[0] + w[2]) / 2
+    m = re.match(r'-?\d+\.?\d*', t.lstrip('('))
+    return (float(m.group(0)), (w[0] + w[2]) / 2) if m else None
 
 def _transposed(lines, pno, name=''):
     """The other layout: constituents across a header line ('Constituent Nb2O5 MgO FeOa MnO TiO2
@@ -1790,7 +1800,7 @@ def counts_guess(norm):
 def _journal_to_icdd(f):
     """'(NH4)1.895Na0.065' -> '( N H4 )1.895 Na0.065'; 'Fe3+1.52' -> 'Fe1.52 +3'; 'Σ2.000' kept; '·8H2O' -> '!8 H2 O'."""
     f = f.replace('{', '(').replace('}', ')')                                            # '{[(NH4)2.13K0.87]Σ3.00(H2O)}{…}': braces are brackets
-    f = re.sub(r'(?<![A-Za-z])(S|Se|Te|Fe|Mn|Cu|Ti|V|Cr|As|Sb|U|Ce|Eu|Co|Ni|Sn|Pb|Tl|Bi|Nb|W|Mo)([1-6]) (\d+\.\d+)(?![\d.])', r'\1 \3', f)   # 'S2 2.60': a charge whose sign the text layer lost (S2− 2.60)
+    f = re.sub(r'(?<![A-Za-z])(S|Se|Te|Fe|Mn|Cu|Ti|V|Cr|As|Sb|U|Ce|Eu|Co|Ni|Sn|Pb|Tl|Bi|Nb|W|Mo)([1-6])\s*[−–—‒-]?\s+(\d+\.\d+)(?![\d.])', r'\1 \3', f)   # 'S2 2.60' / 'S2– 1.02': an ANION charge, whose sign the text layer either lost or left as a dash — not a subscript. Without the dash branch 'S6+ 1.02S2– 1.02' summed to S3.02 instead of S2.04 (northstarite), and the surplus read as a real disagreement.
     f = re.split(r'\s*\(?\bZ\s*=', f)[0]                                               # '(Z = 2)' and what follows
     f = re.sub(r'^\(\s*[A-Za-z\-+, ]+\)\s*', '', f)                                      # '(SREF) Cu2Fe0.84…', '(O + F) (Na2.74…': a tag or the basis, not a group
     f = re.sub(r'(?<![A-Za-z(])((?:P|S|As|Si|V|Se|Cr|Mo|W|B|C|N)O([2-4]))(\d+\.\d{2})(?![\d.])', r'(\1)\3', f)   # 'PO43.02' = (PO4)3.02, the brackets flattened
@@ -1939,6 +1949,41 @@ def check_composition(ex, text):
                 res['lines'].append('  another formula sentence in the body differs from the one the table reproduces (an alternative normalisation?): %s%s' % (
                     '; '.join(d.replace(' vs ', ' / ') for d in diffs[:6]), ('; only one of them carries ' + ', '.join(missing[:4])) if missing else ''))
     return res
+
+def _single_outlier(counts, apfu, ox_paper=None, tol=0.025, gap=0.04):
+    """The element a single wrong number is carried by — or None when no element stands out.
+
+    A reduction NORMALISES to a basis, so one bad wt% or one bad coefficient does not move one
+    element alone: it moves that element a lot and dilutes every other one by a single common
+    factor. That is a different shape from a misread table, where the errors scatter, and it is
+    the shape the 'the cations deviate N% overall' doubt was mistaking for one. Measured by
+    seeding faults 2026-09-07: recall PEAKED and then FELL (a 20% error in a wt% caught less
+    often than a 10% one, on 96 papers) entirely because the bigger fault pushed a second element
+    past tolerance and the single-element rule below insisted on exactly one.
+
+    So: divide out the common factor and see whether exactly one element is left standing.
+    `ox_paper` guards the one shape this cannot read — an element the formula prints in two
+    valence states reduces to one summed coefficient, and a mismatch there is the parse, not the
+    paper (northstarite's 'S6+ 1.02 S2- 1.02')."""
+    els = [e for e in counts
+           if e not in ('H', 'O') and (counts[e] or 0) >= 0.05 and (apfu or {}).get(e)]
+    if len(els) < 4:
+        return None
+    rat = {e: apfu[e] / counts[e] for e in els}
+    best = best_dev = None
+    for o in els:
+        if len((ox_paper or {}).get(o) or ()) > 1:
+            continue                       # two valence states -> one summed coefficient; not evidence
+        rest = sorted(rat[e] for e in els if e != o)
+        c = rest[len(rest) // 2] if len(rest) % 2 else 0.5 * (rest[len(rest) // 2 - 1] + rest[len(rest) // 2])
+        if not c:
+            continue
+        spread = max(abs(x / c - 1) for x in rest)
+        dev = abs(rat[o] / c - 1)
+        if spread <= tol and dev >= max(gap, 3 * spread) and (best_dev is None or dev > best_dev):
+            best, best_dev = o, dev
+    return best
+
 
 def _check_formula(ex, text, fcand):
     """Re-do the paper's reduction from its own table, basis and method, against its own empirical
@@ -2116,7 +2161,7 @@ def _check_formula(ex, text, fcand):
     if r and r.get('water_oh'):
         converted.append('the anion count taken as O + OH + F, every H2O of the table as two OH (the tourmaline convention)')
     if r is None:
-        return {'ok': False, 'verified': False, 'lines': ['composition: not verifiable — the wt% table read (%d constituents) and the formula read could not be reconciled on any basis; check the table and the formula sentence by eye' % len(wt)],
+        return {'ok': False, 'verified': False, 'lines': ['composition: not verifiable — the wt%% table read (%d constituents) and the formula read could not be reconciled on any basis; check the table and the formula sentence by eye' % len(wt)],
                 'formula': ftxt, 'basis': None, 'result': None, 'doubts': ['not reconcilable on any basis'], 'wt': wt, 'counts': counts}
     # confidence: only a clean read with a specific deviation is a finding; anything doubtful is a note
     doubts = []; notes = []; reading_doubts = []
@@ -2173,7 +2218,7 @@ def _check_formula(ex, text, fcand):
     if factor_like:
         doubt('%s is off by a factor (%.2f vs %.2f) — a multiplier or notation problem in the read, not a coefficient slip' % (factor_like[0][0], factor_like[0][1], factor_like[0][2]))
     if column_note and r['diffs']:
-        doubt('the wt%% column was chosen by fit, not by its header — a residual disagreement there is not evidence', reading=True)
+        doubt('the wt% column was chosen by fit, not by its header — a residual disagreement there is not evidence', reading=True)
     if any('analyses under it averaged' in c_ for c_ in converted) and r['diffs']:
         doubt('the analyses under the name were averaged by the tool — the paper\'s own mean may treat the iron split or the H2O differently; a residual there is not evidence')   # NOT a soft doubt: it names a mechanism (the iron split, the water) that moves one element, which is the shape the single-element rule below trusts
     if f_kind == 'structural' and r['diffs']:
@@ -2247,9 +2292,14 @@ def _check_formula(ex, text, fcand):
     solo = [d for d in r['diffs'] if d[2] is not None]
     els_read = {EP.parse_constituent(c).element for c in wt if _parses(c)}
     compared = [k for k, v in counts.items() if k not in ('H', 'O') and (v or 0) >= 0.05 and k in els_read]
-    if len(solo) == 1 and len(compared) >= 4 and reading_doubts and all(d in reading_doubts for d in doubts):
+    # ... and one element off with the REST sharing a single factor is the same fact, seen through
+    # the normalisation: see _single_outlier. Without it a bigger fault was caught less often than
+    # a smaller one, because it pushed a second element past tolerance and broke `len(solo) == 1`.
+    outlier = solo[0][0] if len(solo) == 1 else (
+        _single_outlier(counts, r.get('apfu') or {}, ox_paper) if r['diffs'] else None)   # nothing deviates (the apfu column already vouched): there is no one cell to name
+    if outlier and len(compared) >= 4 and reading_doubts and all(d in reading_doubts for d in doubts):
         notes.append('every coefficient of the formula but %s follows from the table read, so the doubts about that '
-                     'reading do not carry to it — check the one cell' % solo[0][0])
+                     'reading do not carry to it — check the one cell' % outlier)
         doubts = []
     verified = not doubts
     lines = []

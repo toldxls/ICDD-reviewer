@@ -19,6 +19,72 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed — a bigger error was caught less often than a small one
+Recall was measured for the first time on 2026-09-07 by seeding faults, and it did not rise with
+the size of the fault: it PEAKED and then FELL. Per paper, comparing a 20 % fault with a 10 % one:
+
+| fault | caught at 10 % but not at 20 % | the reverse |
+|---|---|---|
+| a wt % | **96** | 6 |
+| a formula coefficient | **27** | 7 |
+
+117 of those 123 came back as `noted` rather than `missed` — the check saw the error and refused to
+write it. The cause is arithmetic. A reduction NORMALISES to a basis, so one wrong number never
+moves one element alone: it moves that element a lot and dilutes every other one by a single common
+factor. Past about 6 % that second, common shift crosses tolerance, `the cations deviate N% overall`
+fires, and the rule that rescues a single-element disagreement could not answer because it insisted
+on exactly one element deviating. Northstarite, PbO seeded +20 %:
+
+```
+Pb: paper 1.890, from the paper's own wt%  2.152  (+0.262)   ratio 1.139
+Te: paper 0.980, from the paper's own wt%  0.930  (-0.050)   ratio 0.949
+S : paper 1.040, from the paper's own wt%  0.986  (-0.054)   ratio 0.948
+```
+
+Te and S share one factor to a tenth of a per cent; Pb is the outlier. `paper_extract._single_outlier`
+divides out the common factor and asks whether exactly one element is left standing — the signature
+of one wrong number, as against the scatter of a misread table. Nothing else changes: a hard doubt
+(the formula would not parse, the wt % do not add up, an element is missing, the basis is circular)
+still blocks, and the paper's own apfu column still overrides.
+
+Measured through the real check, not the helper: **39 of the 96** inverted wt % papers and **15 of
+the 27** formula ones now produce a finding at 20 %, and on the 31 corpus papers that carry this
+doubt today it adds **no new flags at all**.
+
+Re-seeding the whole corpus (1093 papers) gives the curve:
+
+| fault, share caught | 5 % | 10 % | 20 % |
+|---|---|---|---|
+| a formula coefficient | 5 → **6 %** | 59 → **71 %** | 55 → **69 %** |
+| a wt % | 6 → **6 %** | 27 → **32 %** | 12 → **23 %** |
+
+The `d` and stated-basis curves are untouched. **The inversion is reduced, not gone**: a 20 % wt %
+error is still caught less often than a 10 % one (23 % against 32 %), so something beyond the
+common-factor shape is still downgrading the largest faults. The apfu column also costs less than
+it did — 11 % of wt % faults ≥ 5 % caught where a paper prints one, against 6 % before, versus
+22 % where it does not.
+
+### Fixed — fourteen papers raised instead of being read
+Three crash classes across the corpus, 15 errored papers, now 1 (a zero-byte .pdf).
+
+Two were one root cause: dash normalisation was half-done. `_NUM` has always admitted an en dash as
+a minus sign, so `–0.09` passed the guard and then broke `float()` two lines later, and the same gap
+(only U+2212 translated) crashed the word-position reader on a negative cell. One `_dash()` covers
+minus, en dash, em dash, figure dash and non-breaking hyphen, and is used at every point a string
+off a page becomes a number.
+
+The third: `'the wt% table read (%d constituents)' % n` raised `unsupported format character 't'` on
+all 8 papers where no basis reconciles — the per-cent sign read as a conversion, and the verdict was
+lost to a crash. Its mirror image, a doubled `%%` in a string nothing formats, was reaching reports
+as a literal `wt%%`.
+
+### Fixed — an anion charge read as a subscript
+The formula normaliser already undid a charge whose sign the pdf text layer had LOST (`S2 2.60` for
+S2−); one it kept as a dash fell through, so northstarite's `S6+ 1.02S2– 1.02` summed to S3.02
+instead of S2.04 and the surplus sulfur read as a real disagreement with the analysis. That paper
+now reproduces its formula exactly. It is the only verdict the corpus changes: 1078 papers, one
+`composition unverified -> ok`, nothing else moved.
+
 ### Added — the water a structure can account for (issue #10, first increment)
 An oxygen receives about 2 v.u. from its cations; one receiving much less is holding a hydrogen the
 refinement need not have located, which is the point — H is unlocated in many structures, and this

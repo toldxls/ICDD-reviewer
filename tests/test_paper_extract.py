@@ -135,6 +135,102 @@ class CompositionDoubts(unittest.TestCase):
         self.assertEqual(c['result']['diffs'], [])
 
 
+class SingleOutlier(unittest.TestCase):
+    """One wrong number does not move one element alone.
+
+    A reduction normalises to a basis, so inflating one constituent moves that element a lot and
+    dilutes every OTHER one by a single common factor. The 'the cations deviate N% overall' doubt
+    was reading that as a table-reading problem, and because the single-element rescue insisted on
+    exactly one deviating element it could not answer. Measured 2026-09-07 by seeding faults:
+    recall PEAKED then FELL — 96 papers where a 10 % error in a wt% was caught and a 20 % one was
+    not, 27 more for a formula coefficient, and 117 of those 123 degraded to a console note.
+
+    The fixture: the same five constituents as CompositionDoubts, SiO2 inflated 20 %. The
+    reduction then puts Si 9 % high and Al, Mg, Ca and Fe all 9 % low — one factor, to a tenth of
+    a per cent — while the formula sentence is untouched."""
+    WT = (('SiO2', 48.34), ('Al2O3', 20.05), ('MgO', 18.10), ('CaO', 10.90), ('FeO', 10.20))
+    FORMULA = 'The empirical formula (based on 12 O apfu) is Si2.96Al1.74Mg1.98Ca0.86Fe0.63O12 for it.'
+
+    def ex(self, rows=None, header='A B C'):
+        rows = rows if rows is not None else self.WT
+        return {'name': 'testite', 'basis': ('anions', None, 12.0),
+                'epma': {'rows': [{'constituent': c, 'mean': v} for c, v in rows],
+                         'header': header, 'caption': ''}}
+
+    def test_one_element_off_and_the_rest_on_one_factor_is_a_finding(self):
+        c = PE.check_composition(self.ex(), self.FORMULA)
+        self.assertEqual(len(c['result']['diffs']), 5)          # five deviate, so `len(solo) == 1` cannot fire
+        self.assertTrue(c['verified'], c['doubts'])             # …but it is one wrong number, and a finding
+        self.assertTrue(any('but Si follows from the table read' in l for l in c['lines']), c['lines'])
+        self.assertEqual(c['doubts'], [])
+
+    def test_the_outlier_is_named_and_it_is_the_wrong_one(self):
+        r = PE._check_formula(self.ex(), self.FORMULA, PE._formulas(self.FORMULA, 'testite')[0])
+        self.assertEqual(PE._single_outlier(r['counts'], r['result']['apfu']), 'Si')
+
+    def test_scattered_deviations_are_still_a_reading_problem(self):
+        """No common factor: the elements disagree in different directions by different amounts,
+        which is what a misread table actually looks like. The doubt must stand."""
+        rows = (('SiO2', 44.0), ('Al2O3', 17.0), ('MgO', 21.0), ('CaO', 9.0), ('FeO', 12.0))
+        c = PE.check_composition(self.ex(rows=rows), self.FORMULA)
+        self.assertFalse(c['verified'])
+        self.assertTrue(any('deviate' in d for d in c['doubts']), c['doubts'])
+        self.assertIsNone(PE._single_outlier(c['counts'], c['result']['apfu']))
+
+    def test_a_hard_doubt_still_blocks_the_outlier(self):
+        """Same shape, but an element of the formula is missing from the table: the comparison
+        itself is unsound, so nothing may be read off it."""
+        c = PE.check_composition(
+            self.ex(), 'The empirical formula (based on 12 O apfu) is Si2.96Al1.74Mg1.98Ca0.86Fe0.63Na0.30O12 for it.')
+        self.assertFalse(c['verified'])
+        self.assertTrue(any('has no Na' in d for d in c['doubts']), c['doubts'])
+
+    def test_fewer_than_four_cations_says_nothing(self):
+        self.assertIsNone(PE._single_outlier({'Si': 3.0, 'Al': 1.0, 'Mg': 2.0}, {'Si': 3.3, 'Al': 0.91, 'Mg': 1.82}))
+
+    def test_an_element_in_two_valence_states_is_not_an_outlier(self):
+        """A formula printing one element twice ('S6+ 1.02 S2- 1.02') reduces to one summed
+        coefficient, so a mismatch there is the parse, not the paper."""
+        counts = {'Pb': 5.8, 'Te': 5.04, 'S': 3.02, 'Sb': 0.9, 'Cu': 1.0}
+        apfu = {'Pb': 5.49, 'Te': 4.77, 'S': 3.60, 'Sb': 0.85, 'Cu': 0.95}
+        self.assertEqual(PE._single_outlier(counts, apfu), 'S')                     # without the charges
+        self.assertIsNone(PE._single_outlier(counts, apfu, {'S': {2, 6}}))          # with them
+
+    def test_every_dash_a_journal_sets_reaches_float_as_a_minus(self):
+        """Three of the corpus's four crash classes were one half-normalisation: `_NUM` admits an
+        en dash as a minus, `float()` does not, and only U+2212 was being translated. 14 papers
+        raised instead of being read (8 of them on a separate bug, the per-cent sign below)."""
+        for d in ('\u2212', '\u2013', '\u2014', '\u2012', '\u2010'):
+            self.assertEqual(PE._dash(d + '0.09'), '-0.09')
+            self.assertEqual(PE._numbers(['1.20', d, '3.40']), [('range', (1.20, 3.40))])
+            self.assertIsNotNone(PE._num_x((0.0, 0.0, 10.0, 1.0, d + '0.09')))
+        self.assertIsNone(PE._num_x((0.0, 0.0, 10.0, 1.0, '\u2014')))      # a bare dash is 'not detected', not a number
+
+    def test_a_per_cent_sign_is_not_a_format_conversion(self):
+        """'the wt% table read (%d constituents)' % n raised `unsupported format character 't'`
+        on every paper no basis reconciled — 8 of the corpus. The verdict was lost to a crash."""
+        c = PE.check_composition(
+            {'name': 'testite', 'epma': {'rows': [{'constituent': 'SiO2', 'mean': 40.0},
+                                                  {'constituent': 'PbO', 'mean': 55.0}],
+                                         'header': 'Constituent Mean', 'caption': ''}},
+            'The empirical formula (based on 12 O apfu) is Na9.11K4.02Ba1.77Sr0.90O12 for it.')
+        self.assertEqual(c['lines'], ['composition: not verifiable — the wt% table read (2 constituents) and '
+                                      'the formula read could not be reconciled on any basis; check the table '
+                                      'and the formula sentence by eye'])
+        self.assertFalse(c['verified'])
+
+    def test_a_dashed_anion_charge_is_not_a_subscript(self):
+        """northstarite: 'S6+ 1.02S2- 1.02' is 2.04 S, not 3.02. The normaliser already undid a
+        charge whose sign the text layer had LOST ('S2 2.60'); a sign it kept as a dash fell
+        through, and the surplus sulfur then read as a real disagreement with the analysis."""
+        from pxrd_review import epma as EP
+        norm = PE._journal_to_icdd('Pb5.80Sb3+ 0.05Te4+ 5.04S6+ 1.02S2– 1.02O18')
+        counts, _ox, _iss = EP.parse_icdd_formula(norm, has_sulfur=True)
+        self.assertAlmostEqual(counts['S'], 2.04, places=2)
+        self.assertAlmostEqual(counts['Pb'], 5.80, places=2)
+        self.assertEqual(PE._journal_to_icdd('Fe2O3'), 'Fe2 O3')                    # a real subscript survives
+
+
 class GladstoneDale(unittest.TestCase):
     """Which constituents K_C is formed from decides the answer, so every set the paper offers is
     tried and the paper's own stated compatibility index arbitrates. Only when none reproduces it
