@@ -143,6 +143,26 @@ a fix was reachable:
   `tools/corpus_paper_extract.py --papers LIST`): eight more papers gain a bond-valence oracle (four
   agree, four doubts), two grids whose every cell had 'disagreed' become doubts, none is lost. Also fixed on the way: `compute` crashed on a
   hydrogen-bond acceptor with a split label ('A1/Ow1').
+- **The basis flag, checked by hand on its fourteen corpus cases: every one was the tool's own
+  convention, so those conventions are now rules** — a formula with OH or H2O but a table without
+  water cannot be reduced on an anion count that includes them (fehrite, terskite, strontioborite);
+  '9 O' that excludes the water oxygens is the found count less the water (keystoneite); a table
+  of elements with no oxygen makes the anion basis degenerate (heterogenite, lazaraskeite); 'O + S
+  = 10' with SO3 and S both in the table counts the sulfate sulfur (cherokeeite); ammonium
+  reported as an oxide (burroite); a stated basis on which every coefficient is within tolerance
+  anyway (fluorcarmoite, rms 0.031); a sentence that states both bases, one per mineral, where the
+  reader took the other (cupromakovickyite). The flag now fires nowhere on the corpus and stays in
+  place for a real case.
+- **A paper's own site names are mapped onto the .cif by coordinates** (`site_name_map`): the
+  coordinates table gives x y z per site name — A1, M2A, T(1), X, Y, Z — and a site whose
+  coordinates fall on a .cif site (any equivalent position, within 0.25 Å) is that site. The
+  coordinates reader (`paper_structure._label_ok`) now keeps such names (it kept only
+  element-headed labels). The mapping feeds every bond-valence reader and checker, so grids and BVS
+  columns headed by the paper's names are read: chloritoid-3T's M1A…M2C, allanite-(Y)'s A1 A2 M1–M3
+  T1–T3, puttapaite's M1–M4 T, elbaite's X Y Z T. Grid reading also improved on the way: the
+  column label is the site-name token over a site-population line beneath the header, x-clusters
+  under one label are one column, prose of the other page column between two rows no longer ends
+  the grid, and a header with no row within six lines is not a header. __BVCOUNT__
 - **Six defects a cross-file review of the unreleased 0.5.6 code found, fixed** (a medium `/code-review`;
   its other angles did not finish): Mindat's ideal formula is HTML, and its mass was read by a token scan
   that dropped every subscript (abelsonite 86 instead of 519) — that garbage stood in as "an ideal

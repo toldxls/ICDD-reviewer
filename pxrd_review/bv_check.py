@@ -1349,6 +1349,11 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
         cat_labels.setdefault(k_, v_); cat_labels.setdefault(_strip_charge(k_), v_)
     an_labels = {_norm_label(x): a.label for a in st.anions for x in a.label.split('/')}
     an_labels.update({_norm_label(a.label): a.label for a in st.anions})
+    for k_, v_ in (getattr(st, 'aliases', None) or {}).items():         # the paper's own site names, mapped by coordinates
+        if v_ in {r[0].label for r in result}:
+            cat_labels.setdefault(k_, v_)
+        elif v_ in {a.label for a in st.anions}:
+            an_labels.setdefault(k_, v_)
     def resolve_anion(lab):
         if lab in an_labels:
             return an_labels[lab]
@@ -1521,6 +1526,10 @@ def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_ani
         if k_ not in bvs_of:
             row = next(r for r in result if r[0].label == v_)
             bvs_of[k_] = bvs_of[_strip_charge(k_)] = (v_, row[2], 'cation', min(getattr(row[0], 'occ_total', 1.0) or 1.0, 1.0))
+    for k_, v_ in (getattr(st, 'aliases', None) or {}).items():         # the paper's own site names, mapped by coordinates
+        hit = bvs_of.get(_norm_label(v_))
+        if hit and k_ not in bvs_of:
+            bvs_of[k_] = hit
     for a in st.anions:
         for x in a.label.split('/'):
             bvs_of[_norm_label(x)] = (a.label, anion_sum.get(a.label, 0.0), 'anion', 1.0)

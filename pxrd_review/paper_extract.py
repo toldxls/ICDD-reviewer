@@ -2091,7 +2091,8 @@ def _check_formula(ex, text, fcand):
         lines.append('  every coefficient of the published formula follows from the published wt%')
     basis_flag = False
     if ok and verified and ex.get('basis') and b and not _same_basis(b, ex['basis']) and not r.get('factor') \
-            and _basis_flaggable(ex['basis'], b) and _basis_is_the_formulas(ex.get('basis_sentence') or '', f_ctx):
+            and _basis_flaggable(ex['basis'], b) and _basis_is_the_formulas(ex.get('basis_sentence') or '', f_ctx) \
+            and _basis_comparable(ex['basis'], b, wt, counts, _rep(wt, [ex['basis']]), ex.get('basis_sentence') or ''):
         # the paper says 'on the basis of 12 O' and its coefficients follow from 13 anions, or from 8 cations:
         # a reviewer confirms which is the slip (owner: flag it when they differ). Only with a clean reduction
         # on the other basis, and the basis sentence being the formula's own
@@ -2099,6 +2100,49 @@ def _check_formula(ex, text, fcand):
         lines.append('  the paper states its formula is calculated on %s, but every coefficient follows from %s — the stated basis does not reproduce the formula; one of the two is a slip'
                      % (EP._basis_label(ex['basis']), EP._basis_label(b)))
     return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts, 'wt': wt, 'counts': counts, 'basis_flag': basis_flag}
+
+def _basis_comparable(stated, found, wt, counts, r_stated, basis_sentence=''):
+    """Whether a stated basis that fails can be held against the paper — the cases the corpus
+    showed to be the tool's convention, not the paper's slip, are left alone:
+    - the formula carries H but the table has no water or H constituent: an anion count that includes
+      the OH / H2O oxygens cannot be reduced from the anhydrous oxides (fehrite, terskite,
+      strontioborite);
+    - the table has water and the stated anion count is the found one less the water oxygens: '9 O'
+      that excludes the H2O (keystoneite);
+    - the reduction on the stated basis is degenerate — a major element comes out at zero, as it does
+      for a table of elements with no oxygen (heterogenite, lazaraskeite);
+    - the stated anion sum names an element the table carries as an oxide as well ('O + S = 10' with
+      SO3 and S both in the table: the sulfate S counted among the anions, cherokeeite)."""
+    if r_stated and not r_stated.get('diffs'):
+        return False                                                   # every coefficient within tolerance on the stated basis (fluorcarmoite, rms 0.031): no slip to flag
+    has_h = (counts or {}).get('H', 0) > 0.2
+    if stated[0] == 'O' and any(c in ('N2H8O', '(NH4)2O') for c in wt):
+        return False                                                   # ammonium reported as an oxide: the anion count is a convention (burroite)
+    found_n = float(found[-1])
+    if basis_sentence and re.search(r'(?<![\d.])%g\s*(?:apfu|atoms|anions|oxygens?|O\b|cations|pfu)|=\s*%g(?![\d.])' % (found_n, found_n), basis_sentence):
+        return False                                                   # the sentence states the found basis too ('18 for makovickyite and 36 for cupromakovickyite'): the reader took the other
+    table_els = set()
+    for c in wt:
+        try:
+            table_els.add(EP.parse_constituent(c).element)
+        except Exception:
+            pass
+    table_h = any(_parses(c) and (EP.parse_constituent(c).kind == 'water' or EP.parse_constituent(c).element == 'H') for c in wt)
+    if has_h and not table_h:
+        return False
+    if stated[0] == 'O' and found[0] == 'O' and has_h and table_h:
+        n_w = (counts or {}).get('H', 0) / 2.0
+        if abs(float(found[1]) - float(stated[1]) - n_w) <= 0.15:
+            return False
+    if r_stated and any(d[2] in (None, 0.0) or (d[1] >= 0.3 and d[2] is not None and d[2] < 0.05 * d[1]) for d in r_stated.get('diffs') or []):
+        return False
+    if stated[0] == 'O':
+        spec = str(stated[1]) if len(stated) > 2 else ''
+    if stated[0] == 'element':
+        els = set(re.findall(r'[A-Z][a-z]?', stated[1]))
+        if 'O' in els and any(e_ in table_els and any(_parses(c) and EP.parse_constituent(c).element == e_ and re.search(r'O\d*$', c) for c in wt) for e_ in els - {'O'}):
+            return False
+    return True
 
 def _basis_flaggable(stated, found):
     """Whether the basis that reproduces the formula is one a paper states — a whole-number anion or
@@ -2960,9 +3004,58 @@ def _bv_norm(t):
     return B._norm_label(t.replace('−', '-').replace('–', '-'))
 
 def _cation_labels(st):
-    """The structure's cation site labels as bv_check normalises them (hydrogen left out)."""
+    """The structure's cation site labels as bv_check normalises them (hydrogen left out), plus the
+    paper's own names for those sites when a coordinates table let them be mapped (st.aliases)."""
     cats = {_bv_norm(x) for r in st.cations for x in r.label.split('/')} | {_bv_norm(r.label) for r in st.cations}
+    cat_full = {r.label for r in st.cations}
+    cats |= {k for k, v in (getattr(st, 'aliases', None) or {}).items() if v in cat_full}
     return {c for c in cats if not c.startswith('H')}
+
+def _anion_labels(st):
+    """The structure's anion site labels normalised, plus the paper's own names for them."""
+    an = {_bv_norm(x) for a in st.anions for x in a.label.split('/')} | {_bv_norm(a.label) for a in st.anions}
+    an_full = {a.label for a in st.anions}
+    return an | {k for k, v in (getattr(st, 'aliases', None) or {}).items() if v in an_full}
+
+def site_name_map(path, st, tol=0.25):
+    """A paper names its sites its own way — A1, M2, T, X(3) — while the .cif labels them by element
+    (Ca1, Al2, Si1). The paper's coordinates table settles it: a site whose x y z fall on a .cif site
+    (within tol Å, any equivalent position, periodic) is that site. -> {normalised paper label: .cif
+    label}, only the names that differ from the .cif's, and only when two or more sites map and no
+    two paper names land on one .cif site."""
+    try:
+        from pxrd_review import paper_structure as PS
+        rows = PS.paper_sites(path)
+    except Exception:
+        return {}
+    if not rows:
+        return {}
+    own = {_bv_norm(x) for r in st.sites for x in r.label.split('/')} | {_bv_norm(r.label) for r in st.sites}
+    out = {}; taken = {}
+    for lab, x, y, z, _tail in rows:
+        try:
+            xyz = [float(x), float(y), float(z)]
+        except (TypeError, ValueError):
+            continue
+        key = _bv_norm(lab)
+        if not key or key in own:
+            continue
+        best = None
+        for site in st.sites:
+            for pos in (site.positions or [site.frac]):
+                try:
+                    d = st._min_dist(list(pos), xyz)
+                except Exception:
+                    continue
+                if best is None or d < best[0]:
+                    best = (d, site.label)
+        if best and best[0] <= tol:
+            if best[1] in taken and taken[best[1]] != key:
+                taken[best[1]] = None                                  # two paper names on one .cif site: neither is trusted
+            else:
+                taken.setdefault(best[1], key); out[key] = best[1]
+    out = {k: v for k, v in out.items() if taken.get(v) == k}
+    return out if len(out) >= 2 else {}
 
 def _names_cations(rows, st):
     """Whether a Word table belongs to this structure — the rule bv_tables applies to a pdf's
@@ -3000,7 +3093,7 @@ def bv_check_paper(path, cif, ex):
             all_tabs = [t for t in B.read_tables(path) if len(t) >= 2]
             if not any(sum(1 for r in t for c in r if re.match(r'^\s*0\.\d\d', c)) >= 3 or any(_BVS_HEAD.match((c or '').strip()) for r in t[:3] for c in r) for t in all_tabs):
                 return {'status': 'none', 'message': 'no bond-valence table found in the manuscript (nothing to check against the .cif)'}   # no valences and no BVS column: the .cif is not needed, so a broken one is no finding
-            st = B.Structure(cif)
+            st = B.Structure(cif); st.aliases = site_name_map(path, st)
             all_tabs = [t for t in (_maybe_transpose(t, st) for t in all_tabs) if len(t) >= 3]   # a grid the other way round has its rows as columns before the transpose
             has_bvs_col = lambda t: any(_BVS_HEAD.match((c or '').strip()) for r in t[:3] for c in r)   # a BVS column of a coordinates / bond table, not a grid
             tabs = [{'page': None, 'rows': t, 'kind': 'grid'} for t in all_tabs if _names_cations(t, st) and not has_bvs_col(t)]
@@ -3010,7 +3103,7 @@ def bv_check_paper(path, cif, ex):
                 return {'status': 'foreign', 'message': 'a bond-valence-like table was read but it names none of the .cif\'s cation sites (%s) — is that the right structure?'
                         % ', '.join(sorted(r.label for r in st.cations if not r.label.upper().startswith('H')))[:80]}
         else:
-            st = B.Structure(cif)
+            st = B.Structure(cif); st.aliases = site_name_map(path, st)
             tabs = bv_tables(path, st) or bvs_site_tables(path, st)
         if not tabs:
             return {'status': 'none', 'message': 'no bond-valence table found in the paper (nothing to check against the .cif)'}
@@ -3043,9 +3136,9 @@ def bv_check_paper(path, cif, ex):
                     '(Ow/OH in the table vs O in the .cif); the row and column sums below were still checked' % where)
             return {'status': 'unmatched', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': 0, 'disagree': 0}
         bad, _, key, u6, P, lines, n = best
-        if n >= 4 and 2 * bad >= n:                                   # half or more of the cells differ: not this convention, or not this reading
+        if (n >= 4 and 2 * bad >= n) or bad >= 8:                     # half or more of the cells differ, or eight of them: not this convention, or not this reading — a published table has one or two slips, not a list
             head = ('bond valence: %s vs the .cif — %d of %d cells differ under every parameter set: another convention (occupancy-weighted sums, '
-                    'other parameters, another site labelling) or a misread table; not compared cell by cell [unverified]' % (where, bad, n))
+                    'other parameters, another site labelling) or a misread table; not compared cell by cell [unverified]' % (where, bad, n))   # a doubt for the reviewer, never a list of findings
             lines = [ln for ln in lines if 'cells compared' in ln]
             return {'status': 'unmatched', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad}
         head = 'bond valence: %s vs the .cif — agrees best with %s%s' % (
@@ -3063,7 +3156,7 @@ def bv_tables(pdf, st):
     or below its row: a cell with two distances) joins the row nearest to it. Columns are the data
     tokens' x-clusters labelled by the nearest header token. -> [{'page', 'rows', 'kind': 'grid'}]"""
     norm = _bv_norm; cats = _cation_labels(st)
-    anions = {norm(x) for a in st.anions for x in a.label.split('/')} | {norm(a.label) for a in st.anions}
+    anions = _anion_labels(st)
     an_re = _AN_RE
     is_an = lambda t: norm(t) in anions or bool(an_re.match(t))
     is_cat = lambda t: norm(t) in cats
@@ -3094,8 +3187,10 @@ def bv_tables(pdf, st):
                 if not lw or row_ok(lw[0][4]) or re.search(r'\d\.\d\d', ' '.join(w[4] for w in lw)):
                     break
                 head += lw; j += 1
-            raw = []; ys = []; blank = 0; pending = []
+            raw = []; ys = []; blank = 0; pending = []; head_end = j
             while j < len(lines) and j < i + 90:
+                if not raw and j > head_end + 6:
+                    break                                                  # no row within six lines of this header: it was a site-population line, not the grid's header
                 lw = [w for w in lines[j]['w'] if w[0] >= x_lo and w[2] <= x_hi]
                 if not lw:
                     blank += 1; j += 1
@@ -3111,6 +3206,9 @@ def bv_tables(pdf, st):
                         j += 1; break
                 elif all(val_re.match(w[4]) for w in lw):
                     pending.append((y, lw))                                # bare valences: the nearest row's cell with two distances
+                elif raw and not any(re.search(r'\d', w[4]) for w in lw):
+                    blank += 1                                             # the other page column's prose between two rows: skipped, not the end
+                    if blank > 3: break
                 elif raw:
                     break
                 j += 1
@@ -3129,15 +3227,23 @@ def bv_tables(pdf, st):
             if not cols:
                 i += 1; continue
             hw = [((w[0] + w[2]) / 2, w[4]) for w in head]
-            labels = [next((t for x, t in sorted(hw, key=lambda h: abs(h[0] - cx)) if abs(x - cx) < 28), '?') for cx in cols]
+            is_lab = lambda t: is_cat(t) or is_an(t) or bool(re.match(r'^(Σ|Sum|Total|6anion|6cation)', t))
+            labels = [next((t for x, t in sorted(hw, key=lambda h: abs(h[0] - cx)) if abs(x - cx) < 28 and is_lab(t)), None)
+                      or next((t for x, t in sorted(hw, key=lambda h: abs(h[0] - cx)) if abs(x - cx) < 28), '?') for cx in cols]   # a site name over a site-population line ('Na 0.28 Ca')
+            merged = []                                                    # two x-clusters under one label (a wide column): one column
+            for cx, lab in zip(cols, labels):
+                if merged and merged[-1][1] == lab and lab != '?' and cx - merged[-1][0][-1] <= 60:
+                    merged[-1][0].append(cx)
+                else:
+                    merged.append(([cx], lab))
             rows = []
             for first, ws in raw:
-                cells = [[] for _ in cols]
+                cells = [[] for _ in merged]
                 for w in sorted(ws, key=lambda w: w[0]):
-                    k = min(range(len(cols)), key=lambda c: abs(cols[c] - (w[0] + w[2]) / 2))
+                    k = min(range(len(merged)), key=lambda c: min(abs(x - (w[0] + w[2]) / 2) for x in merged[c][0]))
                     cells[k].append(w[4])
                 rows.append([first] + [' '.join(c) for c in cells])
-            grid = [['Atom'] + labels] + rows
+            grid = [['Atom'] + [lab for _, lab in merged]] + rows
             if transposed:
                 grid = [list(col) for col in zip(*[r + [''] * (len(grid[0]) - len(r)) for r in grid])]   # anion rows × cation columns, as the checker reads
                 grid[0][0] = 'Atom'
@@ -3154,7 +3260,7 @@ def bvs_site_tables(pdf, st):
     'rows': [(site label, value), …]}]. Rows are lines whose first token is a site of the .cif
     (cation or anion) and whose value sits under the header token."""
     norm = _bv_norm; cats = _cation_labels(st)
-    anions = {norm(x) for a in st.anions for x in a.label.split('/')} | {norm(a.label) for a in st.anions}
+    anions = _anion_labels(st)
     out = []
     for pno, lines in enumerate(_pages(pdf)):
         for i, ln in enumerate(lines):
@@ -3201,7 +3307,7 @@ def _maybe_transpose(rows, st):
     if not rows or len(rows) < 2:
         return rows
     norm = _bv_norm; cats = _cation_labels(st)
-    anions = {norm(x) for a in st.anions for x in a.label.split('/')} | {norm(a.label) for a in st.anions}
+    anions = _anion_labels(st)
     hdr = rows[0]
     an_hits = sum(1 for c in hdr[1:] if norm((c or '').strip()) in anions or _AN_RE.match((c or '').strip()))
     cat_hits = sum(1 for c in hdr[1:] if norm((c or '').strip()) in cats)
@@ -3217,7 +3323,7 @@ def _maybe_transpose(rows, st):
 def _site_rows_from_grid(rows, st):
     """A Word table with a BVS column: -> [(site label, value), …] or []."""
     norm = _bv_norm; cats = _cation_labels(st)
-    anions = {norm(x) for a in st.anions for x in a.label.split('/')} | {norm(a.label) for a in st.anions}
+    anions = _anion_labels(st)
     for ri in range(min(3, len(rows))):
         ks = [ci for ci, c in enumerate(rows[ri]) if _BVS_HEAD.match((c or '').strip())]
         if ks and any(re.match(r'^(Atom|Site|Sites?|Atoms?|Label|Cation|Anion)$', (c or '').strip(), re.I) for c in rows[ri]):

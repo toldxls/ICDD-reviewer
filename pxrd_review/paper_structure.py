@@ -56,13 +56,20 @@ LABEL = re.compile(r'^([A-Z][a-z]?)([A-Za-z]?\(?\d{0,2}\)?[A-Za-z]?)$')     # O1
 WYCK = re.compile(r'^\(?\d{1,2}[a-z]\)?$')                                # a Wyckoff token between label and x
 FRACT_MAX = 1.05                                                          # a fractional coordinate, nothing else
 
+SITE_LETTERS = set('AMTXYZQDEGJLRW')                                       # a crystallographic site name: A1, M2A, T(1), X(3), Q2 — not an element
+
 def _label_ok(t):
     """'O1', 'Si2', 'Na1a' — and 'Ow1'/'OW1', the water oxygen, whose two-letter head is not an
-    element: fall back to the first letter, which is."""
-    m = LABEL.match(t.rstrip(',*†‡§'))
+    element: fall back to the first letter, which is. A paper's own site name (A1, M2A, T(1), X(3))
+    is a label too — its element comes from the occupancy column, and its coordinates are what map
+    the paper's names onto the .cif's."""
+    t = t.rstrip(',*†‡§')
+    m = LABEL.match(t)
     if not m:
         return False
-    return m.group(1) in EP.ATOMIC_WEIGHTS or m.group(1)[:1] in EP.ATOMIC_WEIGHTS
+    if m.group(1) in EP.ATOMIC_WEIGHTS or m.group(1)[:1] in EP.ATOMIC_WEIGHTS:
+        return True
+    return len(m.group(1)) == 1 and (m.group(1) in SITE_LETTERS and bool(re.search(r'\d', m.group(2))) or (m.group(1) in 'XYZTMA' and not m.group(2)))   # 'X', 'Y', 'Z', 'T': a tourmaline's sites, bare
 
 def _view(lines, lo, hi):
     """The page restricted to one text column: page_lines merges both columns of a two-column page
