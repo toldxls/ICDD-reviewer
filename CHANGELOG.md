@@ -118,7 +118,11 @@ a fix was reachable:
   fuller one — so a D_calc that follows from none of the formulas read is a doubt naming that
   possibility, never red. Mindat's cell vouches for a paper's cell when nothing in the paper
   could (sorted axes within 3 %, the entry check's rule); a difference is a doubt, never red.
-  (Corpus counts for the basis flag follow in the next entry.)
+  The first pass of the basis flag drew 43 on the corpus, 30 of them where the basis that
+  reproduced was the formula's own printed group sum ('Na+Ca+K+Zn = 0.97' — which reproduces its
+  cations by construction); the flag now needs a basis a paper would state (a whole-number anion
+  or cation count, a single element, or the stated group with another number). Fourteen flags
+  stand on the corpus, listed for the owner's eye; the basis record goes 41 % → 74 % verified.
 - **Bond-valence sums as a column, and grids the other way round, are read.** Of the 77 corpus
   papers with a .cif beside them and no bond-valence table read, 48 print one — as a BVS column of
   the coordinates table ('Atom x y z Ueq BVS'), of the bond-distance table ('Cr1–O7 1.92 … O1
@@ -134,7 +138,10 @@ a fix was reachable:
   agrees best, and a table half or more of whose cells differ under every parameter set is a
   doubt ('another convention, or a misread table'), never a list of findings. What stays unread:
   tables whose site names are the paper's own (M1, T, A2) where the .cif labels sites by element —
-  no mapping exists to read them by. (Corpus counts follow in the next entry.) Also fixed on the way: `compute` crashed on a
+  no mapping exists to read them by. Validated on a 165-paper subset (every paper the change could touch, plus sixty at random —
+  the owner's rule from here on: a full corpus run is half an hour and is not spent on every step;
+  `tools/corpus_paper_extract.py --papers LIST`): eight more papers gain a bond-valence oracle (four
+  agree, four doubts), two grids whose every cell had 'disagreed' become doubts, none is lost. Also fixed on the way: `compute` crashed on a
   hydrogen-bond acceptor with a split label ('A1/Ow1').
 - **Six defects a cross-file review of the unreleased 0.5.6 code found, fixed** (a medium `/code-review`;
   its other angles did not finish): Mindat's ideal formula is HTML, and its mass was read by a token scan

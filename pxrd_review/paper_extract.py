@@ -2091,7 +2091,7 @@ def _check_formula(ex, text, fcand):
         lines.append('  every coefficient of the published formula follows from the published wt%')
     basis_flag = False
     if ok and verified and ex.get('basis') and b and not _same_basis(b, ex['basis']) and not r.get('factor') \
-            and _basis_is_the_formulas(ex.get('basis_sentence') or '', f_ctx):
+            and _basis_flaggable(ex['basis'], b) and _basis_is_the_formulas(ex.get('basis_sentence') or '', f_ctx):
         # the paper says 'on the basis of 12 O' and its coefficients follow from 13 anions, or from 8 cations:
         # a reviewer confirms which is the slip (owner: flag it when they differ). Only with a clean reduction
         # on the other basis, and the basis sentence being the formula's own
@@ -2099,6 +2099,19 @@ def _check_formula(ex, text, fcand):
         lines.append('  the paper states its formula is calculated on %s, but every coefficient follows from %s — the stated basis does not reproduce the formula; one of the two is a slip'
                      % (EP._basis_label(ex['basis']), EP._basis_label(b)))
     return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts, 'wt': wt, 'counts': counts, 'basis_flag': basis_flag}
+
+def _basis_flaggable(stated, found):
+    """Whether the basis that reproduces the formula is one a paper states — a whole-number anion or
+    cation count, a single element ('P = 3'), or the stated group with another number ('S+Se+Te = 36'
+    against a stated 18) — and not the formula's own printed group sum ('Na+Ca+K+Zn = 0.97', which
+    reproduces its cations by construction; on the corpus those were 30 of 43 first flags)."""
+    whole = lambda n: abs(float(n) - round(float(n))) <= 0.02
+    if found[0] == 'element':
+        els = set(re.findall(r'[A-Z][a-z]?', found[1])); n = found[2]
+        if len(els) == 1 and whole(n):
+            return True
+        return stated[0] == 'element' and set(re.findall(r'[A-Z][a-z]?', stated[1])) == els and whole(n) and whole(stated[2])
+    return whole(found[-1])
 
 def _basis_is_the_formulas(basis_sentence, f_ctx):
     """Whether the basis sentence read is the formula sentence's own (or names the formula) rather
@@ -2737,7 +2750,7 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
                 # the formula vouches for it (owner: verified); a basis that reproduces with residuals is a doubt
                 _set(f, 'basis', 'agrees' if comp.get('ok') else 'unverified', 'composition', 'inferred — the paper states no basis; %s reproduces the formula' % basis_string(b), value=b)
             elif _same_basis(b, ex.get('basis')):
-                _set(f, 'basis', s, 'composition', 'the reduction on this basis reproduces the formula')
+                _set(f, 'basis', 'agrees' if comp.get('verified') else 'unverified', 'composition', 'the reduction on this basis reproduces the formula' if comp.get('ok') else 'the reduction on this basis is the one the formula rests on; a coefficient is off, not the basis')
             elif comp.get('basis_flag'):
                 _set(f, 'basis', 'disagrees', 'composition', 'the paper states %s, but every coefficient follows from %s' % (basis_string(ex['basis']), basis_string(b)), value=b)
             else:
@@ -3070,7 +3083,10 @@ def bv_tables(pdf, st):
                 else:
                     i += 1; continue
             lab_ws = [lines[i]['w'][k] for k in hits]
-            x_lo = min(w[0] for w in lab_ws) - 130; x_hi = max(w[2] for w in lab_ws) + 130   # the row labels to the left, a Σ column to the right
+            k0 = min(hits)
+            while k0 > 0 and re.fullmatch(r"[A-Z][a-z]{0,2}\d{0,2}[a-z]?(?:\([^)]{1,6}\))?'*\*?", toks[k0 - 1]):
+                k0 -= 1                                                    # 'Pb M1 M2' before the first matched label: the paper's own site names, part of the header
+            x_lo = min(lines[i]['w'][k0][0], min(w[0] for w in lab_ws)) - 130; x_hi = max(w[2] for w in lab_ws) + 130   # the row labels to the left, a Σ column to the right
             head = [w for w in lines[i]['w'] if w[0] >= x_lo and w[2] <= x_hi]; j = i + 1
             row_ok = is_cat if transposed else is_an
             while j < len(lines) and j <= i + 2:

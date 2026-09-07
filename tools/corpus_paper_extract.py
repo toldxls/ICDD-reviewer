@@ -2,7 +2,10 @@
 basis and method vs its own formula) and against its .cif (bond-valence table). Output: review_out/paper_checks_*.
 
     python3 tools/corpus_paper_extract.py "<unused>" "<pdf folders, comma-separated>" [OUT_DIR] [TAG]
-                                          [--baseline paper_checks_papers_<tag>.json] [--limit N] [--only SUBSTR]
+                                          [--baseline paper_checks_papers_<tag>.json] [--limit N] [--only SUBSTR] [--papers LIST]
+
+--papers (a file of basenames, or a comma list) runs a subset: the papers a change could touch plus a sample,
+diffed against the baseline record — the owner's rule, a full run being half an hour.
 
 --baseline diffs this run's per-paper record (paper_checks_papers<tag>.json, written every run) against an
 earlier run's: the readers whose status changed, paper by paper. That is the A/B for a reader change — the
@@ -57,7 +60,7 @@ def diff(base, papers, limit=8):
     return lines
 
 
-def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None):
+def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None, subset=None):
     """Every paper .pdf (paired with its .cif when one shares the I-number): what the extractor
     reads, the paper's formula re-derived from its own table and basis, its bond-valence table vs
     the .cif. The verdicts are the tool's, for the owner to check one by one."""
@@ -73,6 +76,8 @@ def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None)
                 continue
             if only and only not in base:
                 continue
+            if subset is not None and base not in subset:
+                continue                                                  # a subset: the papers a change could touch, plus a sample — a full run costs half an hour
             ids = set(re.findall(r'I\d{6}', base)); key = tuple(sorted(ids)) or base
             if key in seen:
                 continue
@@ -176,5 +181,9 @@ if __name__ == '__main__':
     ap.add_argument('--baseline', help='an earlier run\'s paper_checks_papers<tag>.json to diff against')
     ap.add_argument('--limit', type=int, help='stop after N papers (a smoke run)')
     ap.add_argument('--only', help='only papers whose file name contains this')
+    ap.add_argument('--papers', help='a file with one pdf basename per line (or a comma list): only those papers — a subset run')
     a = ap.parse_args()
-    main(a.roots.split(','), a.pdf_dirs.split(','), a.out_dir, a.tag, a.baseline, a.limit, a.only)
+    subset = None
+    if a.papers:
+        subset = set(open(a.papers, encoding='utf-8').read().split()) if os.path.exists(a.papers) else set(x.strip() for x in a.papers.split(',') if x.strip())
+    main(a.roots.split(','), a.pdf_dirs.split(','), a.out_dir, a.tag, a.baseline, a.limit, a.only, subset)
