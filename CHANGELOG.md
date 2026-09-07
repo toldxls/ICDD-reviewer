@@ -262,6 +262,19 @@ record (`--papers`, `--baseline`): tables checked 44 → 46, clean tables 10 →
   wt% reading itself in doubt the column only "sides with the wt% read — worth a look [unverified]";
   a column that differs from a formula the wt% reproduce is a note.
 
+### Fixed — a stale verdict no longer overturns the reviewer's decision (2026-09-07, issue #1)
+Triage is keyed by the docx stem, and which copy `discover` picks for an entry changes mid-review,
+so records for one entry pile up under several stems and are merged. The merge took the strongest
+verdict across all of them. A reviewer who confirmed a finding, then saw a rerun switch the stem,
+then thought again and dismissed it, had the confirm restored on the next launch, saved back to
+disk, and the comment they dismissed written into the docx again — every launch, for ever, because
+the old per-stem keys are never removed. Clearing a verdict was undone the same way.
+
+The current stem is the reviewer speaking now, so its record is authoritative and another stem may
+only fill in a finding it never recorded. Ranking survives only among the other stems, which is what
+the merge was for: recovering a verdict orphaned by a stem change. Six cases pinned in
+`tests/test_gui_triage.py`, including the report's own reproduction.
+
 ### Changed — the doubts yield when the reading proves itself (2026-09-07)
 Acting on the recall measurement below. A doubt in the composition check is a statement that the
 tool may have misread the paper's analysis table; the reduction answers that question itself. When

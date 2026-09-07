@@ -576,13 +576,18 @@ def _reconcile_triage_keys():
     """Self-heal the triage. Triage is keyed by the docx basename STEM, but which copy discover
     picks for an entry id can change mid-review (a clean '(Name).docx' vs a reviewed
     '(Name)_edited.docx'), and '? look' is no longer a verdict. For each CURRENT entry, merge every
-    triage record saved for its id under ANY stem — taking the strongest real verdict per finding
-    (confirm > dismiss > none), dropping stale 'look' marks, and keeping notes / accept / reviewed.
-    Recovers confirms orphaned by a copy-selection change or shadowed by an accidental 'look'. A
-    normal folder (one stem per id) merges a single record → just drops any 'look'. Every OTHER
-    saved field (entry note, per-finding label, timestamps, …) is carried over verbatim, with the
-    current stem's own values taking priority — the merge never discards data. In-memory,
-    persisted on the next save; the original per-stem keys are left untouched."""
+    triage record saved for its id under ANY stem, dropping stale 'look' marks and keeping notes /
+    accept / reviewed. Recovers verdicts orphaned by a copy-selection change or shadowed by an
+    accidental 'look'. A normal folder (one stem per id) merges a single record → just drops any
+    'look'. In-memory, persisted on the next save; the original per-stem keys are left untouched.
+
+    THE CURRENT STEM IS THE REVIEWER SPEAKING NOW, so its record is authoritative and another stem
+    may only fill in what it has never said. Anything else undoes a decision: the reviewer confirms
+    a finding, a rerun renames the copy and the stem switches, they think again and DISMISS it — and
+    a merge that took the strongest verdict across stems restored the confirm, saved it back, and
+    `annotate_review --triage` wrote the comment they dismissed into the docx again, every launch,
+    for ever. A CLEARED verdict is a decision too and is kept the same way. Ranking (confirm >
+    dismiss) survives only among OTHER stems, for a finding the current stem never recorded."""
     tri = STATE['triage']
     if not tri:
         return
@@ -599,16 +604,21 @@ def _reconcile_triage_keys():
         recs = groups.get(eid) if eid else None
         if not recs:
             continue
-        own = tri.get(key)                              # the current stem's own record wins gap-fills
-        ordered = ([own] if isinstance(own, dict) else []) + [r for r in recs if r is not own]
+        own = tri.get(key) if isinstance(tri.get(key), dict) else None
+        own_fields = set(own or ())                     # what the CURRENT stem has said, and may not be talked over
+        own_findings = set((own or {}).get('findings') or ())
+        ordered = ([own] if own else []) + [r for r in recs if r is not own]
         merged = {'findings': {}}
         for r in ordered:
+            mine = r is own
             for k2, v2 in r.items():                    # carry every entry-level field (accept, note, …)
                 if k2 == 'findings':
                     continue
                 if k2 == 'reviewed':
                     merged['reviewed'] = bool(merged.get('reviewed')) or bool(v2)
-                elif merged.get(k2) is None and v2 is not None:
+                elif mine:
+                    merged[k2] = v2
+                elif k2 not in own_fields and merged.get(k2) is None and v2 is not None:
                     merged[k2] = v2
             for fk, fv in (r.get('findings') or {}).items():
                 if not isinstance(fv, dict):
@@ -616,8 +626,10 @@ def _reconcile_triage_keys():
                 cur = merged['findings'].setdefault(fk, {'verdict': None})
                 ver = fv.get('verdict')
                 ver = ver if ver in _VERDICT_RANK else None     # retire 'look' -> no verdict
-                if _VERDICT_RANK.get(ver, 0) > _VERDICT_RANK.get(cur.get('verdict'), 0):
-                    cur['verdict'] = ver
+                if mine:
+                    cur['verdict'] = ver                        # the reviewer's current word, a cleared one included
+                elif fk not in own_findings and _VERDICT_RANK.get(ver, 0) > _VERDICT_RANK.get(cur.get('verdict'), 0):
+                    cur['verdict'] = ver                        # only for a finding the current stem never recorded
                 for k2, v2 in fv.items():               # keep label / note / any other finding field
                     if k2 != 'verdict' and cur.get(k2) is None and v2 is not None:
                         cur[k2] = v2
