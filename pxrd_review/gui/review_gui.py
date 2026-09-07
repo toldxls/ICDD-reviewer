@@ -818,14 +818,15 @@ def api_entries():
         order = list(STATE['order']); cache = dict(STATE['cache'])
     for key in order:
         c = cache.get(key)
-        try:
-            fp = _fingerprint(key)                       # stats four files: done outside the lock
-        except KeyError:
-            continue                                    # the folder switched mid-poll — the entry is gone; the next poll has the new one
-        if c and c.get('fp') == fp:                     # already analysed (source unchanged)
-            rows.append(_row(key, c['data']))
-        else:
-            rows.append(_row(key)); pending += 1
+        try:                                            # both of these read STATE['docx'][key]:
+            fp = _fingerprint(key)                      # _fingerprint to stat the sources, and _row
+            fresh = bool(c and c.get('fp') == fp)       # to name a pending entry. Guard the pair, not
+            row = _row(key, c['data']) if fresh else _row(key)   # just the first — the pending branch is
+        except KeyError:                                # exactly the one a just-switched folder takes.
+            continue                                    # the entry is gone; the next poll has the new folder
+        rows.append(row)
+        if not fresh:
+            pending += 1
     # Rows can go stale AFTER the launch/switch pass finished (e.g. the docx was edited in Word
     # via the 'open' button, or a paired source file changed). Kick a fresh background pass so
     # the badges come back — without this they would stay 'analyzing…' forever. Throttled so a

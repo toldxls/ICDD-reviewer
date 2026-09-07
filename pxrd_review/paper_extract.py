@@ -350,9 +350,9 @@ _MEANROW = re.compile(r'^(mean|average|aver\.?|avg\.?|среднее)[:.]?$', re
 _STATROW = re.compile(r'^(range|s\.?d\.?|σ|min\.?|max\.?|esd|standard|stdev|st\.?dev|n|apfu|wt\.?%)', re.I)
 
 def _numlike(t):
+    """'12.3', '29(3)', '(13.16)', '−0.5': a value cell."""
     if t.endswith('%') and len(t) > 1:
         t = t[:-1]
-    """'12.3', '29(3)', '(13.16)', '−0.5': a value cell."""
     t = t.replace('−', '-')
     return bool(_NUM.match(t) or _NUM_ESD.match(t) or re.fullmatch(r'\(\d+\.\d+\)', t))
 
