@@ -11,7 +11,8 @@ requires-python = ">=3.9"
 license = { file = "LICENSE" }
 authors = [{ name = "Travis Olds" }]
 dependencies = [
-    "PyMuPDF",          # fitz — PDF text + render (AGPL-3.0 or commercial; see NOTICE)
+    "PyMuPDF>=1.24.3",  # PDF text + render (AGPL-3.0 or commercial; see NOTICE). The floor is where
+                        # the module took its own name: before it, only the deprecated `fitz` alias exists
     "python-docx>=1.2", # docx parse + Word comments API — add_comment() needs >=1.2 (see requirements.txt)
     "lxml",             # docx XML
     "Flask",            # review-mode GUI only

@@ -45,7 +45,7 @@ def _rules(exc, path):
 
     if isinstance(exc, ImportError):
         mod = getattr(exc, 'name', '') or ''
-        pkg = {'fitz': 'PyMuPDF', 'docx': 'python-docx', 'flask': 'Flask',
+        pkg = {'pymupdf': 'PyMuPDF', 'fitz': 'PyMuPDF', 'docx': 'python-docx', 'flask': 'Flask',
                'lxml': 'lxml'}.get(mod, mod or 'a required package')
         yield (True, '%s is not installed.' % pkg,
                'Run: pip3 install %s   (a source checkout can use: pip3 install -r requirements.txt)' % pkg)

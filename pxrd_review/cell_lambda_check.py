@@ -242,25 +242,25 @@ def _norm_pdf(s):
     s = re.sub(r'(?<=\d)[ \t]*\n[ \t]*\((\d{1,3})\)(?=[ \t]*[Å°])', r'(\1)', s)
     return s
 
-def _pdf_text_fitz(path):
+def _pdf_text_pymupdf(path):
     """Raw concatenated PDF text via in-process MuPDF — the default reader (CLI / regression)."""
     try:
-        import fitz
+        import pymupdf
     except ImportError:
         # Without it, EVERY entry that has a paired .pdf fails — one clear line beats N
         # tracebacks (or, in the GUI, N opaque 500s) that never name the missing package.
         raise ImportError("PyMuPDF is not installed — the tool cannot read the .pdf. "
                           "Run: pip3 install PyMuPDF   (or: pip3 install -r requirements.txt)")
-    with fitz.open(path) as doc:                  # close the handle (was leaked)
+    with pymupdf.open(path) as doc:                  # close the handle (was leaked)
         return '\n'.join(p.get_text() for p in doc)
 
-_pdf_reader = _pdf_text_fitz                      # override point: the GUI routes this through a
-                                                  # MuPDF worker subprocess (fitz is NOT thread-safe,
+_pdf_reader = _pdf_text_pymupdf                      # override point: the GUI routes this through a
+                                                  # MuPDF worker subprocess (PyMuPDF is NOT thread-safe,
                                                   # so it must never run on a Flask request thread)
 def set_pdf_reader(fn):
-    """Swap the raw PDF-text reader (fn(path)->raw text); None restores in-process fitz."""
+    """Swap the raw PDF-text reader (fn(path)->raw text); None restores in-process pymupdf."""
     global _pdf_reader
-    _pdf_reader = fn or _pdf_text_fitz
+    _pdf_reader = fn or _pdf_text_pymupdf
 
 def pdf_text(path):
     return _norm_pdf(_pdf_reader(path))
@@ -1390,7 +1390,7 @@ def main():
         eid = entry_id(dp)
         # One unreadable file must not take the batch down with it: a .docx that is really an
         # HTML error page from a cloud-sync (BadZipFile), a docx with no word/document.xml
-        # (KeyError), a truncated .pdf (fitz.FileDataError), or the deliberate DOCTYPE refusal
+        # (KeyError), a truncated .pdf (pymupdf.FileDataError), or the deliberate DOCTYPE refusal
         # (ValueError) would otherwise abort the run and leave every later entry unchecked.
         try:
             report(dp, idx.get(eid))

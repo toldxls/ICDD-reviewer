@@ -1,7 +1,7 @@
 """Corpus validation of the bond-valence + hydrogen-bond tables: the tool's table from the .cif vs
 the paper's published table (extracted from the .pdf text by word positions)."""
 import os, re, sys, glob, json, math
-import fitz
+import pymupdf
 from pxrd_review import bv_check as B
 
 ANION_LAB = re.compile(r'^(O|OH|OW|Ow|W|Wat|F|Cl|OD|Oh|Hw|H2O)\d*[A-Za-z]?\d*$')
@@ -42,7 +42,7 @@ def find_tables(pdf, st):
     cats = {c for c in cats if not c.startswith('H')}
     anions = {norm(x) for a in st.anions for x in a.label.split('/')} | {norm(a.label) for a in st.anions}
     out = []
-    doc = fitz.open(pdf)
+    doc = pymupdf.open(pdf)
     for pno, page in enumerate(doc):
         lines = pdf_lines(page)
         i = 0

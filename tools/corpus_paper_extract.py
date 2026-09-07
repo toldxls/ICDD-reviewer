@@ -287,5 +287,5 @@ if __name__ == '__main__':
     subset = None
     if a.papers:
         subset = set(open(a.papers, encoding='utf-8').read().split()) if os.path.exists(a.papers) else set(x.strip() for x in a.papers.split(',') if x.strip())
-    jobs = a.jobs or min(8, os.cpu_count() or 1)                       # capped: each worker holds fitz and a paper's page model
+    jobs = a.jobs or min(8, os.cpu_count() or 1)                       # capped: each worker holds PyMuPDF and a paper's page model
     main(a.roots.split(','), a.pdf_dirs.split(','), a.out_dir, a.tag, a.baseline, a.limit, a.only, subset, max(1, jobs))

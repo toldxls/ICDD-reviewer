@@ -1,4 +1,4 @@
-"""Isolate MuPDF (PyMuPDF / fitz) page operations in worker subprocesses.
+"""Isolate MuPDF (PyMuPDF) page operations in worker subprocesses.
 
 A malformed embedded image — e.g. a JPEG-2000 (JPX) image that segfaults libmupdf's
 decoder — crashes the whole interpreter with an *uncatchable* SIGSEGV, taking the Flask
@@ -6,7 +6,7 @@ GUI server down with it (a `try/except` cannot catch a native fault). Every oper
 that interprets a page's content stream (`get_text`, `search_for`, `get_pixmap`) can hit
 such an image, so they all run here, in a pooled subprocess. If a worker segfaults, the
 future reports it, the request degrades gracefully, and the server keeps running. Workers
-persist (one `fitz` import each), so page navigation stays responsive.
+persist (one `pymupdf` import each), so page navigation stays responsive.
 """
 import threading
 import multiprocessing as mp
@@ -59,7 +59,7 @@ def run(fn, *args, default=None, timeout=40):
             _pool = None
         return default
     except Exception:
-        return default                  # ordinary fitz error -> graceful, pool still healthy
+        return default                  # ordinary PyMuPDF error -> graceful, pool still healthy
 
 
 def shutdown():
@@ -70,11 +70,11 @@ def shutdown():
             _pool = None
 
 
-# --- the isolated operations (each (re)imports fitz inside the worker) -----------------
+# --- the isolated operations (each (re)imports pymupdf inside the worker) --------------
 def words(pdf, n):
     """{w, h, words:[[x0,y0,x1,y1,text], …]} for page n, or None for an out-of-range page."""
-    import fitz
-    with fitz.open(pdf) as doc:
+    import pymupdf
+    with pymupdf.open(pdf) as doc:
         if not (0 <= n < doc.page_count):
             return None
         page = doc[n]
@@ -86,22 +86,22 @@ def words(pdf, n):
 
 def page_png(pdf, n, terms):
     """Full page n rendered at 2x with `terms` highlighted; PNG bytes, or None if out of range."""
-    import fitz
-    with fitz.open(pdf) as doc:
+    import pymupdf
+    with pymupdf.open(pdf) as doc:
         if not (0 <= n < doc.page_count):
             return None
         page = doc[n]
         for t in (terms or []):
             for rect in page.search_for(t):
                 page.add_highlight_annot(rect)
-        return page.get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes('png')
+        return page.get_pixmap(matrix=pymupdf.Matrix(2, 2)).tobytes('png')
 
 
 def region_png(pdf, n, terms):
     """A 3x zoomed crop of page n framing the `terms` hits (a quarter-ish of the page); PNG
     bytes, or None if out of range. Mirrors the original api_pdf_region geometry."""
-    import fitz
-    with fitz.open(pdf) as doc:
+    import pymupdf
+    with pymupdf.open(pdf) as doc:
         if not (0 <= n < doc.page_count):
             return None
         page = doc[n]
@@ -120,29 +120,29 @@ def region_png(pdf, n, terms):
             cx, cy, halfw, halfh = pr.width / 2, pr.height * 0.28, fw / 2, fh / 2
         cx = min(max(cx, pr.x0 + halfw), pr.x1 - halfw)
         cy = min(max(cy, pr.y0 + halfh), pr.y1 - halfh)
-        clip = fitz.Rect(cx - halfw, cy - halfh, cx + halfw, cy + halfh) & pr
+        clip = pymupdf.Rect(cx - halfw, cy - halfh, cx + halfw, cy + halfh) & pr
         for t in (terms or []):
             for r in page.search_for(t):
                 page.add_highlight_annot(r)
-        return page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=clip).tobytes('png')
+        return page.get_pixmap(matrix=pymupdf.Matrix(3, 3), clip=clip).tobytes('png')
 
 
 def text(pdf):
     """Raw concatenated text of every page — the source for annotate_review.analyze()'s cell/λ
-    parse. Byte-for-byte the same join as cell_lambda_check._pdf_text_fitz, so a valid PDF yields
+    parse. Byte-for-byte the same join as cell_lambda_check._pdf_text_pymupdf, so a valid PDF yields
     an identical analysis; it runs HERE (like every other page op) only so a malformed embedded
     image that segfaults libmupdf's text extraction, or a pathological page that stalls it,
     degrades to the caller's default instead of crashing / hanging the Flask server."""
-    import fitz
-    with fitz.open(pdf) as doc:
+    import pymupdf
+    with pymupdf.open(pdf) as doc:
         return '\n'.join(p.get_text() for p in doc)
 
 
 def scan(pdf, terms):
     """[n_pages, best_evidence_page] — the page with the most hits for `terms`."""
-    import fitz
+    import pymupdf
     best_pg, best_hits, n = 0, -1, 0
-    with fitz.open(pdf) as doc:
+    with pymupdf.open(pdf) as doc:
         n = doc.page_count
         if terms:
             for i in range(n):
@@ -155,8 +155,8 @@ def scan(pdf, terms):
 def sizes(pdf):
     """[[w, h], …] point size of every page — lets the UI reserve each page slot's true height
     so lazy-loaded images cause no layout shift (accurate scroll-to-hit). No rendering."""
-    import fitz
-    with fitz.open(pdf) as doc:
+    import pymupdf
+    with pymupdf.open(pdf) as doc:
         return [[round(p.rect.width, 1), round(p.rect.height, 1)] for p in doc]
 
 
@@ -173,9 +173,9 @@ def search(pdf, q):
          'hits':  [{page, rect:[x0,y0,x1,y1]}…], # every individual hit, in reading order
          'sizes': {page: [w, h], …}}             # point size of each page that has a hit
     so the UI can step hit-to-hit and place a flash box in page-% coordinates."""
-    import fitz
+    import pymupdf
     pages, hits, sizes = [], [], {}
-    with fitz.open(pdf) as doc:
+    with pymupdf.open(pdf) as doc:
         for i in range(doc.page_count):
             rects = doc[i].search_for(q)
             if rects:

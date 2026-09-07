@@ -213,12 +213,12 @@ def _pdf_text_worker_isolated():
     one the render ops use), so a malformed PDF that segfaults or stalls libmupdf degrades to ''
     (analyze()'s 'no text layer' verdict) instead of taking the Flask server down. Checks the
     worker text op (a) returns a valid PDF's text and (b) returns the caller's default — never
-    propagates — when extraction fails. Needs fitz (already a suite dependency); NOT Flask."""
+    propagates — when extraction fails. Needs PyMuPDF (already a suite dependency); NOT Flask."""
     from pxrd_review.gui import _pdf_worker as PW   # the worker pool only — does NOT import the Flask app
-    import fitz, tempfile
+    import pymupdf, tempfile
     fd, p = tempfile.mkstemp(suffix='.pdf'); os.close(fd)
     try:
-        doc = fitz.open()                          # a real 1-page PDF carrying a known token
+        doc = pymupdf.open()                          # a real 1-page PDF carrying a known token
         doc.new_page().insert_text((72, 72), 'unitcell 1.234')
         doc.save(p); doc.close()
         got = PW.run(PW.text, p, default=None)

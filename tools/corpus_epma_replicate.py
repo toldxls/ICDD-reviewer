@@ -3,7 +3,7 @@ formula) re-reduced with pxrd_review.epma on the basis the paper states (from th
 failing that, the basis that best reproduces the formula; every coefficient compared."""
 import os, re, sys, glob, math, json
 from collections import OrderedDict
-import fitz
+import pymupdf
 from pxrd_review import extra_checks as X, epma as EP, gd as GD
 USUAL = GD.USUAL_OXIDE
 
@@ -166,7 +166,7 @@ def paper_basis(pdf_paths):
     out = []
     for p in pdf_paths:
         try:
-            doc = fitz.open(p)
+            doc = pymupdf.open(p)
         except Exception:
             continue
         txt = ' '.join(page.get_text() for page in doc)

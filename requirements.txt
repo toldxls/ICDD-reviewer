@@ -1,7 +1,8 @@
 # Python dependencies for the PXRD review tool.
 #   pip3 install -r requirements.txt
 
-PyMuPDF              # imported as 'fitz' — PDF text extraction + page render (pxrd_review/cell_lambda_check.py, gui/)
+PyMuPDF>=1.24.3      # PDF text extraction + page render (pxrd_review/cell_lambda_check.py, gui/). >=1.24.3
+                     # is where the module became importable as 'pymupdf'; the old 'fitz' alias is deprecated
 python-docx>=1.2     # docx parsing + Word comments API (pxrd_review/annotate_review.py)
                      # >=1.2 is REQUIRED: Document.add_comment() landed in 1.2.0. With 1.1.x installed
                      # every flagged entry raises AttributeError, is caught per-entry, and the run

@@ -40,13 +40,13 @@ from pxrd_review import annotate_review as A
 from pxrd_review import paths as P
 from pxrd_review.gui import _pdf_worker as PW   # MuPDF ops run in a subprocess (crash isolation)
 
-# analyze()'s PDF text parse uses fitz, which (a) is NOT thread-safe and (b) interprets the page
+# analyze()'s PDF text parse uses PyMuPDF, which (a) is NOT thread-safe and (b) interprets the page
 # content stream — so a malformed embedded image can segfault libmupdf, an UNCATCHABLE native fault
 # that would take the whole Flask server down (a try/except can't catch a SIGSEGV). Route text
 # extraction through the SAME isolating worker pool as the render path: a crash or stall degrades to
 # '' (→ analyze()'s 'no text layer' verdict) instead of killing the server, and the pool's separate
-# processes sidestep fitz's thread-unsafety with no in-process lock. The CLI keeps the faster
-# in-process reader (C._pdf_text_fitz) — a crash there just fails that one run, with no server to
+# processes sidestep its thread-unsafety with no in-process lock. The CLI keeps the faster
+# in-process reader (C._pdf_text_pymupdf) — a crash there just fails that one run, with no server to
 # protect. PW.text is a byte-identical join, so a valid PDF's analysis is unchanged.
 def _worker_pdf_reader(path):
     return PW.run(PW.text, path, default='')

@@ -262,6 +262,13 @@ record (`--papers`, `--baseline`): tables checked 44 → 46, clean tables 10 →
   wt% reading itself in doubt the column only "sides with the wt% read — worth a look [unverified]";
   a column that differs from a formula the wt% reproduce is a note.
 
+### Changed — PyMuPDF is imported by its own name (2026-09-07)
+`import fitz` is the library's legacy alias and it now warns on every import that it will be
+removed. Every import and call site moved to `import pymupdf`, the internal reader is
+`_pdf_text_pymupdf`, and the dependency floor is `PyMuPDF>=1.24.3`, the release where the module
+took its own name. The `fitz` key stays in the missing-dependency table so an older installation
+still gets a useful remedy rather than a bare ImportError.
+
 ### Fixed — five reported issues from the 0.3.x review pass (2026-09-07, issues #2 #3 #4 #7 #8)
 - **The old two-column template's instrument fields were read as the next field's label** (#2). That
   template puts `Label : Value` in one cell, so taking the cell after the label returned the

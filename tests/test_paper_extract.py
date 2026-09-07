@@ -9,8 +9,8 @@ from pxrd_review import paper_extract as PE
 
 
 def make_pdf(path):
-    import fitz
-    doc = fitz.open(); page = doc.new_page(width=595, height=842)
+    import pymupdf
+    doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
     y = 60
     def line(txt, x=40, dy=14):
         nonlocal y
@@ -110,10 +110,10 @@ class Parsers(unittest.TestCase):
 class ApfuBlock(unittest.TestCase):
     def test_apfu_rows_below_total(self):
         # bare-element rows under the Total are the apfu block, even for S (a sulfate reports SO3 only)
-        import fitz
+        import pymupdf
         tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'sulfate.pdf')
         try:
-            doc = fitz.open(); page = doc.new_page(width=595, height=842); y = 60
+            doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 60
             for row in ('Table 1. Chemical data (wt%)', 'Constituent  Mean  Range', 'MgO  11.00  10.5-11.5', 'CuO  31.18  30.9-31.5',
                         'ZnO  2.62  2.4-2.8', 'SO3  54.76  54.1-55.2', 'Total  99.56', 'Mg  0.79', 'Cu  1.14', 'Zn  0.09', 'S  1.99'):
                 page.insert_text((40, y), row, fontsize=9); y += 14
@@ -153,10 +153,10 @@ class SpeciesEvidence(unittest.TestCase):
 
 class Transposed(unittest.TestCase):
     def test_constituents_across(self):
-        import fitz
+        import pymupdf
         tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'across.pdf')
         try:
-            doc = fitz.open(); page = doc.new_page(width=595, height=842); y = 60
+            doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 60
             xs = (40, 120, 190, 260, 330, 400)
             for cells in (('Constituent', 'Nb2O5', 'MgO', 'FeO', 'MnO', 'Total'), ('1', '62.10', '36.20', '0.80', '0.60', '99.70'),
                           ('2', '61.90', '36.40', '0.70', '0.70', '99.70'), ('Mean', '62.00', '36.30', '0.75', '0.65', '99.70'),
@@ -208,10 +208,10 @@ class MorningRules(unittest.TestCase):
         self.assertEqual(issues, [])                                         # '(OH)2' is two items of the Σ9
 
     def test_candidate_tables_and_ppm(self):
-        import fitz
+        import pymupdf
         tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'two.pdf')
         try:
-            doc = fitz.open(); page = doc.new_page(width=595, height=842); y = 60
+            doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 60
             def line(txt):
                 nonlocal y
                 page.insert_text((40, y), txt, fontsize=9); y += 14
@@ -250,15 +250,15 @@ class LateMorning(unittest.TestCase):
         self.assertEqual((c, kind, vals[0]), ('Na2O', 'constituent', ('num', 25.51)))
 
     def test_subscript_digit_glued(self):
-        import fitz
+        import pymupdf
         tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'sub.pdf')
         try:
-            doc = fitz.open(); page = doc.new_page(width=595, height=842)
+            doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
             page.insert_text((40, 100), 'B2O', fontsize=9); page.insert_text((54.5, 102.5), '3', fontsize=6)    # the subscript as its own glyph
             page.insert_text((100, 100), '11.43', fontsize=9)
             page.insert_text((40, 120), 'SiO2', fontsize=9); page.insert_text((59, 96), '1', fontsize=6)       # a numbered footnote, superscript
             doc.save(path); doc.close()
-            lines = PE.page_lines(fitz.open(path)[0])
+            lines = PE.page_lines(pymupdf.open(path)[0])
             toks = [w[4] for w in lines[0]['w']]
             self.assertEqual(toks, ['B2O3', '11.43'], toks)
         finally:
@@ -507,10 +507,10 @@ class HandCheck(unittest.TestCase):
         self.assertEqual(PE.legend_columns('4–6 – pyromorphite; 1 – mimetite', 'pyromorphite'), ['4', '5', '6'])
 
     def test_two_line_cell_mean_above_label(self):
-        import fitz
+        import pymupdf
         tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'twoline.pdf')
         try:
-            doc = fitz.open(); page = doc.new_page(width=595, height=842); y = 60
+            doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 60
             page.insert_text((40, y), 'Constituent', fontsize=9); y += 14
             for x, t in zip((130, 180, 220, 260), ('1', '2', '3', '4')): page.insert_text((x, y), t, fontsize=9)
             y += 14
@@ -545,9 +545,9 @@ class ReaderClasses(unittest.TestCase):
 
     def _pdf(self, lines, xs=None):
         """lines: [(y, [(x, text), …])] or [(y, 'text at x=40')] -> a one-page pdf path."""
-        import fitz
+        import pymupdf
         tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'page.pdf')
-        doc = fitz.open(); page = doc.new_page(width=595, height=842)
+        doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
         for y, cells in lines:
             if isinstance(cells, str):
                 page.insert_text((40, y), cells, fontsize=9)
@@ -566,9 +566,9 @@ class ReaderClasses(unittest.TestCase):
         self.assertEqual(PE._constituent_ok('Cl–')[0], 'Cl')
 
     def test_footnote_mark_on_value(self):
-        import fitz
+        import pymupdf
         path = self._pdf([(100, [(40, 'FeOb'), (120, '11.41c'), (160, '0.46'), (200, '11.97d')]), (114, [(40, 'MnO'), (120, '0.62'), (160, '0.05'), (200, '0.70')])])
-        lines = PE.page_lines(fitz.open(path)[0])
+        lines = PE.page_lines(pymupdf.open(path)[0])
         self.assertEqual([w[4] for w in lines[0]['w']], ['FeOb', '11.41', '0.46', '11.97'])
 
     def test_legend_name_then_number(self):
@@ -1054,7 +1054,7 @@ class BondValenceHandCheck(unittest.TestCase):
     mineral in a two-mineral paper, and a table that differs throughout summarised by column."""
 
     def test_site_named_by_its_bond_lengths(self):
-        import fitz
+        import pymupdf
         from tests.test_bv_check import HYDRATE
         from pxrd_review import bv_check as B
         tmp = tempfile.mkdtemp(prefix='pe_')
@@ -1066,8 +1066,8 @@ class BondValenceHandCheck(unittest.TestCase):
             ds = sorted(d for _o, d, _n in st.neighbours(st.cations[0], 3.4))
             self.assertEqual(len(ds), 3)
             path = os.path.join(tmp, 'bonds.pdf')
-            doc = fitz.open(); page = doc.new_page(width=595, height=842); y = 60
-            for ln in ['Table 3. Selected bond lengths (Å)'] + sum([['M1-O%d' % (k + 1), '%.3f(2)' % d] for k, d in enumerate(ds[:3])], []) + ['<M1-O>', '%.3f' % (sum(ds[:3]) / 3)]:   # fitz's base font has no en dash
+            doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 60
+            for ln in ['Table 3. Selected bond lengths (Å)'] + sum([['M1-O%d' % (k + 1), '%.3f(2)' % d] for k, d in enumerate(ds[:3])], []) + ['<M1-O>', '%.3f' % (sum(ds[:3]) / 3)]:   # the base font has no en dash
                 page.insert_text((40, y), ln, fontsize=9); y += 12
             doc.save(path); doc.close()
             self.assertEqual(PE._site_map_by_bonds(path, st, set()), {'M1': 'Ca1'})
@@ -1144,10 +1144,10 @@ class HandCheckRules(unittest.TestCase):
         self.assertTrue(any(l.startswith('2.46 (1 0 1) sits +1.1 % off the cell') and l.endswith('[unverified]') for l in cc['lines']), cc['lines'])   # 2.460 vs 2.4874: noted
 
     def test_apfu_column_vouches_for_the_formula(self):
-        import fitz
+        import pymupdf
         tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'apfu.pdf')
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        doc = fitz.open(); page = doc.new_page(width=595, height=842); y = 60
+        doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 60
         rows = ['Testite is a new mineral. The empirical formula, based on 4 O apfu, is Mg0.98Ca1.01Si1.00O4.',
                 'Table 1. Chemical data (wt%) for testite', 'Constituent  Mean  Range', 'MgO  25.30  25.0-25.6', 'CaO  36.20  35.9-36.5', 'SiO2  38.40  38.1-38.7', 'Total  99.90',
                 'Mg  0.98', 'Ca  1.01', 'Si  1.00']

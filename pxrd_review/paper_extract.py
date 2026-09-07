@@ -180,8 +180,8 @@ _pages_mode = 'fallback'
 
 def set_pages_reader(fn, mode='fallback'):
     """Install a second pdf page reader (fn(path) -> pages as page_lines gives them); None removes
-    it. mode 'fallback' (the default): the table readers try fitz's page first and the other
-    reader's page only where fitz read no table; 'replace': every page comes from the other reader.
+    it. mode 'fallback' (the default): the table readers try PyMuPDF's page first and the other
+    reader's page only where PyMuPDF read no table; 'replace': every page comes from the other reader.
     A .docx is never routed through it. A hook only — the tool ships no second reader: a local
     layout model (docling) was measured on the corpus in 0.5.6 and read the tables worse than the
     pdf text on both the powder and the coordinates tables, and was removed."""
@@ -194,8 +194,8 @@ def _pages(path):
         return _docx_pages(path)
     if _pages_reader is not None and _pages_mode == 'replace':
         return _pages_reader(path)
-    import fitz
-    with fitz.open(path) as doc:
+    import pymupdf
+    with pymupdf.open(path) as doc:
         return [page_lines(page) for page in doc]
 
 def text_of(pdf):
@@ -209,8 +209,8 @@ def text_of(pdf):
                     cells.append(' '.join(_docx_cell_text(c._tc) for c in row.cells))
         t = ' '.join(parts + cells).replace('þ', '+')                   # prose first: the sentence readers prefer it to a table's footnote
     else:
-        import fitz
-        doc = fitz.open(pdf)
+        import pymupdf
+        doc = pymupdf.open(pdf)
         t = ' '.join(page.get_text() for page in doc).replace('þ', '+')   # a journal font prints '+' as 'þ'
     t = re.sub(r'-\n(?=[a-z])', '', t)                     # de-hyphenate line breaks
     t = re.sub(r'(?<=[A-Za-z\)])\s*¼\s*(?=\d)', ' = ', t)   # a journal font that prints '=' as '¼' ("O ¼ 32")
@@ -3258,8 +3258,8 @@ def _site_map_by_bonds(path, st, known, tol=0.0015):
     if not path.lower().endswith('.pdf'):
         return {}
     try:
-        import fitz
-        with fitz.open(path) as doc:
+        import pymupdf
+        with pymupdf.open(path) as doc:
             text = '\n'.join(pg.get_text() for pg in doc)
     except Exception:
         return {}

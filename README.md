@@ -135,7 +135,7 @@ preferred** over `_Supp`/`_TableS1` files (those often omit the cell or hold a
 different phase's table) — pairing the wrong file was the main cause of
 "no cell found" misses.
 
-Dependencies: PyMuPDF (`fitz`). docx is parsed directly from `word/document.xml`.
+Dependencies: PyMuPDF (`import pymupdf`; 1.24.3 or newer, where the module took its own name from the deprecated `fitz` alias). docx is parsed directly from `word/document.xml`.
 
 ## Manuscript reference check (`pxrd refs`) — citations vs the reference list
 
