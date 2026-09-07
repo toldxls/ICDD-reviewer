@@ -107,6 +107,35 @@ a fix was reachable:
   without those guards drew eleven red lines, five of them on cells whose axes the reader had
   misread. One paper stays red on the corpus (I003395, −5.4 %), unvetted by hand; two more were
   red until the Mindat-mass defect below was fixed — their D_calc follows from the ideal formula.
+- **The owner's four rules on the remaining gaps (2026-09-06, afternoon).** A basis the paper never
+  states, when the reduction on it reproduces every coefficient, is verified — the formula vouches
+  for it. A stated basis that fails while another reproduces every coefficient cleanly is a
+  finding ('the paper states its formula is calculated on 12 anions, but every coefficient follows
+  from 8 cations — one of the two is a slip'), guarded: the basis sentence must be the formula's own
+  and the reduction on the other basis clean; the basis record reads `disagrees`. The D_calc red
+  line rests: every one drawn on the corpus dissolved on inspection, the last (I003395) on the
+  owner's eye — an empirical formula deficient in cations while the paper's D_calc rests on a
+  fuller one — so a D_calc that follows from none of the formulas read is a doubt naming that
+  possibility, never red. Mindat's cell vouches for a paper's cell when nothing in the paper
+  could (sorted axes within 3 %, the entry check's rule); a difference is a doubt, never red.
+  (Corpus counts for the basis flag follow in the next entry.)
+- **Bond-valence sums as a column, and grids the other way round, are read.** Of the 77 corpus
+  papers with a .cif beside them and no bond-valence table read, 48 print one — as a BVS column of
+  the coordinates table ('Atom x y z Ueq BVS'), of the bond-distance table ('Cr1–O7 1.92 … O1
+  1.95'), or as a grid with the anions across and the cations down ('Site F(1) F(2) … Σcations').
+  All three are read now (`bvs_site_tables`, `_site_rows_from_grid`, the transposed grid in
+  `bv_tables` and `_maybe_transpose` for a Word table) and checked site by site
+  (`bv_check.check_bvs_sites`: a cation sum within 0.05 vu + 3 %, or its occupancy-weighted value
+  for a split site; anion sums only for a structure without hydrogen bonds). The grid reader also
+  takes its width from the labelled header tokens, so a powder table or the other page column
+  printed beside the grid stays out, joins a line of bare valences to the nearest row, and reads a
+  column headed by an element ('Fe3+', 'Ge') for a .cif with one site of it. Two guards: a paper
+  with several BVS columns (two parameter sets, with and without H) is judged by the column that
+  agrees best, and a table half or more of whose cells differ under every parameter set is a
+  doubt ('another convention, or a misread table'), never a list of findings. What stays unread:
+  tables whose site names are the paper's own (M1, T, A2) where the .cif labels sites by element —
+  no mapping exists to read them by. (Corpus counts follow in the next entry.) Also fixed on the way: `compute` crashed on a
+  hydrogen-bond acceptor with a split label ('A1/Ow1').
 - **Six defects a cross-file review of the unreleased 0.5.6 code found, fixed** (a medium `/code-review`;
   its other angles did not finish): Mindat's ideal formula is HTML, and its mass was read by a token scan
   that dropped every subscript (abelsonite 86 instead of 519) — that garbage stood in as "an ideal

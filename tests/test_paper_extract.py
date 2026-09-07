@@ -866,7 +866,7 @@ class DocxPaper(unittest.TestCase):
         cc = PE.cell_consistency('The cell is a = 4.5937, c = 2.9587 Å, V = 62.43 Å3, Z = 2 (powder data).', {'Ti': 1, 'O': 2}, None, 4.60, verified_formula=True)
         self.assertEqual(cc['status'], 'unverified'); self.assertFalse(cc['red'])                    # one formula tried: a doubt, not a finding
         cc = PE.cell_consistency('The cell is a = 4.5937, c = 2.9587 Å, V = 62.43 Å3, Z = 2 (powder data).', {'Ti': 1, 'O': 2}, None, 4.60, verified_formula=True, masses=[('the ideal formula', 79.9)])
-        self.assertEqual(cc['status'], 'disagrees'); self.assertTrue(cc['red']); self.assertTrue(any('D_calc 4.600 does not follow' in l for l in cc['lines']), cc['lines'])   # off from every formula: red
+        self.assertEqual(cc['status'], 'unverified'); self.assertFalse(cc['red']); self.assertTrue(any('none of the formulas read gives it' in l for l in cc['lines']), cc['lines'])   # off from every formula: a doubt, never red (2026-09-06)
         cc = PE.cell_consistency('The cell is a = 4.5937, c = 2.9587 Å, V = 70.0 Å3 (powder data).', None, None, None)
         self.assertEqual(cc['status'], 'unverified'); self.assertTrue(any('does not follow from the axes' in l for l in cc['lines']))
         self.assertTrue(PE._same_basis(('O', 8.0), ('O', 8))); self.assertFalse(PE._same_basis(('O', 8.0), ('cations', 8.0)))
@@ -996,3 +996,53 @@ class GapFixes(unittest.TestCase):
         M = PE._species_mass({'formula': 'Ca<sub>2</sub>(UO<sub>2</sub>)<sub>3</sub>(CO<sub>3</sub>)<sub>5</sub>·8H<sub>2</sub>O'})
         self.assertAlmostEqual(M, 2 * 40.078 + 3 * (238.029 + 2 * 15.999) + 5 * (12.011 + 3 * 15.999) + 8 * 18.015, delta=2.0)
         self.assertIsNone(PE._species_mass({'formula': ''})); self.assertIsNone(PE._species_mass(None))
+
+    def test_bvs_column_and_transposed_grid(self):
+        """Bond-valence sums printed as a column of the coordinates table, and a grid printed the
+        other way round (cations down the rows), both checked against the .cif."""
+        from docx import Document
+        from tests.test_bv_check import RUTILE
+        from pxrd_review import bv_check as B
+        tmp = tempfile.mkdtemp(prefix='pe_'); cif = os.path.join(tmp, 'rutile.cif')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        with open(cif, 'w', encoding='utf-8') as f:
+            f.write(RUTILE)
+        st = B.Structure(cif); rk = B.compute(st, B.Params(prefer='gh', u6='burns'), None, 'oo')
+        ti = next(r for r in rk[0] if r[0].label.upper().startswith('TI'))
+        L = B.check_bvs_sites(st, rk[0], rk[1], [{'head': 'BVS', 'rows': [(ti[0].label, round(ti[2], 2))]}], 'GH')
+        self.assertTrue(L[0].startswith('bond-valence sums (table 1, column BVS): 1 cells compared, 0 disagree'), L)
+        L = B.check_bvs_sites(st, rk[0], rk[1], [{'head': 'BVS', 'rows': [(ti[0].label, round(ti[2], 2) - 0.5)]}], 'GH')
+        self.assertIn('1 disagree', L[0]); self.assertTrue(any('BVS of %s' % ti[0].label in l and ' vs ' in l for l in L), L)
+        # a manuscript: the coordinates table with a BVS column
+        def docx_with(rows):
+            path = os.path.join(tmp, 'ms_%d.docx' % len(os.listdir(tmp))); doc = Document()
+            doc.add_paragraph('Rutile. Table 3. Atom coordinates and bond-valence sums.')
+            t = doc.add_table(rows=0, cols=len(rows[0]))
+            for row in rows:
+                cells = t.add_row().cells
+                for c, v in zip(cells, row):
+                    c.text = v
+            doc.save(path); return path
+        ex = {'bv': {'params': 'gh', 'u6': 'burns'}}
+        p1 = docx_with([('Atom', 'x', 'y', 'z', 'Ueq', 'BVS'), (ti[0].label, '0', '0', '0', '0.005', '%.2f' % ti[2]), ('O1', '0.305', '0.305', '0', '0.006', '2.01')])
+        bc = PE.bv_check_paper(p1, cif, ex)
+        self.assertEqual(bc['status'], 'checked'); self.assertIn('BVS column', bc['head']); self.assertEqual(bc['disagree'], 0)
+        self.assertEqual(PE._site_rows_from_grid([['Atom', 'BVS'], [ti[0].label, '3.98'], ['O1', '2.01']], st), [(ti[0].label, 3.98), ('O1', 2.01)])
+        # a manuscript: the grid the other way round — anions across, cations down (a hydrate with four anions)
+        from tests.test_bv_check import HYDRATE
+        cif2 = os.path.join(tmp, 'hydrate.cif')
+        with open(cif2, 'w', encoding='utf-8') as f:
+            f.write(HYDRATE)
+        st2 = B.Structure(cif2); rk2 = B.compute(st2, B.Params(prefer='gh', u6='burns'), None, 'oo')
+        ca = next(r for r in rk2[0] if r[0].label.upper().startswith('CA'))
+        ans = [a.label for a in st2.anions]
+        def cell_text(an):
+            segs = rk2[2].get((an, ca[0].label))
+            if not segs:
+                return ''
+            return ' '.join(('%.2f×%d↓' % (v, nd)) if nd > 1 else '%.2f' % v for v, nd, _na in segs)
+        p2 = docx_with([tuple(['Site'] + ans + ['Σ']), tuple([ca[0].label] + [cell_text(an) for an in ans] + ['%.2f' % ca[2]])])
+        rows = PE._maybe_transpose(B.read_tables(p2)[0], st2)
+        self.assertEqual(rows[0][1], ca[0].label); self.assertEqual(rows[1][0], ans[0])              # transposed: anion rows × cation columns
+        bc = PE.bv_check_paper(p2, cif2, ex)
+        self.assertEqual(bc['status'], 'checked', bc); self.assertEqual(bc['disagree'], 0, bc.get('lines'))

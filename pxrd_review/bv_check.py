@@ -686,7 +686,7 @@ def compute(st, params, cutoff=None, hbond='oo', hmax=None, donors=None, force=N
     hbonds = estimate_hbonds(st, result, dict(anion_sum), params, hbond, hmax, donors, force)
     if hbond != 'h':
         for hb in hbonds:
-            anion_sum[hb.acceptor.label] += hb.s * hb.n_across
+            anion_sum[hb.acceptor.label] = anion_sum.get(hb.acceptor.label, 0.0) + hb.s * hb.n_across
     return result, anion_sum, cells, hbonds
 
 # ----------------------------------------------------------------------------- hydrogen bonds
@@ -1317,6 +1317,23 @@ def _segs_split(segs):
     na = segs[0][2] if segs else 1
     return nums, nd, na
 
+def _element_aliases(result, anions=()):
+    """'Fe3+' / 'Ge' in a paper's header for a .cif whose only iron site is Fe1: {norm: label} for
+    every element with exactly one site (cations from result, anions from st.anions)."""
+    out = {}
+    by_el = {}
+    for r in result:
+        by_el.setdefault(r[0].element, []).append(r[0].label)
+    for a in anions:
+        by_el.setdefault(getattr(a, 'element', None), []).append(a.label)
+    for el, labs in by_el.items():
+        if el and len(labs) == 1:
+            out[_norm_label(el)] = labs[0]
+    return out
+
+def _strip_charge(key):
+    return re.sub(r'\d?[+\-]$|(?<=[A-Z])\d(?=$)', '', key) if key else key
+
 def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
     """Findings about a manuscript bond-valence table (anion rows × cation columns).
 
@@ -1328,6 +1345,8 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
     L = []
     cat_labels = {_norm_label(x): r[0].label for r in result for x in r[0].label.split('/')}   # 'Mg' -> 'Mg/Mn'
     cat_labels.update({_norm_label(r[0].label): r[0].label for r in result})
+    for k_, v_ in _element_aliases(result).items():                     # 'Fe3+' / 'Ge' for a single Fe1 / Ge2 site
+        cat_labels.setdefault(k_, v_); cat_labels.setdefault(_strip_charge(k_), v_)
     an_labels = {_norm_label(x): a.label for a in st.anions for x in a.label.split('/')}
     an_labels.update({_norm_label(a.label): a.label for a in st.anions})
     def resolve_anion(lab):
@@ -1349,7 +1368,7 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
             continue
         hdr = None
         for ri in range(min(3, len(rows))):
-            hits = [ci for ci, x in enumerate(rows[ri]) if _norm_label(x) in cat_labels]
+            hits = [ci for ci, x in enumerate(rows[ri]) if _norm_label(x) in cat_labels or _strip_charge(_norm_label(x)) in cat_labels]
             below = sum(1 for r in rows[ri + 1:ri + 4] if r and _norm_label(r[0]) in an_labels)
             numeric = any(re.search(r'\d\.\d', x) for x in rows[ri])       # a bond-distance table, not a header
             if not numeric and (len(hits) >= 2 or (hits and below >= 1)):
@@ -1358,7 +1377,8 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
             continue
         found = True
         header = rows[hdr]
-        col_cat = {ci: cat_labels[_norm_label(x)] for ci, x in enumerate(header) if _norm_label(x) in cat_labels}
+        col_cat = {ci: cat_labels.get(_norm_label(x)) or cat_labels[_strip_charge(_norm_label(x))] for ci, x in enumerate(header)
+                   if _norm_label(x) in cat_labels or _strip_charge(_norm_label(x)) in cat_labels}
         sum_col = next((ci for ci, x in enumerate(header) if re.match(r'^\s*(Σ|Sum|Total)', x, re.I)), None)
         col_kind = {}
         for ci, x in enumerate(header):
@@ -1481,6 +1501,47 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
                  % (ti + 1, ncell, nbad, params_label))
     if not found:
         L.append('no bond-valence table found in the manuscript (a header row with the cation labels)')
+    return L
+
+def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_anions=True):
+    """Findings about bond-valence SUMS printed one per site (a BVS column of the coordinates or
+    bond-distance table): each site's value against the sum computed from the .cif. A cation sum
+    is accepted within 0.05 vu + 3 % (or the occupancy-weighted sum, for a split site); an anion
+    sum within 0.12 vu + 3 %, and only when the structure has no hydrogen bonds (with them the
+    conventions — H in or out, donor deducted or not — vary too much to compare). tables:
+    [{'rows': [(label, value), …], 'head'}]."""
+    L = []
+    bvs_of = {}
+    for r in result:
+        occ = min(getattr(r[0], 'occ_total', 1.0) or 1.0, 1.0)
+        for x in r[0].label.split('/'):
+            bvs_of[_norm_label(x)] = (r[0].label, r[2], 'cation', occ)
+        bvs_of[_norm_label(r[0].label)] = (r[0].label, r[2], 'cation', occ)
+    for k_, v_ in _element_aliases(result).items():
+        if k_ not in bvs_of:
+            row = next(r for r in result if r[0].label == v_)
+            bvs_of[k_] = bvs_of[_strip_charge(k_)] = (v_, row[2], 'cation', min(getattr(row[0], 'occ_total', 1.0) or 1.0, 1.0))
+    for a in st.anions:
+        for x in a.label.split('/'):
+            bvs_of[_norm_label(x)] = (a.label, anion_sum.get(a.label, 0.0), 'anion', 1.0)
+        bvs_of[_norm_label(a.label)] = (a.label, anion_sum.get(a.label, 0.0), 'anion', 1.0)
+    for ti, tab in enumerate(tables):
+        ncell = nbad = 0; found = False
+        for lab, v in tab.get('rows') or []:
+            hit = bvs_of.get(_norm_label(lab)) or bvs_of.get(_strip_charge(_norm_label(lab)))
+            if not hit or (hit[2] == 'anion' and not compare_anions):
+                continue
+            found = True; site, mine, kind, occ = hit
+            tol = (0.05 if kind == 'cation' else 0.12) + 0.03 * max(v, mine)
+            ncell += 1
+            if abs(v - mine) > tol and not (occ < 0.98 and abs(v - mine * occ) <= tol):   # an occupancy-weighted sum for a split site
+                nbad += 1
+                L.append('table %d: BVS of %s %.2f in the table vs %.2f from the .cif (parameters: %s)%s' % (
+                    ti + 1, site, v, mine, params_label, '' if kind == 'cation' else ' — an anion sum: hydrogen bonds and H conventions vary'))
+        if found:
+            L.insert(0, 'bond-valence sums (table %d, column %s): %d cells compared, %d disagree (computed with %s)' % (ti + 1, tab.get('head') or 'BVS', ncell, nbad, params_label))
+    if not L:
+        L.append('no bond-valence table found in the manuscript (a BVS column with the site labels)')
     return L
 
 # ----------------------------------------------------------------------------- Word output
