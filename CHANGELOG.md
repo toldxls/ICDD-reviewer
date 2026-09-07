@@ -162,7 +162,10 @@ a fix was reachable:
   T1–T3, puttapaite's M1–M4 T, elbaite's X Y Z T. Grid reading also improved on the way: the
   column label is the site-name token over a site-population line beneath the header, x-clusters
   under one label are one column, prose of the other page column between two rows no longer ends
-  the grid, and a header with no row within six lines is not a header. __BVCOUNT__
+  the grid, and a header with no row within six lines is not a header. A table eight or more of whose cells differ is a doubt like one half of whose cells
+  differ. Validated on the 182-paper subset (every paper with a .cif, plus sixty at random) against
+  the last full record: bond-valence tables checked 30 → 44 papers, clean 7 → 10, doubts 10 → 20,
+  unread 78 → 54, none lost.
 - **Six defects a cross-file review of the unreleased 0.5.6 code found, fixed** (a medium `/code-review`;
   its other angles did not finish): Mindat's ideal formula is HTML, and its mass was read by a token scan
   that dropped every subscript (abelsonite 86 instead of 519) — that garbage stood in as "an ideal
