@@ -262,6 +262,36 @@ record (`--papers`, `--baseline`): tables checked 44 → 46, clean tables 10 →
   wt% reading itself in doubt the column only "sides with the wt% read — worth a look [unverified]";
   a column that differs from a formula the wt% reproduce is a note.
 
+### Added — the first recall measurement (2026-09-07)
+`tools/seed_faults.py` takes papers whose checks pass, injects one fault of a known size into the
+values already read from them, and records whether the check fires. Four faults, each of a kind a
+real paper carries, at a ladder of sizes, so the answer is a detection curve rather than one number.
+Corpus-wide, 1092 papers, the share of seeded faults that would be WRITTEN into a review:
+
+| fault | 2 % | 5 % | 10 % | 20 % |
+|---|---|---|---|---|
+| a coefficient of the published formula | 0 % | 5 % | 59 % | 55 % |
+| one constituent's wt% | 0 % | 6 % | 27 % | 12 % |
+
+| a calculated d-spacing | 1 % | 2 % | 3 % | 5 % |
+|---|---|---|---|---|
+| | 0 % | 11 % | 75 % | 82 % |
+
+A wrong stated basis is caught in 1 % of 280 papers, so that flag is effectively dead — which is
+the arithmetic consequence of narrowing it to zero false positives on the corpus.
+
+Two findings worth acting on, neither acted on yet:
+- **A bigger fault is caught LESS often than a medium one.** Formula recall peaks at 10 % and falls
+  at 20 %; wt% recall halves. The cause is the doubt rule "the cations deviate N % overall — a basis
+  or table-reading problem rather than one slip", which fires above 6 % and downgrades the finding
+  to a console note. The worse a paper's error, the more confidently the tool blames its own reading.
+  The discriminator it does not apply: a deviation carried by ONE element with the rest agreeing is
+  a paper error, not a misread table.
+- **The apfu-column oracle added earlier the same day costs recall.** Where a paper prints its own
+  atoms-per-formula-unit column, a seeded wt% fault of 5 % or more is caught 6 % of the time against
+  17 % without one, because the rule attributes the mismatch to the tool's reading. That is the right
+  call when the tool misreads a table and the wrong one when the table is genuinely mistyped.
+
 ### Changed — the bond-valence parameter file is parsed once (2026-09-07)
 `Params.__init__` re-read and re-parsed `data/bvparm2020.cif` on every construction, and the callers
 build them in bulk: `bv_check_paper` makes six per paper, three parameter sets times two U6+ modes,
