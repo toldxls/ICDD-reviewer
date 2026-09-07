@@ -20,10 +20,10 @@ jobs:
       matrix:
         python-version: ['3.9', '3.11', '3.12']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -39,16 +39,18 @@ jobs:
         run: |
           python - <<'PY'
           import importlib
-          mods = ('pxrd_review', 'pxrd_review.cli', 'pxrd_review.cell_lambda_check',
-                  'pxrd_review.extra_checks', 'pxrd_review.annotate_review', 'pxrd_review.mindat',
-                  'pxrd_review.paths', 'pxrd_review.errors', 'pxrd_review.sweep',
-                  'pxrd_review.candidate_groups', 'pxrd_review.regression_check',
-                  'pxrd_review.gui.review_gui', 'pxrd_review.gui._pdf_worker',
-                  'pxrd_review.paper_extract', 'pxrd_review.layout_reader')   # the layout reader imports without docling
+          import pkgutil, pxrd_review
+          # Every module in the package, discovered rather than listed: a hand-written list drifts
+          # behind the package and then fails for the wrong reason. It named layout_reader, which
+          # went with docling in 0.5.6, so CI failed on a module that was deliberately deleted while
+          # six modules added since were never imported here at all.
+          mods = ['pxrd_review'] + sorted(m.name for m in pkgutil.walk_packages(
+              pxrd_review.__path__, prefix='pxrd_review.'))
           for m in mods:
               importlib.import_module(m)
           from pxrd_review import __version__ as v
           print('imported %d modules · version %s' % (len(mods), v))
+          print('  ' + ', '.join(m.split('.', 1)[-1] for m in mods[1:]))
           PY
 
       # Uses `python -c`, NOT a `python - <<heredoc`: the worker-isolation check spawns a
