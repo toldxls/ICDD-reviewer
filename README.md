@@ -665,6 +665,10 @@ comment-only rule, and it is deliberately narrow:
 - **A cell a person has already edited is never overwritten.** If the Reference cell carries any
   human tracked change, the tool leaves it alone and stays a comment (the run reports *"fix left
   to the reviewer (already hand-edited)"*).
+- **A Word Reject affects that copy only.** Rejecting restores the source text exactly, so a rerun
+  sees no hand edit, rebuilds from source and proposes the same correction again. To refuse a
+  correction for good, **dismiss the finding in the GUI**: a dismissed finding writes no comment and
+  applies no fix, and the dismissal is remembered across reruns.
 - The rewrite differs from the docx in **letter case only** — the authors, journal, year and
   pages stay byte-identical, and the check refuses to write at all if it cannot prove that.
 - Reruns are **idempotent**: a rerun rejects the tool's own previous change and re-derives it, so
