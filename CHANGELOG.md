@@ -210,6 +210,58 @@ a fix was reachable:
   from the .cif, the species from Mindat, and the paper's own arithmetic; a manuscript with an
   internally consistent error and no .cif still passes — there is no entry to compare it with.
 
+### Changed — three bond-valence papers hand-checked, the powder floor, the paper's own apfu column (2026-09-07)
+The owner asked what the bond-valence disagreements on allanite-(Y), nigelcookite and
+bainbridgeite-(YCe) actually were, said a powder line is worth a flag only when egregiously off,
+and observed that the composition failures are ones a human settles by looking at another part of
+the paper. Each became a rule; validated on the 182-paper bond-valence subset against its last
+record (`--papers`, `--baseline`): tables checked 44 → 46, clean tables 10 → 15, nothing lost.
+- **The bond-valence reader, on what those three papers printed.** A row label with the paper's
+  hydroxyl tag (`O8(OH)`, `O3(H2O)`) is the .cif's `O8` (`_norm_label`; the nigelcookite table lost
+  its two OH rows and its Sum row to this). Two values in one cell read off a page come space-
+  separated and each mark belongs to the value it follows (`_bv_cell`: `0.06 0.05×2↓` is 0.06 and
+  0.05 × 2, not both doubled — allanite's A1 column added to 2.20 instead of 2.14). A bare valence
+  line between two rows joins the row above on a tie (a cell's second value prints below its
+  first; allanite's O2 cell was read into O3). A printed Σ that includes the hydroxyl's own O–H
+  (`2.15§ — includes 0.87 vu from H10`) is accepted when the .cif has an H on that oxygen or the
+  label carries the tag (`_h_donor_anions`). A paper that prints no coordinates table still names
+  its sites by their bond lengths: `M1–O1vi 2.101(3)` — a paper name whose distances are a .cif
+  cation's, three or more of them, is that site (`_site_map_by_bonds`; nigelcookite's M1, M2).
+- **The paper's valences for a .cif that states none** (`_structure_for_paper`). A .cif without
+  oxidation numbers left V, Fe, Mn, Cu … to the tool's defaults — V5+ for nigelcookite's V3+ site,
+  and every cell of that column differed by 0.07 vu. The paper's own formula (`V3+`), else the
+  species' ideal formula on Mindat, settles an element's valence; a mixed-valence element (Fe2+
+  and Fe3+ in the formula) is settled per site, each site taking the valence its own bonds bear
+  out (the sum nearest the site's expected charge — plumbojohntomaite's Fe1 2+, Fe2 3+); an
+  admixture under a quarter keeps the default. The .cif's own statements always win; the check
+  says what it took (`valences from the paper's formula: Pb+2, V+3, Fe+2 (Fe1)`).
+- **One table per mineral.** A two-mineral paper prints a bond-valence table per mineral; when
+  the captions name them and the .cif's own name (its `_chemical_name`, else its file name) is in
+  one caption while another names a different mineral, only the named table is this .cif's
+  (`_own_mineral_tables`; nigelcookite 9 of 22 → 1 of 23, I002957-I002959 from unmatched 42 of 68
+  to checked 2 of 15).
+- **Which cells, and the pattern.** Tables are judged one by one (`_bv_per_table`), and a table
+  that differs throughout is summarised by column with direction and size instead of hidden
+  behind "not compared cell by cell" (`_bv_pattern`): the nigelcookite table's own P1 and P2
+  columns are higher than the .cif gives by 0.06–0.09 vu in all seven cells with the Pb and M
+  columns agreeing and the P sums printed as 5.24 and 5.36; bainbridgeite-(YCe)'s six large-cation
+  sums are lower than any parameter set gives by 0.18–0.38 vu while its C sums agree; allanite-(Y)'s
+  three remaining differences all sit in the A2 (Y/Nd/Ca) column, 0.03–0.06 vu, with its own A1
+  column summing to 2.14 where 2.08 is printed. A kept table with three or more differences gets
+  the same summary line.
+- **Powder lines: only the egregious are red** (`_CELL_RED`). A calculated d 2 % or more off its
+  cell is flagged as before; one 0.5–2 % off is now a note ("sits +1.1 % off the cell — a poorly
+  fitting or mis-indexed line rather than a typo [unverified]"). On the last full record 15 of 51
+  red lines are notes now.
+- **The paper's own apfu column vouches for its formula.** `epma_table` now keeps the atoms-per-
+  formula-unit block it used to skip (`'apfu'`), and `_check_formula` reads it as another part of
+  the paper: where the wt% read do not reproduce the formula but the apfu column does, the formula
+  stands and the reading of the wt% table is named as the tool's shortfall (79391: rms 48 % on the
+  wt%, the column agrees on six elements → ok); where the wt% reproduce all but one coefficient and
+  the column sides with the wt%, the finding says the formula's coefficient is the slip; with the
+  wt% reading itself in doubt the column only "sides with the wt% read — worth a look [unverified]";
+  a column that differs from a formula the wt% reproduce is a note.
+
 ## [0.5.5] — 2026-09-05
 
 ### Fixed — three things the owner hit testing 0.5.4

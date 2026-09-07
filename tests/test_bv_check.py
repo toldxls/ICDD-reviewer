@@ -277,5 +277,48 @@ class ManuscriptTable(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class PaperTableConventions(unittest.TestCase):
+    """The 2026-09-07 hand-check of three papers: a hydroxyl tagged in its row label ('O8(OH)'), two
+    values in one cell read off a page with a space between them, a printed Σ that includes the
+    hydroxyl's own H, and a site's valence given per label."""
+
+    def test_row_label_tags_and_space_separated_values(self):
+        self.assertEqual(B._norm_label('O8(OH)'), 'O8')
+        self.assertEqual(B._norm_label('O3(H2O)'), 'O3')
+        self.assertEqual(B._norm_label('Fe(1)'), 'FE1')
+        self.assertEqual(B._norm_label('OW1'), 'OW1')
+        self.assertEqual(B._bv_cell('0.06 0.05×2↓'), [(0.06, 1, 1), (0.05, 2, 1)])       # the mark belongs to the value it follows
+        self.assertEqual(B._bv_cell('0.36×2↓ 0.23×2↓'), [(0.36, 2, 1), (0.23, 2, 1)])
+        self.assertEqual(B._bv_cell('0.70 ×2↓'), [(0.7, 2, 1)])                        # a space before the mark is still one value
+        self.assertEqual(B._bv_cell('0.70×4↓×2→, 0.64×2↓'), [(0.7, 4, 2), (0.64, 2, 1)])
+
+    def test_sum_may_include_the_hydroxyl_hydrogen(self):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        try:
+            cif = _write(tmp, 'hydrate.cif', HYDRATE_H)
+            st = B.Structure(cif); P = B.Params(prefer='bo')
+            self.assertEqual(B._h_donor_anions(st), {'OW1'})
+            result, anion_sum, cells, _ = B.compute(st, P)
+            ca_ow = next(s for (an, cat), lst in cells.items() if an == 'OW1' and cat == 'Ca1' for s, _, _ in lst)
+            with_h = [['Atom', 'Ca1', 'Σ'], ['OW1', '%.2f' % ca_ow, '%.2f' % (ca_ow + 0.80)]]        # Σ 'includes 0.80 vu from H1'
+            lines = B.check_bvs_table(st, result, cells, anion_sum, [with_h + [['Σ', '%.2f' % ca_ow, '']]], 'test')
+            self.assertFalse(any('but its row adds to' in x for x in lines), lines)
+            too_much = [['Atom', 'Ca1', 'Σ'], ['OW1', '%.2f' % ca_ow, '%.2f' % (ca_ow + 1.40)], ['Σ', '%.2f' % ca_ow, '']]
+            lines = B.check_bvs_table(st, result, cells, anion_sum, [too_much], 'test')
+            self.assertTrue(any('but its row adds to' in x for x in lines), lines)   # 1.40 is no hydrogen
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_valence_override_by_site_label(self):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        try:
+            cif = _write(tmp, 'two_fe.cif', HYDRATE.replace('Ca1 Ca 0 0 0', 'Fe1 Fe 0 0 0'))
+            by_el = B.Structure(cif, ox_override={'Fe': 2}); by_lab = B.Structure(cif, ox_override={'Fe1': 3, 'Fe': 2})
+            self.assertEqual([sp.ox for sp in by_el.sites[0].species], [2])
+            self.assertEqual([sp.ox for sp in by_lab.sites[0].species], [3])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()

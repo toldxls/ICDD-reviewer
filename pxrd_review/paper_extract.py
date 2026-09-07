@@ -643,20 +643,29 @@ def epma_table(pdf, name=''):
                         nums_m = [v for kk, v in major[2] if kk == 'num']
                         if nums_m:
                             keep_cols = [q for q, v in enumerate(nums_m) if abs(v - nums_m[0]) <= 0.15 * nums_m[0]]
-                past_total = False; first_val = {}; rows_nd = []
+                past_total = False; first_val = {}; rows_nd = []; apfu = {}   # apfu: the paper's own atoms per formula unit, read off the block it prints them in
+                bare = lambda c_: bool(re.fullmatch(r'[A-Z][a-z]?', c_))
                 for c, kind, vals, ws_row in block:
                     if c == 'O':
                         continue                                                 # an 'O = F' remnant, never a constituent
                     v0 = next((v for k_, v in vals if k_ == 'num'), None)
                     if kind == 'constituent' and c in first_val and v0 is not None and v0 < first_val[c] / 2:
+                        if bare(c) and 0 < v0 < 60:
+                            apfu.setdefault(c, v0)
                         continue                                                 # the same constituent again, much smaller: the apfu block (Ag 72.29 … Ag 8.01)
-                    if kind == 'constituent' and past_total and c in first_val and re.fullmatch(r'[A-Z][a-z]?', c):
+                    if kind == 'constituent' and past_total and c in first_val and bare(c):
+                        if v0 is not None and 0 < v0 < 60:
+                            apfu.setdefault(c, v0)
                         continue                                                 # a bare element again below the Total: the apfu block ('Na 0.22' under 'Na n.d. n.d. 0.18'); an oxide there is the FeO / Fe2O3 split
                     if kind == 'constituent' and (v0 is not None or (vals and vals[0][0] == 'na')):
                         first_val.setdefault(c, v0 if v0 is not None else 0.0)
-                    if past_total and re.fullmatch(r'[A-Z][a-z]?', c) and c in oxide_els:
+                    if past_total and bare(c) and c in oxide_els:
+                        if v0 is not None and 0 < v0 < 60:
+                            apfu.setdefault(c, v0)
                         continue                                                 # below the Total: the apfu block (S 1.99 under SO3 54.76)
-                    if n_oxide >= 3 and re.fullmatch(r'[A-Z][a-z]?', c) and c in oxide_els and c not in ('F', 'Cl', 'Br', 'I', 'S', 'Se', 'Te'):
+                    if n_oxide >= 3 and bare(c) and c in oxide_els and c not in ('F', 'Cl', 'Br', 'I', 'S', 'Se', 'Te'):
+                        if v0 is not None and 0 < v0 < 60:
+                            apfu.setdefault(c, v0)
                         continue                                                 # an apfu row (Si 5.936) beside the oxide row of the same element
                     nums_all = [v if k == 'num' else 0.0 for k, v in vals if k in ('num', 'na')]   # positional: 'n.d.' = 0 in its column, the columns stay aligned
                     nums = [v for k, v in vals if k == 'num']                   # the measured numbers: the mean, the points' average, the s.d.
@@ -696,7 +705,7 @@ def epma_table(pdf, name=''):
                         rng = (round(rng[0] * k_hs, 3), round(rng[1] * k_hs, 3)) if rng else None
                     (rows_nd if nd_first else rows).append({'constituent': 'N2H8O' if c == '(NH4)2O' else c.rstrip('+-'), 'mean': mean, 'range': rng, 'sd': sd,
                                  'standard': ' '.join(texts) if texts else None, 'all': nums_all, 'xs': xs})
-                cand = {'rows': _drop_totals(rows), 'total': total, 'header': ' '.join(head)[:200], 'page': pno + 1, 'n': n_const, 'score': score, 'caption': cap[:160], 'head_cells': head_cells, 'rows_all': rows + rows_nd, 'label_x': x_col}
+                cand = {'rows': _drop_totals(rows), 'total': total, 'header': ' '.join(head)[:200], 'page': pno + 1, 'n': n_const, 'score': score, 'caption': cap[:160], 'head_cells': head_cells, 'rows_all': rows + rows_nd, 'label_x': x_col, 'apfu': apfu}
                 key_rows = {(r_['constituent'], r_['mean']) for r_ in cand['rows']}
                 if any(c_['page'] == cand['page'] and abs((c_.get('label_x') or 0) - (x_col or 0)) <= 30 and key_rows <= {(r_['constituent'], r_['mean']) for r_ in c_['rows']} for c_ in cands):
                     i = j; continue                                          # the same block read again from its second row (a side-by-side rescan): not another table
@@ -1474,6 +1483,7 @@ def _cell_score(cell, calc):
 
 _CELL_LOOSE = 0.015                                                    # a table computed with a cell slightly different from the stated one sits within this
 _CELL_WILD = 0.15                                                      # beyond this the reader paired a d with the wrong indices — its fault, not the paper's
+_CELL_RED = 0.02                                                       # a calculated line this far off its cell is flagged; below it, noted
 
 _CELL_SRC = {'.cif': 'the .cif cell', 'powder': "the paper's powder cell", 'single': "the paper's single-crystal cell"}
 
@@ -1576,8 +1586,15 @@ def cell_check(path, cif=None, text=None, table=None):
         if len(bad) > 5:
             lines.append('%d lines do not follow the cell (up to %.1f %% off) — the indexing, the cell or the reading of the table is off; a paper slips once or twice, not %d times [unverified]' % (len(bad), max(abs(r[4]) for r in bad) * 100, len(bad)))
             bad = []
+        # a calculated d that is off its own cell by 2 % or more is a mistyped or mis-indexed line (owner,
+        # 2026-09-07: flag only the egregious); a smaller offset may be a poorly fitting reflection or a
+        # column the header calls calculated that is not — a note, not a finding
+        slight = [r for r in bad if abs(r[4]) < _CELL_RED]
+        bad = [r for r in bad if abs(r[4]) >= _CELL_RED]
         for d, I, hkl, dc, dev, flipped in bad:
             lines.append('%g (%d %d %d) does not follow the cell: it gives %.4f (%+.1f %%)%s' % (d, hkl[0], hkl[1], hkl[2], dc, dev * 100, ' — a weak line' if I is not None and I <= 5 else ''))
+        for d, I, hkl, dc, dev, flipped in slight:
+            lines.append('%g (%d %d %d) sits %+.1f %% off the cell (it gives %.4f) — a poorly fitting or mis-indexed line rather than a typo [unverified]' % (d, hkl[0], hkl[1], hkl[2], dev * 100, dc))
     if wild:
         lines.append('%d line%s the reader could not pair with the cell (off by more than 15 %%: a row it read across two blocks) — left out [unverified]'
                      % (len(wild), 's' if len(wild) > 1 else ''))     # the reader's fault, not the paper's: never a flag
@@ -2161,6 +2178,30 @@ def _check_formula(ex, text, fcand):
         if abs(n_ - round(n_)) > 0.02:
             doubts.append('the paper states no basis and the one that reproduces its formula, %s, is the formula\'s own '
                           'printed sum — a deviation against it is circular' % EP._basis_label(r['basis']))
+    # Another part of the paper: its own apfu column, printed under or beside the wt%. Where the wt%
+    # read do not reproduce the formula, the apfu column agreeing with it says the reading of the
+    # wt% table is the tool's shortfall and the formula the paper's; where the wt% reproduce all but
+    # one coefficient, the column says which side of that one the paper itself is on.
+    apfu_col = {k: v for k, v in (e.get('apfu') or {}).items() if k in EP.ATOMIC_WEIGHTS}
+    apfu_shared = [el for el in apfu_col if el in counts and el not in ('H', 'O') and counts[el] >= 0.02] if f_kind != 'structural' else []
+    apfu_note = None; apfu_vouches = False; apfu_off = []
+    if len(apfu_shared) >= 3:
+        apfu_off = [el for el in apfu_shared if abs(apfu_col[el] - counts[el]) > max(0.03, 0.04 * counts[el])]
+        apfu_vouches = not apfu_off
+    if apfu_vouches and r['diffs'] and doubts:
+        apfu_note = ("the wt%% read miss the formula (rms %.1f %%), but the paper's own apfu column reproduces it (%s) — the reading of the wt%% table is "
+                     "the tool's shortfall, the formula is the paper's" % (100 * r['score'], ', '.join(apfu_shared[:8])))   # worded to stay a note in the GUI, not a red line
+        doubts = []; r['diffs'] = []; r['unanalysed'] = []
+    elif apfu_vouches and r['diffs']:
+        apfu_note = "the paper's own apfu column agrees with its formula (%s): the wt%% and the apfu column disagree with each other on %s" % (', '.join(apfu_shared[:8]), ', '.join(d[0] for d in r['diffs'][:4]))
+    elif apfu_off and r['diffs']:
+        same_side = [el for el in apfu_off if any(d[0] == el and d[2] is not None and abs(apfu_col[el] - d[2]) <= max(0.03, 0.04 * d[2]) for d in r['diffs'])]
+        if same_side and not doubts and not f_issues:
+            apfu_note = "the paper's own apfu column gives %s, as the wt%% do — the formula's coefficient is the slip" % ', '.join('%s %.3g' % (el, apfu_col[el]) for el in same_side[:4])
+        elif same_side:                                                     # the wt% reading is itself in doubt: the column sides with it, no more
+            apfu_note = "the paper's own apfu column (%s) sides with the wt%% read rather than with the formula — worth a look at the table [unverified]" % ', '.join('%s %.3g' % (el, apfu_col[el]) for el in same_side[:4])
+    elif apfu_off and not r['diffs']:
+        apfu_note = "the paper's own apfu column differs from its formula in %s — the formula follows from the wt%%; the column may be rounded or another sample's" % '; '.join('%s %.3g vs %.3g' % (el, apfu_col[el], counts[el]) for el in apfu_off[:4])
     verified = not doubts
     lines = []
     b = r['basis']
@@ -2183,8 +2224,10 @@ def _check_formula(ex, text, fcand):
         lines.append('  H (informational): paper %.3f, from the paper\'s own wt%% %s — hydrate/hydroxyl notation is read approximately' % (v, ('%.3f' % t) if t is not None else '—'))
     for d in doubts:
         lines.append('  not verifiable: ' + d)
-    ok = not r['diffs'] and not f_issues
-    if ok:
+    if apfu_note:
+        lines.append('  ' + apfu_note)
+    ok = not r['diffs'] and (not f_issues or apfu_vouches)
+    if ok and not (apfu_vouches and apfu_note and 'shortfall' in apfu_note):
         lines.append('  every coefficient of the published formula follows from the published wt%')
     basis_flag = False
     if ok and verified and ex.get('basis') and b and not _same_basis(b, ex['basis']) and not basis_equiv and not r.get('factor') \
@@ -2196,7 +2239,8 @@ def _check_formula(ex, text, fcand):
         basis_flag = True
         lines.append('  the paper states its formula is calculated on %s, but every coefficient follows from %s — the stated basis does not reproduce the formula; one of the two is a slip'
                      % (EP._basis_label(ex['basis']), EP._basis_label(b)))
-    return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts, 'wt': wt, 'counts': counts, 'basis_flag': basis_flag, 'basis_equiv': basis_equiv}
+    return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts, 'wt': wt, 'counts': counts, 'basis_flag': basis_flag, 'basis_equiv': basis_equiv,
+            'apfu': apfu_note, 'apfu_vouches': apfu_vouches}
 
 def _basis_comparable(stated, found, wt, counts, r_stated, basis_sentence=''):
     """Whether a stated basis that fails can be held against the paper — the cases the corpus
@@ -3052,7 +3096,7 @@ def check_paper(pdf, cif=None, out_dir=None):
     # back as if it were independent evidence. Note-grade throughout (91 % of sites on the corpus).
     bv_cif = cif or _paper_cif(pdf, text, out)
     if bv_cif:
-        bc = bv_check_paper(pdf, bv_cif, ex)
+        bc = bv_check_paper(pdf, bv_cif, ex, text)
     if out.get('paper_structure'):                       # bv_check_paper has read it; the file goes now
         from pxrd_review import paper_structure as _PS
         ps_ = out['paper_structure']
@@ -3094,7 +3138,7 @@ def check_paper(pdf, cif=None, out_dir=None):
     out['lines'].insert(0, readers_line(out['fields']))
     return out
 
-_AN_RE = re.compile(r'^(O|OH|OW|Ow|W|Wat|F|Cl|OD|Oh|Hw|H2O)\d*[A-Za-z]?\d*$')
+_AN_RE = re.compile(r'^(O|OH|OW|Ow|W|Wat|F|Cl|OD|Oh|Hw|H2O)\d*[A-Za-z]?\d*(?:\((?:OH|OH2|H2O|W|OW|HW|Wat)\))?$')   # 'O8(OH)': the paper tags its hydroxyl
 
 def _bv_norm(t):
     from pxrd_review import bv_check as B
@@ -3124,12 +3168,10 @@ def site_name_map(path, st, tol=0.25):
         from pxrd_review import paper_structure as PS
         rows = PS.paper_sites(path)
     except Exception:
-        return {}
-    if not rows:
-        return {}
+        rows = []
     own = {_bv_norm(x) for r in st.sites for x in r.label.split('/')} | {_bv_norm(r.label) for r in st.sites}
     out = {}; taken = {}
-    for lab, x, y, z, _tail in rows:
+    for lab, x, y, z, _tail in rows or []:
         try:
             xyz = [float(x), float(y), float(z)]
         except (TypeError, ValueError):
@@ -3152,7 +3194,54 @@ def site_name_map(path, st, tol=0.25):
             else:
                 taken.setdefault(best[1], key); out[key] = best[1]
     out = {k: v for k, v in out.items() if taken.get(v) == k}
-    return out if len(out) >= 2 else {}
+    out = out if len(out) >= 2 else {}
+    by_bonds = _site_map_by_bonds(path, st, own | set(out))
+    out.update(by_bonds)
+    return out
+
+_BOND_LINE = re.compile(r"(?<![<A-Za-z0-9.])([A-Z][a-z]?\d{1,2}[A-Za-z]?|[A-Z][a-z]?\(\d{1,2}\)|[A-Z]{1,2}\d?)\s*[–\-−]\s*"
+                        r"(?:O|OH|OW|Ow|W|F|Cl|S|Se|H2O)\d{0,2}[A-Za-z]?(?:\(\d{1,2}\))?(?:[ivx]{1,5}|'+|\*)?\s*\n?\s*(\d\.\d{2,4})(?=\(|\s|$)")
+
+def _site_map_by_bonds(path, st, known, tol=0.0015):
+    """A paper that prints no coordinates table still prints its bond lengths, site by site: 'M1–O1vi
+    2.101(3)'. A paper name whose distances are a .cif cation's (three or more of them within tol Å,
+    most of them, and no other cation's) is that site. -> {normalised paper label: .cif label}"""
+    if not path.lower().endswith('.pdf'):
+        return {}
+    try:
+        import fitz
+        with fitz.open(path) as doc:
+            text = '\n'.join(pg.get_text() for pg in doc)
+    except Exception:
+        return {}
+    printed = {}
+    for m in _BOND_LINE.finditer(text):
+        key = _bv_norm(m.group(1))
+        if key and key not in known and not key.startswith('H'):
+            printed.setdefault(key, set()).add(round(float(m.group(2)), 3))
+    if not printed:
+        return {}
+    cif = {}
+    for c in st.cations:
+        if c.element == 'H':
+            continue
+        try:
+            cif[c.label] = sorted({round(d, 3) for _o, d, _n in st.neighbours(c, 3.4)})
+        except Exception:
+            continue
+    out = {}
+    for key, ds in printed.items():
+        if len(ds) < 3:
+            continue
+        top = max(ds) + 0.02                                               # the paper lists a site's bonds up to its own cutoff
+        scores = sorted(((sum(1 for d in ds if any(abs(d - x) <= tol for x in xs)), -len([x for x in xs if x <= top]), lab) for lab, xs in cif.items()), reverse=True)
+        n_hit, n_cif, lab = scores[0][0], -scores[0][1], scores[0][2]
+        # two minerals' tables in one paper share the label 'M1': the .cif's own bonds must ALL be in the
+        # paper's list (three or more of its distances up to the paper's longest), not most of the list
+        if n_hit >= 3 and n_hit >= 0.75 * n_cif and (len(scores) < 2 or scores[1][0] <= n_hit - 2):
+            out[key] = lab
+    labs = list(out.values())
+    return {k: v for k, v in out.items() if labs.count(v) == 1}          # two paper names on one .cif site: neither
 
 def _names_cations(rows, st):
     """Whether a Word table belongs to this structure — the rule bv_tables applies to a pdf's
@@ -3174,7 +3263,57 @@ def _bv_like(rows):
     vu = sum(1 for r in rows for c in r[1:] if re.match(r'^\s*0\.\d\d', c))
     return an >= 2 and vu >= 4
 
-def bv_check_paper(path, cif, ex):
+def _structure_for_paper(cif, ex, text, B):
+    """The .cif's structure with the valences the paper states where the .cif states none: a .cif
+    without oxidation numbers leaves V, Fe, Mn, Cu, As, U … to the tool's defaults (V5+, Fe3+), and
+    a bond-valence table computed with V3+ differs from that throughout. The paper's own formula
+    ('Fe2+', 'V3+'), else the species' ideal formula on Mindat, settles the element's valence; the
+    .cif's own statements (type symbols, _atom_type_oxidation_number) always win."""
+    st = B.Structure(cif)
+    assumed = {m.group(1) for m in re.finditer(r'assumed ([A-Z][a-z]?)[+-]\d', ' '.join(st.notes))}
+    if not assumed:
+        return st
+    try:
+        from pxrd_review import paper_structure as PS
+        sets = PS.element_charge_sets(text or '', (ex or {}).get('name'))
+    except Exception:
+        return st
+    over = {}; said = []
+    mixed = []
+    for el in sorted(assumed):
+        chs = sorted(sets.get(el) or [])
+        if len(chs) == 1:
+            over[el] = chs[0]; said.append('%s%+d' % (el, chs[0]))
+        elif len(chs) > 1:
+            mixed.append((el, chs))
+    for el, chs in mixed:
+        # a mixed-valence element (Fe2+ and Fe3+ in the formula): each site it dominates or shares
+        # (a quarter or more) takes the valence its own bonds bear out — the sum nearest the site's
+        # expected charge; a minor admixture keeps the default, which moves the sum by nothing
+        fit = {}
+        for c in chs:
+            try:
+                st_c = B.Structure(cif, ox_override=dict(over, **{el: c})); notes = list(st_c.notes)
+                res = B.compute(st_c, B.Params(), None, 'none')[0]; st_c.notes[:] = notes
+            except Exception:
+                continue
+            for site, _b, bvs, expected, _m in res:
+                if sum(sp.occ for sp in site.species if sp.element == el) >= 0.25:
+                    fit.setdefault(site.label, []).append((abs(bvs - expected), c))
+        for label, cands in fit.items():
+            c = min(cands)[1]
+            site = next((x for x in st.sites if x.label == label), None)
+            for part, sp in zip(label.split('/'), site.species if site else []):
+                if sp.element == el:
+                    over[part] = c; said.append('%s%+d (%s)' % (el, c, part))
+    if not over:
+        return st
+    st2 = B.Structure(cif, ox_override=over)
+    st2.notes = [n for n in st2.notes if not re.search(r'assumed (%s)[+-]\d' % '|'.join(assumed), n)]
+    st2.notes.append('valence%s from the paper\'s formula: %s (the .cif states none)' % ('s' if len(said) > 1 else '', ', '.join(said)))
+    return st2
+
+def bv_check_paper(path, cif, ex, text=None):
     """The paper's bond-valence table (a pdf's, read from the page; a manuscript .docx's, from
     its Word table) against the .cif, under every parameter set — the one that agrees best wins,
     the cited one on a tie. -> {'status', …}:
@@ -3190,7 +3329,7 @@ def bv_check_paper(path, cif, ex):
             all_tabs = [t for t in B.read_tables(path) if len(t) >= 2]
             if not any(sum(1 for r in t for c in r if re.match(r'^\s*0\.\d\d', c)) >= 3 or any(_BVS_HEAD.match((c or '').strip()) for r in t[:3] for c in r) for t in all_tabs):
                 return {'status': 'none', 'message': 'no bond-valence table found in the manuscript (nothing to check against the .cif)'}   # no valences and no BVS column: the .cif is not needed, so a broken one is no finding
-            st = B.Structure(cif); st.aliases = site_name_map(path, st)
+            st = _structure_for_paper(cif, ex, text if text is not None else text_of(path), B); st.aliases = site_name_map(path, st)
             all_tabs = [t for t in (_maybe_transpose(t, st) for t in all_tabs) if len(t) >= 3]   # a grid the other way round has its rows as columns before the transpose
             has_bvs_col = lambda t: any(_BVS_HEAD.match((c or '').strip()) for r in t[:3] for c in r)   # a BVS column of a coordinates / bond table, not a grid
             tabs = [{'page': None, 'rows': t, 'kind': 'grid'} for t in all_tabs if _names_cations(t, st) and not has_bvs_col(t)]
@@ -3200,10 +3339,11 @@ def bv_check_paper(path, cif, ex):
                 return {'status': 'foreign', 'message': 'a bond-valence-like table was read but it names none of the .cif\'s cation sites (%s) — is that the right structure?'
                         % ', '.join(sorted(r.label for r in st.cations if not r.label.upper().startswith('H')))[:80]}
         else:
-            st = B.Structure(cif); st.aliases = site_name_map(path, st)
+            st = _structure_for_paper(cif, ex, text if text is not None else text_of(path), B); st.aliases = site_name_map(path, st)
             tabs = bv_tables(path, st) or bvs_site_tables(path, st)
         if not tabs:
             return {'status': 'none', 'message': 'no bond-valence table found in the paper (nothing to check against the .cif)'}
+        tabs, left_out = _own_mineral_tables(tabs, cif, st)
         sites = tabs[0].get('kind') == 'sites'
         where = ('the paper\'s %s (p%d)' % ('BVS column' if sites else 'table', tabs[0]['page'])) if tabs[0].get('page') else ('the manuscript\'s %s' % ('BVS column' if sites else 'table'))
         cited = (ex['bv'].get('params') or 'gh', ex['bv'].get('u6') or 'burns')
@@ -3233,16 +3373,113 @@ def bv_check_paper(path, cif, ex):
                     '(Ow/OH in the table vs O in the .cif); the row and column sums below were still checked' % where)
             return {'status': 'unmatched', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': 0, 'disagree': 0}
         bad, _, key, u6, P, lines, n = best
-        if (n >= 4 and 2 * bad >= n) or bad >= 8:                     # half or more of the cells differ, or eight of them: not this convention, or not this reading — a published table has one or two slips, not a list
-            head = ('bond valence: %s vs the .cif — %d of %d cells differ under every parameter set: another convention (occupancy-weighted sums, '
-                    'other parameters, another site labelling) or a misread table; not compared cell by cell [unverified]' % (where, bad, n))   # a doubt for the reviewer, never a list of findings
-            lines = [ln for ln in lines if 'cells compared' in ln]
-            return {'status': 'unmatched', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad}
+        trips = lambda n_, bad_: (n_ >= 4 and 2 * bad_ >= n_) or bad_ >= 8   # half or more of the cells differ, or eight of them: not this convention, or not this reading — a published table has one or two slips, not a list
+        kept = []; doubted = []
+        for tno, n_i, bad_i, tl in _bv_per_table(lines):
+            if trips(n_i, bad_i):
+                doubted.append('table %d: %d of %d cells differ under every parameter set — %s; another convention (occupancy-weighted sums, other parameters, '
+                               'another site labelling), another mineral\'s table, or a misread one; not compared cell by cell [unverified]' % (tno, bad_i, n_i, _bv_pattern(tl, n_i, bad_i)))
+            else:
+                kept.extend(tl)
+                if bad_i >= 3:
+                    kept.append('table %d: the differences — %s' % (tno, _bv_pattern(tl, n_i, bad_i)))   # where they sit: one column throughout is a convention, scattered ones are slips
+        if not kept:                                                   # a doubt for the reviewer, never a list of findings
+            head = 'bond valence: %s vs the .cif — %d of %d cells differ under every parameter set; not compared cell by cell [unverified]' % (where, bad, n)
+            return {'status': 'unmatched', 'head': head, 'lines': doubted + [ln for ln in st.notes if "from the paper's formula" in ln] + left_out, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad}
         head = 'bond valence: %s vs the .cif — agrees best with %s%s' % (
             where, P.note(), '' if (key, u6) == cited else ' (the paper cites %s%s)' % (B.PARAM_NAMES.get(cited[0], cited[0]), ', U6+ from Burns' if cited[1] == 'burns' else ''))
-        return {'status': 'checked', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad}
+        kept += [ln for ln in st.notes if "from the paper's formula" in ln] + left_out
+        return {'status': 'checked', 'head': head, 'lines': kept + doubted, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad}
     except Exception as ex_:
         return {'status': 'error', 'message': 'could not check (%s)' % ex_}
+
+_GENERIC_CIF_WORDS = {'final', 'structure', 'data', 'refined', 'refinement', 'crystal', 'checkcif', 'supplementary', 'deposit', 'revised', 'corrected', 'mineral'}
+
+def _own_mineral_tables(tabs, cif, st):
+    """A two-mineral paper prints a bond-valence table per mineral; the .cif is one of them. When
+    the captions name the minerals and the .cif's own name (its _chemical_name, else its file
+    name) is in one caption and another caption names a different mineral, only the named table
+    is this .cif's. -> (tables, lines saying which were left out)"""
+    caps = [(t.get('caption') or '').lower() for t in tabs]
+    if len(tabs) < 2 or not all(caps):
+        return tabs, []
+    names = set()
+    for src in (getattr(st, 'name', None) or '', re.sub(r'\.cif$', '', os.path.basename(cif), flags=re.I)):
+        for w in re.findall(r'[a-z]{5,}', src.lower().replace('_', ' ')):
+            if w not in _GENERIC_CIF_WORDS:
+                names.add(w)
+    if not names:
+        return tabs, []
+    mine = [any(nm in c for nm in names) for c in caps]
+    other = [bool(re.search(r'\b[a-z]{4,}ite\b', c)) and not m for c, m in zip(caps, mine)]   # a caption naming some other -ite
+    if any(mine) and any(other) and all(m or o for m, o in zip(mine, other)):
+        kept = [t for t, m in zip(tabs, mine) if m]
+        left = ["another mineral's bond-valence table left out (p%s: %s)" % (t.get('page'), (t.get('caption') or '')[:70]) for t, m in zip(tabs, mine) if not m]
+        return kept, left
+    return tabs, []
+
+def _bv_per_table(lines):
+    """check_bvs_table / check_bvs_sites lines grouped by table: [(table no, cells compared, disagree, lines)]."""
+    groups = OrderedDict()
+    for ln in lines:
+        m = re.search(r'\btable (\d+)', ln)
+        groups.setdefault(int(m.group(1)) if m else 0, []).append(ln)
+    out = []
+    for tno, tl in groups.items():
+        m = next((re.search(r'(\d+) cells compared, (\d+) disagree', x) for x in tl if 'cells compared' in x), None)
+        out.append((tno, int(m.group(1)) if m else 0, int(m.group(2)) if m else 0, tl))
+    return out
+
+def _bv_pattern(lines, n, bad):
+    """What a table that differs throughout differs IN — the reviewer's next question. The
+    disagreements grouped by column (a grid) or by site (a BVS column), each with its direction
+    and size: 'P1, P2: 7 cells, the table higher by 0.06–0.09 vu; the other 4 cells agree'."""
+    cells = []                                                          # (group, table value, computed)
+    blanks = 0; sums = 0
+    for ln in lines:
+        m = re.search(r'^table \d+: (\S+)–(\S+) (.+?) vs (\d+\.\d+) computed(.*)$', ln)
+        if m:
+            vals = sorted(float(x) for x in re.findall(r'\d+\.\d+', re.sub(r'[×x]\s*\d+', ' ', m.group(3))))
+            pb = re.search(r'per bond: ([\d., ]+);', m.group(5))
+            calc = sorted(float(x) for x in pb.group(1).split(',')) if pb else [float(m.group(4))]
+            if vals and len(vals) == len(calc):
+                worst = max(range(len(vals)), key=lambda k: abs(vals[k] - calc[k]))
+                cells.append((m.group(2), vals[worst], calc[worst]))            # a two-value cell: the value that is off
+            elif vals:
+                cells.append((m.group(2), vals[0], float(m.group(4))))
+            continue
+        m = re.search(r'^table \d+: BVS of (\S+) (\d+\.\d+) in the table vs (\d+\.\d+) from the \.cif', ln)
+        if m:
+            cells.append((m.group(1), float(m.group(2)), float(m.group(3))))
+            continue
+        if 'is blank but the .cif has that bond' in ln:
+            blanks += 1
+        elif re.search(r'^table \d+: Σ for ', ln):
+            sums += 1
+    parts = []
+    if cells:
+        groups = OrderedDict()
+        for g, tv, cv in cells:
+            groups.setdefault(g, []).append(tv - cv)
+        def phrase(diffs):
+            up = sum(1 for d in diffs if d > 0.02); dn = sum(1 for d in diffs if d < -0.02)
+            mags = sorted(abs(d) for d in diffs)
+            rng = ('%.2f' % mags[0]) if len(mags) == 1 or abs(mags[-1] - mags[0]) < 0.005 else '%.2f–%.2f' % (mags[0], mags[-1])
+            side = 'higher' if up and not dn else 'lower' if dn and not up else 'off either way'
+            return 'the table %s by %s vu' % (side, rng)
+        same = phrase([d for ds in groups.values() for d in ds])
+        if len(groups) > 1 and all(phrase(ds).split(' by ')[0] == same.split(' by ')[0] for ds in groups.values()):
+            parts.append('%s: %d cells, %s' % (', '.join(groups), len(cells), same))
+        else:
+            parts.append('; '.join('%s: %d cell%s, %s' % (g, len(ds), '' if len(ds) == 1 else 's', phrase(ds)) for g, ds in groups.items()))
+    if blanks:
+        parts.append('%d cell%s blank where the .cif has a bond' % (blanks, '' if blanks == 1 else 's'))
+    if sums:
+        parts.append('%d printed Σ off its row or column' % sums)
+    rest = n - bad
+    if rest > 0:
+        parts.append('the other %d cell%s agree%s' % (rest, '' if rest == 1 else 's', 's' if rest == 1 else ''))
+    return '; '.join(parts) if parts else 'no cell-by-cell detail'
 
 def bv_tables(pdf, st):
     """The paper's bond-valence grids (anion rows × cation columns) as row lists, read from the pdf
@@ -3296,7 +3533,7 @@ def bv_tables(pdf, st):
                 first = lw[0][4]; y = lines[j]['y']
                 if row_ok(first) or re.match(r'^(Σ|Sum|Total|Σcat|Σanion|Σan)', first):
                     blank = 0
-                    if pending and raw and abs(pending[0][0] - ys[-1]) < abs(y - pending[0][0]):
+                    if pending and raw and abs(pending[0][0] - ys[-1]) <= abs(y - pending[0][0]) + 2.0:   # a tie (row labels top-aligned): the row above — a cell's second value prints below its first
                         raw[-1] = (raw[-1][0], raw[-1][1] + [w for _, ws in pending for w in ws]); pending = []
                     raw.append((first, lw[1:] + [w for _, ws in pending for w in ws])); ys.append(y); pending = []
                     if re.match(r'^(Σ|Sum|Total)', first) and not re.match(r'^Σan', first):
@@ -3341,10 +3578,12 @@ def bv_tables(pdf, st):
                     cells[k].append(w[4])
                 rows.append([first] + [' '.join(c) for c in cells])
             grid = [['Atom'] + [lab for _, lab in merged]] + rows
+            caption = next((' '.join(w[4] for w in lines[k]['w']) for k in range(i, max(-1, i - 40), -1)
+                            if re.match(r'^(TABLE|Table)\s+[A-Z]?\d+[A-Za-z]?[.:]', ' '.join(w[4] for w in lines[k]['w'][:3]))), '')   # the caption above: names the mineral in a two-mineral paper
             if transposed:
                 grid = [list(col) for col in zip(*[r + [''] * (len(grid[0]) - len(r)) for r in grid])]   # anion rows × cation columns, as the checker reads
                 grid[0][0] = 'Atom'
-            out.append({'page': pno + 1, 'rows': grid, 'kind': 'grid'})
+            out.append({'page': pno + 1, 'rows': grid, 'kind': 'grid', 'caption': caption[:160]})
             i = j
     return out
 

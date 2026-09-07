@@ -391,8 +391,8 @@ class Structure:
                     ox_final = 1
                 elif ox is not None:
                     ox_final = ox
-                elif el in ox_override:
-                    ox_final = ox_override[el]
+                elif lab in ox_override or el in ox_override:            # a site's own valence ('Fe2': 3) before its element's
+                    ox_final = ox_override[lab] if lab in ox_override else ox_override[el]
                 elif el in type_ox:
                     ox_final = type_ox[el]
                 elif el in ANION_ELEMENTS and not (el in ('S', 'Se', 'Te', 'N') and has_o) and el != 'H':
@@ -1174,8 +1174,12 @@ def _atom_like(lab):
                for part in lab.split('/'))
 NUM_CELL = re.compile(r"^\s*(\d+\.\d+)\s*(\(\d+\))?\s*(?:[×x]\s*(\d+))?")
 
+_ANION_TAG = re.compile(r'\s*\((?:OH|OH2|H2O|W|OW|HW|Wat|H)\)\s*$', re.I)
+
 def _norm_label(lab):
-    return re.sub(r'[()\s]', '', lab).upper()
+    """'Fe(1)' -> 'FE1'; 'O8(OH)' / 'O3(H2O)' -> 'O8' / 'O3' — a paper tags a hydroxyl or water
+    oxygen in its row label, the .cif labels it O8."""
+    return re.sub(r'[()\s]', '', _ANION_TAG.sub('', lab)).upper()
 
 def manuscript_bonds(tables):
     """[(table idx, row idx, col idx, cation, anion, is_mean, count, d, esd)] from every table."""
@@ -1290,7 +1294,9 @@ def _bv_cell(txt):
     each with its own marks ('0.70×4↓×2→, 0.64×2↓'). Marks may be '×3↓', '×3 →', or a
     superscript '²↓' (kept as ^2↓^ by the table reader)."""
     segs = []
-    for part in re.split(r'\s*[,;]\s*(?=\d)', txt.strip()):
+    # two values in one cell come comma-listed or, read off a page, space-separated ('0.06 0.05×2↓':
+    # the mark belongs to the value it follows, not to both)
+    for part in re.split(r'\s*[,;]\s*(?=\d)|(?<=[↓→^])\s+(?=\d)|(?<=\d)\s+(?=\d+\.\d)', txt.strip()):
         n_down = n_across = 1
         for mk in re.findall(r'\^([^^]*)\^', part):
             m = re.search(r'(\d+)\s*([↓→]?)', mk)
@@ -1316,6 +1322,21 @@ def _segs_split(segs):
     nd = segs[0][1] if segs else 1
     na = segs[0][2] if segs else 1
     return nums, nd, na
+
+def _h_donor_anions(st):
+    """The anion labels that carry a hydrogen in the .cif (an H site within 1.3 Å): a hydroxyl or
+    water oxygen, whose printed Σ may include its own O–H valence."""
+    out = set()
+    for h in st.sites:
+        if h.element != 'H':
+            continue
+        try:
+            for other, d, _n in st.neighbours(h, 1.3):
+                if d < 1.3:
+                    out.add(other.label)
+        except Exception:
+            pass
+    return out
 
 def _element_aliases(result, anions=()):
     """'Fe3+' / 'Ge' in a paper's header for a .cif whose only iron site is Fe1: {norm: label} for
@@ -1367,6 +1388,7 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
     cat_occ.update({r[0].label: min(r[0].occ_total, 1.0) for r in result})
     bvs_of = {r[0].label: r[2] for r in result}
     h_cols = {r[0].label for r in result if r[0].element == 'H'}
+    donors = _h_donor_anions(st)
     found = False
     for ti, rows in enumerate(tables):
         if len(rows) < 3:
@@ -1474,7 +1496,8 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
                                 extra += (last[1] * (n - 1)) * (-1 if last[2] == 'donor' else 1)
                         extra += row_h
                         typed = (row_pb + extra, row_tot + extra, row_alt + extra)
-                        if row_flagged:
+                        h_in_sum = 0.55 <= given - typed[0] <= 1.05 and (an in donors or _ANION_TAG.search(row[0] or ''))   # 'Σ 2.15§ — includes 0.87 vu from H10': the hydroxyl's own H, in the sum but in no column
+                        if row_flagged or h_in_sum:
                             pass                                    # a wrong cell already explains the row
                         elif min(abs(t - given) for t in typed) > 0.025:
                             if re.search(r'(?<![\d.])0\d\d(?![\d.])', ' '.join(row)):

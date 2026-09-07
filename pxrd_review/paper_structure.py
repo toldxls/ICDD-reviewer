@@ -246,6 +246,27 @@ def site_element(label, tail):
         return m.group(1)
     return (label[:1] if label[:1] in EP.ATOMIC_WEIGHTS else None)
 
+def element_charge_sets(text, name=None):
+    """{element: {oxidation states}} the paper's formulas state ('Fe2+', 'Fe3+' — both, for a
+    mixed-valence mineral), else the species' ideal formula on Mindat."""
+    ox = {}
+    try:
+        for _t, _c, _i, charges, _k, _s in PE._formulas(text, name or ''):
+            for el, chs in (charges or {}).items():
+                ox.setdefault(el, set()).update(chs)
+    except Exception:
+        pass
+    try:                                                                # Mindat for the elements the paper's formulas leave uncharged
+        rec = PE.species_record(name) if name else None
+        mindat = {}
+        for el, ch in re.findall(r'([A-Z][a-z]?)(\d)\+', re.sub(r'<[^>]+>', '', (rec or {}).get('formula') or '')):
+            mindat.setdefault(el, set()).add(int(ch))
+        for el, chs in mindat.items():
+            ox.setdefault(el, chs)
+    except Exception:
+        pass
+    return ox
+
 def element_charges(text, name=None):
     """{element: oxidation state} from the paper's own formulas — 'Fe3+1.52' states the charge — and
     from the species' ideal formula on Mindat when the paper's does not say."""
@@ -259,7 +280,7 @@ def element_charges(text, name=None):
         pass
     try:
         rec = PE.species_record(name) if name else None
-        for el, ch in re.findall(r'([A-Z][a-z]?)(\d)\+', (rec or {}).get('formula') or ''):
+        for el, ch in re.findall(r'([A-Z][a-z]?)(\d)\+', re.sub(r'<[^>]+>', '', (rec or {}).get('formula') or '')):   # 'V<sup>3+</sup>' on Mindat
             ox.setdefault(el, int(ch))
     except Exception:
         pass

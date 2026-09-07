@@ -416,7 +416,7 @@ against the .cif; Gladstone–Dale for n and the densities; the cell against its
 and, with Z (from the paper's other cell statement or the .cif when the powder cell omits it), the
 density from the formula; the measured and calculated densities against each other (4 %); and
 Mindat's species for the name. A rule the tool keeps: a red line needs an oracle behind it, and a
-reading no oracle reached is a dot, never a verdict.
+reading no oracle reached is a dot, never a verdict. Two more things vouch or dissent (2026-09-07): the paper's own apfu column, read off the block under or beside the wt% — where the wt% read do not reproduce the formula but that column does, the formula stands and the wt% reading is named as the tool's shortfall; and, for a bond-valence table that differs throughout, a summary of where — which columns or sites, in which direction, by how much — instead of a bare "not compared cell by cell". A calculated powder line is red only when 2 % or more off its cell; a smaller offset is a note.
 
 **`pxrd epma --check`** replicates a *published* formula from an ICDD entry's Analysis field — the
 mean wt% list followed by the empirical formula in the ICDD notation (`( Mn1.75 +2 Mg0.25 )sigma2.00

@@ -803,15 +803,15 @@ class DocxPaper(unittest.TestCase):
         doc.add_paragraph('Table 2. Powder X-ray diffraction data for rutile.')
         t = doc.add_table(rows=0, cols=7)
         for row in (('Iobs', 'dobs', 'Icalc', 'dcalc', 'h', 'k', 'l'), ('100', '3.248', '100', '3.2482', '1', '1', '0'), ('50', '2.487', '48', '2.4874', '1', '0', '1'),
-                    ('8', '2.297', '7', '2.2696', '2', '0', '0'), ('20', '2.187', '19', '2.1873', '1', '1', '1'), ('10', '2.054', '9', '2.0544', '2', '1', '0'), ('60', '1.687', '58', '1.6874', '2', '1', '1')):
+                    ('8', '2.297', '7', '2.2296', '2', '0', '0'), ('20', '2.187', '19', '2.1873', '1', '1', '1'), ('10', '2.054', '9', '2.0544', '2', '1', '0'), ('60', '1.687', '58', '1.6874', '2', '1', '1')):   # 2.2296: a mistyped digit, 2.9 % off
             cells = t.add_row().cells
             for c, v in zip(cells, row):
                 c.text = v
         doc.save(path)
         cc = PE.cell_check(path, None)
-        self.assertEqual((cc['status'], cc['source'], cc['n'], cc['agree'], cc['loose']), ('checked', 'powder', 6, 5, 6))
+        self.assertEqual((cc['status'], cc['source'], cc['n'], cc['agree'], cc['loose']), ('checked', 'powder', 6, 5, 5))   # the 2.9 % line is beyond 1.5 %
         self.assertAlmostEqual(cc['cell']['γ'], 90.0); self.assertEqual(cc['bad'][0][2], (2, 0, 0))
-        self.assertTrue(any(ln.startswith('2.2696 (2 0 0) does not follow the cell: it gives 2.2968') for ln in cc['lines']), cc['lines'])
+        self.assertTrue(any(ln.startswith('2.2296 (2 0 0) does not follow the cell: it gives 2.2968') for ln in cc['lines']), cc['lines'])
         self.assertEqual(cc['unmatched_obs'], [])                                       # 2.297 observed is the (2 0 0) the cell gives
         cc = PE.cell_check(path, cif)
         self.assertEqual((cc['source'], cc['agree'], len(cc['bad'])), ('.cif', 5, 1))
@@ -1046,3 +1046,125 @@ class GapFixes(unittest.TestCase):
         self.assertEqual(rows[0][1], ca[0].label); self.assertEqual(rows[1][0], ans[0])              # transposed: anion rows × cation columns
         bc = PE.bv_check_paper(p2, cif2, ex)
         self.assertEqual(bc['status'], 'checked', bc); self.assertEqual(bc['disagree'], 0, bc.get('lines'))
+
+
+class BondValenceHandCheck(unittest.TestCase):
+    """The 2026-09-07 hand-check of three bond-valence papers: a site named by its bond lengths when
+    the paper prints no coordinates, the paper's valences for a .cif that states none, one table per
+    mineral in a two-mineral paper, and a table that differs throughout summarised by column."""
+
+    def test_site_named_by_its_bond_lengths(self):
+        import fitz
+        from tests.test_bv_check import HYDRATE
+        from pxrd_review import bv_check as B
+        tmp = tempfile.mkdtemp(prefix='pe_')
+        try:
+            cif = os.path.join(tmp, 's.cif')
+            with open(cif, 'w') as f:                                                           # Ca with three oxygens at 2.32, 2.40, 2.48 Å
+                f.write(HYDRATE.split('Ca1 Ca 0 0 0')[0] + 'Ca1 Ca 0 0 0\nO1 O 0.30 0 0\nO2 O 0 0.31 0\nO3 O 0 0 0.29\n')
+            st = B.Structure(cif)
+            ds = sorted(d for _o, d, _n in st.neighbours(st.cations[0], 3.4))
+            self.assertEqual(len(ds), 3)
+            path = os.path.join(tmp, 'bonds.pdf')
+            doc = fitz.open(); page = doc.new_page(width=595, height=842); y = 60
+            for ln in ['Table 3. Selected bond lengths (Å)'] + sum([['M1-O%d' % (k + 1), '%.3f(2)' % d] for k, d in enumerate(ds[:3])], []) + ['<M1-O>', '%.3f' % (sum(ds[:3]) / 3)]:   # fitz's base font has no en dash
+                page.insert_text((40, y), ln, fontsize=9); y += 12
+            doc.save(path); doc.close()
+            self.assertEqual(PE._site_map_by_bonds(path, st, set()), {'M1': 'Ca1'})
+            self.assertEqual(PE.site_name_map(path, st), {'M1': 'Ca1'})                     # no coordinates table: the bonds decide
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_paper_valences_for_a_silent_cif(self):
+        from tests.test_bv_check import HYDRATE
+        from pxrd_review import bv_check as B
+        tmp = tempfile.mkdtemp(prefix='pe_')
+        try:
+            cif = os.path.join(tmp, 'v.cif')
+            with open(cif, 'w') as f:
+                f.write(HYDRATE.replace('Ca1 Ca 0 0 0', 'V1 V 0 0 0'))
+            st = PE._structure_for_paper(cif, {'name': 'testite'}, 'Testite, ideally V3+2(PO4)3, is a new mineral. The empirical formula is V3+1.98P3.01O12.', B)
+            self.assertEqual([sp.ox for sp in st.sites[0].species], [3])
+            self.assertTrue(any("from the paper's formula: V+3" in n for n in st.notes), st.notes)
+            st = PE._structure_for_paper(cif, {'name': 'testite'}, 'no formula here', B)
+            self.assertEqual([sp.ox for sp in st.sites[0].species], [5])                    # the default stands when the paper says nothing
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_own_mineral_table_and_the_pattern(self):
+        class St: name = None
+        tabs = [{'page': 10, 'rows': [], 'kind': 'grid', 'caption': 'TABLE 5A. Bond valences (v.u.) for atoms in nigelcookite'},
+                {'page': 11, 'rows': [], 'kind': 'grid', 'caption': 'TABLE 5B. Bond valences (v.u.) for atoms in plumbojohntomaite'}]
+        kept, left = PE._own_mineral_tables(tabs, '/x/11580_I003563_Plumbojohntomaite.cif', St())
+        self.assertEqual([t['page'] for t in kept], [11]); self.assertIn('nigelcookite', left[0])
+        kept, left = PE._own_mineral_tables(tabs, '/x/final_structure.cif', St())              # no name to go by: every table stays
+        self.assertEqual(len(kept), 2); self.assertEqual(left, [])
+        both = [dict(tabs[0]), dict(tabs[0], page=12, caption='Table 6. Bond valences for nigelcookite at 100 K')]
+        self.assertEqual(len(PE._own_mineral_tables(both, '/x/nigelcookite.cif', St())[0]), 2)   # two tables of the same mineral
+        lines = ['bond-valence table 1: 11 cells compared, 7 disagree (computed with X; H columns not compared)',
+                 'table 1: O1–P1 1.29 vs 1.22 computed', 'table 1: O2–P1 1.22 vs 1.16 computed', 'table 1: O3–P1 1.35 vs 1.27 computed',
+                 'table 1: O5–P2 1.35 vs 1.26 computed', 'table 1: O7–P2 1.37 × 2↓ vs 1.28 computed (1.28 per bond, ×2↓)',
+                 'table 1: O9–M2 0.47 0.46 vs 1.07 computed (per bond: 0.53, 0.54; total 1.07)',
+                 'table 1: O2–Pb1 is blank but the .cif has that bond (0.06 vu)', 'table 1: Σ for P1 5.24 vs 4.94 from the .cif (parameters: X)',
+                 'bond-valence table 2: 11 cells compared, 1 disagree (computed with X; H columns not compared)', 'table 2: O1–P1 1.26 vs 1.22 computed']
+        per = PE._bv_per_table(lines)
+        self.assertEqual([(t, n, b) for t, n, b, _ in per], [(1, 11, 7), (2, 11, 1)])
+        pat = PE._bv_pattern(per[0][3], 11, 7)
+        self.assertIn('P1: 3 cells, the table higher by 0.06–0.08 vu', pat)
+        self.assertIn('M2: 1 cell, the table lower by 0.07 vu', pat)                        # the two-value cell: its worse value against its own bond
+        self.assertIn('1 cell blank where the .cif has a bond', pat); self.assertIn('the other 4 cells agree', pat)
+        sums = ['bond-valence sums (table 1, column BVS): 12 cells compared, 6 disagree (computed with X)',
+                'table 1: BVS of Ba1 2.12 in the table vs 2.44 from the .cif (parameters: X)', 'table 1: BVS of Na4/Dy4 0.97 in the table vs 1.19 from the .cif (parameters: X)']
+        self.assertIn('Ba1, Na4/Dy4: 2 cells, the table lower by 0.22–0.32 vu; the other 6 cells agree', PE._bv_pattern(sums, 12, 6))
+
+
+class HandCheckRules(unittest.TestCase):
+    """Owner's rules of 2026-09-07: a calculated powder line is flagged only when egregiously off its
+    cell (2 % or more) — a smaller offset is a note; the paper's own apfu column is another part of
+    the paper that vouches for its formula when the wt% reading does not."""
+
+    def test_only_an_egregious_powder_line_is_red(self):
+        from docx import Document
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'rutile.docx')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = Document()
+        doc.add_paragraph('Rutile. The powder pattern was indexed on a tetragonal cell, a = 4.5937(2), c = 2.9587(1) Å, V = 62.43 Å3, Z = 2.')
+        doc.add_paragraph('Table 2. Powder X-ray diffraction data for rutile.')
+        t = doc.add_table(rows=0, cols=7)
+        for row in (('Iobs', 'dobs', 'Icalc', 'dcalc', 'h', 'k', 'l'), ('100', '3.248', '100', '3.2482', '1', '1', '0'), ('50', '2.487', '48', '2.460', '1', '0', '1'),
+                    ('20', '2.187', '19', '2.250', '1', '1', '1'), ('10', '2.054', '9', '2.0544', '2', '1', '0'), ('60', '1.687', '58', '1.6874', '2', '1', '1'), ('30', '1.624', '28', '1.6237', '2', '2', '0')):
+            cells = t.add_row().cells
+            for c, v in zip(cells, row):
+                c.text = v
+        doc.save(path)
+        cc = PE.cell_check(path, None)
+        self.assertEqual(cc['status'], 'checked')
+        self.assertEqual([hkl for _d, _i, hkl, _dc, _dev, _f in cc['bad']], [(1, 1, 1)])                 # 2.250 vs 2.1873: +2.9 %, flagged
+        self.assertTrue(any(l.startswith('2.25 (1 1 1) does not follow the cell') for l in cc['lines']), cc['lines'])
+        self.assertTrue(any(l.startswith('2.46 (1 0 1) sits +1.1 % off the cell') and l.endswith('[unverified]') for l in cc['lines']), cc['lines'])   # 2.460 vs 2.4874: noted
+
+    def test_apfu_column_vouches_for_the_formula(self):
+        import fitz
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'apfu.pdf')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = fitz.open(); page = doc.new_page(width=595, height=842); y = 60
+        rows = ['Testite is a new mineral. The empirical formula, based on 4 O apfu, is Mg0.98Ca1.01Si1.00O4.',
+                'Table 1. Chemical data (wt%) for testite', 'Constituent  Mean  Range', 'MgO  25.30  25.0-25.6', 'CaO  36.20  35.9-36.5', 'SiO2  38.40  38.1-38.7', 'Total  99.90',
+                'Mg  0.98', 'Ca  1.01', 'Si  1.00']
+        for row in rows:
+            page.insert_text((40, y), row, fontsize=9); y += 14
+        doc.save(path); doc.close()
+        e = PE.epma_table(path, 'testite')
+        self.assertEqual(e['apfu'], {'Mg': 0.98, 'Ca': 1.01, 'Si': 1.0})                                # the block under the Total, read and kept
+        self.assertEqual([r['constituent'] for r in e['rows']], ['MgO', 'CaO', 'SiO2'])
+        # the wt% reproduce the formula on their own here; the apfu column then adds nothing but agreement
+        r = PE.check_paper(path, None, None)
+        self.assertTrue(r['composition']['ok'], r['composition']['lines'])
+        self.assertIsNone(r['composition'].get('apfu'))
+        # a formula the wt% cannot reproduce (another sample's) that the apfu column vouches for: the formula stands, the reading is the tool's
+        ex = r['extract']; text = PE.text_of(path).replace('Mg0.98Ca1.01Si1.00O4', 'Mg0.98Ca1.01Si1.00O4')
+        e2 = dict(e); e2['rows'] = [dict(x, mean=x['mean'] * (1.3 if x['constituent'] == 'MgO' else 0.9)) for x in e['rows']]
+        ex2 = dict(ex); ex2['epma'] = e2
+        c2 = PE.check_composition(ex2, text)
+        self.assertTrue(c2['ok'], c2['lines']); self.assertTrue(c2['verified'])
+        self.assertIn("the paper's own apfu column reproduces it", c2.get('apfu') or '', c2['lines'])

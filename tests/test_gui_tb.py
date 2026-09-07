@@ -221,7 +221,7 @@ class DocxPaper(unittest.TestCase):
         doc.add_paragraph('Table 3. Powder X-ray diffraction data for rutile.')
         t3 = doc.add_table(rows=0, cols=7)
         for row in (('Iobs', 'dobs', 'Icalc', 'dcalc', 'h', 'k', 'l'), ('100', '3.248', '100', '3.2482', '1', '1', '0'), ('50', '2.487', '48', '2.4874', '1', '0', '1'),
-                    ('8', '2.297', '7', '2.2696', '2', '0', '0'), ('20', '2.187', '19', '2.1873', '1', '1', '1'), ('60', '1.687', '58', '1.6874', '2', '1', '1')):
+                    ('8', '2.297', '7', '2.2296', '2', '0', '0'), ('20', '2.187', '19', '2.1873', '1', '1', '1'), ('60', '1.687', '58', '1.6874', '2', '1', '1')):   # 2.2296: 2.9 % off, egregious enough to flag
             cells = t3.add_row().cells
             for c, v in zip(cells, row):
                 c.text = v
@@ -256,7 +256,7 @@ class DocxPaper(unittest.TestCase):
         heads = [x['msg'] for x in f if x['label'].startswith('powder')]
         self.assertTrue(any(m.startswith('powder table: 5 indexed lines vs the .cif cell') for m in heads), heads)
         red = [x for x in f if x['kind'] == 'calc' and x['label'].startswith('powder')]
-        self.assertEqual(len(red), 1); self.assertTrue(red[0]['msg'].startswith('2.2696 (2 0 0) does not follow')); self.assertEqual(red[0]['find'], '2.2696')
+        self.assertEqual(len(red), 1); self.assertTrue(red[0]['msg'].startswith('2.2296 (2 0 0) does not follow')); self.assertEqual(red[0]['find'], '2.2296')
 
     def test_strangers_table_is_not_scored(self):
         """A manuscript whose bond-valence table names other cations than the folder's only .cif is
