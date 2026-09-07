@@ -3171,6 +3171,10 @@ def check_paper(pdf, cif=None, out_dir=None):
         else:
             out['bv'] = {k: bc[k] for k in ('tables', 'lines', 'params', 'u6', 'cited', 'compared', 'disagree')}
             out['lines'] += [bc['head']] + ['  ' + ln for ln in bc['lines']]
+    # the water the formula claims against the hydrogen the structure accounts for — note-grade, and
+    # only where a .cif was supplied (the structure the paper prints is not independent of it)
+    if cif:
+        out['lines'] += water_check(cif, (out.get('composition') or {}).get('counts') or {})
     try:
         cc = cell_check(pdf, cif, text, table=ex.get('_table'))
     except Exception as ex_:
@@ -3361,6 +3365,65 @@ def _structure_for_paper(cif, ex, text, B):
     st2.notes = [n for n in st2.notes if not re.search(r'assumed (%s)[+-]\d' % '|'.join(assumed), n)]
     st2.notes.append('valence%s from the paper\'s formula: %s (the .cif states none)' % ('s' if len(said) > 1 else '', ', '.join(said)))
     return st2
+
+def water_check(cif, counts, name=''):
+    """The water a paper's formula claims, against the hydrogen its own structure can hold.
+
+    An oxygen receives about 2 v.u. from its cations; one receiving much less is holding a hydrogen
+    the refinement need not have located, which is the point — H is unlocated in many structures,
+    and this reads the water content without it. `bv_check.water_from_structure` does the counting;
+    its error is one-sided (measured there), so this reads the count as a CEILING:
+
+      the formula claims MORE hydrogen than the structure has room for -> a real disagreement, and
+        the direction that is trustworthy: over-stated water, or a structure missing sites;
+      the structure has room for MORE than the formula claims -> suggestive only. It is the common
+        real fault (a dehydrated sample, water never measured, an ideal formula the analysis cannot
+        reach), but it is also what an unrefined cation site looks like. The owner's rule: confirmation
+        is in the paper's own account of how the sample was treated, which is not something to code.
+
+    Note-grade throughout: -> [lines], every one marked [unverified], or [] when it cannot be read."""
+    try:
+        from pxrd_review import bv_check as B
+        st = B.Structure(cif)
+        result, anion_sum, cells, _hb = B.compute(st, B.Params(), None, 'none')
+        w = B.water_from_structure(st, result, cells)
+    except Exception:
+        return []
+    if not w:
+        return []
+    h_formula = (counts or {}).get('H')
+    if h_formula is None:
+        return []
+    # Ammonium and organic hydrogen do not sit on an oxygen, so the structure's oxygens cannot
+    # account for them and the comparison stops being like for like: an NH4 mineral would read as
+    # short of water by four H per ammonium.
+    if (counts or {}).get('N') or (counts or {}).get('C'):
+        return []
+    # Where the refinement DID locate its hydrogen, that is the structure's own answer and it wins:
+    # the valence count is an inference and this is a measurement. The count carries the case the
+    # method exists for, a structure whose H were never located.
+    if w['located'] is not None:
+        ceiling = w['located']
+        where = 'the structure locates %g H per formula unit (Z = %d)' % (w['located'], w['Z'])
+    else:
+        ceiling = w['H']
+        where = ('its H were not located, and the anion valences leave room for %g (%g OH and %g H2O '
+                 'per formula unit, Z = %d)' % (w['H'], w['OH'], w['H2O'], w['Z']))
+    # A difference of one hydrogen is noise in a formula carrying forty of them, and the whole story
+    # in one carrying two, so the threshold scales: on the corpus a flat 1.0 H spoke on 20 % of the
+    # papers with a .cif, mostly about hydrates differing by a percent or two.
+    slack = max(1.5, 0.2 * max(h_formula, ceiling))
+    if h_formula > ceiling + slack:
+        return ['water: the formula carries %g H but %s — more hydrogen than the structure accounts '
+                'for, so either the water is over-stated or the refinement is missing a site [unverified]'
+                % (h_formula, where)]
+    if ceiling > h_formula + slack:
+        return ['water: the formula carries %g H and %s — more than the formula claims. That is what a '
+                'dehydrated sample, or water never measured, looks like; it is also what an unrefined '
+                'cation site looks like. Check what the paper says about how the sample was treated '
+                '[unverified]' % (h_formula, where)]
+    return []
+
 
 def bv_check_paper(path, cif, ex, text=None):
     """The paper's bond-valence table (a pdf's, read from the page; a manuscript .docx's, from

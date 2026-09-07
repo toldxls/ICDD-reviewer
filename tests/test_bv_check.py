@@ -320,5 +320,41 @@ class PaperTableConventions(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class WaterFromStructure(unittest.TestCase):
+    """An oxygen's bond-valence sum says whether it holds hydrogen, whether or not the refinement
+    located any — the count issue #10's check rests on."""
+
+    def test_counts_hydroxyl_and_water_from_the_valences(self):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        try:
+            # the formula sum is what scales the cell's sites to one formula unit (Z)
+            cif = _write(tmp, 'hydrate.cif', HYDRATE.replace('_chemical_name_mineral testhydrate',
+                         '_chemical_name_mineral testhydrate\n_chemical_formula_sum "Ca O4"'))
+            st = B.Structure(cif)
+            result, anion_sum, cells, _ = B.compute(st, B.Params(), None, 'none')
+            w = B.water_from_structure(st, result, cells)
+            self.assertIsNotNone(w)
+            kinds = {lab: kind for lab, _v, kind in w['sites']}
+            self.assertEqual(kinds['OW1'], 'H2O')              # 0.3 v.u. from one Ca: a water molecule
+            self.assertIn(kinds['O2'], ('H2O', 'OH'))          # bonded to nothing at all
+            self.assertEqual(w['H'], w['OH'] + 2 * w['H2O'])   # hydrogen is the two counts together
+
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_an_oxygen_with_its_full_valence_holds_no_hydrogen(self):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        try:
+            cif = _write(tmp, 'rutile.cif', RUTILE.replace('loop_\n_space_group_symop_operation_xyz',
+                         '_chemical_formula_sum "Ti O2"\nloop_\n_space_group_symop_operation_xyz', 1))
+            st = B.Structure(cif)
+            result, anion_sum, cells, _ = B.compute(st, B.Params(), None, 'none')
+            w = B.water_from_structure(st, result, cells)
+            self.assertEqual([k for _l, _v, k in w['sites']], ['O'])
+            self.assertEqual((w['OH'], w['H2O'], w['H']), (0.0, 0.0, 0.0))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()

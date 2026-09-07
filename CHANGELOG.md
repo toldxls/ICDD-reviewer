@@ -17,6 +17,35 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
+## [Unreleased]
+
+### Added — the water a structure can account for (issue #10, first increment)
+An oxygen receives about 2 v.u. from its cations; one receiving much less is holding a hydrogen the
+refinement need not have located, which is the point — H is unlocated in many structures, and this
+reads the water content without it. `bv_check.water_from_structure` classifies every oxygen site and
+counts the hydroxyls and waters per formula unit, scaling by a Z derived from the .cif's own formula
+sum. `paper_extract.water_check` compares that with the paper's formula.
+
+Measured before it was built on, and the numbers set what it may claim. Against 1165 sites whose
+label states what they are (a refiner writes OH1, OW1, W1):
+
+| | |
+|---|---|
+| a hydroxyl or water called ordinary oxygen | 7 of 221, and 0 of 77 in well-behaved structures |
+| an ordinary oxygen called hydrous | 184 of 944 (19 %) |
+
+The error is one-sided and gating on the structure's own valence index does not improve it, so the
+count is a reliable statement that a site holds no hydrogen and only a suggestive one that it does.
+Where a refinement did locate its H, that measurement wins over the inference. The threshold scales
+with the formula (a difference of one H is noise in a formula carrying forty), and ammonium and
+organic hydrogen are skipped since they never sit on an oxygen. **Note-grade**: it speaks on 11 of
+115 corpus papers with a .cif, every one a structure whose H were not located, and says to check
+what the paper reports about how the sample was treated — the owner's point, that the confirmation
+is in prose a person reads rather than anything to code.
+
+Not yet done: the physical arbiters (Gladstone-Dale and density at the ideal water content) and the
+comparison against the ideal formula rather than the empirical one.
+
 ## [0.5.6] — 2026-09-07
 Every reading now says which oracle vouched for it, the tool's recall is measured for the first
 time, and the corpus harness runs in parallel (21 min → 5). Seven reported issues fixed.

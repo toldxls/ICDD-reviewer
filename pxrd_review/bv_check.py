@@ -1551,6 +1551,93 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
         L.append('no bond-valence table found in the manuscript (a header row with the cation labels)')
     return L
 
+# An oxygen receives about 2 v.u. from its cations. One that receives much less is holding a
+# hydrogen the refinement may never have located: about 1.0-1.3 for a hydroxyl, whose H supplies
+# the rest, and 0.2-0.5 for a water molecule, held by little else. Measured over 605 oxygen sites
+# in corpus structures that DID locate their hydrogens, the bands are:
+#     0 H   median 1.93   (10th-90th 1.53-2.10)
+#     1 H   median 1.16   (0.95-1.36)
+#     2 H   median 0.39   (0.00-1.00)
+# so these two thresholds put 89 % of those sites where the structure itself puts them. The O/OH
+# boundary is the sharp one; OH and H2O overlap, which is why the count below is reported as
+# hydrogen (where an error of one class costs one H) as well as by species.
+#
+# Scored again on 1165 sites whose LABEL states what they are (a refiner writes OH1, OW1, W1), the
+# error is ONE-SIDED, and that asymmetry is what any check built on this must respect:
+#     a hydroxyl or water called ordinary oxygen    7 of 221   (0 of 77 in well-behaved structures)
+#     an ordinary oxygen called hydrous           184 of 944   (19 %, and no better when gated on
+#                                                               the structure's own valence index)
+# So the count is a RELIABLE statement that a site holds no hydrogen, and only a SUGGESTIVE one
+# that it does: read as a ceiling on the hydrogen a structure can hold, never as a measurement of
+# it. A cation site left out of the refinement, or a partly occupied one, leaves its oxygens
+# under-bonded and indistinguishable from hydroxyls.
+WATER_MAX = 0.5          # below this an oxygen is a water molecule
+HYDROXYL_MAX = 1.5       # below this it is a hydroxyl
+
+
+def water_from_structure(st, result, cells):
+    """How much hydrogen the STRUCTURE holds, from the anion bond-valence sums — countable whether
+    or not the refinement located the H. -> {'H', 'OH', 'H2O', 'Z', 'sites': [(label, sum, kind)],
+    'located': n_H_the_cif_actually_has or None} per FORMULA UNIT, or None when it cannot be scaled.
+
+    Z comes from the .cif's own `_chemical_formula_sum`: an element's total over the cell (Σ mult ×
+    occupancy) divided by its count in that formula is Z, and the median over the elements is taken
+    so one odd site cannot move it."""
+    h_labels = {r[0].label for r in result if r[0].element == 'H'}
+    cat = {}
+    for (an, c), segs in cells.items():
+        if c in h_labels:
+            continue
+        cat[an] = cat.get(an, 0.0) + sum(s * (n2 if isinstance(n2, int) else 1) for s, _n, n2 in segs)
+    sites = []
+    n_oh = n_w = 0.0
+    for a in st.anions:
+        if a.element != 'O':
+            continue
+        v = cat.get(a.label, 0.0)
+        kind = 'H2O' if v < WATER_MAX else 'OH' if v < HYDROXYL_MAX else 'O'
+        sites.append((a.label, round(v, 2), kind))
+        w = a.mult * min(a.occ_total, 1.0)
+        if kind == 'H2O':
+            n_w += w
+        elif kind == 'OH':
+            n_oh += w
+    z = _z_from_formula(st)
+    if not z:
+        return None
+    # what the .cif itself says, where its H were located — the score this can be checked against
+    located = None
+    if any(s.element == 'H' for s in st.sites):
+        located = sum(s.mult * min(s.occ_total, 1.0) for s in st.sites if s.element == 'H') / z
+    return {'H': round((n_oh + 2 * n_w) / z, 2), 'OH': round(n_oh / z, 2), 'H2O': round(n_w / z, 2),
+            'Z': z, 'sites': sites, 'located': None if located is None else round(located, 2)}
+
+
+def _z_from_formula(st):
+    """Z, from the cell's site totals against the .cif's own formula sum. None when the two cannot
+    be reconciled (no formula, or the elements disagree about the ratio)."""
+    import statistics
+    want = {}
+    for el, num in re.findall(r'([A-Z][a-z]?)\s*(\d*\.?\d*)', st.formula or ''):
+        if el in ELEMENTS:
+            want[el] = want.get(el, 0.0) + (float(num) if num else 1.0)
+    if not want:
+        return None
+    have = {}
+    for s_ in st.sites:
+        for sp in s_.species:
+            if sp.element:
+                have[sp.element] = have.get(sp.element, 0.0) + s_.mult * sp.occ
+    ratios = [have[el] / want[el] for el in want
+              if el != 'H' and want.get(el, 0) >= 0.5 and have.get(el)]
+    if len(ratios) < 2:
+        return None
+    z = statistics.median(ratios)
+    if z < 0.5 or max(abs(r - z) for r in ratios) > 0.25 * z:   # the elements disagree: no single Z
+        return None
+    return round(z)
+
+
 def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_anions=True):
     """Findings about bond-valence SUMS printed one per site (a BVS column of the coordinates or
     bond-distance table): each site's value against the sum computed from the .cif. A cation sum
