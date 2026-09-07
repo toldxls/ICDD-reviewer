@@ -48,7 +48,7 @@ def _rules(exc, path):
         pkg = {'fitz': 'PyMuPDF', 'docx': 'python-docx', 'flask': 'Flask',
                'lxml': 'lxml'}.get(mod, mod or 'a required package')
         yield (True, '%s is not installed.' % pkg,
-               'Run: pip3 install -r requirements.txt   (or: pip3 install %s)' % pkg)
+               'Run: pip3 install %s   (a source checkout can use: pip3 install -r requirements.txt)' % pkg)
 
     if isinstance(exc, AttributeError) and 'add_comment' in msg:
         yield (True,
@@ -63,8 +63,8 @@ def _rules(exc, path):
 
     if 'mindat' in msg.lower() and ('key' in msg.lower() or '401' in msg or '403' in msg):
         yield (True, 'the Mindat API rejected the key (missing, expired, or wrong).',
-               'Put a valid key in .mindat_key or $MINDAT_API_KEY, then: '
-               'python3 -m pxrd_review.mindat --refresh')
+               'Put a valid key in .mindat_key or $MINDAT_API_KEY, then run: pxrd refresh   '
+               '(the launcher works on every platform; `python3` does not exist on Windows).')
 
 
 def explain(exc, path=None):

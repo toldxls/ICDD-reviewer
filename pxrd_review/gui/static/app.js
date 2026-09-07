@@ -70,7 +70,7 @@ const mantissa = s => (s == null ? '' : String(s).replace(/\(.*$/, '').trim()); 
 async function loadEntries() {
   clearTimeout(S.pollTimer);
   const r = await fetch('/api/entries').then(x => x.json());
-  const parts = (r.folder || '').split('/').filter(Boolean);
+  const parts = (r.folder || '').split(/[\\/]/).filter(Boolean);   // either separator: a Windows path never split on '/' alone, so the chip showed the whole path
   $('#folder').textContent = (parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/');
   $('#folder-ctl').title = (r.folder || '') + '  — click to change folder';
   $('#folder').dataset.path = r.folder || '';             // the bare path (the title is decorated)
@@ -913,6 +913,12 @@ function renderPdf(snippet, snipLabel, hlTerms) {
   if (S.pdfIO) { S.pdfIO.disconnect(); S.pdfIO = null; }
   if (!a.pdf) {
     view.innerHTML = '<div class="empty muted">no .pdf paired for this entry</div>';
+    $('#pdf-pager').innerHTML = ''; $('#pdf-snippet').innerHTML = '';
+    return;
+  }
+  if (a.pdf.unreadable) {          // the page scan timed out or the decoder crashed: say so rather
+    view.innerHTML = '<div class="empty muted">could not read this .pdf — the page scan timed out '  // than build zero page slots and look merely empty
+      + 'or the decoder failed. Reopening the entry tries again.</div>';
     $('#pdf-pager').innerHTML = ''; $('#pdf-snippet').innerHTML = '';
     return;
   }

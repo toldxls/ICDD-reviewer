@@ -117,8 +117,11 @@ class _RunLock:
                 self.held = True
                 return True
             except FileExistsError:
-                stale = (not self._owner_alive() or
-                         time.time() - os.path.getmtime(self.path) > self.STALE_S)
+                try:                          # the owner can release between these two calls
+                    age = time.time() - os.path.getmtime(self.path)
+                except OSError:
+                    continue                  # gone already — go round and take it
+                stale = not self._owner_alive() or age > self.STALE_S
                 if not stale:
                     return False
                 try:                          # abandoned by a dead run — reclaim it
@@ -1254,15 +1257,26 @@ def main():
     # Single writer per output folder (see _RunLock): the GUI's 'Rerun all' and a terminal run
     # on the same folder would otherwise interleave writes to the same docx and corrupt it
     # without saying so. --inplace writes to the SOURCE folder, so lock that instead.
-    lock = _RunLock(os.path.dirname(docs[0]) if args.inplace else out_dir)
-    if not lock.acquire():
-        sys.exit("another annotate_review run is already writing to this folder (lock: %s).\n"
-                 "Wait for it to finish, or — if no run is active — delete that lock file."
-                 % lock.path)
+    # --inplace writes to the SOURCE folders, and discover() is recursive, so a run can touch
+    # several: lock EVERY directory that holds a discovered docx, not just the first one's.
+    # Sorted, so two runs contending over the same set take them in the same order and one of
+    # them simply loses the first lock instead of the two deadlocking half-way in.
+    targets = sorted({os.path.dirname(d) for d in docs}) if args.inplace else [out_dir]
+    locks = []
+    for t in targets:
+        lk = _RunLock(t)
+        if not lk.acquire():
+            for held in locks:
+                held.release()
+            sys.exit("another annotate_review run is already writing to this folder (lock: %s).\n"
+                     "Wait for it to finish, or — if no run is active — delete that lock file."
+                     % lk.path)
+        locks.append(lk)
     try:
         _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage)
     finally:
-        lock.release()
+        for lk in locks:
+            lk.release()
 
 def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
     records = []           # (filename, rec) for the log

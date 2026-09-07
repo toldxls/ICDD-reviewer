@@ -16,9 +16,8 @@ annotate_review.analyze() verbatim (the single source of truth) and never writes
 
 Point it at NEW-format ICDD batches only. An OLD Task-Group-format tree parses to empty
 structure — every entry lands in the report's 'old-template' column and its check results
-are meaningless — so do NOT use such a tree as a drift corpus. (Locally: the 'training/'
-corpus is a valid drift corpus; the sibling 'training 2/' is the old format, kept only as
-PDF-training material — do not sweep it.)
+are meaningless — so do NOT use such a tree as a drift corpus. Check the report's header: a
+batch that lands wholly in the 'old-template' column is the wrong tree to sweep.
 
 Usage:
     python3 -m pxrd_review.sweep "<folder>"               # report + snapshot + diff vs last

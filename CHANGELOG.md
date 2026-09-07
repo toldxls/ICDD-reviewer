@@ -262,6 +262,37 @@ record (`--papers`, `--baseline`): tables checked 44 → 46, clean tables 10 →
   wt% reading itself in doubt the column only "sides with the wt% read — worth a look [unverified]";
   a column that differs from a formula the wt% reproduce is a note.
 
+### Fixed — five reported issues from the 0.3.x review pass (2026-09-07, issues #2 #3 #4 #7 #8)
+- **The old two-column template's instrument fields were read as the next field's label** (#2). That
+  template puts `Label : Value` in one cell, so taking the cell after the label returned the
+  following field's name, and every instrument-dependent check found nothing it recognised and
+  abstained. The entry then reported clean, which is indistinguishable from checked-and-fine. A
+  field's value now comes from its own cell when it carries one, and from the next cell only when
+  that cell is not itself a label. The radiation block only ever matched the new template's
+  `Radiation=` spelling, so on the old one the anode stayed blank and the checks that did run
+  reported "measured but no radiation stated" on nearly every entry; it matches both now.
+  Measured: 644 of 662 old-template entries go from holding a label to holding a real controlled
+  vocabulary value, 508 of them Diffractometer; 0 of 127 new-template entries change; the newly
+  live checks find a Debye-Scherrer that should be a diffractometer in 8 entries and a
+  'Diffractomter' typo in one.
+- **A failed PDF page scan was cached as an answer of zero pages** (#3). The pane then built zero
+  page slots and looked merely empty, with a pdf ✓ badge, and it survived restarts. A scan that
+  returns no pages is marked unreadable, is not cached, and the pane says so.
+- **`/api/entries` read the shared state without the lock** (#4). A folder switch during the 1.2 s
+  poll raised an unhandled KeyError, the poll 500'd and was never rescheduled, and the dashboard
+  sat showing the old folder until a reload. It now snapshots under the lock and stats outside it,
+  and an entry that disappears mid-poll is skipped rather than fatal. The same fix for the cache
+  write, which was serialising a live dict and losing `gui_cache.json` to a swallowed error, and
+  for the analysis thread's progress line.
+- **`--inplace` locked only the first docx's folder** (#7), while discovery is recursive. Every
+  directory holding a discovered docx is locked now, in sorted order so two runs cannot deadlock.
+  The lock's staleness test also stat'd a file that the owner could delete between the two calls.
+- **Windows polish** (#8): the folder chip splits on either separator so a Windows path shortens;
+  the Mindat remedy offers `pxrd refresh` rather than a `python3` that does not exist there; the
+  missing-dependency remedies no longer assume a `requirements.txt` on disk; the sweep docstring no
+  longer names the maintainer's local corpora; and `requirements.txt` stops calling two
+  unconditional dependencies optional.
+
 ### Fixed — a stale verdict no longer overturns the reviewer's decision (2026-09-07, issue #1)
 Triage is keyed by the docx stem, and which copy `discover` picks for an entry changes mid-review,
 so records for one entry pile up under several stems and are merged. The merge took the strongest

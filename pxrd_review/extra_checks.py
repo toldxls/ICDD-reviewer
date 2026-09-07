@@ -131,28 +131,28 @@ def parse_entry(path):
         if section == 'SubFiles' and len(r) == 3 and r[1].strip() and r[1].strip() != 'Chemical Class':
             subfiles.append((r[1].strip(), r[2].strip()))
         # --- instrumentation
-        if hk.startswith('Radiation='):
-            instr['anode'] = r[1].strip() if len(r) > 1 else ''
-            for i, x in enumerate(r):
-                xs = _ns(x).lower()
-                if xs.startswith('l=') and i + 1 < len(r):
-                    instr['lam'] = _ns(r[i + 1])
-                if xs.startswith('standard') and i + 1 < len(r):
-                    instr['standard'] = r[i + 1].strip()
-                if xs.startswith('filter:') and i + 1 < len(r):
-                    instr['filter'] = r[i + 1].strip()
-                if xs.startswith('filtertype') and i + 1 < len(r):
-                    instr['filtertype'] = r[i + 1].strip()
+        if hk.startswith('Radiation=') or hk.startswith('Radiation:'):
+            instr['anode'] = _field_value(r[0], r, 0)
+        for i, x in enumerate(r):                      # each label carries its value in the new
+            xs = _ns(x).lower()                        # template's next cell or the old one's own
+            if xs.startswith(('l=', 'l:', 'λ=', 'λ:')):
+                instr['lam'] = _ns(_field_value(x, r, i))
+            if xs.startswith('standard'):
+                instr['standard'] = _field_value(x, r, i)
+            if xs.startswith('filter:') or xs.startswith('filter='):
+                instr['filter'] = _field_value(x, r, i)
+            if xs.startswith('filtertype'):
+                instr['filtertype'] = _field_value(x, r, i)
         for i, x in enumerate(r):
             xs = _ns(x)
-            if xs.startswith('SpacingInstr') and i + 1 < len(r):
-                instr['spacing_instr'] = r[i + 1].strip()
-            if xs.startswith('IntensityInstr') and i + 1 < len(r):
-                instr['intensity_instr'] = r[i + 1].strip()
-            if xs.startswith('IntensityType') and i + 1 < len(r):
-                instr['intensity_type'] = r[i + 1].strip()
-            if xs.startswith('CameraDiameter') and i + 1 < len(r):
-                instr['camera'] = r[i + 1].strip()
+            if xs.startswith('SpacingInstr'):
+                instr['spacing_instr'] = _field_value(x, r, i)
+            if xs.startswith('IntensityInstr'):
+                instr['intensity_instr'] = _field_value(x, r, i)
+            if xs.startswith('IntensityType'):
+                instr['intensity_type'] = _field_value(x, r, i)
+            if xs.startswith('CameraDiameter'):
+                instr['camera'] = _field_value(x, r, i)
         # --- comments section: Desc code -> text
         if section == 'Comments' and len(r) >= 2 and h and h != 'Desc.':
             comments[h] = _sq(r[1])
@@ -169,6 +169,34 @@ def parse_entry(path):
 
     return Entry(name, primary, subfiles, formulas, crystal_system, space_group,
                  cell, instr, comments, refl, rows)
+
+_LABEL_CELL = re.compile(r'^[A-Za-zλ][A-Za-z0-9 ./+\-]{0,28}\s*[:=]')   # 'FilterType :', 'I/Ic :', 'Radiation ='
+
+def _field_value(cell, row, i):
+    """The value of a 'Label : Value' field, from whichever cell actually holds it.
+
+    The template the tool targets puts the label and the value in SEPARATE cells, so the value is
+    the next cell. The older two-column ICDD template puts both in ONE cell — 'Intensity Instrument
+    : Diffractometer' — and reading the next cell there returns the FOLLOWING field's label. Every
+    instrument-dependent check then recognised nothing and abstained, and the entry was reported
+    clean, which is indistinguishable from checked-and-fine: 644 of 662 old-template entries in the
+    corpus handed at least one instrument check another field's name.
+
+    So: take the text after the colon in the label's own cell when there is any, else the next cell.
+    A new-template label cell is either bare or ends at its colon, so it falls through unchanged."""
+    for sep in (':', '='):
+        if sep in cell:
+            tail = cell.split(sep, 1)[1].strip()
+            if tail:
+                return tail
+            break
+    nxt = row[i + 1].strip() if i + 1 < len(row) else ''
+    # An empty value falls through to the next cell only if that cell holds a VALUE. In the old
+    # template the neighbour is the next field's own 'Label :', and taking it was the whole bug:
+    # 'Filter :' would read as 'FilterType :' and 'Standard :' as 'Spacing Instrument : …'.
+    if nxt and _LABEL_CELL.match(nxt):
+        return ''
+    return nxt
 
 # ----------------------------------------------------------------------------- numeric helpers
 def _val(s):

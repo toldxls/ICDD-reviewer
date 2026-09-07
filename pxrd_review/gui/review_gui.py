@@ -55,8 +55,9 @@ C.set_pdf_reader(_worker_pdf_reader)
 try:
     from flask import Flask, jsonify, request, send_file, abort, Response, redirect
 except ImportError:
-    sys.exit("Flask is not installed — run: pip3 install -r requirements.txt "
-             "(the GUI needs Flask; the CLI checks do not).")
+    sys.exit("Flask is not installed — run: pip3 install Flask "
+             "(the GUI needs Flask; the CLI checks do not). A wheel install has no "
+             "requirements.txt on disk; reinstalling from /releases/latest also fixes it.")
 
 HERE = os.path.dirname(os.path.abspath(__file__))   # the packaged gui/ folder (assets live here)
 app = Flask(__name__, static_folder=os.path.join(HERE, 'static'),
@@ -364,8 +365,14 @@ def _serialize(key):
                 if t and t not in terms:
                     terms.append(t)
         npages, evp = _pdf_scan(pdf, terms)
+        # A worker timeout or a malformed-image crash returns 0 pages. Storing that would cache a
+        # failure as an answer: the pane builds zero page slots, the pager reads 'p.1 / 0', the
+        # badge still says pdf ✓, and it survives restarts because gui_cache.json keeps it until
+        # an mtime changes. Report it as unreadable instead, and let the next open try again.
         pdfinfo = {'name': os.path.basename(pdf), 'pages': npages,
                    'evidence_page': evp, 'terms': terms}
+        if not npages:
+            pdfinfo['unreadable'] = True
 
     clean = A._is_clean(res)
     severe = A._is_severe(res)
@@ -520,6 +527,9 @@ def get_analysis(key, force=False):
         if not force and c and c.get('fp') == fp:
             return c['data']
         data = _serialize(key)
+        if ((data.get('pdf') or {}).get('unreadable')):
+            return data              # a scan that timed out is not an answer: hand it back, but do not
+                                     # cache it, so reopening the entry retries instead of pinning the failure
         STATE['cache'][key] = {'fp': fp, 'data': data}
         return data
 
@@ -536,8 +546,10 @@ def _load_cache():
 def _save_cache():
     try:
         os.makedirs(STATE['out_dir'], exist_ok=True)
-        with open(_cache_path(), 'w', encoding='utf-8') as f:
-            json.dump(STATE['cache'], f)
+        with STATE['lock']:                             # a live dict serialised while the analysis thread
+            snapshot = dict(STATE['cache'])             # writes it raises 'changed size during iteration',
+        with open(_cache_path(), 'w', encoding='utf-8') as f:   # which the except below swallowed — so the
+            json.dump(snapshot, f)                      # cache was never written and every launch re-analysed
     except Exception as ex:
         print('  !! could not write gui_cache.json: %s' % ex)
 
@@ -724,8 +736,12 @@ def analyze_all(gen=None):
                             if x['level'] in ('danger', 'warn'))
         except Exception as ex:
             tags = '!! ' + str(ex)
+        try:                                            # a folder switch can retire the entry between
+            eid = C.entry_id(STATE['docx'][key]) or '?'  # the analysis and this line — a progress print
+        except KeyError:                                 # must not take the whole pass down with it
+            continue
         print('  [%2d/%2d] %-9s %-34s %s'
-              % (i, n, C.entry_id(STATE['docx'][key]) or '?',
+              % (i, n, eid,
                  (STATE['cache'].get(key, {}).get('data', {}).get('name') or key)[:34], tags))
     if gen is None or STATE.get('gen') == gen:
         _save_cache()
@@ -794,9 +810,19 @@ def api_entries():
     a lightweight row (name/id/files, no badges) so the list renders instantly. `pending` counts
     the un-analysed ones — the dashboard polls until it reaches 0."""
     rows, pending = [], 0
-    for key in STATE['order']:
-        c = STATE['cache'].get(key)
-        if c and c.get('fp') == _fingerprint(key):      # already analysed (source unchanged)
+    # Snapshot under the lock. build_index installs a NEW STATE['docx'] and STATE['order'] on a
+    # folder switch, and this runs on a 1.2 s poll, so iterating the live dicts raced exactly when
+    # a reviewer clicked Open: _fingerprint hit a KeyError, the poll 500'd, the client's .json()
+    # rejected, the poll was never rescheduled, and the dashboard sat showing the old folder.
+    with STATE['lock']:
+        order = list(STATE['order']); cache = dict(STATE['cache'])
+    for key in order:
+        c = cache.get(key)
+        try:
+            fp = _fingerprint(key)                       # stats four files: done outside the lock
+        except KeyError:
+            continue                                    # the folder switched mid-poll — the entry is gone; the next poll has the new one
+        if c and c.get('fp') == fp:                     # already analysed (source unchanged)
             rows.append(_row(key, c['data']))
         else:
             rows.append(_row(key)); pending += 1
