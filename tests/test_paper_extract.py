@@ -141,25 +141,33 @@ class GladstoneDale(unittest.TestCase):
     does the completeness heuristic speak — and then it says whether the fault is a reading this
     tool could not complete (nooracle, with the reason) or a real disagreement (unverified).
 
-    SiO2 46.0 + MgO 34.0 + H2O 20.0 gives K_C 0.2402; with n 1.560 that is D 2.332 for an index of
-    zero, and the tests set the paper's own index to match."""
+    The density is derived from K_C rather than written down, so a revision to the constants file
+    cannot quietly turn these into tests of nothing."""
     ROWS = (('SiO2', 46.0), ('MgO', 34.0), ('H2O', 20.0))
 
-    def ex(self, rows=None, n=1.560, D=2.332):
+    @classmethod
+    def setUpClass(cls):
+        from pxrd_review import gd as GD
+        cls.KC = GD.kc(dict(cls.ROWS))[0]
+        cls.n = 1.560
+        cls.D = (cls.n - 1) / cls.KC              # the density at which 1 - K_P/K_C is exactly zero
+
+    def ex(self, rows=None, n=None, D=None):
         rows = self.ROWS if rows is None else rows
         return {'name': 'testite',
-                'optics': {'n': n, 'n_from': 'mean of a b g', 'D_meas': D, 'D_calc': None, 'sentences': []},
+                'optics': {'n': self.n if n is None else n, 'n_from': 'mean of a b g',
+                           'D_meas': self.D if D is None else D, 'D_calc': None, 'sentences': []},
                 'epma': {'rows': [{'constituent': c, 'mean': v} for c, v in rows],
                          'total': round(sum(v for _c, v in rows), 2), 'header': 'Constituent wt%'}}
 
+    STATED = {'ci': 0.0, 'category': None, 'sentence': ''}
+
     def test_the_analytical_table_stands_in_for_an_incomplete_reduction(self):
-        # the composition check reduced on SiO2 alone; K_C from that is a quarter of the truth, and
+        # the composition check reduced on SiO2 alone; K_C from that is a fraction of the truth, and
         # the index it gives is nowhere near the paper's. The paper's own table reproduces it.
-        ex = self.ex()
-        stmt = {'ci': 0.0, 'category': None, 'sentence': ''}
-        out = PE.gd_check(ex, {'wt': {'SiO2': 46.0}}, stmt)
+        out = PE.gd_check(self.ex(), {'wt': {'SiO2': 46.0}}, self.STATED)
         self.assertEqual(out['status']['optics.n'], 'agrees')
-        self.assertAlmostEqual(out['KC'], 0.2402, places=3)
+        self.assertAlmostEqual(out['KC'], self.KC, places=4)
 
     def test_an_analysis_in_elements_is_converted_to_its_oxides(self):
         from pxrd_review import gd as GD
@@ -173,30 +181,28 @@ class GladstoneDale(unittest.TestCase):
         self.assertIsNone(PE._as_oxides({'SiO2': 46.0, 'MgO': 34.0}, GD.constants()))
 
     def test_a_constituent_with_no_constant_is_a_limitation_not_a_doubt(self):
-        ex = self.ex(rows=(('SiO2', 46.0), ('Pr2O3', 34.0), ('H2O', 20.0)))
-        out = PE.gd_check(ex, {'wt': {'SiO2': 46.0, 'Pr2O3': 34.0, 'H2O': 20.0}},
-                          {'ci': 0.0, 'category': None, 'sentence': ''})
+        rows = (('SiO2', 46.0), ('Xy2O3', 34.0), ('H2O', 20.0))
+        out = PE.gd_check(self.ex(rows=rows), {'wt': dict(rows)}, self.STATED)
         self.assertEqual(out['status']['optics.n'], 'nooracle')
-        self.assertIn('Pr2O3', out['detail'])
+        self.assertIn('Xy2O3', out['detail'])
 
     def test_an_analysis_short_of_its_own_printed_total_is_a_limitation(self):
         ex = self.ex()
         ex['epma']['rows'] = [{'constituent': 'SiO2', 'mean': 46.0}]     # the H2O and MgO rows were missed
         ex['epma']['total'] = 100.0                                       # but the table prints its own total
-        out = PE.gd_check(ex, {'wt': {'SiO2': 46.0}}, {'ci': 0.0, 'category': None, 'sentence': ''})
+        out = PE.gd_check(ex, {'wt': {'SiO2': 46.0}}, self.STATED)
         self.assertEqual(out['status']['optics.n'], 'nooracle')
         self.assertIn('100.0 %', out['detail'])
 
     def test_a_complete_analysis_that_still_misses_is_a_doubt(self):
         # every constituent has a constant and the whole adds to 100: nothing excuses the gap, so
         # it stays a doubt about the paper's numbers
-        out = PE.gd_check(self.ex(n=1.90), {'wt': dict(self.ROWS)},
-                          {'ci': 0.0, 'category': None, 'sentence': ''})
+        out = PE.gd_check(self.ex(n=1.90), {'wt': dict(self.ROWS)}, self.STATED)
         self.assertEqual(out['status']['optics.n'], 'unverified')
         self.assertIn('this gives', out['detail'])
 
     def test_the_densities_take_the_same_verdict_as_the_index(self):
-        out = PE.gd_check(self.ex(), {'wt': dict(self.ROWS)}, {'ci': 0.0, 'category': None, 'sentence': ''})
+        out = PE.gd_check(self.ex(), {'wt': dict(self.ROWS)}, self.STATED)
         self.assertEqual(out['status']['optics.n'], 'agrees')
         self.assertEqual(out['status']['optics.D_meas'], 'agrees')
         self.assertEqual(out['status']['optics.D_calc'], 'nooracle')      # the paper gives no calculated density

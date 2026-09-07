@@ -424,6 +424,15 @@ gate it reproduced 98 % of the `.cif`'s cation sums on the corpus papers that ha
 against 74 % ungated. Above it and up to 0.35 v.u. the reading is reported as a doubt. Anion sums are never
 compared this way — they need site multiplicities a bond table does not print.
 
+**The constants.** `data/gd_constants.json` carries all 117 usable entries of Mandarino (1981),
+Can. Mineral. 19, 441–450, Table 7 — the table that paper says should replace all former constants —
+each with his own reliability indicator and, where Table 7 prints one, the alternative value for a
+class of minerals (Al2O3 0.242 for sulfates and selenates, Fe2O3 0.268 for silicates, and so on);
+`--k SiO2=0.209` overrides any of them. Two entries were the owner's spreadsheet values and were
+changed on corpus evidence: UO3 0.134 → 0.118, which reproduces the published compatibility index of
+12 of the 22 corpus papers carrying UO3 against 5 for the old value, and MgO 0.225 → 0.200. Both old
+values are kept in the file and reachable with `--k`.
+
 **Gladstone–Dale, and what "unverified" is allowed to mean.** K_C is a weighted mean over the whole
 analysis, so a set of constituents short of it gives a K_C short in the same proportion and an index
 nowhere near the paper's. Every wt% set the paper offers is tried — the one the composition check

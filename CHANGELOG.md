@@ -100,6 +100,44 @@ oracle at all now have a verdict, one of them a real finding (a paper citing Bre
 table is Brown & Altermatt: 1 cell of 26 differs under the latter, 9 under the former), and 11 more
 get a note. Validation harness: `tools/corpus_paper_bonds.py`.
 
+### Added — the Gladstone–Dale constants, from the printed table at last
+`data/gd_constants.json` held 65 constants, a third of them tagged "check" because they had been
+recalled rather than read, and it had none at all for ammonium or for the rare earths beyond La, Ce,
+Nd and Y. It now carries all 117 usable entries of **Mandarino (1981), Can. Mineral. 19, 441–450,
+Table 7** — the table that paper says "should replace all former constants" — transcribed from the
+scan the owner supplied and checked three ways: every row's printed molecular weight against the one
+computed from its formula (all 114 agree; Pm2O3's 342 against 338 is the paper's own figure,
+promethium having no stable isotope), sixteen values against the paper's own abstract, and the whole
+file against the corpus.
+
+Each entry now carries Mandarino's reliability indicator (H/M/L, or `?` for a value he derived by
+extrapolation) and, where Table 7 prints one, the alternative value for a named class of minerals —
+Al2O3 0.242 for sulfates and selenates and 0.176 for neso- and inosilicates, Fe2O3 0.268 for
+silicates, and so on. Nothing chooses between those automatically; `--k` picks one.
+
+**53 constants added** and **23 values corrected.** Two of the corrections were the owner's own
+spreadsheet values, and both were settled by measurement rather than by deference:
+
+| | file | Table 7 | papers reproducing their own published index |
+|---|---|---|---|
+| UO3 | 0.134 | **0.118** | 12 of the 22 corpus papers whose analysis carries UO3, against 5 |
+| MgO | 0.225 | **0.200** | one more |
+
+The 0.134 the spreadsheets use for uranyl minerals is not in Table 7, and nine papers reproduce
+their own index with 0.118 where they do not with 0.134 (two go the other way, including the owner's
+spanoite sheet). Both former values are kept as variants and `--k UO3=0.134` still reaches them —
+`tests.test_gd` pins that route so the old sheets stay reproducible. **This one is worth the owner's
+eye**: it is a working convention overturned on corpus evidence, not a typo.
+
+Also corrected: Mn2O3 0.153 → 0.301 (0.153 is Bi2O3's value, so the old entry looks like a
+transposition), WO3 0.152 → 0.171 and P2O5, SeO2, TeO2, TeO3 — the five revisions Mandarino's
+abstract names explicitly — and Fe2O3, Cr2O3, NiO, CoO, Nb2O5, As2O3, Sb2O3, CO2, F, Cl, Br and the
+rest of the 1976 values Table 7 supersedes.
+
+With the constants in, `optics.n` goes from 45 % verified to **57 %** (110 → 146 of the 255 papers
+that read an index): the whole of what was left of "no Gladstone–Dale constant for …" is gone but
+three papers, and those three tabulate their analysis in elements for a sulfide or an organic.
+
 ### Fixed — Gladstone–Dale said "unverified" where it meant "could not read the analysis"
 94 papers read a refractive index, a density and an analytical table and still would not verify, and
 the fault was in K_C, not in the papers. K_C is a weighted mean over the WHOLE analysis, so a set of
@@ -115,9 +153,8 @@ the reason ("the analysis as read totals 80 % against the 99.7 % the table itsel
 Gladstone-Dale constant for Pr2O3, Sm2O3") or `unverified`, a real disagreement with the paper.
 
 On the corpus: `optics.n` 43 % → 45 %, `D_meas` 58 % → 71 %, `D_calc` 62 % → 70 %, and 61 doubts
-about papers become statements about this tool's own limits. The largest of those limits is data,
-not code — `data/gd_constants.json` has no (NH4)2O and none of the rare-earth sesquioxides beyond
-La, Ce, Nd and Y, which is 30 of the papers that still cannot be checked.
+about papers become statements about this tool's own limits. The largest of those limits was data,
+not code — and the constants above supply it, taking `optics.n` the rest of the way to 57 %.
 
 ## [0.5.6] — 2026-09-07
 Every reading now says which oracle vouched for it, the tool's recall is measured for the first

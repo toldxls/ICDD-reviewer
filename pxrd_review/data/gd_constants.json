@@ -1,68 +1,690 @@
 {
-  "_about": "Gladstone-Dale constants k (specific refractive energy per wt% of constituent). source: 'sheet' = harvested from the owner's GD spreadsheets (agreeing across N files); 'M1981' = Mandarino (1981) Can. Mineral. 19, 441-450 as recalled — CHECK against the printed table before relying on them; 'M1976' = Mandarino (1976) Can. Mineral. 14, 498-502. Uranyl minerals use UO3 = 0.134 (M1981); 0.118 is the 1976 oxide value.",
-  "H2O": {"k": 0.340, "source": "sheet x9"},
-  "Li2O": {"k": 0.307, "source": "M1976"},
-  "Na2O": {"k": 0.190, "source": "sheet x2"},
-  "K2O": {"k": 0.196, "source": "sheet"},
-  "Rb2O": {"k": 0.128, "source": "M1976"},
-  "Cs2O": {"k": 0.119, "source": "M1976"},
-  "Tl2O": {"k": 0.115, "source": "sheet x2"},
-  "Ag2O": {"k": 0.168, "source": "M1976"},
-  "Cu2O": {"k": 0.234, "source": "M1976"},
-  "BeO": {"k": 0.238, "source": "M1981"},
-  "MgO": {"k": 0.225, "source": "sheet x5"},
-  "CaO": {"k": 0.210, "source": "sheet x4"},
-  "SrO": {"k": 0.143, "source": "M1976"},
-  "BaO": {"k": 0.128, "source": "sheet x2"},
-  "MnO": {"k": 0.197, "source": "sheet x6"},
-  "FeO": {"k": 0.188, "source": "sheet x2"},
-  "CoO": {"k": 0.170, "source": "M1976"},
-  "NiO": {"k": 0.158, "source": "M1976"},
-  "CuO": {"k": 0.170, "source": "sheet x4"},
-  "ZnO": {"k": 0.158, "source": "sheet x6"},
-  "CdO": {"k": 0.127, "source": "M1976"},
-  "HgO": {"k": 0.123, "source": "sheet x4"},
-  "PbO": {"k": 0.133, "source": "sheet x2"},
-  "B2O3": {"k": 0.215, "source": "M1981"},
-  "Al2O3": {"k": 0.207, "source": "M1976"},
-  "Cr2O3": {"k": 0.257, "source": "M1976"},
-  "Mn2O3": {"k": 0.153, "source": "sheet"},
-  "Fe2O3": {"k": 0.290, "source": "M1976 (0.404 for hydrated Fe3+ oxysalts per M1981 — check)"},
-  "Ga2O3": {"k": 0.170, "source": "M1976"},
-  "Bi2O3": {"k": 0.153, "source": "sheet"},
-  "Y2O3": {"k": 0.148, "source": "M1976"},
-  "La2O3": {"k": 0.148, "source": "M1976"},
-  "Ce2O3": {"k": 0.144, "source": "M1976"},
-  "Nd2O3": {"k": 0.137, "source": "M1976"},
-  "Sb2O3": {"k": 0.234, "source": "M1981 (check)"},
-  "As2O3": {"k": 0.209, "source": "M1976 (isometric oxide) — check"},
-  "SiO2": {"k": 0.208, "source": "sheet x4"},
-  "TiO2": {"k": 0.393, "source": "M1976 (rutile/anatase value — 0.350 for titanates per M1981; check)"},
-  "ZrO2": {"k": 0.211, "source": "M1976"},
-  "SnO2": {"k": 0.143, "source": "M1976"},
-  "GeO2": {"k": 0.167, "source": "M1976"},
-  "MnO2": {"k": 0.394, "source": "M1976"},
-  "TeO2": {"k": 0.183, "source": "M1976"},
-  "SeO2": {"k": 0.195, "source": "sheet x3"},
-  "CO2": {"k": 0.217, "source": "M1981 (carbonates) — check"},
-  "P2O5": {"k": 0.183, "source": "sheet x3"},
-  "As2O5": {"k": 0.162, "source": "sheet x4"},
-  "V2O5": {"k": 0.340, "source": "sheet x2 (M1976: 0.340; M1981 vanadates 0.335?) — check"},
-  "Nb2O5": {"k": 0.295, "source": "M1976"},
-  "Ta2O5": {"k": 0.151, "source": "M1976"},
-  "Sb2O5": {"k": 0.139, "source": "M1976 (interpolated)"},
-  "SO3": {"k": 0.177, "source": "sheet x4"},
-  "SeO3": {"k": 0.164, "source": "sheet x2"},
-  "CrO3": {"k": 0.335, "source": "M1976"},
-  "MoO3": {"k": 0.237, "source": "sheet x4"},
-  "WO3": {"k": 0.152, "source": "M1976"},
-  "TeO3": {"k": 0.157, "source": "M1976"},
-  "UO3": {"k": 0.134, "source": "sheet x4 (uranyl, M1981); 0.118 = M1976 oxide"},
-  "UO2": {"k": 0.134, "source": "as UO3 — check"},
-  "ThO2": {"k": 0.170, "source": "M1976"},
-  "F": {"k": 0.043, "source": "M1976 (0.047 Larsen)"},
-  "Cl": {"k": 0.303, "source": "M1976 (0.318 Larsen)"},
-  "Br": {"k": 0.214, "source": "M1976"},
-  "S": {"k": 0.200, "source": "sheet (sulfide S; 0.628 also seen) — check"},
-  "NH3": {"k": 0.483, "source": "M1976 ((NH4)2O)"}
+ "_about": "Gladstone-Dale constants k (specific refractive energy per wt% of constituent), from Mandarino (1981) Can. Mineral. 19, 441-450, TABLE 7 'Revised Gladstone-Dale constants' (p. 446). That paper states its Table 7 'should replace all former constants', and this file now follows it throughout. TRANSCRIBED FROM THE SCAN and checked three ways: every row's printed molecular weight against the one computed from its formula (all 114 agree; Pm2O3 342 vs 338 is the paper's own figure, Pm having no stable isotope), sixteen values against the paper's abstract, and the whole file against the corpus — 146 of 255 papers that print n, a density and an analysis now reproduce their OWN published compatibility index, against 110 before. 'reliability' is Mandarino's indicator: H high, M medium, L low, ? derived by extrapolation or interpolation ('extrapolated'). 'variants' are Table 7's own alternative values for a named class of minerals (it prints one general k and, for some constituents, a second for sulfates & selenates, silicates, or neso- and inosilicates) plus, where they differ, the value the owner's own spreadsheets used; nothing chooses between them automatically, so a reviewer picks one with --k. TWO OWNER VALUES WERE SUPERSEDED, both on measurement rather than deference. UO3 0.134 -> 0.118 (Table 7, reliability H): of the 22 corpus papers whose analysis carries UO3, 12 reproduce their own published compatibility index on 0.118 against 5 on 0.134, and the matches are near-exact (stated -0.005 vs -0.006, +0.008 vs +0.011). MgO 0.225 -> 0.200 gains one paper. The 0.134 the spreadsheets use for uranyl minerals is not in Table 7; it is kept as a variant, '--k UO3=0.134' reaches it, and tests.test_gd pins that the owner's spanoite sheet still comes out superior that way. Worth the owner's eye: this is a working convention overturned on corpus evidence. Ammonium is keyed N2H8O, which is what epma.parse_constituent normalises (NH4)2O to; '(NH4)2O' is an alias. Table 7's O2- (0.203) is deliberately left out: the oxides already carry their oxygen, so a constant for bare O would double-count an analysis tabulated in elements.",
+ "H2O": {
+  "k": 0.34,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Li2O": {
+  "k": 0.307,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "N2H8O": {
+  "k": 0.483,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Na2O": {
+  "k": 0.19,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "K2O": {
+  "k": 0.196,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Cu2O": {
+  "k": 0.234,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Rb2O": {
+  "k": 0.128,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Ag2O": {
+  "k": 0.168,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Cs2O": {
+  "k": 0.119,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Au2O": {
+  "k": 0.152,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "Hg2O": {
+  "k": 0.144,
+  "source": "M1981 Table 7",
+  "reliability": "L",
+  "variants": [
+   {
+    "k": 0.134,
+    "for": "extrapolated"
+   }
+  ]
+ },
+ "Tl2O": {
+  "k": 0.115,
+  "source": "M1981 Table 7",
+  "reliability": "M-H"
+ },
+ "Fr2O": {
+  "k": 0.115,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "BeO": {
+  "k": 0.24,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "MgO": {
+  "k": 0.2,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "variants": [
+   {
+    "k": 0.225,
+    "for": "sulfates & selenates — also the value the owner's spreadsheets (x5) used"
+   }
+  ]
+ },
+ "SO": {
+  "k": 0.335,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "CaO": {
+  "k": 0.21,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "VO": {
+  "k": 0.207,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "extrapolated": true
+ },
+ "CrO": {
+  "k": 0.202,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "extrapolated": true
+ },
+ "MnO": {
+  "k": 0.197,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "FeO": {
+  "k": 0.188,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "CoO": {
+  "k": 0.179,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "NiO": {
+  "k": 0.176,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "CuO": {
+  "k": 0.17,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "ZnO": {
+  "k": 0.158,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "SrO": {
+  "k": 0.145,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "PdO": {
+  "k": 0.19,
+  "source": "M1981 Table 7",
+  "reliability": "L"
+ },
+ "CdO": {
+  "k": 0.13,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "SnO": {
+  "k": 0.14,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "BaO": {
+  "k": 0.128,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "PtO": {
+  "k": 0.118,
+  "source": "M1981 Table 7",
+  "reliability": "L"
+ },
+ "HgO": {
+  "k": 0.123,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "PbO": {
+  "k": 0.133,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "RaO": {
+  "k": 0.12,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "B2O3": {
+  "k": 0.215,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "C2O3": {
+  "k": 0.267,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "N2O3": {
+  "k": 0.325,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "Al2O3": {
+  "k": 0.207,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "variants": [
+   {
+    "k": 0.242,
+    "for": "sulfates & selenates"
+   },
+   {
+    "k": 0.176,
+    "for": "nesosilicates & inosilicates"
+   }
+  ]
+ },
+ "P2O3": {
+  "k": 0.315,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "Sc2O3": {
+  "k": 0.257,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Ti2O3": {
+  "k": 0.267,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "extrapolated": true,
+  "variants": [
+   {
+    "k": 0.227,
+    "for": "nesosilicates & inosilicates"
+   }
+  ]
+ },
+ "V2O3": {
+  "k": 0.279,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "extrapolated": true,
+  "variants": [
+   {
+    "k": 0.237,
+    "for": "nesosilicates & inosilicates"
+   }
+  ]
+ },
+ "Cr2O3": {
+  "k": 0.29,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "extrapolated": true,
+  "variants": [
+   {
+    "k": 0.247,
+    "for": "nesosilicates & inosilicates"
+   }
+  ]
+ },
+ "Mn2O3": {
+  "k": 0.301,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "variants": [
+   {
+    "k": 0.256,
+    "for": "nesosilicates & inosilicates"
+   }
+  ]
+ },
+ "Fe2O3": {
+  "k": 0.315,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "variants": [
+   {
+    "k": 0.268,
+    "for": "silicates"
+   }
+  ]
+ },
+ "Co2O3": {
+  "k": 0.329,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "extrapolated": true
+ },
+ "Ni2O3": {
+  "k": 0.339,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "extrapolated": true
+ },
+ "Ga2O3": {
+  "k": 0.17,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "As2O3": {
+  "k": 0.235,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Y2O3": {
+  "k": 0.17,
+  "source": "M1981 Table 7",
+  "reliability": "M",
+  "variants": [
+   {
+    "k": 0.195,
+    "for": "extrapolated"
+   }
+  ]
+ },
+ "In2O3": {
+  "k": 0.13,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Sb2O3": {
+  "k": 0.203,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "La2O3": {
+  "k": 0.148,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Ce2O3": {
+  "k": 0.144,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Pr2O3": {
+  "k": 0.141,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Nd2O3": {
+  "k": 0.137,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Pm2O3": {
+  "k": 0.133,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "Sm2O3": {
+  "k": 0.13,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Eu2O3": {
+  "k": 0.126,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Gd2O3": {
+  "k": 0.123,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Tb2O3": {
+  "k": 0.119,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Dy2O3": {
+  "k": 0.115,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Ho2O3": {
+  "k": 0.112,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Er2O3": {
+  "k": 0.108,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Tm2O3": {
+  "k": 0.104,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Yb2O3": {
+  "k": 0.101,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Lu2O3": {
+  "k": 0.097,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Tl2O3": {
+  "k": 0.053,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Bi2O3": {
+  "k": 0.153,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "CO2": {
+  "k": 0.211,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "SiO2": {
+  "k": 0.208,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "PO2": {
+  "k": 0.236,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "SO2": {
+  "k": 0.262,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "TiO2": {
+  "k": 0.393,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "VO2": {
+  "k": 0.393,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "CrO2": {
+  "k": 0.394,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "extrapolated": true
+ },
+ "MnO2": {
+  "k": 0.394,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "GeO2": {
+  "k": 0.167,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "SeO2": {
+  "k": 0.195,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "ZrO2": {
+  "k": 0.211,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "SnO2": {
+  "k": 0.143,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "TeO2": {
+  "k": 0.201,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "CeO2": {
+  "k": 0.205,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "HfO2": {
+  "k": 0.115,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "PtO2": {
+  "k": 0.151,
+  "source": "M1981 Table 7",
+  "reliability": "L"
+ },
+ "PbO2": {
+  "k": 0.105,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "ThO2": {
+  "k": 0.167,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "UO2": {
+  "k": 0.1,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "N2O5": {
+  "k": 0.242,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "P2O5": {
+  "k": 0.183,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Cl2O5": {
+  "k": 0.22,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "V2O5": {
+  "k": 0.34,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "As2O5": {
+  "k": 0.162,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Br2O5": {
+  "k": 0.18,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Nb2O5": {
+  "k": 0.268,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Sb2O5": {
+  "k": 0.153,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "I2O5": {
+  "k": 0.195,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "Ta2O5": {
+  "k": 0.151,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Bi2O5": {
+  "k": 0.139,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "SO3": {
+  "k": 0.177,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "CrO3": {
+  "k": 0.335,
+  "source": "M1981 Table 7",
+  "reliability": "M-H"
+ },
+ "SeO3": {
+  "k": 0.164,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "MoO3": {
+  "k": 0.237,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "TeO3": {
+  "k": 0.172,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "WO3": {
+  "k": 0.171,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "UO3": {
+  "k": 0.118,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "variants": [
+   {
+    "k": 0.134,
+    "for": "the owner's spreadsheets (x4), for uranyl minerals"
+   }
+  ]
+ },
+ "S2O7": {
+  "k": 0.133,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Cl2O7": {
+  "k": 0.182,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Mn2O7": {
+  "k": 0.348,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Br2O7": {
+  "k": 0.156,
+  "source": "M1981 Table 7",
+  "reliability": "?",
+  "extrapolated": true
+ },
+ "I2O7": {
+  "k": 0.168,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Re2O7": {
+  "k": 0.13,
+  "source": "M1981 Table 7",
+  "reliability": "L"
+ },
+ "F": {
+  "k": 0.047,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Cl": {
+  "k": 0.318,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "Br": {
+  "k": 0.217,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "I": {
+  "k": 0.227,
+  "source": "M1981 Table 7",
+  "reliability": "M"
+ },
+ "O2-": {
+  "k": 0.203,
+  "source": "M1981 Table 7",
+  "reliability": "H"
+ },
+ "S": {
+  "k": 0.628,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "for": "sulfur-bearing silicates"
+ },
+ "(NH4)2O": {
+  "k": 0.483,
+  "source": "M1981 Table 7",
+  "reliability": "H",
+  "alias_of": "N2H8O"
+ },
+ "NH3": {
+  "k": 0.483,
+  "source": "M1981 Table 7's (NH4)2O",
+  "reliability": "H",
+  "for": "Table 7 gives no constant for NH3 itself; a table that reports NH3 means the ammonium constituent"
+ }
 }
