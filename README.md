@@ -13,27 +13,10 @@ integrated vs visually-estimated intensities), analysis counts, IMA number, name
 consistency, Mindat classification/chemistry, cross-file cell/ESD agreement, and a light
 reflection-indexing consistency pass.
 
-## Install / Quick start (`pxrd`)
-> **Reviewers (non-developers): see [INSTALL.md](INSTALL.md)** — step-by-step Windows
-> install & upgrade instructions for the distributed bundle zip (wheel + checksum +
-> instructions). This section is the developer quick start for a checkout.
-```
-pip install -e .                   # one-time: puts a global `pxrd` command on PATH
-cd /path/to/entries && pxrd gui    # open the GUI for the folder you're standing in
-pxrd gui "/path/to/entries"        # …or name the folder explicitly
-pxrd gui                           # reopens the last folder, on a free port, in the browser
-```
-`pxrd` is a launcher so you don't type folder prefixes or ports. Sub-commands:
-`gui`, `review` (write comments/highlights), `sweep` (corpus fire-rate/drift report),
-`lambda`, `extras`, `candidates`, `check` (regression), `refresh` (rebuild Mindat cache),
-`mindat` (Mindat passthrough). For a data sub-command the folder is
-**resolved as**: an explicit argument, else the current directory when it holds entry
-`.docx` files, else the folder **remembered per sub-command** (pass it once, omit
-after). The GUI **auto-picks a free port**, and extra flags (`--id`, `--port`, …) pass
-through. Without installing, run `./pxrd <sub>` from a checkout (the dev launcher), or
-the explicit `python3 -m pxrd_review.<module>` forms shown below.
+## Install
+> **Reviewers (non-developers): follow [INSTALL.md](INSTALL.md)** — Windows install and upgrade
+> for the distributed bundle zip. The steps below are for a checkout.
 
-## Setup — step by step (fresh install)
 Requirements: **Python ≥ 3.9** and `pip`. Unzip the archive, then work from inside the
 `pxrd-review-tool` folder. Steps **1** and **5** are the minimum to use the tool; **2–4** add the
 Mindat cross-checks and the verification pass.
@@ -96,6 +79,15 @@ have it. Everyone else: skip to step 5 — `pxrd --version` is enough to confirm
 pxrd gui "/path/to/entries"
 ```
 Opens the review GUI in your browser — **localhost only**, auto-picks a free port.
+
+**The `pxrd` command.** A launcher, so you type neither folder prefixes nor ports.
+Entries: `gui`, `review` (write comments/highlights), `sweep`, `lambda`, `extras`,
+`candidates`, `check` (regression), `refresh` / `mindat`, `update`. Papers and structures:
+`refs`, `paper`, `bv`, `tables`, `epma`, `gd`, `pxrd`. A folder sub-command takes an
+explicit folder, else the current directory when it holds entry `.docx` files, else the
+folder **remembered per sub-command** (pass it once, omit after); the GUI picks a free
+port; extra flags (`--id`, `--port`, …) pass through. Without installing, run
+`./pxrd <sub>` from a checkout, or the `python3 -m pxrd_review.<module>` forms below.
 
 **Notes**
 - **PyMuPDF licensing:** PyMuPDF (the PDF engine) is **AGPL-3.0 or commercial** (Artifex) — the only
@@ -416,7 +408,11 @@ against the .cif; Gladstone–Dale for n and the densities; the cell against its
 and, with Z (from the paper's other cell statement or the .cif when the powder cell omits it), the
 density from the formula; the measured and calculated densities against each other (4 %); and
 Mindat's species for the name. A rule the tool keeps: a red line needs an oracle behind it, and a
-reading no oracle reached is a dot, never a verdict. Two more things vouch or dissent (2026-09-07): the paper's own apfu column, read off the block under or beside the wt% — where the wt% read do not reproduce the formula but that column does, the formula stands and the wt% reading is named as the tool's shortfall; and, for a bond-valence table that differs throughout, a summary of where — which columns or sites, in which direction, by how much — instead of a bare "not compared cell by cell". A calculated powder line is red only when 2 % or more off its cell; a smaller offset is a note.
+reading no oracle reached is a dot, never a verdict. Two more oracles were added in 0.5.6. The paper's own atoms-per-formula-unit column, printed under or
+beside the wt%, is read: where the wt% do not reproduce the formula but that column does, the formula
+stands and the reading of the table is named as the tool's shortfall. And a bond-valence table that
+differs from the .cif throughout is summarised by column or site — which way, and by how much — rather
+than dismissed. A calculated powder line is flagged only 2 % or more off its cell; a smaller offset is a note.
 
 **`pxrd epma --check`** replicates a *published* formula from an ICDD entry's Analysis field — the
 mean wt% list followed by the empirical formula in the ICDD notation (`( Mn1.75 +2 Mg0.25 )sigma2.00
