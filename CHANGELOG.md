@@ -4,427 +4,146 @@ Notable changes to the PXRD review tool. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); the version is the `pxrd-review`
 package version in `pyproject.toml`.
 
+| version | | one line |
+|---|---|---|
+| [0.5.6](#056--2026-09-07) | 7 Sep | Every reading says which oracle vouched for it; recall measured by seeding faults; corpus runs in parallel; seven issues fixed |
+| [0.5.5](#055--2026-09-05) | 5 Sep | The powder table checked against the cell — every calculated d recomputed from its own indices |
+| [0.5.4](#054--2026-09-03) | 3 Sep | Five papers hand-checked, one rule each; the reader defects behind "column chosen by fit" |
+| [0.5.3](#053--2026-09-03) | 3 Sep | The paper checker hardened on ~1,400 corpus papers |
+| [0.5.2](#052--2026-09-02) | 2 Sep | A paper checked against itself in Manuscript mode; Fill ▸ from the paper; `pxrd update` |
+| [0.5.1](#051--2026-09-02) | 2 Sep | Bond-valence tables corrected across `pxrd bv`, `pxrd tables` and the GUI |
+| [0.5.0](#050--2026-08-26) | 26 Aug | `pxrd epma`, `pxrd gd`, `pxrd pxrd`; Tables mode becomes five tabs |
+| [0.4.0](#040--2026-08-25) | 25 Aug | `pxrd bv`, `pxrd tables`, `pxrd refs`, and Manuscript mode |
+| [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
+| [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
+
 ## [0.5.6] — 2026-09-07
+Every reading now says which oracle vouched for it, the tool's recall is measured for the first
+time, and the corpus harness runs in parallel (21 min → 5). Seven reported issues fixed.
 
-### Added — what was read, and what vouches for it
-- **A record behind every reading.** `extract()` returns `fields`: for the table, formula, basis,
-  method, n, D_meas, D_calc, cell, bond-valence set, powder lines and name — the value, where it was
-  read, which reader read it, and what vouched for it: the composition re-derived from the table
-  (`check_composition`), the powder table against the cell (`cell_check`), the bond-valence table
-  against the .cif (`bv_check_paper`), Gladstone–Dale for the optics (new `gd_check`, with the
-  paper's own compatibility statement read by `gd_statement`), the cell against its own printed
-  volume, its density from Z and the formula, and the .cif (new `cell_consistency`), and Mindat's
-  species for the name (new `species_check`). A field an oracle adjudicated is `agrees` or
-  `disagrees`; one it looked at with doubts is `unverified`; one nothing could check is
-  `nooracle`. A refractive index outside 1.3–3.0 or a density outside 1–25 is marked unverified
-  before any oracle sees it. `check_paper` prints a first line `readers: table ✓ (p6) · formula ✓ ·
-  basis ? · n ✓ · …` and two new sections, `Gladstone–Dale:` and `cell:`. The only new red line is a
-  D_calc that follows from none of the paper's formulas (empirical and ideal) with the cell and Z
-  (tightened on 2026-09-06, below: 5–15 %, the paper's own Z, an anchored cell, an anhydrous formula). The compatibility index is never red — on the corpus a strict
-  comparison flagged fifty papers, K_C at fault in most — it agrees within 0.03 or is a doubt.
-- **Fill ▸ runs the checks.** The Tables mode fills from `check_paper` instead of the bare reader:
-  each filled input carries a mark — ✓ an oracle agrees, ? unverified, ✗ disagrees — with the
-  reason as its tooltip, the EPMA tab shows the check text, and the status line starts with the
-  `readers:` summary. What Fill ▸ now leaves out, and says so: a name whose Mindat species has
-  elements the paper lacks (a running head's mineral), a table whose total is outside 85–112 wt%,
-  an n outside 1.3–3.0, a density outside 1–25; a stated basis that does not reproduce the formula
-  is replaced by the one that does, marked ?.
-- **The corpus harness reports a per-reader verified rate** (`tools/corpus_paper_extract.py` →
-  `paper_checks_readers.csv`): read / verified / agree / disagree / unverified / nooracle per field —
-  the standing metric for the readers from here on. It also writes a per-paper record
-  (`paper_checks_papers<tag>.json`) and `--baseline <that json>` diffs a run against an earlier one,
-  reader by reader and paper by paper — the A/B for a reader change, with no worktree or module copy
-  (the baseline is the old code's record). The same run carries what a separate cell survey used to
-  (`tools/corpus_cell_survey.py`, retired): the powder-vs-cell statuses and the red list.
-  `tools/corpus_pxrd_ab.py` remains for the powder reader itself (against a baseline copy of the
-  module, with the cell metric: d from the .cif cell vs the parsed h k l and d). Baseline recorded on the 694 distinct corpus pdfs:
-  obs 15,225 / calc 18,374 / suspect 30 / cell-consistent 4,379 of 4,887 calc rows (90 %, a lost
-  overbar tolerated); `cell_check` red on 19 papers.
-- `paper_extract.set_pages_reader(fn)` — a hook to swap the pdf page reader (for a layout model),
-  mirroring `cell_lambda_check.set_pdf_reader`.
-- **A layout model for the tables was tried and is not shipped.** docling (MIT, fully local) was
-  built in as `pxrd_review.layout_reader` behind `pip install "pxrd-review[layout]"` and measured on
-  the corpus: as a replacement for the pdf-text reader it loses more than it gains (cell-consistent
-  calculated rows 89.6 % → 85.3 %, the largest tables truncated); as a fallback it adds lines to
-  four papers and takes none away; on the coordinates tables of the paper-structure harness it read
-  worse again; and a 6-page supplement took 16 minutes. Removed before release — the extra, the
-  module, `--pages docling` and the GUI option are gone; `paper_extract.set_pages_reader` stays as
-  the hook for a second page reader.
-- **A paper without a .cif can still have its bond-valence table checked — against the structure
-  the paper itself prints** (`pxrd_review/paper_structure.py`). Roughly half the corpus's papers
-  print a coordinates table, a space-group symbol and a cell; the other half deposit them with the
-  CCDC or CSD. Where one is printed it is built: the coordinates as typeset, the operators the
-  symbol stands for (the new `symops` table), the element of each site from the site-occupancy
-  column (a paper names sites A1/M2/T3 and puts the elements there), the charges from the paper's
-  own formula, and the cell chosen by trying each one the paper prints and keeping whichever gives
-  the soundest valences — the structure judging its own cell. Two gates guard it: the global
-  instability index (0.15 vu) and composition closure, which is what catches a coordinates table
-  read only in part, since its sites still give sound valences while its composition is not the
-  mineral's. **Note-grade, and treated so**: measured over 176 papers that have both a printed
-  structure and a .cif to score against, 17 pass the gate and 49 of their 54 cation sites (91 %)
-  reproduce the .cif's sums within 0.05 vu — so every line it produces is marked `[unverified]`
-  and its record never reads `agrees`. Corpus: papers with a bond-valence check 48 -> 60.
-- **A paper is parsed locally, always.** A hosted-model reader was built and measured against the
-  same oracles, and then removed before release: a paper under review is unpublished work, and a
-  public tool must not offer to upload one. Both readers that remain — the pdf-text reader and the
-  optional layout model — run on the reviewer's machine. The record layer keeps the `reader` field
-  it was given, so a future reader is a local one.
+### Added
+- **A record behind every reading.** `extract()` returns `fields`: value, where it was read, which
+  reader read it, and what vouched for it. The oracles: the composition re-derived from the paper's
+  own table (`check_composition`), the powder table against the cell (`cell_check`), the
+  bond-valence table against the .cif (`bv_check_paper`), Gladstone–Dale for the optics (`gd_check`,
+  reading the paper's own compatibility statement), the cell against its printed volume and its
+  density from Z and the formula (`cell_consistency`), and Mindat for the name (`species_check`).
+  A field is `agrees` / `disagrees` when an oracle adjudicated it, `unverified` with doubts,
+  `nooracle` when nothing could check it. `check_paper` prints a `readers:` line and the two new
+  sections. An n outside 1.3–3.0 or a density outside 1–25 is unverified before any oracle sees it.
+  The compatibility index is never red: a strict comparison flagged fifty corpus papers, K_C at
+  fault in most.
+- **Recall, measured — the first time (`tools/seed_faults.py`).** Every threshold here was tuned by
+  mining the corrected corpus for false positives, so every number was a precision number. The
+  seeder injects a fault of known size into papers the tool passes and records whether the check
+  fires. Corpus of 1092 papers, share that would reach a reviewer:
 
-### Changed — the readers' remaining gaps, closed where the corpus could reach them (2026-09-06)
-Six gaps were named after the record layer landed; each was measured on the 1,077-paper corpus
-(`tools/corpus_paper_extract.py … --baseline`, the old code's record against the new) and fixed where
-a fix was reachable:
-- **Composition: the paper's own word on which numbers, read whole.** Papers list the analysis in
-  prose right before the formula sentence ('… SiO2 29.35, F 2.41, H2O 0.26, total 101.18. The
-  empirical formula is …' — 218 corpus papers do); the formula's context held only its last 200
-  characters, so a long list was truncated and the tool fell back to fitting a table column. The
-  prose run is now looked for in the 1,400 characters before the formula (`_prose_before`), in
-  either order ('0.03 Na2O, 3.70 K2O' as well as 'Na2O 0.03'), with a parenthesised range and s.d.
-  after a value, and it is the first candidate whenever it exists — before any header-named column.
-  A formula that writes the lanthanides as one REE folds the table's Ln2O3 rows for every candidate,
-  not only the first read; a Σ printed as `6=` (font) is read; and a names row above the header
-  ('Burnettite Melilite Paqueite …' over 'Constituent wt% n = 5 SD') is part of the header when it
-  sits below the caption and reads like one. Composition on the corpus: 587 → 597 of 713 papers reproduce exactly, 108 → 104 unverified, the same 12 flags.
-- **The observed powder lines have an oracle.** An observed line without a calculated partner in the
-  table used to count against the reading (a tenth of them and the column was 'unverified'), but
-  tables legitimately list lines they never index — on the corpus the median such table left 29 % of
-  its observed lines unindexed. An unpaired line is now looked for among every reflection the cell
-  allows (`_reflection_ds`, no extinction rule; pairing within the table's own scatter): a line on the
-  cell is 'left unindexed by the table', a line on no reflection is a note ('a typo, or another
-  phase'), and the column is vouched for unless more than one in twenty sits on none. `pxrd.obs`
-  verified 35 % → 62 % (194 → 341 of 551 readings), no new red line.
-- **The densities are adjudicated.** Z belongs to the structure, so a powder cell quoted without it
-  borrows the one Z the paper states elsewhere (its single-crystal sentence, its crystal-data table,
-  or the .cif's `_cell_formula_units_Z`) — 200 corpus papers printed a Z the cell reader had not
-  attached; the D_calc record now takes the cell oracle's verdict (Z, the cell and the formula
-  against the printed value: agrees / a doubt / the existing red line), not only Gladstone–Dale's;
-  and the two printed densities vouch for each other: a measured density within 4 % of the
-  calculated one is the usual case, and a misread value is far outside it. `optics.D_calc`
-  verified 20 % → 62 % (103 → 326 of 526 agree), `optics.D_meas` 31 % → 58 %, and the cell 72 % → 74 %. The D_calc red line
-  is tightened at the same time: it needs the paper's own Z beside the cell (a borrowed one supports a
-  ✓ or a doubt, never a red line), a cell whose printed volume or .cif vouches for the axes, an
-  anhydrous formula (a hydrate count is what the text layer loses) and 5–15 % off — the first pass
-  without those guards drew eleven red lines, five of them on cells whose axes the reader had
-  misread. One paper stays red on the corpus (I003395, −5.4 %), unvetted by hand; two more were
-  red until the Mindat-mass defect below was fixed — their D_calc follows from the ideal formula.
-- **The owner's four rules on the remaining gaps (2026-09-06, afternoon).** A basis the paper never
-  states, when the reduction on it reproduces every coefficient, is verified — the formula vouches
-  for it. A stated basis that fails while another reproduces every coefficient cleanly is a
-  finding ('the paper states its formula is calculated on 12 anions, but every coefficient follows
-  from 8 cations — one of the two is a slip'), guarded: the basis sentence must be the formula's own
-  and the reduction on the other basis clean; the basis record reads `disagrees`. The D_calc red
-  line rests: every one drawn on the corpus dissolved on inspection, the last (I003395) on the
-  owner's eye — an empirical formula deficient in cations while the paper's D_calc rests on a
-  fuller one — so a D_calc that follows from none of the formulas read is a doubt naming that
-  possibility, never red. Mindat's cell vouches for a paper's cell when nothing in the paper
-  could (sorted axes within 3 %, the entry check's rule); a difference is a doubt, never red.
-  The first pass of the basis flag drew 43 on the corpus, 30 of them where the basis that
-  reproduced was the formula's own printed group sum ('Na+Ca+K+Zn = 0.97' — which reproduces its
-  cations by construction); the flag now needs a basis a paper would state (a whole-number anion
-  or cation count, a single element, or the stated group with another number). Fourteen flags
-  stand on the corpus, listed for the owner's eye; the basis record goes 41 % → 74 % verified.
-- **Bond-valence sums as a column, and grids the other way round, are read.** Of the 77 corpus
-  papers with a .cif beside them and no bond-valence table read, 48 print one — as a BVS column of
-  the coordinates table ('Atom x y z Ueq BVS'), of the bond-distance table ('Cr1–O7 1.92 … O1
-  1.95'), or as a grid with the anions across and the cations down ('Site F(1) F(2) … Σcations').
-  All three are read now (`bvs_site_tables`, `_site_rows_from_grid`, the transposed grid in
-  `bv_tables` and `_maybe_transpose` for a Word table) and checked site by site
-  (`bv_check.check_bvs_sites`: a cation sum within 0.05 vu + 3 %, or its occupancy-weighted value
-  for a split site; anion sums only for a structure without hydrogen bonds). The grid reader also
-  takes its width from the labelled header tokens, so a powder table or the other page column
-  printed beside the grid stays out, joins a line of bare valences to the nearest row, and reads a
-  column headed by an element ('Fe3+', 'Ge') for a .cif with one site of it. Two guards: a paper
-  with several BVS columns (two parameter sets, with and without H) is judged by the column that
-  agrees best, and a table half or more of whose cells differ under every parameter set is a
-  doubt ('another convention, or a misread table'), never a list of findings. What stays unread:
-  tables whose site names are the paper's own (M1, T, A2) where the .cif labels sites by element —
-  no mapping exists to read them by. Validated on a 165-paper subset (every paper the change could touch, plus sixty at random —
-  the owner's rule from here on: a full corpus run is half an hour and is not spent on every step;
-  `tools/corpus_paper_extract.py --papers LIST`): eight more papers gain a bond-valence oracle (four
-  agree, four doubts), two grids whose every cell had 'disagreed' become doubts, none is lost. Also fixed on the way: `compute` crashed on a
-  hydrogen-bond acceptor with a split label ('A1/Ow1').
-- **The basis flag, checked by hand on its fourteen corpus cases: every one was the tool's own
-  convention, so those conventions are now rules** — a formula with OH or H2O but a table without
-  water cannot be reduced on an anion count that includes them (fehrite, terskite, strontioborite);
-  '9 O' that excludes the water oxygens is the found count less the water (keystoneite); a table
-  of elements with no oxygen makes the anion basis degenerate (heterogenite, lazaraskeite); 'O + S
-  = 10' with SO3 and S both in the table counts the sulfate sulfur (cherokeeite); ammonium
-  reported as an oxide (burroite); a stated basis on which every coefficient is within tolerance
-  anyway (fluorcarmoite, rms 0.031); a sentence that states both bases, one per mineral, where the
-  reader took the other (cupromakovickyite). The flag now fires nowhere on the corpus and stays in
-  place for a real case.
-- **A paper's own site names are mapped onto the .cif by coordinates** (`site_name_map`): the
-  coordinates table gives x y z per site name — A1, M2A, T(1), X, Y, Z — and a site whose
-  coordinates fall on a .cif site (any equivalent position, within 0.25 Å) is that site. The
-  coordinates reader (`paper_structure._label_ok`) now keeps such names (it kept only
-  element-headed labels). The mapping feeds every bond-valence reader and checker, so grids and BVS
-  columns headed by the paper's names are read: chloritoid-3T's M1A…M2C, allanite-(Y)'s A1 A2 M1–M3
-  T1–T3, puttapaite's M1–M4 T, elbaite's X Y Z T. Grid reading also improved on the way: the
-  column label is the site-name token over a site-population line beneath the header, x-clusters
-  under one label are one column, prose of the other page column between two rows no longer ends
-  the grid, and a header with no row within six lines is not a header. A table eight or more of whose cells differ is a doubt like one half of whose cells
-  differ. Validated on the 182-paper subset (every paper with a .cif, plus sixty at random) against
-  the last full record: bond-valence tables checked 30 → 44 papers, clean 7 → 10, doubts 10 → 20,
-  unread 78 → 54, none lost.
-- **A cell statement that lost its angles gets them back.** A quarter of the powder tables that
-  'followed no cell' were monoclinic or triclinic papers whose cell the reader had taken without its
-  angles — most often because a Symbol-font β reaches the text layer as a plain 'b' ('b = 107.928(1)°'
-  after 'c = 5.5681(7) Å'), and a triclinic α β γ as 'a b c'. `_paper_cells` now offers, for a
-  statement with no angle, the angles of the paper's fuller statement of the same axes, each distinct
-  β the text prints for a monoclinic mineral, and each α β γ triplet for a triclinic one — the table
-  decides which cell it follows. Nine of twelve such tables checked by hand went from 'only 3 of 38
-  lines follow it' to every line within 0.5 %. Lines that follow another cell the paper states are that other
-  phase's (a three-mineral paper's table no longer draws fifteen red lines), and more than five
-  outliers in one table is a doubt about the reading, not a list of slips. On the 240-paper subset
-  (every table that followed no cell, every unverified composition, sixty at random): 39 more tables
-  follow their cell, 49 remain of 88, none lost; red powder lines 13 → 11 in eight papers, two of
-  them new (69131, EJM30_581), for the owner's eye.
-- **Composition, five reader classes from the 'cations deviate' papers:** the oxide block printed
-  beside an apfu block that begins a line earlier (gunmaite's Table 3: 'Avg. Min. Max Na 1.72' over
-  'Na2O 3.61 2.93 4.26 Sr 0.70') is read as its own table; a value with its unit glued ('7.84%') is a
-  value; a site label whose bracket the text layer lost ('Y Mg1.50Fe…') is not yttrium; a stated
-  anion count from a table without water is reduced on the anhydrous count, stated − H/2 (every OH
-  half an oxide oxygen, every H2O a whole one the oxides do not give) — terskite, fehrite and
-  strontioborite now reproduce on the basis their papers state; the tourmaline convention '31
-  anions (O + OH + F)' — every H2O of the table as two OH — is tried when the stated anion basis
-  fails (`epma.reduce(water_oh=)`); and 'on the basis of 10 cations excluding Si and P' is read as
-  the sum of the table's other cations. 'On the basis of 4319 observed reflections' is no longer a basis (the O
-  must be a whole word). Gunmaite and luogufengite verify; the basis record gains 28 on the subset.
-- **Six defects a cross-file review of the unreleased 0.5.6 code found, fixed** (a medium `/code-review`;
-  its other angles did not finish): Mindat's ideal formula is HTML, and its mass was read by a token scan
-  that dropped every subscript (abelsonite 86 instead of 519) — that garbage stood in as "an ideal
-  formula" for the density oracle's two-formula guard; it is now read by the formula parser
-  (`_species_mass`). A .cif that a space-group symbol with two origin choices stands in for is
-  noted as such (`bv_check`: "setting 1 of 2 — check the origin"). Fill ▸ dropped a name Mindat
-  rejected as another mineral's but kept the .cif that name had chosen, so the bond-valence check and
-  the Gladstone–Dale cell were that other mineral's; the .cif goes with the name. The bond-valence
-  check against the structure the paper itself prints was shown under whichever .cif the Tables mode
-  had selected; it is now labelled as the paper's own structure and shown whatever is selected. The
-  `readers:` line was a finding anchored to the first page it mentioned; it is anchored to none. A
-  paper-structure build that failed after its loop left its temporary directory behind; it is removed.
-- **Bond valence: the gap is in the files, not the reader.** 923 corpus papers have no .cif beside
-  them at all; of the 40 with .cif files sharing no I-number, matching by cell finds three. Nothing
-  more to read: a paper without its .cif is checked against the structure it prints (0.5.6) or not
-  at all.
-- **Manuscript mode's ground truth** is what a .cif and Mindat give: the cell, Z and space group
-  from the .cif, the species from Mindat, and the paper's own arithmetic; a manuscript with an
-  internally consistent error and no .cif still passes — there is no entry to compare it with.
+  | fault | 2 % | 5 % | 10 % | 20 % |
+  |---|---|---|---|---|
+  | a coefficient of the published formula | 0 % | 6 % | 69 % | 67 % |
+  | one constituent's wt% | 0 % | 6 % | 31 % | 16 % |
 
-### Changed — three bond-valence papers hand-checked, the powder floor, the paper's own apfu column (2026-09-07)
-The owner asked what the bond-valence disagreements on allanite-(Y), nigelcookite and
-bainbridgeite-(YCe) actually were, said a powder line is worth a flag only when egregiously off,
-and observed that the composition failures are ones a human settles by looking at another part of
-the paper. Each became a rule; validated on the 182-paper bond-valence subset against its last
-record (`--papers`, `--baseline`): tables checked 44 → 46, clean tables 10 → 15, nothing lost.
-- **The bond-valence reader, on what those three papers printed.** A row label with the paper's
-  hydroxyl tag (`O8(OH)`, `O3(H2O)`) is the .cif's `O8` (`_norm_label`; the nigelcookite table lost
-  its two OH rows and its Sum row to this). Two values in one cell read off a page come space-
-  separated and each mark belongs to the value it follows (`_bv_cell`: `0.06 0.05×2↓` is 0.06 and
-  0.05 × 2, not both doubled — allanite's A1 column added to 2.20 instead of 2.14). A bare valence
-  line between two rows joins the row above on a tie (a cell's second value prints below its
-  first; allanite's O2 cell was read into O3). A printed Σ that includes the hydroxyl's own O–H
-  (`2.15§ — includes 0.87 vu from H10`) is accepted when the .cif has an H on that oxygen or the
-  label carries the tag (`_h_donor_anions`). A paper that prints no coordinates table still names
-  its sites by their bond lengths: `M1–O1vi 2.101(3)` — a paper name whose distances are a .cif
-  cation's, three or more of them, is that site (`_site_map_by_bonds`; nigelcookite's M1, M2).
-- **The paper's valences for a .cif that states none** (`_structure_for_paper`). A .cif without
-  oxidation numbers left V, Fe, Mn, Cu … to the tool's defaults — V5+ for nigelcookite's V3+ site,
-  and every cell of that column differed by 0.07 vu. The paper's own formula (`V3+`), else the
-  species' ideal formula on Mindat, settles an element's valence; a mixed-valence element (Fe2+
-  and Fe3+ in the formula) is settled per site, each site taking the valence its own bonds bear
-  out (the sum nearest the site's expected charge — plumbojohntomaite's Fe1 2+, Fe2 3+); an
-  admixture under a quarter keeps the default. The .cif's own statements always win; the check
-  says what it took (`valences from the paper's formula: Pb+2, V+3, Fe+2 (Fe1)`).
-- **One table per mineral.** A two-mineral paper prints a bond-valence table per mineral; when
-  the captions name them and the .cif's own name (its `_chemical_name`, else its file name) is in
-  one caption while another names a different mineral, only the named table is this .cif's
-  (`_own_mineral_tables`; nigelcookite 9 of 22 → 1 of 23, I002957-I002959 from unmatched 42 of 68
-  to checked 2 of 15).
-- **Which cells, and the pattern.** Tables are judged one by one (`_bv_per_table`), and a table
-  that differs throughout is summarised by column with direction and size instead of hidden
-  behind "not compared cell by cell" (`_bv_pattern`): the nigelcookite table's own P1 and P2
-  columns are higher than the .cif gives by 0.06–0.09 vu in all seven cells with the Pb and M
-  columns agreeing and the P sums printed as 5.24 and 5.36; bainbridgeite-(YCe)'s six large-cation
-  sums are lower than any parameter set gives by 0.18–0.38 vu while its C sums agree; allanite-(Y)'s
-  three remaining differences all sit in the A2 (Y/Nd/Ca) column, 0.03–0.06 vu, with its own A1
-  column summing to 2.14 where 2.08 is printed. A kept table with three or more differences gets
-  the same summary line.
-- **Powder lines: only the egregious are red** (`_CELL_RED`). A calculated d 2 % or more off its
-  cell is flagged as before; one 0.5–2 % off is now a note ("sits +1.1 % off the cell — a poorly
-  fitting or mis-indexed line rather than a typo [unverified]"). On the last full record 15 of 51
-  red lines are notes now.
-- **The paper's own apfu column vouches for its formula.** `epma_table` now keeps the atoms-per-
-  formula-unit block it used to skip (`'apfu'`), and `_check_formula` reads it as another part of
-  the paper: where the wt% read do not reproduce the formula but the apfu column does, the formula
-  stands and the reading of the wt% table is named as the tool's shortfall (79391: rms 48 % on the
-  wt%, the column agrees on six elements → ok); where the wt% reproduce all but one coefficient and
-  the column sides with the wt%, the finding says the formula's coefficient is the slip; with the
-  wt% reading itself in doubt the column only "sides with the wt% read — worth a look [unverified]";
-  a column that differs from a formula the wt% reproduce is a note.
+  A powder d is caught 11 % at 2 %, 75 % at 3 %, 82 % at 5 %. A wrong stated basis is caught in 1 %
+  of 280 papers, so that flag is dead as written (issue #10).
+- **A structure from a paper that prints one** (`paper_structure.py`), for the ~50 % of papers whose
+  coordinates are printed rather than deposited: coordinates as typeset, operators from the
+  space-group symbol (new `symops` table, harvested from corpus .cif files), site elements from the
+  occupancy column, charges from the paper's formula, and the cell chosen by lowest instability
+  index. Gated on GII ≤ 0.15 and composition closure. **Note-grade throughout**: of 176 papers with
+  both a printed structure and a .cif, 17 pass the gate and 49 of 54 cation sites (91 %) reproduce
+  the .cif within 0.05 vu, so every line is `[unverified]` and the record never reads `agrees`.
+  Papers with a bond-valence check: 48 → 60.
+- **The corpus harness** (`tools/corpus_paper_extract.py`) reports a per-reader verified rate
+  (`paper_checks_readers.csv`) and writes a per-paper record; `--baseline <json>` diffs a run against
+  an earlier one, reader by reader, which is the A/B for a reader change with no worktree or module
+  copy. `--jobs` runs the papers in worker processes: 214 s → 53 s on 183 papers, output folded in
+  job order and byte-identical to serial, which is the acceptance test. A dead worker stops the run
+  rather than marking some paper an error, since an OOM kill and a MuPDF segfault look alike.
+- **Fill ▸ runs the checks.** Tables mode fills from `check_paper`: each input carries ✓ / ? / ✗ with
+  the reason as its tooltip. It now leaves out, and says so: a name whose Mindat species lacks the
+  paper's elements, a table totalling outside 85–112 wt%, an n or density out of range.
+- `paper_extract.set_pages_reader(fn)` — a hook to swap the pdf page reader.
 
-### Changed — PyMuPDF is imported by its own name (2026-09-07)
-`import fitz` is the library's legacy alias and it now warns on every import that it will be
-removed. Every import and call site moved to `import pymupdf`, the internal reader is
-`_pdf_text_pymupdf`, and the dependency floor is `PyMuPDF>=1.24.3`, the release where the module
-took its own name. The `fitz` key stays in the missing-dependency table so an older installation
-still gets a useful remedy rather than a bare ImportError.
+### Changed — the readers
+- **Composition.** The analysis printed in prose before the formula is read whole, from the 1,400
+  characters before it and in either order (218 corpus papers do this; only the last 200 characters
+  were searched). Five more reader classes: an oxide block beside an apfu block, a value with its
+  unit glued (`7.84%`), a site label whose bracket was lost, the anhydrous basis (stated − H/2), the
+  tourmaline O + OH + F convention, and `10 cations excluding Si and P`. A Σ printed as `6=` is
+  read; `4319 observed reflections` is no longer a basis. **The paper's own apfu column** is kept and
+  used: where the wt% miss the formula but that column reproduces it, the reading is named as the
+  tool's shortfall. Corpus: 587 → 605 of 713 reproduce exactly, 108 → 95 unverified.
+- **The doubts yield when the reading proves itself.** A doubt says the tool may have misread the
+  table; the reduction answers that itself. Reproducing every coefficient but one, over four or more
+  elements, drops the doubts about the reading — hard doubts (parse failure, totals, a missing
+  element, a circular basis, averaged analyses) still block. H and traces are filtered *before* the
+  doubts are weighed, not after: counting a hydrogen the tool itself calls informational as one of
+  the "two or more elements deviating" was suppressing single-element findings by itself. Recall on
+  a mistyped coefficient 59 % → 69 %; corpus flags 12 → 13.
+- **Powder.** An observed line with no calculated partner is looked for among every reflection the
+  cell allows, so a table that leaves lines unindexed is no longer penalised (the median such table
+  leaves 29 %): `pxrd.obs` verified 35 % → 62 %. A cell statement that lost its angles gets them
+  back — a Symbol-font β reaches the text as a plain `b` — and 39 more tables follow their cell, 49
+  remain of 88. Lines fitting another cell the paper states are that phase's; more than five
+  outliers is a doubt. **A calculated d is flagged only 2 % or more off its cell** (`_CELL_RED`);
+  below that it is a note.
+- **Densities and the cell.** A powder cell quoted without Z borrows the one the paper states
+  elsewhere or the .cif's (200 corpus papers printed a Z the reader had not attached).
+  `optics.D_calc` verified 20 % → 62 %, `D_meas` 31 % → 58 %, cell 72 % → 74 %. The D_calc red line
+  is **retired to a note**: every one drawn dissolved on inspection. Mindat's cell vouches
+  note-grade where nothing in the paper can.
+- **Basis.** An inferred basis that reproduces every coefficient is verified. A stated basis that
+  fails where another reproduces cleanly is a finding — guarded, and after all fourteen corpus cases
+  proved to be the tool's own conventions, those are now rules (water/OH, `9 O` less the water,
+  element tables, `O + S`, ammonium, within tolerance, both bases stated). It fires nowhere on the
+  corpus; the record goes 41 % → 74 % verified.
+- **Bond valence.** BVS columns and transposed grids are read (`bvs_site_tables`,
+  `_site_rows_from_grid`, `_maybe_transpose`) and checked site by site (`check_bvs_sites`). A
+  paper's own site names map onto the .cif **by coordinates**, or by its printed bond lengths where
+  it gives no coordinates table. A .cif that states no oxidation numbers takes them from the paper's
+  formula, per element and per site for a mixed-valence one. In a two-mineral paper only the .cif's
+  own mineral's table is compared. A table that differs throughout is summarised by column with
+  direction and size rather than dismissed. Subsets: tables checked 30 → 46, clean 7 → 15, none lost.
+  Reader details fixed on the way: `O8(OH)` row labels, space-separated two-value cells, a Σ that
+  includes the hydroxyl's own H, and a tie going to the row above.
+- **PyMuPDF is imported by its own name**; the deprecated `fitz` alias is gone, floor `>=1.24.3`.
+- **The bond-valence parameter file is parsed once**, not six times per paper. A tidy-up, not a
+  speed-up: 214 s → 211 s on 183 papers, inside the noise.
 
-### Fixed — five reported issues from the 0.3.x review pass (2026-09-07, issues #2 #3 #4 #7 #8)
-- **The old two-column template's instrument fields were read as the next field's label** (#2). That
-  template puts `Label : Value` in one cell, so taking the cell after the label returned the
-  following field's name, and every instrument-dependent check found nothing it recognised and
-  abstained. The entry then reported clean, which is indistinguishable from checked-and-fine. A
-  field's value now comes from its own cell when it carries one, and from the next cell only when
-  that cell is not itself a label. The radiation block only ever matched the new template's
-  `Radiation=` spelling, so on the old one the anode stayed blank and the checks that did run
-  reported "measured but no radiation stated" on nearly every entry; it matches both now.
-  Measured: 644 of 662 old-template entries go from holding a label to holding a real controlled
-  vocabulary value, 508 of them Diffractometer; 0 of 127 new-template entries change; the newly
-  live checks find a Debye-Scherrer that should be a diffractometer in 8 entries and a
-  'Diffractomter' typo in one.
-- **A failed PDF page scan was cached as an answer of zero pages** (#3). The pane then built zero
-  page slots and looked merely empty, with a pdf ✓ badge, and it survived restarts. A scan that
-  returns no pages is marked unreadable, is not cached, and the pane says so.
-- **`/api/entries` read the shared state without the lock** (#4). A folder switch during the 1.2 s
-  poll raised an unhandled KeyError, the poll 500'd and was never rescheduled, and the dashboard
-  sat showing the old folder until a reload. It now snapshots under the lock and stats outside it,
-  and an entry that disappears mid-poll is skipped rather than fatal. The same fix for the cache
-  write, which was serialising a live dict and losing `gui_cache.json` to a swallowed error, and
-  for the analysis thread's progress line.
-- **`--inplace` locked only the first docx's folder** (#7), while discovery is recursive. Every
-  directory holding a discovered docx is locked now, in sorted order so two runs cannot deadlock.
-  The lock's staleness test also stat'd a file that the owner could delete between the two calls.
-- **Windows polish** (#8): the folder chip splits on either separator so a Windows path shortens;
-  the Mindat remedy offers `pxrd refresh` rather than a `python3` that does not exist there; the
-  missing-dependency remedies no longer assume a `requirements.txt` on disk; the sweep docstring no
-  longer names the maintainer's local corpora; and `requirements.txt` stops calling two
-  unconditional dependencies optional.
+### Fixed
+- **#1** a stale verdict could overturn the dismissal a reviewer had just made, and the comment they
+  dismissed was written back into the docx on every launch.
+- **#2** the old two-column template's instrument fields parsed as the next field's label, so 644 of
+  662 entries silently abstained from every instrument check and reported clean. The radiation block
+  matched only the new template's spelling, leaving the anode blank.
+- **#3** a page scan that timed out was cached as an answer of zero pages: a blank pane behind a
+  `pdf ✓` badge, permanently. **#4** the entries endpoint read shared state unlocked, so a folder
+  switch mid-poll stranded the dashboard on the old folder. **#7** an in-place run locked only the
+  first folder while discovery is recursive. **#8** Windows papercuts. **#9** documented what a Word
+  Reject does not persist. **#5**, **#6** verified already fixed.
+- **Two reader faults the recall work exposed**, both wrong before and merely hidden: tourmaline's
+  boron site was counted as an element, putting every tourmaline paper's boron 1.0 apfu high; and
+  nothing checked that a constituent's mean lies inside its own printed range, which it does not in
+  5 papers of 109.
+- **Six defects from a cross-file review**: Mindat's HTML ideal formula was mass-read by a token scan
+  that dropped every subscript (abelsonite 86 instead of 519); a two-origin space group is noted as
+  such; Fill ▸ kept a .cif chosen by a name Mindat had rejected; the paper's own structure was shown
+  under whichever .cif was selected; the `readers:` line was anchored to a page; a failed
+  paper-structure build left its temp directory behind.
 
-### Fixed — a stale verdict no longer overturns the reviewer's decision (2026-09-07, issue #1)
-Triage is keyed by the docx stem, and which copy `discover` picks for an entry changes mid-review,
-so records for one entry pile up under several stems and are merged. The merge took the strongest
-verdict across all of them. A reviewer who confirmed a finding, then saw a rerun switch the stem,
-then thought again and dismissed it, had the confirm restored on the next launch, saved back to
-disk, and the comment they dismissed written into the docx again — every launch, for ever, because
-the old per-stem keys are never removed. Clearing a verdict was undone the same way.
+### Not shipped
+- **A layout model (docling)** was built behind an extra and measured: as a replacement it loses
+  more than it gains (cell-consistent calculated rows 89.6 % → 85.3 %, the largest tables truncated),
+  as a fallback it adds lines to four papers and takes none away, it read the coordinates tables
+  worse, and a 6-page supplement took 16 minutes. Removed; `set_pages_reader` stays as the hook.
+- **A hosted-model reader** was built, measured against the same oracles, and removed: a paper under
+  review is unpublished work and a public tool must not offer to upload one. Every reader is local.
 
-The current stem is the reviewer speaking now, so its record is authoritative and another stem may
-only fill in a finding it never recorded. Ranking survives only among the other stems, which is what
-the merge was for: recovering a verdict orphaned by a stem change. Six cases pinned in
-`tests/test_gui_triage.py`, including the report's own reproduction.
-
-### Changed — the doubts yield when the reading proves itself (2026-09-07)
-Acting on the recall measurement below. A doubt in the composition check is a statement that the
-tool may have misread the paper's analysis table; the reduction answers that question itself. When
-it reproduces every coefficient of the published formula but one, over four or more elements, the
-reading is demonstrated and the single exception belongs to the paper. Doubts are now marked as
-being about the reading or not, and only the former yield. A hard doubt still blocks: the formula
-would not parse, the wt% do not add up, an element is missing, the basis is circular, or the
-analyses were averaged by the tool, which names a mechanism that moves one element on its own.
-
-Hydrogen and traces are also removed from the deviation list BEFORE the doubts are weighed rather
-than after. Counting a hydrogen the tool itself labels informational as one of the "two or more
-elements deviating" was suppressing real single-element findings on its own.
-
-The paper's own apfu column now defers to the tool's reading only when something independent
-already doubts that reading, not merely when the table was awkward.
-
-Corpus, 1092 papers: composition flags 12 to 13, papers verifying cleanly 597 to 604. The one new
-flag is an amphibole whose formula carries Fe 1.42 where its own analysis supports 1.27, with every
-other element agreeing. One previous flag went away, correctly: its table had a row whose mean fell
-outside its own printed range. Recall, from the seeder:
-
-| fault | before | after |
-|---|---|---|
-| formula coefficient, 10 % | 59 % | 69 % |
-| formula coefficient, 20 % | 55 % | 67 % |
-| one wt%, 10 % | 27 % | 31 % |
-| papers with an apfu column, wt% >= 5 % | 6 % | 9 % |
-
-### Fixed — two reader faults the recall work exposed (2026-09-07)
-Both were found by hand-checking flags that the change above made visible, and both were wrong
-before it, merely hidden.
-- **Tourmaline's boron site was counted as an element.** In `T(Si4.526B1.419Al0.055)Σ6.000O18
-  B(BO3)3` the leading B names a site, so the tool read one boron too many and put every tourmaline
-  paper's boron 1.0 apfu high. A bare B before a bracket is only a label where the formula is
-  already written by site, so `Ca[B(OH)4]2` still parses as a borate.
-- **A constituent whose mean falls outside its own printed range** is now evidence that the column
-  mapping is off, and blocks a finding built on it. It fires on 5 papers in 109 that print a range,
-  every one a real mis-mapping: a magnesium oxide read as 4.82 against the row's own range of 4.87
-  to 5.83, a barium read as 0.12 against 17 to 19.52.
-
-### Added — the first recall measurement (2026-09-07)
-`tools/seed_faults.py` takes papers whose checks pass, injects one fault of a known size into the
-values already read from them, and records whether the check fires. Four faults, each of a kind a
-real paper carries, at a ladder of sizes, so the answer is a detection curve rather than one number.
-Corpus-wide, 1092 papers, the share of seeded faults that would be WRITTEN into a review:
-
-| fault | 2 % | 5 % | 10 % | 20 % |
-|---|---|---|---|---|
-| a coefficient of the published formula | 0 % | 5 % | 59 % | 55 % |
-| one constituent's wt% | 0 % | 6 % | 27 % | 12 % |
-
-| a calculated d-spacing | 1 % | 2 % | 3 % | 5 % |
-|---|---|---|---|---|
-| | 0 % | 11 % | 75 % | 82 % |
-
-A wrong stated basis is caught in 1 % of 280 papers, so that flag is effectively dead — which is
-the arithmetic consequence of narrowing it to zero false positives on the corpus.
-
-Two findings worth acting on, neither acted on yet:
-- **A bigger fault is caught LESS often than a medium one.** Formula recall peaks at 10 % and falls
-  at 20 %; wt% recall halves. The cause is the doubt rule "the cations deviate N % overall — a basis
-  or table-reading problem rather than one slip", which fires above 6 % and downgrades the finding
-  to a console note. The worse a paper's error, the more confidently the tool blames its own reading.
-  The discriminator it does not apply: a deviation carried by ONE element with the rest agreeing is
-  a paper error, not a misread table.
-- **The apfu-column oracle added earlier the same day costs recall.** Where a paper prints its own
-  atoms-per-formula-unit column, a seeded wt% fault of 5 % or more is caught 6 % of the time against
-  17 % without one, because the rule attributes the mismatch to the tool's reading. That is the right
-  call when the tool misreads a table and the wrong one when the table is genuinely mistyped.
-
-### Changed — the bond-valence parameter file is parsed once (2026-09-07)
-`Params.__init__` re-read and re-parsed `data/bvparm2020.cif` on every construction, and the callers
-build them in bulk: `bv_check_paper` makes six per paper, three parameter sets times two U6+ modes,
-and `paper_structure.build` one per cell candidate. `_param_tables(path)` now caches the parsed
-`(table, refs)`, keyed by path with mtime and size so an edited file is re-read. Both dicts are
-read-only after construction — the per-instance state is `used` — so one copy backs every `Params`.
-
-Honest accounting: this is a correctness-neutral tidy-up, not a speed-up. Measured on the same
-183-paper subset, serial, the run went from 214 s to 211 s, which is inside the noise; parsing the
-file was only about 3 % of the profile, and the bond-valence neighbour search dominates. Every
-output file is byte-identical before and after.
-
-### Changed — the corpus harness runs its papers in parallel (2026-09-07)
-`tools/corpus_paper_extract.py` walked the corpus one paper at a time in one process, so a full
-run cost about 23 minutes and the standing rule was to validate a change against a subset. The
-papers are independent, so the walk, the work and the merge are now three separate steps and the
-work runs in a process pool: `--jobs N`, defaulting to the machine's cores capped at eight, with
-`--jobs 1` keeping the serial in-process path. Measured on the 183-paper bond-valence subset:
-
-| | serial | 8 workers |
-|---|---|---|
-| wall clock | 214 s | 53 s |
-| cpu time | 185 s | 247 s |
-
-Four times faster, so the full corpus goes from about 21 minutes to about 5. The extra cpu time is
-each worker's own start-up: a spawn, a fitz import and its own read of the 2.3 MB Mindat index.
-
-- **Byte-identical output is the contract, not a hope.** Results are folded in job order, never by
-  completion, because three of the four output files depend on it: `paper_checks_papers<tag>.json`
-  is dict-insertion-ordered, the report's powder red list sorts stably over that same order, and
-  the report and faults TSV are appended per paper. The counters are summed into the pre-seeded
-  `stats` dict so its key order, which the report prints as a repr, cannot move. Verified by running
-  a subset through the old code, the new serial path and the new parallel path and comparing all
-  four files: identical, to the byte.
-- **A dead worker stops the run instead of blaming a paper.** MuPDF can segfault uncatchably on a
-  malformed embedded image, and the OS can kill a worker for memory; a pool cannot tell them apart.
-  Rather than write an `ERROR` line that a later `--baseline` diff would take at face value, the run
-  names the papers that were in flight, writes nothing, and exits. `--jobs 1` then finds the culprit.
-- Only primitives cross the process boundary: the worker builds the record, report lines, TSV rows
-  and counters, so `check_paper`'s return value, which carries an `epma.Reduction` and the whole
-  read of the paper, stays where it was made. The in-flight window is bounded, so the parent holds
-  a few results rather than the whole corpus.
+### Known limits
+- 923 corpus papers have no .cif at all; of the 40 whose .cif shares no I-number, matching by cell
+  finds three. The bond-valence gap is in the files, not the reader.
+- Manuscript mode's ground truth is the .cif, Mindat and the paper's own arithmetic: a manuscript
+  with an internally consistent error and no .cif still passes.
 
 ## [0.5.5] — 2026-09-05
 
@@ -1162,418 +881,17 @@ Consequences of the tool now making revisions of its own, both fixed here:
   the tool's marks, so an applied fix read as a human body-text edit. It now compares after the
   strip, which reverts the tool's own change — so what remains is genuinely a person's.
 
-## [0.2.9] — 2026-07-13
+## Early releases — 2026-07-08 to 07-13
+Ten releases in six days, before the tool went to reviewers; superseded by everything above, and
+kept here in outline. `git log` has the detail.
 
-### Fixed — '? look' on the docx pane landed on the wrong cell
-Reported by an ICDD reviewer: most flags navigated to the `MoKa` cell in the Radiation row
-whatever they were about, and the cell/esd findings didn't navigate at all. Three separate
-causes, all fixed:
-- **Instrument fields are not row headers.** `Spacing Instr. :` is cell 4 of a row whose FIRST
-  cell is `Camera Diameter =`, so matching on the row header could never find it and fell back
-  to the only instrument row that did match — `Radiation =`. Hence "everything lands on MoKa".
-  The docx renderer now tags each anchor's target cell (`data-anchor`) by **label cell → next
-  cell**, the same way the annotator finds the cell it highlights, so the two always agree.
-- **The CELL / per-parameter / RADIATION findings are synthesised in the UI** and are not in the
-  findings list the server sends, so looking them up by key returned nothing and their anchors
-  were lost — `? look` had nothing to aim at (e.g. Amurselite's esd/value flag on *b*). Their
-  anchors are now recorded when the rows are built.
-- **The CELL summary's anchor carried the verdict, not a column** (`cell:match`), which resolves
-  to no axis; it now lands on the Author's Cell row.
-
-### Fixed — Intensity Type findings pointed at the wrong field
-An Intensity Type flag used the generic `instr` anchor, so the tool **highlighted the Spacing
-Instr. cell** and `? look` sent the reviewer to the Radiation row. It now anchors on
-`intensity_type`, and both the highlight and `? look` land on the Intensity Type value.
-
-### Docs
-- INSTALL.md step 2 points at the **Releases page**
-  (<https://github.com/toldxls/ICDD-reviewer/releases>) — the newest build is marked `Latest`,
-  so it is the fewest clicks to the current version. The one-line `pip install` from the repo
-  and the source-folder route are kept as alternatives.
-
-## [0.2.8] — 2026-07-13
-
-### Docs — INSTALL.md rewritten against how reviewers actually install it
-Checked against the "Visual Instructions for PXRD_REVIEW_TOOL" walkthrough ICDD wrote for
-themselves. It worked, but it diverged from our instructions at almost every step — so the
-instructions were the problem, not the reviewers:
-- They installed from a **source folder with `pip install -e .`**; INSTALL.md documented only
-  the wheel bundle. Both paths are now written out.
-- They ran **`python -m pxrd_review.gui.review_gui "<folder>"`**, not `pxrd gui` — the `pxrd`
-  command isn't on PATH for every Windows Python. The long form is now given for every command,
-  with a troubleshooting row for `'pxrd' is not recognized`.
-- **`python3` does not exist on Windows.** The README's commands are all `python3 -m …`, which
-  simply fails there. Called out in both files.
-- They installed Python from the Microsoft Store's **Python Install Manager** (answer **Y** to
-  the PATH prompts); we only documented python.org. Both are now covered.
-- Their Mindat workaround was *"GET the .json files I can email them to you … put them in
-  `.cache`"*, and their note on setting the key was an open TODO. **Both are obsolete as of
-  0.2.7**: the snapshot ships inside the package, so no key and no hand-copied JSON is needed.
-  INSTALL.md now says this at the top.
-- Clarified that **`Rerun entry/all` writes the docx** while **`Export triage` writes a text
-  report** — their walkthrough treated the two as one step.
-- The bundle's checksum file is `SHA256SUMS.txt`, as the docs have always said.
-
-### Changed — reference title case (check 26)
-- **A formal place name now keeps all of its words.** The rule previously let the paper decide
-  every word, which lowercased the head-noun of a name the paper happens to write lowercase
-  elsewhere: `Elba Island` → `Elba island`, `Ingul Gold Placer` → `Ingul gold placer`. The
-  papers disagree with each other on this, so it is the one thing the paper does *not* decide.
-  A capitalized word directly adjacent to a paper-attested name is now part of that name, on
-  **either** side — `New Mexico`, `La Sal`, `Vanadium Queen` before it; `Elba Island`,
-  `Tolbachik Volcano`, `Quadeville Rose Quartz Quarry` after it.
-- **`mine` remains the exception** (*the Burro mine*, *the Redmond mine*), per the reviewer.
-- **A species inside a name is kept** (`Rose Quartz Quarry`) while a species with an ordinary
-  neighbour still lowercases (`isotypic with jamesite`, `the dongchuanite group`) — adjacency
-  to an attested name is the discriminator.
-- **An unattested word is left alone but does not anchor a name.** Letting it anchor turned
-  `a New Layered …` back into the Title Case the check exists to remove.
-- Fire rate drops 6 % → 5 % (21 of 466): the titles that stopped firing are ones whose place
-  names were already correct — i.e. they were false positives under the old rule. Still 0 titles
-  with altered letters.
-
-## [0.2.7] — 2026-07-13
-
-### Added
-- **'? look' now works on the docx pane.** It answered "what does the paper say?" and did
-  nothing for the transcription; it now follows whichever pane is open and lands on the exact
-  cell the finding is about (scrolls to it, outlines it, flashes once). Findings carry an
-  anchor (`reference`, `cell:a`, `instr`, …), and the rendered docx table now carries
-  `tr[data-h]` / `td[data-c]`, so the anchor resolves to a row and column; anything without a
-  usable anchor falls back to searching the cells for the finding's own evidence terms. With
-  no `.pdf` paired, the docx is where '? look' goes.
-- **A Mindat snapshot ships inside the wheel** (`pxrd_review/data/*.json.gz`, ~385 KB gzipped).
-  Without an API key the group / chemistry / cell cross-checks previously found nothing at all —
-  which reads exactly like a clean batch — so the tool now works fully offline out of the box.
-  A key only buys fresher data. The cache banner says `[bundled with this release]` when the
-  seed is doing the work. Maintainer step before a release:
-  `python3 -m pxrd_review.mindat --refresh --bundle`, then commit `pxrd_review/data/`.
-  Also adds `python3 -m pxrd_review.mindat --status`.
-
-## [0.2.6] — 2026-07-13
-
-### Added — reference title case (check 26)
-- **New check: the Primary Reference title should be sentence case, not the machine Title
-  Case the entry arrives in** (`a New Mineral From the Burro Mine`; the title-caser even
-  wrecks acronyms, `USA` → `Usa`). Requested by an ICDD reviewer. The direction was mined,
-  not assumed: of 165 reviewer-corrected reference cells in the corpus, 53 were case-only
-  title fixes and **all 53 went Title Case → sentence case, none the other way**.
-- **The paper decides what is a name.** A word the article writes lowercase mid-sentence
-  (`volcano`, `deposit`) is an ordinary word; one it capitalizes (`Tolbachik`) is a name;
-  one it writes in caps (`USA`) is an acronym to restore. Wholly upper-case lines are
-  discarded as evidence — running heads, and the *Canadian Journal of Mineralogy and
-  Petrology* sets titles in caps/small-caps. `mine` is preferred lowercase regardless.
-- **Never re-cases chemistry** (`Pb2(Fe3+6Zn)O2(PO4)4(OH)8`), an element-prefixed compound
-  (`Al-bearing`), a Levinson suffix (`-(Ce)`, never `-(ce)`), a Roman numeral (`IV.`), or a
-  site variable (the `A` in `analogs (A = K, Rb, Cs)` is not the article). A capitalized word
-  the paper gives no evidence for is left alone rather than lowercased on a guess.
-- Comment-only, like every other check: the corrected title is **suggested** in the comment
-  and the Reference cell is highlighted. The tool never rewrites the cell.
-- Validated across the corpus: fires on 6 % of entries (26 of 466 with a reference), 94 %
-  recall against the reviewer's own known corrections, and **0 titles with altered letters**.
-
-## [0.2.5] — 2026-07-13
-
-Full code review ahead of the repository going public. Nothing here changes what the
-checks *mean*; the fixes are data-safety, one XSS, and false positives that were being
-written into reviewers' docx.
-
-### Fixed — data safety
-- **`--out` pointed at the source folder no longer deletes source `.docx` files.** The
-  output names are derived from the source name, so an `--out` resolving to the source
-  folder made the stale-twin bookkeeping treat a SOURCE docx as a previous run's output
-  and `os.remove()` it. It is now refused outright (`--inplace` remains the deliberate
-  way to edit originals).
-- **Every docx write is atomic** (temp + `os.replace`). `doc.save()` streams a zip; a
-  crash or full disk part-way through truncated the target — which under `--inplace`, or
-  when refreshing onto a hand-edited output, is the reviewer's only copy.
-- **Single-writer lock per output folder.** Clicking "Rerun all" in the GUI while a
-  terminal run was going interleaved writes to the same docx and could corrupt it
-  silently. A second run now stops with a message. Locks left by a crashed run are
-  reclaimed automatically.
-- **`--id` matches the entry id exactly.** Substring matching meant `--id I10126` also
-  selected (and rewrote the output of) a 6-digit `I101261…`.
-
-### Fixed — security (GUI)
-- **XSS via the paper.** `esc()` was `String(s)` — a no-op that only looked like an HTML
-  escape — and the matched-cell snippet (raw `get_text()` from the `.pdf`) went into
-  `innerHTML`. A crafted paper could run script in the localhost origin and drive the
-  local `/api/*` endpoints. `esc()` now escapes; text-node sites use `str()` instead, so
-  nothing double-escapes.
-- State-changing requests carrying **neither `Origin` nor `Referer`** are now refused.
-- `MINDAT_INSECURE=1` warns that it exposes the API key (it disables TLS verification
-  while still sending the `Authorization` header).
-
-### Fixed — false positives (were being written into the docx)
-- **Blank Crystal System no longer flags.** The guard was `cs not in 'amothrc'` on a
-  possibly-empty string — and `''` is a substring of every string — so a blank field
-  sailed through and wrote a bogus *"Crystal System () disagrees with…"* comment.
-- **"Triclinic" and "Trigonal" are no longer read as *tetragonal*.** The classifier took
-  the first letter, and all three start with `t`. Triclinic entries had `a=b` and
-  `α=β=γ=90` imposed on them, producing a storm of false symmetry flags. Crystal systems
-  are now matched as whole words (ICDD's "Anorthic" *and* the IUCr words), and an
-  unrecognised word abstains.
-- **`D8` / `SMART` instrument patterns** required only a bare token — but `d8` is the
-  electron configuration and `smart` is an English word. They now need the maker's name
-  or a real model qualifier.
-- **Near-cubic rhombohedral cells** (α=β=γ≈90°) are no longer forced into the hexagonal
-  setting and told their γ must be 120.
-- **Anode detection** is token-anchored: `CoKα (Fe filter)` read as an *iron* anode (the
-  filter metal), and "Copper" matched `co`. A string naming two metals now resolves to
-  the one carrying the K-line label, or abstains.
-- **Correctly-rounded values** no longer report as value mismatches: comparison at the
-  common precision now rounds half-UP on the decimal value, not half-even on a binary
-  float (pdf `2.675` vs docx `2.68`).
-
-### Fixed — robustness
-- **One unreadable file no longer aborts the batch.** A `.docx` that is really an HTML
-  error page, a docx with no `word/document.xml`, or a truncated `.pdf` killed the run
-  and left every later entry unchecked. Such entries are now skipped and counted.
-- **python-docx pinned to `>=1.2`** — `add_comment()` does not exist before 1.2.0. With
-  1.1.x installed, every flagged entry raised `AttributeError`, was swallowed per-entry,
-  and the run "succeeded" having written **no findings at all**.
-- Mindat: HTTP **429 now backs off and retries** (honouring `Retry-After`) instead of
-  failing the refresh; truncated-JSON / dropped-connection reads retry instead of
-  escaping as a traceback; pagination is capped so a repeating `next` link can't spin
-  forever.
-- A missing **PyMuPDF** now says so, once, instead of failing every entry with an opaque
-  error.
-- The sweep snapshot is written atomically, and an unreadable existing snapshot now says
-  the drift comparison was dropped instead of silently restarting the baseline.
-- Console output is forced to UTF-8 on Windows, so a direct `python -m pxrd_review.…`
-  run no longer dies with `UnicodeEncodeError` on `λ`/`α`/`Å` when redirected.
-- `pxrd review I003448` (a bare entry id) now works for `review`/`lambda`/`candidates`,
-  which take `--id` — the launcher advertised the shorthand but only `extras` accepted it.
-
-### Docs
-- README: the GUI runs on **port 8000**, not 5000; the regression command needed its
-  fixtures argument; install step 4 pointed public readers at a private ICDD batch;
-  `--refresh` rebuilds both caches (`--refresh-struct` is just an alias); dropped a
-  reference to a LaunchAgent that is not in the repo.
-- NOTICE now names the two files that actually import PyMuPDF (the AGPL-isolation claim
-  pointed at paths that no longer exist).
-- INSTALL uses a `<version>` placeholder instead of a wheel filename two releases stale.
-
-## [0.2.4] — 2026-07-12
-
-Follow-up to the Windows-compatibility pass, from the first Windows reviewer's
-feedback.
-
-### Fixed — GUI
-- **The "open ↗" button now opens whichever file the middle pane is showing** —
-  it always opened the entry docx in Word, so on the `.pdf` view clicking it
-  (expecting the paper) surfaced the docx instead. It now opens the `.pdf` in the
-  default PDF viewer on the `.pdf` view and the docx in Word on the `docx` view;
-  the tooltip tracks the toggle. The route (`/api/open/<key>`) grew a
-  `?kind=pdf|docx` selector (default `docx`, so nothing else changes) and still
-  opens only a file the GUI has indexed. Not noticed on macOS, where the inline
-  PDF render made the button unnecessary.
-
-## [0.2.3] — 2026-07-10
-
-Windows-compatibility pass ahead of the first Windows user (ICDD reviewer). A
-static sweep of the codebase found two blockers, fixed below; the rest checked
-out clean (spawn-safe PDF workers, explicit UTF-8 on all text file IO,
-`os.startfile`/PowerShell branches for the native integrations, colon-free
-backup timestamps, per-entry containment of Word file locks).
-
-### Fixed — Windows
-- **`pxrd` mangled folder paths containing spaces** — Windows `exec*` spawns a
-  child while joining argv *without quoting*, so `pxrd gui "C:\…\ICDD entries"`
-  arrived split in two (and the prompt returned while the child still printed).
-  The launcher now uses `subprocess.run` on Windows (correct quoting, waits,
-  propagates the exit code, Ctrl-C → 130); POSIX keeps the true exec.
-- **Every GUI rerun failed on Windows** — a piped child interpreter encodes
-  stdout as cp1252, and the first `λ`/`α`/`→` the checks print raised
-  `UnicodeEncodeError`. The rerun env now sets `PYTHONUTF8=1` and the GUI
-  decodes with `encoding='utf-8', errors='replace'` (no child output can crash
-  either side); `pxrd` also sets `PYTHONUTF8=1` on Windows so redirected
-  console output (`pxrd review > log.txt`) is safe too.
-
-## [0.2.2] — 2026-07-10
-
-Full-codebase review (five parallel reviewers + adversarial verification): 1
-critical, 10 major, ~24 minor defects found and fixed. Regression 230/230 (25 new
-cases); validated by an analyze()-level A/B diff over the full corpus (1612 docx —
-fixtures + all training/ICDD trees): 39 entries changed, every change an intended
-fix (31 false `calculated` flags removed, 2 scanned .pdfs now report `notext`
-instead of a false anode flag, 1 entry's cell match improved), zero new findings.
-
-### Fixed — data loss / reviewer-work safety
-- **Formatting-only manual edits survive reruns** — `output_hand_edited` now does a
-  formatting-level compare (highlight/bold/italic/…, via a stripped temp copy), so a
-  reviewer highlight with no text change is refreshed-in-place with a backup instead
-  of silently rebuilt from source; a corrupt output reads as hand-edited (preserved),
-  and a stale twin is never deleted on formatting evidence alone.
-- **Backup failures abort, loudly** — when `.edit_backup/` can't be written, the
-  entry is left untouched with a `!!` warning instead of proceeding after a false
-  "your edits were saved" message.
-- **Filtered runs keep batch logs** — `--id`/`--limit` no longer rewrite
-  `annotation_log.txt` scoped to the subset or delete `mindat_discrepancies.txt`.
-- **Triage can't land on the wrong entry/finding** — content-stable finding keys
-  (`f:<hash>`, was positional `f0/f1…` that drifted when the list changed) shared by
-  the GUI and `--triage`, with unambiguous-only migration of old keys; the GUI's
-  `openEntry` is race-guarded (a failed/out-of-order load can no longer save entry
-  A's triage under entry B's key); `triage.json` writes are atomic (tmp+rename) with
-  corrupt-file quarantine; rerun endpoints are mutually excluded (409) so two
-  `annotate_review` subprocesses can't interleave writes to the same docx.
-- **Mindat caches are crash-safe** — atomic writes, unreadable caches self-heal via
-  re-fetch instead of crashing every run, and `refresh()` refuses to overwrite a
-  populated cache with a drastically smaller pull.
-
-### Fixed — false positives / missed catches (checks)
-- **check4 (calculated) is species-scoped** — another species' "could not be
-  collected / was calculated" sentences no longer flag a measured entry (removed 31
-  corpus false flags, e.g. the camanchacaite-paper quintet, grguricite, dienerite).
-- **Scanned .pdf (no text layer) → `notext`** — reported as "no extractable text"
-  instead of a written "docx anode NOT found in .pdf" false flag.
-- **Cell parsing hardening** — vertical-table label rows cluster per table block and
-  the inline grab window truncates at a second `a =` (no more chimeric candidates
-  mixing two species' axes — also upgraded one real match, I002381); EPMA rows
-  (`Point Ca 3.45 …`) no longer mint phantom cells; esd rejoin can't fuse a
-  footnote `(3)` across a newline but still recovers a line-wrapped esd with a unit;
-  a docx angle mistyped 90↔120 is now compared instead of skipped; `best_match`
-  never zips unequal axis lists; a merged/short Author's-Cell row pads instead of
-  crashing the batch; `.PDF` (uppercase) articles pair.
-- **λ capture** — nm-quoted wavelengths convert to Å; nearby cell parameters and
-  out-of-band numbers are never read as λ.
-- **check8/check10/check18 misfires** — esd suggestions can't match inside a longer
-  number (112.219(5) vs c=12.219); a prose dash after "biaxial" is not an optic
-  sign; a flattened charge digit (Ce3+) is not a REE coefficient (no more wrong
-  Levinson rename suggestions).
-- **candidate_groups** — axis ratios compare sorted lengths (a setting-swapped cell
-  is "similar", not a phantom super-cell); volumes carry the angle term (γ=0
-  uniaxial reads as 90°), fixing inverted cation-size verdicts.
-- **Accept override works on refresh** — triage `disagree` now clears a previously
-  stamped 'x'; repeated `--inplace` runs strip the tool's own annotations first
-  instead of duplicating every comment.
-
-### Added — distribution (first packaged release)
-- **INSTALL.md** — step-by-step install & upgrade instructions for ICDD reviewers
-  (Windows-first): Option A = wheel from the GitHub Releases page, Option B =
-  `pip install --upgrade git+…` straight from the private repo; README links to it.
-- **`pxrd --version`** (also `-V` / `version`) prints the installed version;
-  `pxrd_review.__version__` synced with `pyproject.toml` (was stuck at 0.1.0).
-- **Wheel installs keep state out of site-packages** — `paths.py` now detects a
-  checkout by marker (`pyproject.toml`) instead of writability, so a pip-installed
-  copy puts `.mindat_key`/`.cache/` in `~/.pxrd_review` even on per-user Pythons
-  whose site-packages is writable (state there would vanish on reinstall). Dev
-  checkouts keep their repo-root state, unchanged.
-
-### Changed — GUI
-- **Folder control is discoverable** — the top-bar path is now a bordered chip
-  (📁 icon + current folder + an explicit "Change…" button) instead of muted text
-  you had to know to click; the picker panel drops down under the chip (was
-  anchored to the far right of the window).
-
-### Fixed — trustworthy gates & tooling
-- **Regression suite can't vacuously pass** — a missing fixture docx is a loud FAIL
-  (was: every negative assertion silently passed); errored checks file under their
-  real code and a corpus-wide case asserts none exist; fixture discovery is
-  recursive and skips `review_out/`.
-- **sweep** — digit-bearing codes aggregate in the fire table; an explicit
-  `--baseline` that can't be read exits with an error instead of silently reporting
-  "no previous snapshot".
-- **CLI** — `pxrd extras I003448` passes the id through instead of remembering it as
-  a folder; a stray docx in the cwd can't hijack folder resolution; `pxrd check`
-  honors `$PXRD_REGRESSION_DIR`.
-- **GUI robustness** — triage export survives a corrupt entry (per-entry error line,
-  atomic write, visible JS failure status); the analysis-cache fingerprint includes
-  mindat.py + both Mindat caches (a cache refresh invalidates stale panes); label-only
-  records are no longer created on render (no `[?]` noise in `triage_report.txt`);
-  wedged PDF-worker processes are hard-killed and failed page images retry once;
-  stale async PDF-pane continuations are generation-guarded.
-
-## [0.2.1] — 2026-07-08
-
-Fixes from a full-day code review of the 0.2.0 work (10 confirmed defects + 5
-cleanups). Regression 204/204; triage-merge behavior covered by new sanity checks.
-
-### Added
-- **Entry-list sort options** — a dropdown beside the filter box orders the list by
-  ICDD id (↑/↓), mineral name (A→Z / Z→A), most fixes first, or cleanest first.
-  Applies within every view (Fixes/Attention/Clean/All); the ‹ › prev/next entry
-  navigation follows the displayed order.
-
-### Fixed
-- **Triage can no longer be silently lost or corrupted** — a duplicate `flushTriage`
-  declaration shadowed the keepalive flush (a confirm/dismiss inside the 350 ms
-  debounce was dropped on tab close); the self-heal merge now recognises lowercase
-  entry ids via the shared `ID_RE` (they previously pooled together and cross-merged
-  verdicts between unrelated entries) and carries **every** saved field (entry notes,
-  per-finding labels, timestamps) instead of stripping them.
-- **Folder switch is race-free** — `/api/folder` rebuilds the index under the state
-  lock, so an in-flight analysis can neither crash an entry request nor write a stale
-  foreign row into the new folder's `gui_cache.json`.
-- **Server lifecycle** — auto-exit grace default is now 90 s (Chrome throttles a
-  backgrounded tab's heartbeat to once per minute, so closing one tab could kill the
-  server under another still-open tab), and the watchdog never exits while a request
-  (e.g. a long rerun) is still being served.
-- **Dashboard rows that go stale later re-analyze** — editing a docx in Word (or
-  touching a paired source) no longer leaves the row on "analyzing…" forever.
-- **Folder picker** — the native macOS dialog now opens frontmost **with keyboard
-  focus** and starts in the current entries folder. Going up is ⌘↑ (the prompt
-  carries the hint), ⌘⇧G to type a path, or the sidebar — those keys used to land
-  in the browser because the dialog opened unfocused, leaving mouse-only
-  drill-down. The in-app browser starts from the real path (not the decorated
-  tooltip text, which had opened one level up); the path box gets its own
-  full-width row in a wider panel;
-  the ancestor `.pdf`-pool probe is bounded (no more minutes-long disk walk when no
-  papers exist nearby); a failed docx render is no longer cached for the session.
-- **Output-folder guards** — `annotate_review` and `sweep` refuse to run on a
-  `review_out` / `.edit_backup` root (discover() can index one since 0.2.0 for the
-  GUI's resume feature; annotating one would double-comment the outputs).
-
-### Changed
-- **discover() tiebreak counts only human marks** — the tool's own comments no
-  longer count as review activity, and on a tie the clean `(Name).docx` beats an
-  `_edited` name. A stray copy of a tool output can no longer outrank the true
-  source; reviewer copies whose only content is tool comments now resolve to the
-  clean copy (Part1: 3 of 37 entries — checks are unaffected, comments never
-  change field cells).
-
-## [0.2.0] — 2026-07-08
-
-Review-mode GUI overhaul: inspect the tool's findings **and** reviewers' edits side
-by side, and re-point the tool without restarting. GUI-only unless noted — the check
-engine and the regression suite are unchanged (204/204 passing).
-
-### Added
-- **In-app docx view** — a `.pdf | docx` toggle in the middle pane renders the entry
-  transcription in the browser with tracked changes inline (insertions underlined,
-  deletions struck through) and comments as chips. An **open ↗** button opens the
-  actual docx in Word when you want the full document.
-- **Per-author colouring + legend** — each reviewer's marks get a distinct colour
-  (the tool itself is muted grey); a colour legend pins to the top of the docx view.
-  The legend entries are **toggle buttons** — click an author to show/hide their
-  marks. Click a comment to **pin its full text** (no more hover-only tooltip).
-- **Reviewer-edit surfacing** — the reviewer's own tracked changes / comments are
-  read from the entry docx (or its `review_out` copy) and listed, **filterable by
-  author** — so you can review a folder of one reviewer's copies.
-- **Auto `.pdf` source pool** — pointing at a folder that holds only docx now
-  auto-finds the papers / `.cif` / `.dft` from the nearest ancestor that has them, so
-  the evidence panes still populate. `--pdf-root` overrides the auto-detected pool.
-- **Dashboard "Log" button** — opens the tool's change log
-  (`review_out/annotation_log.txt`) inline in a new browser tab; falls back to the
-  other `review_out` logs when present (whitelisted filenames only).
-- **In-app folder picker** — click the folder path in the header to re-point the tool
-  at a different entries folder **without restarting**: choose with the native
-  **Finder** dialog (macOS; zenity on Linux), browse in-app, or type/paste a path.
-  Each folder shows a live `docx / .pdf` content hint.
-
-### Fixed
-- **discover() picks the reviewed copy** — when a folder holds both a clean
-  `(Name).docx` and a reviewer's `(Name)_edited.docx`, the most-reviewed copy now
-  wins. Previously the clean copy did, so the GUI/sweep opened the un-edited one.
-- **"Hide author" keeps deletions readable** — hiding an author in the docx view now
-  keeps a deletion's original text (un-struck) rather than removing it, which had read
-  as though the deletion were accepted.
-- **PDF parsing moved off the Flask threads** — `analyze()`'s PDF text read now runs
-  in the MuPDF worker subprocess, so a live folder switch can no longer segfault the
-  server (MuPDF / `fitz` is not thread-safe). The docx renderer is also guarded so a
-  pathological file returns empty instead of a 500.
-
-### Security
-- The docx renderer HTML-escapes every document-derived string; the new log / docx /
-  folder endpoints serve only whitelisted or already-indexed files — no arbitrary
-  path or directory traversal.
+- **0.2.9 – 0.2.6** — reference title case became a check that writes (see 0.3.0); a '? look' mark
+  and Intensity Type findings landed on the wrong docx cell; INSTALL.md rewritten against how
+  reviewers actually install.
+- **0.2.5** — the safety pass: hand-edited outputs backed up before a refresh, the GUI's file
+  routes confined to the folder, several false positives that were being written into the docx.
+- **0.2.4 – 0.2.3** — GUI and Windows fixes.
+- **0.2.2** — the first packaged release, and the data-loss pass that made it fit to distribute:
+  the reviewer's own edits preserved on rerun, the gates made trustworthy.
+- **0.2.1 – 0.2.0** — the first public version: the cell and wavelength comparison, the extra
+  checks, the Mindat lookup, and the first security pass.
