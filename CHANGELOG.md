@@ -262,6 +262,18 @@ record (`--papers`, `--baseline`): tables checked 44 → 46, clean tables 10 →
   wt% reading itself in doubt the column only "sides with the wt% read — worth a look [unverified]";
   a column that differs from a formula the wt% reproduce is a note.
 
+### Changed — the bond-valence parameter file is parsed once (2026-09-07)
+`Params.__init__` re-read and re-parsed `data/bvparm2020.cif` on every construction, and the callers
+build them in bulk: `bv_check_paper` makes six per paper, three parameter sets times two U6+ modes,
+and `paper_structure.build` one per cell candidate. `_param_tables(path)` now caches the parsed
+`(table, refs)`, keyed by path with mtime and size so an edited file is re-read. Both dicts are
+read-only after construction — the per-instance state is `used` — so one copy backs every `Params`.
+
+Honest accounting: this is a correctness-neutral tidy-up, not a speed-up. Measured on the same
+183-paper subset, serial, the run went from 214 s to 211 s, which is inside the noise; parsing the
+file was only about 3 % of the profile, and the bond-valence neighbour search dominates. Every
+output file is byte-identical before and after.
+
 ### Changed — the corpus harness runs its papers in parallel (2026-09-07)
 `tools/corpus_paper_extract.py` walked the corpus one paper at a time in one process, so a full
 run cost about 23 minutes and the standing rule was to validate a change against a subset. The

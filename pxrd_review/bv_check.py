@@ -510,25 +510,45 @@ SHORT_REF = {'a': 'Brown and Altermatt (1985)', 'b': "Brese and O'Keeffe (1991)"
              'af': 'Locock and Burns (2004)', 'bh': 'Brown (2009)', 'bj': 'Krivovichev (2012)', 'bk': 'Mills and Christy (2013)'}
 H_RANGES = [(1.05, 0.907, 0.28), (1.70, 0.569, 0.94), (99.0, 0.990, 0.59)]   # Brown (2002) O–H by distance
 
+_PARAM_CACHE = {}                       # (path, mtime, size) -> (table, refs)
+
+def _param_tables(path):
+    """The parsed parameter file: ({(cation, valence, anion, valence): [(R0, b, ref id, details)]},
+    {ref id: reference}). Cached, because a Params costs a 300 kB parse and the callers build them
+    in bulk: bv_check_paper makes six per paper (three sets x two U6+ modes) and paper_structure one
+    per cell candidate. Both dicts are read-only after this point — nothing outside this function
+    writes to them, the per-instance state being `used` — so one copy backs every Params. The key
+    carries mtime and size, so editing the file during a session re-reads it."""
+    try:
+        st = os.stat(path); key = (path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = (path, None, None)
+    hit = _PARAM_CACHE.get(key)
+    if hit is not None:
+        return hit
+    table = {}; refs = {}
+    for b in read_cif(path):
+        tags, rows = _loop(b, '_valence_ref_id')
+        if rows:
+            for i, r in zip(_col(tags, rows, '_valence_ref_id'), _col(tags, rows, '_valence_ref_reference')):
+                refs[i] = r
+        tags, rows = _loop(b, '_valence_param_ro')
+        if rows:
+            for r in rows:
+                d = dict(zip(tags, r))
+                k = (d['_valence_param_atom_1'], int(d['_valence_param_atom_1_valence']),
+                     d['_valence_param_atom_2'], int(d['_valence_param_atom_2_valence']))
+                table.setdefault(k, []).append((float(d['_valence_param_ro']), float(d['_valence_param_b']),
+                                                d['_valence_param_ref_id'], d.get('_valence_param_details', '')))
+    _PARAM_CACHE[key] = (table, refs)
+    return table, refs
+
+
 class Params:
     def __init__(self, path=PARAM_FILE, prefer='gh', u6='burns'):
         """prefer: 'gh' | 'bo' | 'ba'; u6: 'burns' (U6+–O from Burns et al. 1997, the uranyl
         convention) or 'params' (U6+ from the chosen set like every other cation)."""
-        self.table = {}; self.refs = {}
-        blocks = read_cif(path)
-        for b in blocks:
-            tags, rows = _loop(b, '_valence_ref_id')
-            if rows:
-                for i, r in zip(_col(tags, rows, '_valence_ref_id'), _col(tags, rows, '_valence_ref_reference')):
-                    self.refs[i] = r
-            tags, rows = _loop(b, '_valence_param_ro')
-            if rows:
-                for r in rows:
-                    d = dict(zip(tags, r))
-                    key = (d['_valence_param_atom_1'], int(d['_valence_param_atom_1_valence']),
-                           d['_valence_param_atom_2'], int(d['_valence_param_atom_2_valence']))
-                    self.table.setdefault(key, []).append((float(d['_valence_param_ro']), float(d['_valence_param_b']),
-                                                           d['_valence_param_ref_id'], d.get('_valence_param_details', '')))
+        self.table, self.refs = _param_tables(path)
         self.prefer = PREFER.get(prefer, PREFER['gh'])
         self.prefer_key = prefer if prefer in PREFER else 'gh'
         self.u6 = u6
