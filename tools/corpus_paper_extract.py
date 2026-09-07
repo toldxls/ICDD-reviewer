@@ -7,12 +7,24 @@ basis and method vs its own formula) and against its .cif (bond-valence table). 
 --papers (a file of basenames, or a comma list) runs a subset: the papers a change could touch plus a sample,
 diffed against the baseline record — the owner's rule, a full run being half an hour.
 
+--jobs runs the papers in worker processes (default: the machine's cores, capped at 8; --jobs 1 is the serial
+path, in-process). The papers are independent, so this is wall-clock only: results are folded in JOB order, so
+every output file is byte-identical to a serial run. That equality is the acceptance test for the flag, and it
+matters because these files exist to be diffed against each other.
+
 --baseline diffs this run's per-paper record (paper_checks_papers<tag>.json, written every run) against an
 earlier run's: the readers whose status changed, paper by paper. That is the A/B for a reader change — the
 baseline is the record of the old code, so no worktree or module copy is needed.
 """
 import os, re, sys, glob, csv, json, argparse
-from pxrd_review import extra_checks as X, epma as EP, paper_extract as PE
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # runnable from any cwd — and spawn hands this path to every worker
+from pxrd_review import paper_extract as PE
+
+_CTX = mp.get_context('spawn')          # the context the GUI's page worker already uses (pxrd_review/gui/_pdf_worker.py)
 
 READERS = ('epma', 'formula', 'basis', 'method', 'optics.n', 'optics.D_meas', 'optics.D_calc', 'cell', 'bv.params', 'pxrd.obs', 'pxrd.calc', 'name')
 
@@ -60,13 +72,13 @@ def diff(base, papers, limit=8):
     return lines
 
 
-def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None, subset=None):
-    """Every paper .pdf (paired with its .cif when one shares the I-number): what the extractor
-    reads, the paper's formula re-derived from its own table and basis, its bond-valence table vs
-    the .cif. The verdicts are the tool's, for the owner to check one by one."""
-    stats = {'pdfs': 0, 'table': 0, 'formula': 0, 'comp_checked': 0, 'comp_ok': 0, 'comp_flag': 0, 'comp_unverified': 0, 'bv_checked': 0, 'bv_clean': 0, 'basis': 0, 'n': 0, 'D': 0, 'bvset': 0, 'pxrd': 0}
-    lines = []; rows = []; seen = set(); papers = {}
-    readers = {}                                                          # field -> {status: count}: the per-reader verified rate, the standing metric
+def _jobs(pdf_dirs, only=None, subset=None, limit=None):
+    """The papers to run, in the order the serial walk visited them -> [(pdf, cif, base)].
+    A verbatim transcription of that walk: `seen` is shared across pdf_dirs and the limit is
+    tested AFTER the key is added, so `--limit N` yields exactly N papers, drawn from the
+    earliest directories; `--limit 0` is falsy and means no limit. The .cif is paired here,
+    in the parent, so the unsorted glob that picks it cannot vary from worker to worker."""
+    jobs = []; seen = set()
     for pd in pdf_dirs:
         for pdf in sorted(glob.glob(os.path.join(pd, '**', '*.pdf'), recursive=True)):
             if 'review_out' in pdf:
@@ -85,53 +97,141 @@ def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None,
             if limit and len(seen) > limit:
                 break
             cif = next((c for c in glob.glob(os.path.join(os.path.dirname(pdf), '*.cif')) if any(i in os.path.basename(c) for i in ids)), None) if ids else None
+            jobs.append((pdf, cif, base))
+    return jobs
+
+
+def _run_one(job):
+    """One paper's checks — what the serial loop body did, as a payload the parent folds in:
+      {'base', 'record', 'readers': [(field, status)], 'stats': {key: n}, 'lines': [...], 'rows': [[...]]}
+      {'base', 'fail': <message>}   when check_paper itself raised
+    Only primitives cross the process boundary: check_paper's own return value stays here (it
+    carries an epma.Reduction and the whole read of the paper), and nothing in this path writes
+    to disk — extract() writes its data files only when it is given an out_dir, and it is not."""
+    pdf, cif, base = job
+    try:
+        r = PE.check_paper(pdf, cif, None)
+    except Exception as e:
+        return {'base': base, 'fail': str(e)}
+    st = {}; readers = []; lines = []; rows = []
+    def bump(k):
+        st[k] = st.get(k, 0) + 1
+    bump('pdfs')
+    ex = r['extract']; summary = []
+    for fld, rec in (r.get('fields') or {}).items():
+        readers.append((fld, rec['status']))
+    try:
+        record = paper_record(r, ex, cif, PE.text_of(pdf))
+    except Exception as e:
+        record = {'fields': {}, 'composition': None, 'error': str(e)[:100]}
+    if ex['epma']:
+        bump('table'); summary.append('table %d' % len(ex['epma']['rows']))
+    c = r['composition']
+    if c:
+        bump('formula'); bump('comp_checked')
+        if c['ok']:
+            bump('comp_ok'); summary.append('composition OK')
+        elif c.get('verified'):
+            bump('comp_flag'); summary.append('composition FLAG')
+            for ln in c['lines'][1:]:
+                rows.append([base, 'composition flag', ln.strip(), ''])
+        else:
+            bump('comp_unverified'); summary.append('composition unverified')
+            for ln in c['lines'][1:]:
+                rows.append([base, 'composition unverified', ln.strip(), ''])
+    elif ex['epma']:
+        summary.append('no formula sentence')
+    if ex['basis']: bump('basis')
+    if ex['optics']['n']: bump('n')
+    if ex['optics']['D_meas'] or ex['optics']['D_calc']: bump('D')
+    if ex['bv']['params']: bump('bvset')
+    if ex['pxrd']['obs'] or ex['pxrd']['calc']: bump('pxrd'); summary.append('pxrd %d/%d' % (ex['pxrd']['obs'], ex['pxrd']['calc']))
+    b = r['bv']
+    if b:
+        bump('bv_checked')
+        if b['disagree'] == 0:
+            bump('bv_clean')
+        summary.append('bv %d/%d disagree (%s%s)' % (b['disagree'], b['compared'], b['params'], '' if (b['params'], b['u6']) == b['cited'] else ', paper cites ' + b['cited'][0]))
+        for ln in b['lines'][1:]:
+            rows.append([base, 'bond valence', ln.strip(), ''])
+    elif cif:
+        summary.append('bv: no table found in the pdf')
+    lines.append('==== %-40s %s' % (base, ' | '.join(summary) or 'nothing read'))
+    for ln in r['lines']:
+        lines.append('     ' + ln[:220])
+    return {'base': base, 'record': record, 'readers': readers, 'stats': st, 'lines': lines, 'rows': rows}
+
+
+def _kill(pool):
+    """Tear a pool down hard. shutdown() alone cannot stop a worker wedged inside native MuPDF
+    code, so the process would keep the CPU behind the dead pool (pxrd_review/gui/_pdf_worker)."""
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+    for proc in (getattr(pool, '_processes', None) or {}).values():
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _map_ordered(jobs, n_jobs):
+    """_run_one over the jobs in worker processes -> [payload], IN JOB ORDER. The order is the
+    point: papers[] insertion order is the .json's order and breaks ties in the report's powder
+    list, and lines/rows are the report and the TSV, so folding by completion would change three
+    of the four output files.
+
+    A worker can die outright — MuPDF segfaults uncatchably on some malformed embedded images,
+    which is why the GUI isolates page work at all, and the OS can kill a worker for memory. The
+    pool cannot tell those apart, and neither can this: rather than mark some paper an error and
+    write a report that a later diff would take at face value, the run says which papers were in
+    flight and stops without writing anything. `--jobs 1` then names the culprit."""
+    n_jobs = max(1, min(n_jobs, len(jobs)))
+    if n_jobs <= 1:
+        return [_run_one(j) for j in jobs]
+    out = [None] * len(jobs)
+    pool = ProcessPoolExecutor(max_workers=n_jobs, mp_context=_CTX)
+    try:
+        pending = {}; nxt = 0
+        for i in range(len(jobs)):
+            while nxt < len(jobs) and len(pending) < 4 * n_jobs:          # a bounded window: the parent holds a few results, not the whole corpus
+                pending[nxt] = pool.submit(_run_one, jobs[nxt]); nxt += 1
             try:
-                r = PE.check_paper(pdf, cif, None)
-            except Exception as e:
-                lines.append('==== %-40s ERROR %s' % (base, e)); rows.append([base, 'error', str(e)[:200], '']); continue
-            stats['pdfs'] += 1
-            ex = r['extract']; summary = []
-            for fld, rec in (r.get('fields') or {}).items():
-                readers.setdefault(fld, {}); readers[fld][rec['status']] = readers[fld].get(rec['status'], 0) + 1
-            try:
-                papers[base] = paper_record(r, ex, cif, PE.text_of(pdf))
-            except Exception as e:
-                papers[base] = {'fields': {}, 'composition': None, 'error': str(e)[:100]}
-            if ex['epma']:
-                stats['table'] += 1; summary.append('table %d' % len(ex['epma']['rows']))
-            c = r['composition']
-            if c:
-                stats['formula'] += 1; stats['comp_checked'] += 1
-                if c['ok']:
-                    stats['comp_ok'] += 1; summary.append('composition OK')
-                elif c.get('verified'):
-                    stats['comp_flag'] += 1; summary.append('composition FLAG')
-                    for ln in c['lines'][1:]:
-                        rows.append([base, 'composition flag', ln.strip(), ''])
-                else:
-                    stats['comp_unverified'] += 1; summary.append('composition unverified')
-                    for ln in c['lines'][1:]:
-                        rows.append([base, 'composition unverified', ln.strip(), ''])
-            elif ex['epma']:
-                summary.append('no formula sentence')
-            if ex['basis']: stats['basis'] += 1
-            if ex['optics']['n']: stats['n'] += 1
-            if ex['optics']['D_meas'] or ex['optics']['D_calc']: stats['D'] += 1
-            if ex['bv']['params']: stats['bvset'] += 1
-            if ex['pxrd']['obs'] or ex['pxrd']['calc']: stats['pxrd'] += 1; summary.append('pxrd %d/%d' % (ex['pxrd']['obs'], ex['pxrd']['calc']))
-            b = r['bv']
-            if b:
-                stats['bv_checked'] += 1
-                if b['disagree'] == 0:
-                    stats['bv_clean'] += 1
-                summary.append('bv %d/%d disagree (%s%s)' % (b['disagree'], b['compared'], b['params'], '' if (b['params'], b['u6']) == b['cited'] else ', paper cites ' + b['cited'][0]))
-                for ln in b['lines'][1:]:
-                    rows.append([base, 'bond valence', ln.strip(), ''])
-            elif cif:
-                summary.append('bv: no table found in the pdf')
-            lines.append('==== %-40s %s' % (base, ' | '.join(summary) or 'nothing read'))
-            for ln in r['lines']:
-                lines.append('     ' + ln[:220])
+                out[i] = pending.pop(i).result()
+            except BrokenProcessPool:
+                stuck = sorted(pending)
+                _kill(pool)
+                sys.stderr.write('\nA worker process died — a MuPDF fault on a malformed pdf, or the OS killing it for memory.\n'
+                                 'Nothing was written: a report that quietly marks a sound paper as an error is worse than no report.\n'
+                                 'These papers were in flight, and one of them is the cause:\n')
+                for k in stuck[:20]:
+                    sys.stderr.write('  %s\n' % jobs[k][2])
+                if len(stuck) > 20:
+                    sys.stderr.write('  … and %d more\n' % (len(stuck) - 20))
+                sys.stderr.write('Re-run with --jobs 1 to find it (it will take the whole run down at that paper).\n')
+                raise SystemExit(2)
+    finally:
+        _kill(pool)
+    return out
+
+
+def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None, subset=None, n_jobs=1):
+    """Every paper .pdf (paired with its .cif when one shares the I-number): what the extractor
+    reads, the paper's formula re-derived from its own table and basis, its bond-valence table vs
+    the .cif. The verdicts are the tool's, for the owner to check one by one."""
+    stats = {'pdfs': 0, 'table': 0, 'formula': 0, 'comp_checked': 0, 'comp_ok': 0, 'comp_flag': 0, 'comp_unverified': 0, 'bv_checked': 0, 'bv_clean': 0, 'basis': 0, 'n': 0, 'D': 0, 'bvset': 0, 'pxrd': 0}
+    lines = []; rows = []; papers = {}
+    readers = {}                                                          # field -> {status: count}: the per-reader verified rate, the standing metric
+    for pay in _map_ordered(_jobs(pdf_dirs, only, subset, limit), n_jobs):
+        if 'fail' in pay:
+            lines.append('==== %-40s ERROR %s' % (pay['base'], pay['fail'])); rows.append([pay['base'], 'error', pay['fail'][:200], '']); continue
+        for k, v in pay['stats'].items():
+            stats[k] += v                                                 # += into the dict above: the report prints its repr, so the KEY ORDER is output — never insert one here
+        for fld, status in pay['readers']:
+            readers.setdefault(fld, {}); readers[fld][status] = readers[fld].get(status, 0) + 1
+        papers[pay['base']] = pay['record']                               # insertion order is the .json's order, and breaks ties in the powder list below
+        lines += pay['lines']; rows += pay['rows']
     lines.append(''); lines.append('STATS %s' % stats)
     # the powder table against the cell, corpus-wide (what tools/corpus_cell_survey.py used to report):
     # the statuses, and the red list — a red line names a row of the paper, and the row decides whether
@@ -182,8 +282,10 @@ if __name__ == '__main__':
     ap.add_argument('--limit', type=int, help='stop after N papers (a smoke run)')
     ap.add_argument('--only', help='only papers whose file name contains this')
     ap.add_argument('--papers', help='a file with one pdf basename per line (or a comma list): only those papers — a subset run')
+    ap.add_argument('--jobs', type=int, default=0, help='worker processes: 0 (default) = the cores, capped at 8; 1 = serial, in-process')
     a = ap.parse_args()
     subset = None
     if a.papers:
         subset = set(open(a.papers, encoding='utf-8').read().split()) if os.path.exists(a.papers) else set(x.strip() for x in a.papers.split(',') if x.strip())
-    main(a.roots.split(','), a.pdf_dirs.split(','), a.out_dir, a.tag, a.baseline, a.limit, a.only, subset)
+    jobs = a.jobs or min(8, os.cpu_count() or 1)                       # capped: each worker holds fitz and a paper's page model
+    main(a.roots.split(','), a.pdf_dirs.split(','), a.out_dir, a.tag, a.baseline, a.limit, a.only, subset, max(1, jobs))

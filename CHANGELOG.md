@@ -262,6 +262,37 @@ record (`--papers`, `--baseline`): tables checked 44 → 46, clean tables 10 →
   wt% reading itself in doubt the column only "sides with the wt% read — worth a look [unverified]";
   a column that differs from a formula the wt% reproduce is a note.
 
+### Changed — the corpus harness runs its papers in parallel (2026-09-07)
+`tools/corpus_paper_extract.py` walked the corpus one paper at a time in one process, so a full
+run cost about 23 minutes and the standing rule was to validate a change against a subset. The
+papers are independent, so the walk, the work and the merge are now three separate steps and the
+work runs in a process pool: `--jobs N`, defaulting to the machine's cores capped at eight, with
+`--jobs 1` keeping the serial in-process path. Measured on the 183-paper bond-valence subset:
+
+| | serial | 8 workers |
+|---|---|---|
+| wall clock | 214 s | 53 s |
+| cpu time | 185 s | 247 s |
+
+Four times faster, so the full corpus goes from about 21 minutes to about 5. The extra cpu time is
+each worker's own start-up: a spawn, a fitz import and its own read of the 2.3 MB Mindat index.
+
+- **Byte-identical output is the contract, not a hope.** Results are folded in job order, never by
+  completion, because three of the four output files depend on it: `paper_checks_papers<tag>.json`
+  is dict-insertion-ordered, the report's powder red list sorts stably over that same order, and
+  the report and faults TSV are appended per paper. The counters are summed into the pre-seeded
+  `stats` dict so its key order, which the report prints as a repr, cannot move. Verified by running
+  a subset through the old code, the new serial path and the new parallel path and comparing all
+  four files: identical, to the byte.
+- **A dead worker stops the run instead of blaming a paper.** MuPDF can segfault uncatchably on a
+  malformed embedded image, and the OS can kill a worker for memory; a pool cannot tell them apart.
+  Rather than write an `ERROR` line that a later `--baseline` diff would take at face value, the run
+  names the papers that were in flight, writes nothing, and exits. `--jobs 1` then finds the culprit.
+- Only primitives cross the process boundary: the worker builds the record, report lines, TSV rows
+  and counters, so `check_paper`'s return value, which carries an `epma.Reduction` and the whole
+  read of the paper, stays where it was made. The in-flight window is bounded, so the parent holds
+  a few results rather than the whole corpus.
+
 ## [0.5.5] — 2026-09-05
 
 ### Fixed — three things the owner hit testing 0.5.4
