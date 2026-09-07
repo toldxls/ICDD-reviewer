@@ -166,6 +166,30 @@ a fix was reachable:
   differ. Validated on the 182-paper subset (every paper with a .cif, plus sixty at random) against
   the last full record: bond-valence tables checked 30 → 44 papers, clean 7 → 10, doubts 10 → 20,
   unread 78 → 54, none lost.
+- **A cell statement that lost its angles gets them back.** A quarter of the powder tables that
+  'followed no cell' were monoclinic or triclinic papers whose cell the reader had taken without its
+  angles — most often because a Symbol-font β reaches the text layer as a plain 'b' ('b = 107.928(1)°'
+  after 'c = 5.5681(7) Å'), and a triclinic α β γ as 'a b c'. `_paper_cells` now offers, for a
+  statement with no angle, the angles of the paper's fuller statement of the same axes, each distinct
+  β the text prints for a monoclinic mineral, and each α β γ triplet for a triclinic one — the table
+  decides which cell it follows. Nine of twelve such tables checked by hand went from 'only 3 of 38
+  lines follow it' to every line within 0.5 %. Lines that follow another cell the paper states are that other
+  phase's (a three-mineral paper's table no longer draws fifteen red lines), and more than five
+  outliers in one table is a doubt about the reading, not a list of slips. On the 240-paper subset
+  (every table that followed no cell, every unverified composition, sixty at random): 39 more tables
+  follow their cell, 49 remain of 88, none lost; red powder lines 13 → 11 in eight papers, two of
+  them new (69131, EJM30_581), for the owner's eye.
+- **Composition, five reader classes from the 'cations deviate' papers:** the oxide block printed
+  beside an apfu block that begins a line earlier (gunmaite's Table 3: 'Avg. Min. Max Na 1.72' over
+  'Na2O 3.61 2.93 4.26 Sr 0.70') is read as its own table; a value with its unit glued ('7.84%') is a
+  value; a site label whose bracket the text layer lost ('Y Mg1.50Fe…') is not yttrium; a stated
+  anion count from a table without water is reduced on the anhydrous count, stated − H/2 (every OH
+  half an oxide oxygen, every H2O a whole one the oxides do not give) — terskite, fehrite and
+  strontioborite now reproduce on the basis their papers state; the tourmaline convention '31
+  anions (O + OH + F)' — every H2O of the table as two OH — is tried when the stated anion basis
+  fails (`epma.reduce(water_oh=)`); and 'on the basis of 10 cations excluding Si and P' is read as
+  the sum of the table's other cations. 'On the basis of 4319 observed reflections' is no longer a basis (the O
+  must be a whole word). Gunmaite and luogufengite verify; the basis record gains 28 on the subset.
 - **Six defects a cross-file review of the unreleased 0.5.6 code found, fixed** (a medium `/code-review`;
   its other angles did not finish): Mindat's ideal formula is HTML, and its mass was read by a token scan
   that dropped every subscript (abelsonite 86 instead of 519) — that garbage stood in as "an ideal

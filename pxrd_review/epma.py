@@ -188,7 +188,7 @@ def _stats(vals):
         return (float('nan'),) * 4 + (0,)
     return (sum(v) / len(v), statistics.stdev(v) if len(v) > 1 else 0.0, min(v), max(v), len(v))
 
-def reduce(ds, basis=('O', 21), adds=(), converts=(), drop=(), points=None, ideal_apfu=None, raw_anions=False):
+def reduce(ds, basis=('O', 21), adds=(), converts=(), drop=(), points=None, ideal_apfu=None, raw_anions=False, water_oh=False):
     """-> Reduction. basis: ('O', N) | ('cations', N) | ('element', 'U', N) | ('charge', base) where
     base is one of the others and the balance adjusts the H2O/OH (or Fe3+/Fe2+) content.
     adds: [(formula, mode, value)] with mode 'structure' (apfu), 'wt' (wt%), 'difference'.
@@ -233,7 +233,7 @@ def reduce(ds, basis=('O', 21), adds=(), converts=(), drop=(), points=None, idea
         return corr
     # iterate: structure-based additions depend on the normalisation, which depends on the total
     for _ in range(12):
-        rows = _apfu(table, basis, raw_anions)
+        rows = _apfu(table, basis, raw_anions, water_oh)
         changed = False
         for k, r in table.items():
             if 'struct_apfu' in r:
@@ -250,7 +250,7 @@ def reduce(ds, basis=('O', 21), adds=(), converts=(), drop=(), points=None, idea
                 table[diff_key]['mean'] = table[diff_key]['lo'] = table[diff_key]['hi'] = target; changed = True
         if not changed:
             break
-    rows = _apfu(table, basis, raw_anions)
+    rows = _apfu(table, basis, raw_anions, water_oh)
     out = OrderedDict()
     for k, r in table.items():
         out[k] = Row(r['c'], r['mean'], r['mean'], r['sd'], r['lo'], r['hi'], r['n'], rows['mol'][k], rows['cat'][k], rows['an'][k], rows['apfu'][k], rows['o'][k], r['source'])
@@ -293,13 +293,15 @@ class Reduction:
     def sum_cations(self):
         return sum(r.apfu for r in self.rows.values() if r.c.kind in ('oxide', 'other', 'element') and r.c.element != 'H')
 
-def _apfu(table, basis, raw_anions=False):
+def _apfu(table, basis, raw_anions=False, water_oh=False):
+    """water_oh: the tourmaline / amphibole convention — the anion count is O + OH + F, every H2O of
+    the table standing for two OH (two anions), not for one oxide oxygen."""
     mol = {k: (r['mean'] / r['c'].mw if r['c'].mw else 0.0) for k, r in table.items()}
     cat = {k: mol[k] * r['c'].n_cat for k, r in table.items()}
     an = {}
     for k, r in table.items():
         c = r['c']
-        an[k] = mol[k] * c.n_o if c.kind in ('oxide', 'other') else (mol[k] * c.n_cat if c.kind == 'element-anion' else (mol[k] if c.kind == 'water' else 0.0))
+        an[k] = mol[k] * c.n_o if c.kind in ('oxide', 'other') else (mol[k] * c.n_cat if c.kind == 'element-anion' else ((2.0 if water_oh else 1.0) * mol[k] if c.kind == 'water' else 0.0))
     kind, *arg = basis
     if kind == 'O':
         # every anion: O of the oxides and of H2O, plus F, Cl (S). A halogen REPLACES an oxygen that the
@@ -782,7 +784,7 @@ def _apfu_of(red):
             out['H'] = out.get('H', 0.0) + 4 * r.apfu
     return out
 
-def replicate_formula(wt, counts, bases, name='entry', tol_abs=0.02, tol_rel=0.02):
+def replicate_formula(wt, counts, bases, name='entry', tol_abs=0.02, tol_rel=0.02, water_oh=False):
     """Re-reduce the mean wt% on each candidate basis and compare with the published apfu.
     -> {'basis', 'score' (rms relative deviation of the cations), 'apfu', 'reduction', 'diffs':
     [(element, published, replicated, note)], 'unanalysed': [elements the probe did not give]}."""
@@ -796,7 +798,7 @@ def replicate_formula(wt, counts, bases, name='entry', tol_abs=0.02, tol_rel=0.0
     best = None
     for b in bases:
         try:
-            red = reduce(ds, b)
+            red = reduce(ds, b, water_oh=water_oh)
         except Exception:
             continue
         apfu = _apfu_of(red)

@@ -265,6 +265,8 @@ def _numbers(tokens):
     out = []; i = 0
     while i < len(tokens):
         t = tokens[i].replace('−', '-').replace('–', '-').replace('—', '-')
+        if t.endswith('%') and _NUM.match(t[:-1]):
+            t = t[:-1]                                          # '7.84%': the unit glued to the value
         m = _RANGE1.match(t)
         if m:
             out.append(('range', (float(m.group(1)), float(m.group(2))))); i += 1; continue
@@ -334,6 +336,13 @@ def _row_at(ws, x_col):
                 cut = idx; break
         if not any(kk in ('num', 'range', 'na') for kk, _ in keep[:cut]):
             continue                                            # 'A total of 16 scans …': prose, not the Total row — try the next token
+        if kind == 'constituent' and re.fullmatch(r'[A-Z][a-z]?', c) and cut == 1 and keep[0][0] == 'num' and cut < len(keep):
+            nxt = _constituent_ok(keep[cut][1])[0]
+            try:
+                if nxt and re.search(r'O\d*$', nxt) and EP.parse_constituent(nxt).element == c:
+                    continue                                    # 'Na 1.72 Na2O 3.61 2.93 4.26': the apfu beside the oxide row — the oxide carries the wt%
+            except Exception:
+                pass
         return c, kind, keep[:cut], w[0]
     return None
 
@@ -341,6 +350,8 @@ _MEANROW = re.compile(r'^(mean|average|aver\.?|avg\.?|среднее)[:.]?$', re
 _STATROW = re.compile(r'^(range|s\.?d\.?|σ|min\.?|max\.?|esd|standard|stdev|st\.?dev|n|apfu|wt\.?%)', re.I)
 
 def _numlike(t):
+    if t.endswith('%') and len(t) > 1:
+        t = t[:-1]
     """'12.3', '29(3)', '(13.16)', '−0.5': a value cell."""
     t = t.replace('−', '-')
     return bool(_NUM.match(t) or _NUM_ESD.match(t) or re.fullmatch(r'\(\d+\.\d+\)', t))
@@ -686,10 +697,17 @@ def epma_table(pdf, name=''):
                     (rows_nd if nd_first else rows).append({'constituent': 'N2H8O' if c == '(NH4)2O' else c.rstrip('+-'), 'mean': mean, 'range': rng, 'sd': sd,
                                  'standard': ' '.join(texts) if texts else None, 'all': nums_all, 'xs': xs})
                 cand = {'rows': _drop_totals(rows), 'total': total, 'header': ' '.join(head)[:200], 'page': pno + 1, 'n': n_const, 'score': score, 'caption': cap[:160], 'head_cells': head_cells, 'rows_all': rows + rows_nd, 'label_x': x_col}
+                key_rows = {(r_['constituent'], r_['mean']) for r_ in cand['rows']}
+                if any(c_['page'] == cand['page'] and abs((c_.get('label_x') or 0) - (x_col or 0)) <= 30 and key_rows <= {(r_['constituent'], r_['mean']) for r_ in c_['rows']} for c_ in cands):
+                    i = j; continue                                          # the same block read again from its second row (a side-by-side rescan): not another table
                 cands.append(cand)
                 if best is None or score > best['score']:
                     best = cand
-                i = j; continue
+                # a second table beside this one (its constituent tokens with numbers at another x — the
+                # oxide block beside an apfu block that began a line earlier): scanned from the next line
+                side = any(_constituent_ok(w[4])[0] and abs(w[0] - (x_col or 0)) > 30 and q + 1 < len(ln_['w']) and _numlike(ln_['w'][q + 1][4])
+                           for ln_ in lines[i:j] for q, w in enumerate(ln_['w']))
+                i = (i + 1) if side and j > i + 1 else j; continue
             i += 1
     pt = prose_table(text_of(pdf))
     if pt:
@@ -708,7 +726,7 @@ def epma_table(pdf, name=''):
 # ----------------------------------------------------------------------------- the paper's method
 
 _BASIS = [
-    (r'(?:basis of|based on|normali[sz]ed (?:to|on(?: the basis of)?)) (\d+(?:\.\d+)?) (?:O|oxygen|oxygens)(?: atoms)?(?: per formula unit| apfu| pfu)?', 'O'),
+    (r'(?:basis of|based on|normali[sz]ed (?:to|on(?: the basis of)?)) (\d+(?:\.\d+)?) (?:O|oxygen|oxygens)(?![a-z])(?: atoms)?(?: per formula unit| apfu| pfu)?', 'O'),   # 'O' whole: '4319 observed reflections' is no basis
     (r'(?:basis of|based on|normali[sz]ed (?:to|on(?: the basis of)?)) (\d+(?:\.\d+)?) (?:anions?|\(O ?\+ ?(?:F|OH|Cl)[^)]*\)|O ?\+ ?(?:F|OH|Cl)|total anions?)', 'O'),
     (r'(?:basis of|based on|normali[sz]ed (?:to|on(?: the basis of)?)) (\d+(?:\.\d+)?) (?:total )?cations', 'cations'),
     (r'(?:basis of|based on|normali[sz]ed (?:to|on(?: the basis of)?)) (\d+(?:\.\d+)?) ((?:[A-Z][a-z]? ?\+ ?)*[A-Z][a-z]?)(?: atoms| apfu| pfu| atom)?\b', 'element'),
@@ -1377,14 +1395,46 @@ def _cell_floats(cell):
         return None
 
 def _paper_cells(text):
-    """The cells the text states, the powder one first -> [(context, cell floats)]."""
+    """The cells the text states, the powder one first -> [(context, cell floats)]. A statement that
+    lost its angles (a powder caption 'a = 13.58, b = 5.04, c = 5.57 Å' of a monoclinic mineral; a
+    crystal-data table read without its β) takes them from the paper's fuller statement of the same
+    axes, else the one β the text prints — on the corpus a quarter of the tables that 'followed no
+    cell' followed the stated cell once its β was back."""
     from pxrd_review import cell_lambda_check as CL
+    cands = list(CL.find_cells(text))
+    full = [c_ for c_ in cands if c_.be or c_.al or c_.ga]
+    betas = []                                                         # the distinct β values the text prints (powder and single-crystal differ in the decimals)
+    for x in re.findall(r'(?<![A-Za-z])(?:β|beta|ß|b)\s*(?:\(°\))?\s*[=:]?\s*(9[1-9]\.\d+|1[0-4]\d\.\d+)(?![\d.])', text):   # a Symbol-font β comes out as 'b' in the text layer; an axis of 91–149 Å does not happen
+        v = float(x)
+        if not any(abs(v - b_) < 0.3 for b_ in betas):
+            betas.append(v)
+    triples = []                                                       # 'α = 93.4, β = 91.3, γ = 91.3': a triclinic cell's angles
+    for m_ in re.finditer(r'(?:α|alpha|a)\s*[=:]?\s*(\d{2,3}\.\d+)(?:\(\d+\))?\s*°?,?\s*(?:β|beta|b)\s*[=:]?\s*(\d{2,3}\.\d+)(?:\(\d+\))?\s*°?,?\s*(?:and\s+)?(?:γ|gamma|g|c)\s*[=:]?\s*(\d{2,3}\.\d+)', text):   # a Symbol font prints α β γ as a b c: 'a = 98.77(2), b = 96.21(2), c = 108.45(2)' after the axes
+        t_ = tuple(float(g) for g in m_.groups())
+        if all(60 < v < 140 for v in t_) and not any(all(abs(a_ - b_) < 0.3 for a_, b_ in zip(t_, u_)) for u_ in triples):
+            triples.append(t_)
+    mono = bool(re.search(r'\bmonoclinic\b', text, re.I)); tric = bool(re.search(r'\btriclinic\b', text, re.I))
     out = []; seen = set()
-    for cc in CL.find_cells(text):
+    for cc in cands:
         variants = [{'a': cc.a, 'b': cc.b, 'c': cc.c, 'α': cc.al, 'β': cc.be, 'γ': cc.ga}]
         if cc.b is None and cc.c is not None and cc.ga is None:       # 'a = 4.59, c = 2.96': tetragonal (γ 90) or hexagonal / trigonal (γ 120) — the table decides
             variants = [{'a': cc.a, 'b': cc.a, 'c': cc.c, 'α': cc.al, 'β': cc.be, 'γ': '90'},
                         {'a': cc.a, 'b': cc.a, 'c': cc.c, 'α': cc.al, 'β': cc.be, 'γ': '120'}]
+        elif cc.b is not None and cc.c is not None and not (cc.al or cc.be or cc.ga):
+            base = _cell_floats(variants[0])
+            if base:
+                mine = sorted([base['a'], base['b'], base['c']])
+                for d_ in full:                                        # the same axes stated elsewhere with their angles
+                    dc = _cell_floats({'a': d_.a, 'b': d_.b, 'c': d_.c, 'α': d_.al, 'β': d_.be, 'γ': d_.ga})
+                    if dc and all(abs(x - y) / y <= 0.015 for x, y in zip(mine, sorted([dc['a'], dc['b'], dc['c']]))):
+                        variants.append({'a': cc.a, 'b': cc.b, 'c': cc.c, 'α': d_.al, 'β': d_.be, 'γ': d_.ga})
+                if len(variants) == 1:
+                    if tric:                                           # a triclinic paper's three angles first (its text says 'monoclinic' too, of a relative)
+                        for t_ in triples[:2]:
+                            variants.append({'a': cc.a, 'b': cc.b, 'c': cc.c, 'α': str(t_[0]), 'β': str(t_[1]), 'γ': str(t_[2])})
+                    if mono:
+                        for b_ in betas[:3]:
+                            variants.append({'a': cc.a, 'b': cc.b, 'c': cc.c, 'α': None, 'β': str(b_), 'γ': None})   # each β the paper prints — the table decides
         for v in variants:
             cell = _cell_floats(v)
             if not cell:
@@ -1479,7 +1529,7 @@ def cell_check(path, cif=None, text=None, table=None):
         cc = _cell_floats((X.parse_cif(cif) or {}).get('cell') or {})
         if cc:
             cells.append(('.cif', cc))
-    cells += _paper_cells(text_of(path) if text is None else text)[:6]
+    cells += _paper_cells(text_of(path) if text is None else text)[:12]
     if not cells:
         return {'status': 'nocell', 'pages': pages, 'n': len(calc), 'lines': [],
                 'head': 'powder table%s: %d indexed lines but no cell to check them against (no .cif, none stated in the text)' % (where, len(calc))}
@@ -1513,6 +1563,19 @@ def cell_check(path, cif=None, text=None, table=None):
             lines.append('%d of %d lines sit 0.5–%.1f %% off — computed with a cell slightly different from the one given, or the cell is quoted to too few figures [unverified]'
                          % (len(shifted), n, max(abs(r[4]) for r in shifted) * 100 if shifted else _CELL_LOOSE * 100))
         bad = sorted(off, key=lambda r: -abs(r[4]))
+        # a paper describing several minerals prints their patterns in one table: a line that follows
+        # another cell the paper states is that other phase's line, not this cell's outlier
+        others = [x for x in scored if x[1] is not cell and sorted([x[1]['a'], x[1]['b'], x[1]['c']]) != sorted([cell['a'], cell['b'], cell['c']])]
+        _dv = lambda v: v[0] if isinstance(v, tuple) else v
+        fits_other = lambda r, x: any(abs(_dv(dv) - r[0]) / r[0] <= _CELL_LOOSE for dv in _d_variants(x[1], r[2]))
+        other_phase = [r for r in bad if any(fits_other(r, x) for x in others)]
+        if other_phase:
+            bad = [r for r in bad if r not in other_phase]
+            lines.append('%d line%s follow%s another cell the paper states (%s) — the table holds more than one phase [unverified]' % (
+                len(other_phase), 's' if len(other_phase) > 1 else '', '' if len(other_phase) > 1 else 's', _cell_str(next(x[1] for x in others if fits_other(other_phase[0], x)))))
+        if len(bad) > 5:
+            lines.append('%d lines do not follow the cell (up to %.1f %% off) — the indexing, the cell or the reading of the table is off; a paper slips once or twice, not %d times [unverified]' % (len(bad), max(abs(r[4]) for r in bad) * 100, len(bad)))
+            bad = []
         for d, I, hkl, dc, dev, flipped in bad:
             lines.append('%g (%d %d %d) does not follow the cell: it gives %.4f (%+.1f %%)%s' % (d, hkl[0], hkl[1], hkl[2], dc, dev * 100, ' — a weak line' if I is not None and I <= 5 else ''))
     if wild:
@@ -1734,6 +1797,7 @@ def _journal_to_icdd(f):
     f = re.sub(r'(?<![A-Za-z])[AMXTRZ]\d?(?:\+[AMXTRZ]\d?)?\s*(?=[\(\[]|Σ|6\d)', ' ', f)   # site labels A1[…], M2+M3(…), M3 Σ3.95(…), ')61.00Y('
     f = re.sub(r'(?<![A-Za-z])[YVW](?=[\(\[])', ' ', f)                                  # Y / V / W site labels right before a bracket (the elements keep their counts)
     f = re.sub(r'(?<![A-Za-z])[XYZTVWAMR](?=[A-Z][a-z]?\d*\.\d)', ' ', f)                # 'ZAl6.00[': a label glued to the element it holds
+    f = re.sub(r'(?<![A-Za-z])[XYZTW]\s+(?=[A-Z][a-z]?\d*\.\d)', ' ', f)                # 'Y Mg1.50Fe…': the label with its bracket lost (a bare Y is not yttrium here)
     f = re.sub(r'(?<![A-Za-z])A(?=\d*\.\d)', '?', f)                                      # 'A1.91': a vacancy printed as A (font)
     f = re.sub(r'(?<=[\d\s(])[ho](?=\d*\.\d)', '?', f)                                  # a vacancy printed as 'h' or 'o' (font)
     labelled = {}                                                                        # 'Mg1(Mg1.42…)Mg2(Mg1.71…)': sites named after their element
@@ -1913,6 +1977,29 @@ def _check_formula(ex, text, fcand):
     has_s = any(c in ('S', 'SO3', 'SO2') for c in wt)
     # a flag needs a deviation beyond what rounding, atomic weights and oxide conventions give: 5 % / 0.03 apfu
     stated = ex.get('basis')
+    equiv = {}                                                   # bases that ARE the stated one, written the tool's way
+    table_h = any(_parses(c) and (EP.parse_constituent(c).kind == 'water' or EP.parse_constituent(c).element == 'H') for c in wt)
+    if stated and stated[0] == 'O' and counts.get('H', 0) > 0.2 and not table_h:
+        # 'on the basis of 18 anions with 6 OH' from a table without water: the oxides give the anhydrous
+        # count, 18 − H/2 (every OH is half an oxide oxygen, every H2O a whole one that is not from the oxides)
+        n_an = round(float(stated[1]) - counts['H'] / 2.0, 3)
+        if n_an > 0.5:
+            b_ = ('O', n_an)
+            if b_ not in bases:
+                bases.insert(1, b_)
+            equiv[b_] = 'the stated %s less the water the table does not give (H/2 = %.2f): the anhydrous count' % (EP._basis_label(stated), counts['H'] / 2.0)
+    m_ex = re.search(r'(\d+(?:\.\d+)?)\s*(?:total\s+)?cations?\b[^.;]{0,40}?(?:excluding|except(?:ing)?|other than|without|apart from)\s+((?:[A-Z][a-z]?(?:\s*(?:,|and|\+|or)\s*)?){1,4})', ex.get('basis_sentence') or '')
+    if m_ex:
+        excl = set(re.findall(r'[A-Z][a-z]?', m_ex.group(2)))
+        cat_els = sorted({EP.parse_constituent(c).element for c in wt if _parses(c) and EP.parse_constituent(c).element not in ('O', 'F', 'Cl', 'Br', 'I', 'S', 'Se', 'Te', 'H') and EP.parse_constituent(c).kind != 'water'} - excl)
+        if cat_els:
+            try:
+                b_ = EP._parse_basis('%s=%s' % ('+'.join(cat_els), m_ex.group(1)))
+                if b_ not in bases:
+                    bases.insert(0, b_)
+                equiv[b_] = '%s cations excluding %s, as the paper says: %s' % (m_ex.group(1), ', '.join(sorted(excl)), EP._basis_label(b_))
+            except Exception:
+                pass
     def _rep(wt_, bs):
         return EP.replicate_formula(wt_, counts, bs, ex.get('name') or 'paper', tol_abs=0.03, tol_rel=0.05) if bs else None
     def _best(wt_):
@@ -1925,6 +2012,11 @@ def _check_formula(ex, text, fcand):
         r_ = _rep(wt_, [stated]) if stated else None
         if r_ is not None and r_['score'] <= 0.03 and not r_.get('factor'):
             return r_
+        if stated and stated[0] == 'O' and counts.get('H', 0) > 0.2 and any(_parses(c) and EP.parse_constituent(c).kind == 'water' for c in wt_):
+            r_oh = EP.replicate_formula(wt_, counts, [stated], ex.get('name') or 'paper', tol_abs=0.03, tol_rel=0.05, water_oh=True)
+            if r_oh is not None and r_oh['score'] <= 0.03 and not r_oh.get('factor'):
+                r_oh['water_oh'] = True                                # '31 anions (O + OH + F)': every H2O of the table as two OH
+                return r_oh
         r_ = _rep(wt_, bases) or r_
         if r_ is None or r_['score'] > 0.03 or r_.get('factor'):
             alt = _rep(wt_, [b for b in EP.basis_candidates(counts) if b not in bases])
@@ -1998,6 +2090,11 @@ def _check_formula(ex, text, fcand):
         elif _clean(r):
             notes_used = ['the column headed by %s does not reproduce the formula; the mean column does and is used' % why] + notes_used
     wt = wt_used; e = e_used; converted += notes_used
+    basis_equiv = bool(r and r.get('basis') and equiv.get(tuple(r['basis']) if isinstance(r['basis'], list) else r['basis']))
+    if basis_equiv:
+        converted.append(equiv[tuple(r['basis']) if isinstance(r['basis'], list) else r['basis']])
+    if r and r.get('water_oh'):
+        converted.append('the anion count taken as O + OH + F, every H2O of the table as two OH (the tourmaline convention)')
     if r is None:
         return {'ok': False, 'verified': False, 'lines': ['composition: not verifiable — the wt% table read (%d constituents) and the formula read could not be reconciled on any basis; check the table and the formula sentence by eye' % len(wt)],
                 'formula': ftxt, 'basis': None, 'result': None, 'doubts': ['not reconcilable on any basis'], 'wt': wt, 'counts': counts}
@@ -2068,7 +2165,7 @@ def _check_formula(ex, text, fcand):
     lines = []
     b = r['basis']
     lines.append('composition: %d constituents re-reduced on %s%s → rms deviation of the cations %.1f%%' % (
-        len(wt), EP._basis_label(b), '' if ex.get('basis') == b else (' (the paper states %s; that does not reproduce its formula)' % EP._basis_label(ex['basis']) if ex.get('basis') else ' (basis inferred: the paper does not state one)'), 100 * r['score']))
+        len(wt), EP._basis_label(b), '' if ex.get('basis') == b or basis_equiv else (' (the paper states %s; that does not reproduce its formula)' % EP._basis_label(ex['basis']) if ex.get('basis') else ' (basis inferred: the paper does not state one)'), 100 * r['score']))
     if r.get('factor'):
         lines.append('the published coefficients are the replicated ones ÷ %.3f — a different basis than the one read' % r['factor'])
     if excluded:
@@ -2090,7 +2187,7 @@ def _check_formula(ex, text, fcand):
     if ok:
         lines.append('  every coefficient of the published formula follows from the published wt%')
     basis_flag = False
-    if ok and verified and ex.get('basis') and b and not _same_basis(b, ex['basis']) and not r.get('factor') \
+    if ok and verified and ex.get('basis') and b and not _same_basis(b, ex['basis']) and not basis_equiv and not r.get('factor') \
             and _basis_flaggable(ex['basis'], b) and _basis_is_the_formulas(ex.get('basis_sentence') or '', f_ctx) \
             and _basis_comparable(ex['basis'], b, wt, counts, _rep(wt, [ex['basis']]), ex.get('basis_sentence') or ''):
         # the paper says 'on the basis of 12 O' and its coefficients follow from 13 anions, or from 8 cations:
@@ -2099,7 +2196,7 @@ def _check_formula(ex, text, fcand):
         basis_flag = True
         lines.append('  the paper states its formula is calculated on %s, but every coefficient follows from %s — the stated basis does not reproduce the formula; one of the two is a slip'
                      % (EP._basis_label(ex['basis']), EP._basis_label(b)))
-    return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts, 'wt': wt, 'counts': counts, 'basis_flag': basis_flag}
+    return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts, 'wt': wt, 'counts': counts, 'basis_flag': basis_flag, 'basis_equiv': basis_equiv}
 
 def _basis_comparable(stated, found, wt, counts, r_stated, basis_sentence=''):
     """Whether a stated basis that fails can be held against the paper — the cases the corpus
@@ -2793,8 +2890,8 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
                 # the paper states no basis: the one the reduction found reproduces every coefficient, so
                 # the formula vouches for it (owner: verified); a basis that reproduces with residuals is a doubt
                 _set(f, 'basis', 'agrees' if comp.get('ok') else 'unverified', 'composition', 'inferred — the paper states no basis; %s reproduces the formula' % basis_string(b), value=b)
-            elif _same_basis(b, ex.get('basis')):
-                _set(f, 'basis', 'agrees' if comp.get('verified') else 'unverified', 'composition', 'the reduction on this basis reproduces the formula' if comp.get('ok') else 'the reduction on this basis is the one the formula rests on; a coefficient is off, not the basis')
+            elif _same_basis(b, ex.get('basis')) or comp.get('basis_equiv'):
+                _set(f, 'basis', 'agrees' if comp.get('verified') else 'unverified', 'composition', ('the reduction on this basis reproduces the formula' if comp.get('ok') else 'the reduction on this basis is the one the formula rests on; a coefficient is off, not the basis') + (' (the stated basis, written the tool\'s way)' if comp.get('basis_equiv') else ''))
             elif comp.get('basis_flag'):
                 _set(f, 'basis', 'disagrees', 'composition', 'the paper states %s, but every coefficient follows from %s' % (basis_string(ex['basis']), basis_string(b)), value=b)
             else:
