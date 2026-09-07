@@ -31,8 +31,8 @@ label states what they are (a refiner writes OH1, OW1, W1):
 
 | | |
 |---|---|
-| a hydroxyl or water called ordinary oxygen | 7 of 221, and 0 of 77 in well-behaved structures |
-| an ordinary oxygen called hydrous | 184 of 944 (19 %) |
+| a hydroxyl or water called ordinary oxygen | 2 of 227 (1 %) |
+| an ordinary oxygen called hydrous | 301 of 1115 (27 %) |
 
 The error is one-sided and gating on the structure's own valence index does not improve it, so the
 count is a reliable statement that a site holds no hydrogen and only a suggestive one that it does.
@@ -53,8 +53,71 @@ from 90 % agreement with their own formula sums to 29 %. Against structures whos
 can only sit on oxygen, the count now matches the .cif's own formula sum for 39 of 45, and 5 of the
 7 whose H sites are partly occupied.
 
+**Two defects in that counting, found and fixed.** A hydrogen site sitting ON a symmetry element
+stands for more than one atom — `Structure.neighbours` merges its images into one entry carrying
+their count, and `_located_h` was dropping that count, so a water molecule whose oxygen lies on a
+two-fold axis was credited with one hydrogen instead of two. And the classification recomputed each
+oxygen's cation sum from the table cells *without* the cation-site occupancy that `compute` weights
+its own anion sums by, so an oxygen bonded to a half-occupied cation looked fully coordinated: a
+hydroxyl read as ordinary oxygen, which is the one direction this count is supposed to be reliable
+in. Weighting it took hydroxyl- and water-labelled sites recognised as such from 93 % to 99 % (a
+hydroxyl called ordinary oxygen: 15 of 227 down to 2), with the plain oxygens unchanged.
+
 Not yet done: the physical arbiters (Gladstone-Dale and density at the ideal water content) and the
 comparison against the ideal formula rather than the empirical one.
+
+### Added — bond valence without a .cif, from the distances the paper prints
+`bv.params` was the tool's worst number, 10 % verified, and not for want of a reader: 185 of its
+215 readings had no oracle because nine papers in ten come with no .cif. `paper_structure`, which
+rebuilds the whole structure from the coordinates table, a cell and a space group, reaches very few
+of them — over a sample of the papers that cite a parameter set and have no .cif, it built a
+structure for none of 60: the coordinates have to be read complete, the symbol has to be one the
+operator table knows, and the right cell has to be picked out of the several a paper prints.
+
+A **bond-distance table asks for none of that**. It states the two sites and the distance between
+them, which is everything a bond valence needs. `pxrd_review/paper_bonds.py` reads that table off
+the page — the multi-column layouts, the cation carried down its continuation rows, `×n` before or
+after the distance (including the `×` that several journals' fonts deliver as a `3`), the labels
+that carry a hydroxyl or water mark (`O10H`, `O12W`), the symmetry code superscripted onto an anion,
+the two minerals a paper prints side by side or stacked — and computes the sums from it.
+
+Nothing is inferred: no cell, no space group, no coordinates. So unlike `paper_structure` this is
+not note-grade — **gated on the paper's own bonds adding up to the formal valences** (root-mean-
+square deviation ≤ 0.15 vu), it reproduced 93 of 94 cation sums (98 %) of the corpus papers that do
+have a .cif to score against; ungated it is 74 %, which is why the gate is there. Between 0.15 and
+0.35 vu the reading is worth a note and no more. Anion sums are not offered at all: they need the
+site multiplicities, which a bond table does not print.
+
+Everything downstream is the existing checker — `bv_tables`, `bvs_site_tables`, `check_bvs_table`
+and `check_bvs_sites` take the bond table's structure in place of the .cif's. Two rules are relaxed
+for it, both because printed distances are rounded and a bond table states no multiplicities: an
+anion row's sum is checked for its own arithmetic but never against the structure, and the parameter
+set the paper cites has to be *plainly* refuted before it is called wrong (its U6+ sub-choice being
+compared only where the paper states one).
+
+Measured on the whole corpus, `bv.params` goes from 13 % verified to 19 % — 13 papers that had no
+oracle at all now have a verdict, one of them a real finding (a paper citing Brese & O'Keeffe whose
+table is Brown & Altermatt: 1 cell of 26 differs under the latter, 9 under the former), and 11 more
+get a note. Validation harness: `tools/corpus_paper_bonds.py`.
+
+### Fixed — Gladstone–Dale said "unverified" where it meant "could not read the analysis"
+94 papers read a refractive index, a density and an analytical table and still would not verify, and
+the fault was in K_C, not in the papers. K_C is a weighted mean over the WHOLE analysis, so a set of
+constituents short of it gives a K_C short in the same proportion: 32 of those papers were computing
+it from wt% summing to less than 95 % (a missed H2O row, a table given in elements), and 38 had a
+constituent with no constant in `gd_constants.json`, silently worth k = 0, which is the same fault.
+
+Every wt% set the paper offers is now tried — what the composition check reduced, each analytical
+table the reader kept, and either of those converted from elements to oxides — and **the paper's own
+stated compatibility index arbitrates**: a set that reproduces it has proved itself. Only when none
+does is the completeness of the reading weighed, and then it decides whether to say `nooracle` with
+the reason ("the analysis as read totals 80 % against the 99.7 % the table itself prints"; "no
+Gladstone-Dale constant for Pr2O3, Sm2O3") or `unverified`, a real disagreement with the paper.
+
+On the corpus: `optics.n` 43 % → 45 %, `D_meas` 58 % → 71 %, `D_calc` 62 % → 70 %, and 61 doubts
+about papers become statements about this tool's own limits. The largest of those limits is data,
+not code — `data/gd_constants.json` has no (NH4)2O and none of the rare-earth sesquioxides beyond
+La, Ce, Nd and Y, which is 30 of the papers that still cannot be checked.
 
 ## [0.5.6] — 2026-09-07
 Every reading now says which oracle vouched for it, the tool's recall is measured for the first

@@ -75,6 +75,133 @@ class Extract(unittest.TestCase):
         self.assertEqual(PE.basis_string(ex['basis']), 'O=7')
 
 
+class CompositionDoubts(unittest.TestCase):
+    """The rule that decides whether a composition disagreement is a FINDING or a console note.
+
+    Every doubt marked `reading` says one thing: the tool may not have read the paper's analytical
+    table properly. The reduction answers that itself — when it reproduces every coefficient but
+    one over enough elements, the reading has proved itself and the exception belongs to the paper.
+    A HARD doubt (the wt% do not add up, an element is missing, the formula would not parse) still
+    blocks, because those say the comparison itself is unsound.
+
+    The table below reduces on 12 O to Si 2.962, Al 1.738, Mg 1.984, Ca 0.859, Fe 0.627; the
+    formula sentence states all five, with Mg printed 14 % low.
+    """
+    WT = (('SiO2', 40.28), ('Al2O3', 20.05), ('MgO', 18.10), ('CaO', 10.90), ('FeO', 10.20))
+    FORMULA = 'The empirical formula (based on 12 O apfu) is Si2.96Al1.74Mg1.70Ca0.86Fe0.63O12 for it.'
+
+    def ex(self, scale=1.0, header='Constituent Mean Range', rows=None):
+        rows = rows if rows is not None else self.WT
+        return {'name': 'testite', 'basis': ('anions', None, 12.0),
+                'epma': {'rows': [{'constituent': c, 'mean': round(v * scale, 2)} for c, v in rows],
+                         'header': header, 'caption': ''}}
+
+    def test_a_reading_doubt_alone_does_not_stop_the_one_odd_coefficient(self):
+        # an unrecognised header is a doubt about the READING; four coefficients reproducing
+        # settles that question, so the fifth is the paper's
+        c = PE.check_composition(self.ex(header='A B C'), self.FORMULA)
+        self.assertTrue(any('header was not recognised' not in l for l in c['lines']))
+        self.assertEqual([d[0] for d in c['result']['diffs']], ['Mg'])
+        self.assertTrue(c['verified'])                                  # a finding, not a note
+        self.assertFalse(c['ok'])
+        self.assertTrue(any('but Mg follows from the table read' in l for l in c['lines']), c['lines'])
+        self.assertEqual(c['doubts'], [])
+
+    def test_a_hard_doubt_still_blocks(self):
+        # the same reading, the same one coefficient — but the wt% do not add up, so the
+        # comparison itself is unsound and nothing may be concluded from it
+        c = PE.check_composition(self.ex(scale=0.8, header='A B C'), self.FORMULA)
+        self.assertEqual([d[0] for d in c['result']['diffs']], ['Mg'])
+        self.assertFalse(c['verified'])
+        self.assertTrue(any('add to 79' in d for d in c['doubts']), c['doubts'])
+
+    def test_an_element_the_table_has_none_of_blocks(self):
+        # a formula element absent from the table is a hard doubt: the table was read incompletely
+        c = PE.check_composition(self.ex(header='A B C'),
+                                 'The empirical formula (based on 12 O apfu) is Si2.96Al1.74Mg1.98Ca0.86Fe0.63Na0.30O12 for it.')
+        self.assertFalse(c['verified'])
+        self.assertTrue(any('has no Na' in d for d in c['doubts']), c['doubts'])
+
+    def test_too_few_elements_for_the_reading_to_prove_itself(self):
+        # three constituents: one of them differing leaves too little agreeing to vouch for the read
+        c = PE.check_composition(self.ex(header='A B C', rows=self.WT[:3]),
+                                 'The empirical formula (based on 12 O apfu) is Si4.15Al2.44Mg1.70O12 for it.')
+        self.assertTrue(c['doubts'])
+        self.assertFalse(c['verified'])
+
+    def test_a_clean_read_needs_no_rule(self):
+        c = PE.check_composition(self.ex(), 'The empirical formula (based on 12 O apfu) is Si2.96Al1.74Mg1.98Ca0.86Fe0.63O12 for it.')
+        self.assertTrue(c['ok'], c['lines'])
+        self.assertEqual(c['result']['diffs'], [])
+
+
+class GladstoneDale(unittest.TestCase):
+    """Which constituents K_C is formed from decides the answer, so every set the paper offers is
+    tried and the paper's own stated compatibility index arbitrates. Only when none reproduces it
+    does the completeness heuristic speak — and then it says whether the fault is a reading this
+    tool could not complete (nooracle, with the reason) or a real disagreement (unverified).
+
+    SiO2 46.0 + MgO 34.0 + H2O 20.0 gives K_C 0.2402; with n 1.560 that is D 2.332 for an index of
+    zero, and the tests set the paper's own index to match."""
+    ROWS = (('SiO2', 46.0), ('MgO', 34.0), ('H2O', 20.0))
+
+    def ex(self, rows=None, n=1.560, D=2.332):
+        rows = self.ROWS if rows is None else rows
+        return {'name': 'testite',
+                'optics': {'n': n, 'n_from': 'mean of a b g', 'D_meas': D, 'D_calc': None, 'sentences': []},
+                'epma': {'rows': [{'constituent': c, 'mean': v} for c, v in rows],
+                         'total': round(sum(v for _c, v in rows), 2), 'header': 'Constituent wt%'}}
+
+    def test_the_analytical_table_stands_in_for_an_incomplete_reduction(self):
+        # the composition check reduced on SiO2 alone; K_C from that is a quarter of the truth, and
+        # the index it gives is nowhere near the paper's. The paper's own table reproduces it.
+        ex = self.ex()
+        stmt = {'ci': 0.0, 'category': None, 'sentence': ''}
+        out = PE.gd_check(ex, {'wt': {'SiO2': 46.0}}, stmt)
+        self.assertEqual(out['status']['optics.n'], 'agrees')
+        self.assertAlmostEqual(out['KC'], 0.2402, places=3)
+
+    def test_an_analysis_in_elements_is_converted_to_its_oxides(self):
+        from pxrd_review import gd as GD
+        got = PE._as_oxides({'Si': 21.50, 'Mg': 20.50, 'O': 44.0}, GD.constants())
+        self.assertIn('SiO2', got); self.assertIn('MgO', got)
+        self.assertNotIn('O', got)                              # the oxides carry that oxygen already
+        self.assertAlmostEqual(got['SiO2'], 46.0, delta=0.2)
+
+    def test_nothing_to_convert_is_left_alone(self):
+        from pxrd_review import gd as GD
+        self.assertIsNone(PE._as_oxides({'SiO2': 46.0, 'MgO': 34.0}, GD.constants()))
+
+    def test_a_constituent_with_no_constant_is_a_limitation_not_a_doubt(self):
+        ex = self.ex(rows=(('SiO2', 46.0), ('Pr2O3', 34.0), ('H2O', 20.0)))
+        out = PE.gd_check(ex, {'wt': {'SiO2': 46.0, 'Pr2O3': 34.0, 'H2O': 20.0}},
+                          {'ci': 0.0, 'category': None, 'sentence': ''})
+        self.assertEqual(out['status']['optics.n'], 'nooracle')
+        self.assertIn('Pr2O3', out['detail'])
+
+    def test_an_analysis_short_of_its_own_printed_total_is_a_limitation(self):
+        ex = self.ex()
+        ex['epma']['rows'] = [{'constituent': 'SiO2', 'mean': 46.0}]     # the H2O and MgO rows were missed
+        ex['epma']['total'] = 100.0                                       # but the table prints its own total
+        out = PE.gd_check(ex, {'wt': {'SiO2': 46.0}}, {'ci': 0.0, 'category': None, 'sentence': ''})
+        self.assertEqual(out['status']['optics.n'], 'nooracle')
+        self.assertIn('100.0 %', out['detail'])
+
+    def test_a_complete_analysis_that_still_misses_is_a_doubt(self):
+        # every constituent has a constant and the whole adds to 100: nothing excuses the gap, so
+        # it stays a doubt about the paper's numbers
+        out = PE.gd_check(self.ex(n=1.90), {'wt': dict(self.ROWS)},
+                          {'ci': 0.0, 'category': None, 'sentence': ''})
+        self.assertEqual(out['status']['optics.n'], 'unverified')
+        self.assertIn('this gives', out['detail'])
+
+    def test_the_densities_take_the_same_verdict_as_the_index(self):
+        out = PE.gd_check(self.ex(), {'wt': dict(self.ROWS)}, {'ci': 0.0, 'category': None, 'sentence': ''})
+        self.assertEqual(out['status']['optics.n'], 'agrees')
+        self.assertEqual(out['status']['optics.D_meas'], 'agrees')
+        self.assertEqual(out['status']['optics.D_calc'], 'nooracle')      # the paper gives no calculated density
+
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -414,6 +414,26 @@ stands and the reading of the table is named as the tool's shortfall. And a bond
 differs from the .cif throughout is summarised by column or site — which way, and by how much — rather
 than dismissed. A calculated powder line is flagged only 2 % or more off its cell; a smaller offset is a note.
 
+**Bond valence without a `.cif`.** Nine papers in ten come without one, so the bond-valence oracle
+reached almost none of them. A bond-distance table is enough on its own: it states the two sites and
+the distance between them, which is everything a bond valence needs — no cell, no space group, no
+coordinates. The tool reads that table off the page and checks the paper's own bond-valence table
+against it. Because nothing is inferred, this is a verdict rather than a note, but only while the
+paper's own sums come out at the formal valences (root-mean-square deviation ≤ 0.15 v.u.); at that
+gate it reproduced 98 % of the `.cif`'s cation sums on the corpus papers that have one (93 of 94),
+against 74 % ungated. Above it and up to 0.35 v.u. the reading is reported as a doubt. Anion sums are never
+compared this way — they need site multiplicities a bond table does not print.
+
+**Gladstone–Dale, and what "unverified" is allowed to mean.** K_C is a weighted mean over the whole
+analysis, so a set of constituents short of it gives a K_C short in the same proportion and an index
+nowhere near the paper's. Every wt% set the paper offers is tried — the one the composition check
+reduced, each analytical table read, and either of those converted from elements to oxides — and the
+paper's own stated compatibility index arbitrates: a set that reproduces it has proved itself. Only
+when none does is the completeness of the reading weighed, and then it decides between saying so
+outright ("the analysis as read totals 80 % against the 99.7 % the table itself prints"; "no
+Gladstone–Dale constant for Pr2O3") and calling it a disagreement with the paper. An analysis this
+tool could not read is its own shortfall, never a doubt about the paper.
+
 **`pxrd epma --check`** replicates a *published* formula from an ICDD entry's Analysis field — the
 mean wt% list followed by the empirical formula in the ICDD notation (`( Mn1.75 +2 Mg0.25 )sigma2.00
 ( P O4 )4 … !3.9 H2 O`): `pxrd epma "I003246(...).docx" --check` reads the field from the entry,

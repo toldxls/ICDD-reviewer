@@ -356,5 +356,86 @@ class WaterFromStructure(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+# A water molecule whose oxygen sits ON a two-fold axis: ONE hydrogen site, TWO hydrogens. The
+# formula says H2, so the counter has a right answer to be measured against.
+ON_AXIS = """data_axis
+_cell_length_a 8.0
+_cell_length_b 8.0
+_cell_length_c 8.0
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_name_H-M_alt 'P 2'
+_chemical_formula_sum 'Mg1 O1 H2'
+loop_
+_space_group_symop_operation_xyz
+'x, y, z'
+'-x, y, -z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+Mg1 Mg2+ 0.0 0.600 0.0 1.0
+Ow1 O2-  0.0 0.200 0.0 1.0
+Hw1 H    0.075 0.280 0.05 %s
+"""
+
+
+class LocatedHydrogen(unittest.TestCase):
+    """The hydrogen a refinement actually placed on oxygen, per formula unit. Counted per OXYGEN,
+    by occupancy, because a hydrogen written as two half-occupied alternatives is one hydrogen —
+    and because a hydrogen site on a symmetry element stands for more than one atom."""
+
+    def _st(self, occ='1.0'):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        return B.Structure(_write(tmp, 'axis.cif', ON_AXIS % occ))
+
+    def test_a_hydrogen_site_on_a_symmetry_element_stands_for_every_image(self):
+        st = self._st()
+        self.assertEqual(B._z_from_formula(st), 1)
+        # one H site, two images of it 0.96 A from the same oxygen
+        o = next(a for a in st.anions if a.label == 'Ow1')
+        self.assertEqual([(x.label, n) for x, d, n in st.neighbours(o, 1.3)], [('Hw1', 2)])
+        self.assertEqual(B._located_h(st, 1), 2.0)             # the formula says H2, and so does this
+
+    def test_a_half_occupied_site_counts_by_its_occupancy(self):
+        # the same oxygen with a half-occupied hydrogen: half a hydrogen per image
+        self.assertEqual(B._located_h(self._st('0.5'), 1), 1.0)
+
+    def test_a_structure_that_located_no_hydrogen_says_so(self):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        st = B.Structure(_write(tmp, 'noh.cif', (ON_AXIS % '1.0').replace('Hw1 H    0.075 0.280 0.05 1.0\n', '')))
+        self.assertIsNone(B._located_h(st, 1))                 # None, not zero: nothing was placed
+
+
+    def test_a_half_occupied_cation_gives_its_oxygen_half_the_valence(self):
+        """`compute` weights an anion's sum by the cation site's occupancy, and the water count has
+        to weight it the same way: a hydroxyl bonded to a half-occupied cation otherwise reads as an
+        ordinary oxygen — the one direction this count is meant to be reliable in."""
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        full = B.Structure(_write(tmp, 'full.cif', (ON_AXIS % '1.0').replace(
+            'Hw1 H    0.075 0.280 0.05 1.0\n', '')))
+        half = B.Structure(_write(tmp, 'half.cif', (ON_AXIS % '1.0').replace(
+            'Hw1 H    0.075 0.280 0.05 1.0\n', '').replace('Mg1 Mg2+ 0.0 0.600 0.0 1.0', 'Mg1 Mg2+ 0.0 0.600 0.0 0.5')
+            .replace("'Mg1 O1 H2'", "'Mg0.5 O1 H2'")))
+        got = []
+        for st in (full, half):
+            result, _an, cells, _hb = B.compute(st, B.Params(), None, 'none')
+            w = B.water_from_structure(st, result, cells)
+            got.append(dict((lab, v) for lab, v, _k in w['sites'])['Ow1'])
+        self.assertAlmostEqual(got[1], got[0] / 2, places=2)
+
+    def test_an_oxygen_holds_at_most_two_hydrogens(self):
+        st = self._st()
+        # both images plus a third contact would still be a water molecule, never H3O in the count
+        self.assertLessEqual(B._located_h(st, 1), 2.0)
+
+
 if __name__ == '__main__':
     unittest.main()

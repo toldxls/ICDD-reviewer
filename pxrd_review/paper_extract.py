@@ -2734,29 +2734,146 @@ def gd_statement(text):
             out['category'] = m.group(1).lower(); out['sentence'] = out['sentence'] or t[max(0, m.start() - 20):m.end()].strip()
     return out
 
+# K_C is a weighted mean over the WHOLE analysis, so a set of constituents that is short of it
+# gives a K_C short in the same proportion — and 1 - K_P/K_C then lands nowhere near the paper's
+# index. Measured over the 94 corpus papers that read an n, a density and a table and still could
+# not be verified: 32 were computing K_C from a set summing to less than 95 %, and 38 had a
+# constituent with no constant in the file (silently worth k = 0, which is the same fault again).
+GD_TOTAL = (95.0, 105.0)
+
+
+def _gd_wt_sets(ex, comp):
+    """The wt% sets K_C could be computed from, the COMPLETE ones first: a set is complete when
+    every constituent has a Gladstone-Dale constant and the whole totals 100 within GD_TOTAL.
+    Tried in turn — the set the composition oracle reduced, then each analytical table the reader
+    kept (a paper that tabulates its analysis in elements prints the oxides beside it, and one that
+    does not is converted). -> ([(wt, complete)], why the incomplete ones are incomplete)."""
+    from pxrd_review import gd as GD
+    K = GD.constants()
+    sets = []
+    if (comp or {}).get('wt'):
+        sets.append(('the wt% the composition check used', comp['wt']))
+    e = ex.get('epma') or {}
+    for cand in [{'rows': e.get('rows')}] + list(e.get('candidates') or []):
+        wt = OrderedDict()
+        for r in cand.get('rows') or []:
+            c, m = r.get('constituent'), r.get('mean')
+            if c and m is not None:
+                wt[c] = wt.get(c, 0.0) + m
+        if wt:
+            sets.append(("the paper's analytical table", wt))
+    for label, wt in list(sets):
+        ox = _as_oxides(wt, K)                   # a table given in elements, as the oxides G-D is defined over
+        if ox is not None:
+            sets.append((None, ox))              # None: a conversion may be accepted but never explains a failure
+    good = []; rest = []; missing = None; short = None
+    for label, wt in sets:
+        miss = sorted({c for c, v in wt.items() if v and not c.startswith('O=') and c not in K})
+        total = sum(v for c, v in wt.items() if v and not c.startswith('O='))
+        if not miss and GD_TOTAL[0] <= total <= GD_TOTAL[1]:
+            good.append(wt); continue
+        rest.append(wt)
+        if miss:
+            if label and (missing is None or len(miss) < len(missing)):
+                missing = miss
+        elif label and (short is None or abs(total - 100) < abs(short - 100)):
+            short = total
+    # a set with every constant but the wrong total is the nearer miss, and the more useful thing
+    # to say: the table's own printed total says how much of it the reader did not get
+    if short is not None:
+        printed = (ex.get('epma') or {}).get('total')
+        why = ('the analysis as read totals %.0f %%%s, so K_C would be short in the same proportion'
+               % (short, ' against the %.1f %% the table itself prints' % printed if printed and abs(printed - short) > 2 else ', not 100 %'))
+    elif missing:
+        why = 'no Gladstone-Dale constant for %s' % ', '.join(missing[:4])
+    else:
+        why = 'no wt% table to check it against'
+    return [(wt, True) for wt in good] + [(wt, False) for wt in rest], why
+
+
+_OX_COUNT = re.compile(r'([A-Z][a-z]?)(\d*)')
+
+
+def _as_oxides(wt, K):
+    """An analysis tabulated in ELEMENTS ('Al 24.49, Cl 15.48, H 3.75') as the oxides Gladstone-Dale
+    is defined over. Whether the conversion was the right thing to do is settled by the total it
+    lands on, so nothing here has to decide it: a sulfosalt's metals turned into oxides overshoot
+    100 % by a mile and the caller drops the set. -> the converted wt%, or None when an element has
+    no usual oxide. A measured oxygen content is dropped — the oxides carry that oxygen already."""
+    from pxrd_review import gd as GD
+    if not any(c not in K and c in EP.ATOMIC_WEIGHTS for c in wt):
+        return None
+    out = OrderedDict()
+    for c, v in wt.items():
+        if c == 'O' or not v:
+            continue
+        if c in K:
+            out[c] = out.get(c, 0.0) + v; continue
+        ox = GD.USUAL_OXIDE.get(c)
+        aw = EP.ATOMIC_WEIGHTS.get(c)
+        if not ox or not aw or ox not in K:
+            return None
+        n_el = sum(int(num or 1) for el, num in _OX_COUNT.findall(ox) if el == c)
+        try:
+            mw = EP.parse_constituent(ox).mw
+        except Exception:
+            return None
+        out[ox] = out.get(ox, 0.0) + v / aw / n_el * mw
+    return out or None
+
+
 def gd_check(ex, comp, stmt=None):
-    """The mean refractive index and the densities against the composition: K_C from the wt% the
-    composition oracle used, K_P = (n − 1)/D, 1 − K_P/K_C for each density the paper gives. Against
-    the paper's own stated index or category when it gives one, else against Mandarino's 'poor'
-    boundary — a misread n or D moves the index by a tenth. -> {'status': {field: status},
-    'ci': {'meas': x, 'calc': y}, 'KC', 'lines', 'red': bool}."""
+    """The mean refractive index and the densities against the composition (Mandarino 1981).
+
+    Which constituents K_C is formed from decides the answer, and the reader does not always get a
+    complete analysis: a missed H2O row, a table given in elements, a constant the file does not
+    have. So every wt% set the paper offers is tried and THE PAPER'S OWN STATED INDEX ARBITRATES —
+    a set that reproduces it has proved itself, whatever the completeness heuristic thinks. Only
+    when no set reproduces it does the heuristic speak, and then it says whether the fault is a
+    reading this tool could not complete (`nooracle`, with the reason) or a genuine disagreement
+    with the paper (`unverified`)."""
+    sets, why = _gd_wt_sets(ex, comp)
+    first = None
+    for wt, complete in sets:
+        out = _gd_eval(ex, wt, stmt)
+        if out['status'].get('optics.n') == 'agrees':
+            return out
+        if first is None:
+            first = (out, complete)
+    if first is None:
+        n = (ex.get('optics') or {}).get('n')
+        return {'status': {k: 'nooracle' for k in ('optics.n', 'optics.D_meas', 'optics.D_calc')},
+                'ci': {}, 'KC': None, 'red': False, 'detail': why,
+                'lines': ['Gladstone–Dale: n %.4f read but K_C cannot be formed — %s' % (n, why)] if n else []}
+    out, complete = first
+    if not complete and out['status'].get('optics.n') == 'unverified':
+        # the reading did not reproduce the paper, and the wt% it was formed from is not the whole
+        # analysis: this tool's limitation, not a doubt about the paper
+        out = dict(out, status={k: ('nooracle' if v == 'unverified' else v) for k, v in out['status'].items()},
+                   detail=why, lines=[l + ' — ' + why if l.endswith('[unverified]') else l for l in out['lines']])
+    return out
+
+
+def _gd_eval(ex, wt, stmt):
+    """One wt% set against the optics: K_C from `wt`, K_P = (n − 1)/D, 1 − K_P/K_C for each density
+    the paper gives, judged against the paper's own stated index or category when it gives one, else
+    against Mandarino's 'poor' boundary — a misread n or D moves the index by a tenth.
+    -> {'status': {field: status}, 'ci': {'meas': x, 'calc': y}, 'KC', 'lines', 'red': bool}."""
     from pxrd_review import gd as GD
     o = ex.get('optics') or {}; n = o.get('n'); stmt = stmt or {}
     st = {'optics.n': 'nooracle', 'optics.D_meas': 'nooracle', 'optics.D_calc': 'nooracle'}
     out = {'status': st, 'ci': {}, 'KC': None, 'lines': [], 'red': False}
-    wt = (comp or {}).get('wt') or {}
     if not n or not wt:
-        out['lines'] = [] if not n else ['Gladstone–Dale: n %.4f read but no wt%% table to check it against' % n]
         return out
     try:
         KC, rows = GD.kc({c: v for c, v in wt.items() if v})
     except Exception as ex_:
+        out['detail'] = 'could not compute K_C (%s)' % ex_
         out['lines'] = ['Gladstone–Dale: could not compute K_C (%s)' % ex_]
         return out
     if not KC:
         return out
     out['KC'] = KC
-    verified = bool((comp or {}).get('verified'))
     parts = []; best = None
     for key in ('meas', 'calc'):
         D = o.get('D_' + key)
@@ -3021,6 +3138,23 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
             if bv.get('from_paper'):
                 # checked against the structure the paper prints, not a .cif — a doubt, never a verdict
                 _set(f, 'bv.params', 'unverified', 'bv', 'checked against the structure the paper itself prints, not a .cif')
+            elif bv.get('from_bonds'):
+                # checked against the distances the paper itself prints: a verdict while its sums
+                # come out at the formal valences, a doubt once they do not
+                from pxrd_review import paper_bonds as _PB
+                good = (bv.get('gii') or 9) <= _PB.GII_GATE
+                # What the reader read is the set the paper CITES, so that is what is judged: the
+                # U6+ sub-choice is compared only where the paper states one (it defaults to Burns'
+                # in `cited`, and a paper that says nothing has not been contradicted by it). And
+                # printed distances are rounded, so the sets are told apart by a narrower margin
+                # than a .cif gives — the cited set has to be plainly refuted, not merely second.
+                u6_stated = (ex.get('bv') or {}).get('u6')
+                cn, cb = bv.get('cited_n'), bv.get('cited_bad')
+                fits = (bv.get('params') == (bv.get('cited') or ('gh',))[0]
+                        and (u6_stated is None or bv.get('u6') == u6_stated)) \
+                    or (cn and cb is not None and cb <= max(1, 0.1 * cn))
+                _set(f, 'bv.params', ('agrees' if fits else 'disagrees') if good else 'unverified', 'bv',
+                     "the table agrees best with %s, from the paper's own bond distances (%.2f vu)" % (bv.get('params'), bv.get('gii') or 0))
             else:
                 _set(f, 'bv.params', 'agrees' if same else 'disagrees', 'bv', 'the table agrees best with %s' % bv.get('params'))
         elif bs in ('unmatched', 'foreign'):
@@ -3126,6 +3260,45 @@ def _paper_cif(pdf, text, out):
     return info['path']
 
 
+def _bv_from_bonds(pdf, ex, text, out):
+    """The paper's bond-valence table against the bond distances the paper itself prints, for a
+    paper that comes without a .cif. -> a bv_check_paper result with 'from_bonds' and 'gii', or
+    None when the paper prints no bond table, or one whose sums do not come out."""
+    if pdf.lower().endswith('.docx'):
+        return None
+    try:
+        from pxrd_review import paper_bonds as PB
+        st, res, g = PB.structure_for(pdf, ex, text)
+    except Exception:
+        return None
+    if st is None or g is None or g > PB.GII_NOTE:
+        return None
+    try:
+        bc = bv_check_paper(pdf, None, ex, text, structure=st)
+    except Exception:
+        return None
+    if bc is None or bc.get('status') == 'error':
+        return None
+    if bc['status'] != 'checked' and bc['status'] != 'unmatched':
+        return bc                                # says why the paper's own table cannot serve; the
+                                                 # caller may still try the structure the paper prints
+    bc['from_bonds'] = True; bc['gii'] = g
+    out['paper_bonds'] = {'sites': len(res), 'bonds': len(st.rows), 'gii': g}
+    where = ("the bond distances the paper itself prints (%d bonds over %d sites, which add to the "
+             "formal valences within %.2f vu)" % (len(st.rows), len(res), g))
+    note = g > PB.GII_GATE                       # above the gate the reading is a doubt, not a verdict
+    def _say(t, full):
+        t = t.replace('the .cif', where if full else "the paper's own bond distances")
+        t = t.replace('.cif', where if full else "the paper's own bond distances")
+        return (t + ' [unverified]') if note and '[unverified]' not in t else t
+    for k_ in ('head', 'message'):
+        if bc.get(k_):
+            bc[k_] = _say(bc[k_], True)
+    if bc.get('lines'):
+        bc['lines'] = [_say(ln, False) for ln in bc['lines']]
+    return bc
+
+
 def check_paper(pdf, cif=None, out_dir=None):
     """The paper against itself and its .cif: {'extract', 'composition', 'bv', 'bv_status', 'powder',
     'powder_status', 'fields', 'lines'} — the lines are what a manuscript review prints: a 'readers:'
@@ -3140,12 +3313,23 @@ def check_paper(pdf, cif=None, out_dir=None):
     elif ex.get('epma'):
         out['lines'].append('composition: an analytical table was read but no empirical formula sentence was found to check it against')
     bc = None
-    # no .cif — but roughly half the papers print a structure of their own. It stands in for the
-    # BOND-VALENCE check only: the cell check and verify must not be handed the paper's own cell
-    # back as if it were independent evidence. Note-grade throughout (91 % of sites on the corpus).
-    bv_cif = cif or _paper_cif(pdf, text, out)
-    if bv_cif:
-        bc = bv_check_paper(pdf, bv_cif, ex, text)
+    # Nine papers in ten come without a .cif, and two things in the paper itself can stand in for
+    # one — for the BOND-VALENCE check only, never for the cell check or verify, which must not be
+    # handed the paper's own cell back as if it were independent evidence.
+    #   the bond distances it prints  needs no cell, no space group and no coordinates, only the
+    #                                 two sites and the distance. Gated on its own sums coming out
+    #                                 at the formal valences, it reproduced 98 % of the .cif's sums
+    #                                 on the corpus — a verdict, not a doubt. Tried first.
+    #   the structure it prints       the whole coordinates table, cell and space group rebuilt
+    #                                 (`paper_structure`): 91 % of sites, and note-grade throughout.
+    if cif:
+        bc = bv_check_paper(pdf, cif, ex, text)
+    else:
+        bc = _bv_from_bonds(pdf, ex, text, out)
+        if bc is None or bc.get('status') == 'none':
+            bv_cif = _paper_cif(pdf, text, out)
+            if bv_cif:
+                bc = bv_check_paper(pdf, bv_cif, ex, text) or bc
     if out.get('paper_structure'):                       # bv_check_paper has read it; the file goes now
         from pxrd_review import paper_structure as _PS
         ps_ = out['paper_structure']
@@ -3170,6 +3354,8 @@ def check_paper(pdf, cif=None, out_dir=None):
             out['lines'].append('bond valence: ' + bc['message'])
         else:
             out['bv'] = {k: bc[k] for k in ('tables', 'lines', 'params', 'u6', 'cited', 'compared', 'disagree')}
+            out['bv'].update({k: bc.get(k) for k in ('cited_n', 'cited_bad')})
+            out['bv'].update({k: bc[k] for k in ('from_paper', 'from_bonds', 'gii') if k in bc})
             out['lines'] += [bc['head']] + ['  ' + ln for ln in bc['lines']]
     # the water the formula claims against the hydrogen the structure accounts for — note-grade, and
     # only where a .cif was supplied (the structure the paper prints is not independent of it)
@@ -3425,10 +3611,15 @@ def water_check(cif, counts, name=''):
     return []
 
 
-def bv_check_paper(path, cif, ex, text=None):
+def bv_check_paper(path, cif, ex, text=None, structure=None):
     """The paper's bond-valence table (a pdf's, read from the page; a manuscript .docx's, from
     its Word table) against the .cif, under every parameter set — the one that agrees best wins,
-    the cited one on a tie. -> {'status', …}:
+    the cited one on a tie.
+
+    `structure` stands in for the .cif when there is none: a `paper_bonds.BondStructure`, built
+    from the bond distances the paper itself prints. Everything below then reads the same, save
+    that the anion sums are not compared (a bond table states no multiplicities, so an anion's sum
+    cannot be formed) and the text says which structure was used. -> {'status', …}:
       'checked'   {'head', 'lines', 'tables', 'params', 'u6', 'cited', 'compared', 'disagree'}
       'unmatched' the same keys, compared 0: a table was read but none of its cells matched a
                   bond of the .cif (the labels differ — Ow/OH vs O); its row and column sums are
@@ -3437,7 +3628,19 @@ def bv_check_paper(path, cif, ex, text=None):
       'none'      {'message'}: no table;  'error' {'message'}: the .cif will not compute."""
     try:
         from pxrd_review import bv_check as B
-        if path.lower().endswith('.docx'):
+        if structure is not None:
+            from pxrd_review import paper_bonds as PB
+            st = structure
+            compute = lambda st_, P: PB.compute(st_, P) + ((),)
+            tabs = bv_tables(path, st) or bvs_site_tables(path, st)
+            if not tabs:
+                return {'status': 'none', 'message': 'no bond-valence table found in the paper (nothing to check against its own bond distances)'}
+            cats = _cation_labels(st)
+            if all(t.get('kind') == 'sites' and not any(_bv_norm(l) in cats for l, _v in t['rows']) for t in tabs):
+                return {'status': 'none', 'message': 'the paper prints bond-valence sums for its ANIONS; those need the site multiplicities, '
+                                                     'which a bond-distance table does not give — nothing here can be checked without a .cif'}
+            left_out = []
+        elif path.lower().endswith('.docx'):
             all_tabs = [t for t in B.read_tables(path) if len(t) >= 2]
             if not any(sum(1 for r in t for c in r if re.match(r'^\s*0\.\d\d', c)) >= 3 or any(_BVS_HEAD.match((c or '').strip()) for r in t[:3] for c in r) for t in all_tabs):
                 return {'status': 'none', 'message': 'no bond-valence table found in the manuscript (nothing to check against the .cif)'}   # no valences and no BVS column: the .cif is not needed, so a broken one is no finding
@@ -3455,27 +3658,33 @@ def bv_check_paper(path, cif, ex, text=None):
             tabs = bv_tables(path, st) or bvs_site_tables(path, st)
         if not tabs:
             return {'status': 'none', 'message': 'no bond-valence table found in the paper (nothing to check against the .cif)'}
-        tabs, left_out = _own_mineral_tables(tabs, cif, st)
+        if structure is None:
+            compute = lambda st_, P: B.compute(st_, P, None, 'oo')
+            tabs, left_out = _own_mineral_tables(tabs, cif, st)
         sites = tabs[0].get('kind') == 'sites'
         where = ('the paper\'s %s (p%d)' % ('BVS column' if sites else 'table', tabs[0]['page'])) if tabs[0].get('page') else ('the manuscript\'s %s' % ('BVS column' if sites else 'table'))
         cited = (ex['bv'].get('params') or 'gh', ex['bv'].get('u6') or 'burns')
-        best = None; as_cited = None
+        best = None; as_cited = None; cited_n = cited_bad = None
         # a paper may print several BVS columns (two parameter sets, with and without H): each is judged on
         # its own and the column that agrees best stands for the paper — the others are not findings
         groups = [[t] for t in tabs] if sites else [tabs]
         for key in ('gh', 'bo', 'ba'):
             for u6 in ('burns', 'params'):
                 P = B.Params(prefer=key, u6=u6); notes = list(st.notes)
-                rk = B.compute(st, P, None, 'oo'); st.notes[:] = notes
+                rk = compute(st, P); st.notes[:] = notes
                 for grp in groups:
                     if sites:
-                        lines = B.check_bvs_sites(st, rk[0], rk[1], grp, B.PARAM_NAMES[key], compare_anions=not rk[3])
+                        lines = B.check_bvs_sites(st, rk[0], rk[1], grp, B.PARAM_NAMES[key],
+                                                  compare_anions=not rk[3] and structure is None)
                     else:
-                        lines = B.check_bvs_table(st, rk[0], rk[2], rk[1], [t['rows'] for t in grp], B.PARAM_NAMES[key])
+                        lines = B.check_bvs_table(st, rk[0], rk[2], rk[1], [t['rows'] for t in grp], B.PARAM_NAMES[key],
+                                                  compare_anion_sums=structure is None)
                     hits = [re.search(r'(\d+) cells compared, (\d+) disagree', ln) for ln in lines]
                     n = sum(int(m.group(1)) for m in hits if m); bad = sum(int(m.group(2)) for m in hits if m)
                     if (key, u6) == cited or as_cited is None:
                         as_cited = (key, u6, lines)
+                    if (key, u6) == cited and n and (cited_n is None or bad / n < cited_bad / cited_n):
+                        cited_n, cited_bad = n, bad     # the cited set's best group, as `best` is the best group
                     if n and (best is None or (bad / n, 0 if (key, u6) == cited else 1, -n) < (best[0] / best[6], best[1], -best[6])):
                         best = (bad, 0 if (key, u6) == cited else 1, key, u6, P, lines, n)
         if best is None:
@@ -3483,7 +3692,7 @@ def bv_check_paper(path, cif, ex, text=None):
             lines = [ln for ln in lines if not ln.startswith('no bond-valence table found')]   # the head below says why
             head = ('bond valence: %s was read but none of its cells matched a bond of the .cif — the site labels may differ '
                     '(Ow/OH in the table vs O in the .cif); the row and column sums below were still checked' % where)
-            return {'status': 'unmatched', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': 0, 'disagree': 0}
+            return {'status': 'unmatched', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': 0, 'disagree': 0, 'cited_n': cited_n, 'cited_bad': cited_bad}
         bad, _, key, u6, P, lines, n = best
         trips = lambda n_, bad_: (n_ >= 4 and 2 * bad_ >= n_) or bad_ >= 8   # half or more of the cells differ, or eight of them: not this convention, or not this reading — a published table has one or two slips, not a list
         kept = []; doubted = []
@@ -3497,11 +3706,11 @@ def bv_check_paper(path, cif, ex, text=None):
                     kept.append('table %d: the differences — %s' % (tno, _bv_pattern(tl, n_i, bad_i)))   # where they sit: one column throughout is a convention, scattered ones are slips
         if not kept:                                                   # a doubt for the reviewer, never a list of findings
             head = 'bond valence: %s vs the .cif — %d of %d cells differ under every parameter set; not compared cell by cell [unverified]' % (where, bad, n)
-            return {'status': 'unmatched', 'head': head, 'lines': doubted + [ln for ln in st.notes if "from the paper's formula" in ln] + left_out, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad}
+            return {'status': 'unmatched', 'head': head, 'lines': doubted + [ln for ln in st.notes if "from the paper's formula" in ln] + left_out, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad}
         head = 'bond valence: %s vs the .cif — agrees best with %s%s' % (
             where, P.note(), '' if (key, u6) == cited else ' (the paper cites %s%s)' % (B.PARAM_NAMES.get(cited[0], cited[0]), ', U6+ from Burns' if cited[1] == 'burns' else ''))
         kept += [ln for ln in st.notes if "from the paper's formula" in ln] + left_out
-        return {'status': 'checked', 'head': head, 'lines': kept + doubted, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad}
+        return {'status': 'checked', 'head': head, 'lines': kept + doubted, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad}
     except Exception as ex_:
         return {'status': 'error', 'message': 'could not check (%s)' % ex_}
 

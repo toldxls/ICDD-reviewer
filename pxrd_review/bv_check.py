@@ -1375,8 +1375,12 @@ def _element_aliases(result, anions=()):
 def _strip_charge(key):
     return re.sub(r'\d?[+\-]$|(?<=[A-Z])\d(?=$)', '', key) if key else key
 
-def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
+def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', compare_anion_sums=True):
     """Findings about a manuscript bond-valence table (anion rows × cation columns).
+
+    `compare_anion_sums=False` keeps the arithmetic of each anion row (its Σ against its own cells)
+    but drops the comparison of that row with the structure's: an anion's sum needs the site
+    multiplicities, and a structure read from a printed bond table has none.
 
     Conventions differ between authors, so a cell is accepted when it matches the computed value
     under EITHER reading: one value per bond with a '×n' mark, or the total over the n bonds (and
@@ -1532,7 +1536,7 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
                                            for s, _, n2 in lst)
                             typed_cat = min(row_pb, row_alt) if abs(row_pb + extra - given) <= abs(row_alt + extra - given) else row_alt
                             typed_cat = row_pb if abs(row_pb + extra - given) <= 0.025 else row_alt
-                            if abs(cat_only - typed_cat) > 0.08:
+                            if compare_anion_sums and abs(cat_only - typed_cat) > 0.08:
                                 L.append('table %d: Σ for %s: the cation part adds to %.2f in the table, %.2f from the .cif (parameters: %s)'
                                          % (ti + 1, an, typed_cat, cat_only, params_label))
             elif re.match(r'^\s*(Σ|Sum|Total)', row[0], re.I):
@@ -1562,10 +1566,11 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?'):
 # boundary is the sharp one; OH and H2O overlap, which is why the count below is reported as
 # hydrogen (where an error of one class costs one H) as well as by species.
 #
-# Scored again on 1165 sites whose LABEL states what they are (a refiner writes OH1, OW1, W1), the
-# error is ONE-SIDED, and that asymmetry is what any check built on this must respect:
-#     a hydroxyl or water called ordinary oxygen    7 of 221   (0 of 77 in well-behaved structures)
-#     an ordinary oxygen called hydrous           184 of 944   (19 %, and no better when gated on
+# Scored again on the corpus sites whose LABEL states what they are (a refiner writes OH1, OW1,
+# W1), the error is ONE-SIDED, and that asymmetry is what any check built on this must respect:
+#     a hydroxyl or water called ordinary oxygen    2 of 227   (1 %; it was 15 before the cation
+#                                                               occupancy was weighted in, below)
+#     an ordinary oxygen called hydrous           301 of 1115  (27 %, and no better when gated on
 #                                                               the structure's own valence index)
 # So the count is a RELIABLE statement that a site holds no hydrogen, and only a SUGGESTIVE one
 # that it does: read as a ceiling on the hydrogen a structure can hold, never as a measurement of
@@ -1584,11 +1589,18 @@ def water_from_structure(st, result, cells):
     occupancy) divided by its count in that formula is Z, and the median over the elements is taken
     so one odd site cannot move it."""
     h_labels = {r[0].label for r in result if r[0].element == 'H'}
+    # the cation site's occupancy, exactly as `compute` weights its own anion sums by it: a half
+    # occupied cation gives its oxygen half the valence, and not weighting it here made a hydroxyl
+    # look like an ordinary oxygen — the one direction this count is supposed to be reliable in.
+    # The cell values are used rather than compute's anion_sum because that one carries the
+    # hydrogen bonds an oxygen accepts, which say nothing about the hydrogen it holds.
+    occ_of = {r[0].label: min(sum(sp.occ for sp in r[0].species if sp.ox and sp.ox > 0) or 1.0, 1.0)
+              for r in result}
     cat = {}
     for (an, c), segs in cells.items():
         if c in h_labels:
             continue
-        cat[an] = cat.get(an, 0.0) + sum(s * (n2 if isinstance(n2, int) else 1) for s, _n, n2 in segs)
+        cat[an] = cat.get(an, 0.0) + occ_of.get(c, 1.0) * sum(s * (n2 if isinstance(n2, int) else 1) for s, _n, n2 in segs)
     sites = []
     n_oh = n_w = 0.0
     for a in st.anions:
@@ -1629,7 +1641,10 @@ def _located_h(st, z):
         if a.element != 'O':
             continue
         try:
-            occ = sum(o.occ_total for o, d, _n in st.neighbours(a, 1.3)
+            # `neighbours` merges the symmetry-equivalent images of one H site into a single entry
+            # with its count, and the count is the point here: a water molecule whose oxygen sits
+            # on a two-fold axis has ONE hydrogen site and TWO hydrogens
+            occ = sum(o.occ_total * n for o, d, n in st.neighbours(a, 1.3)
                       if d < 1.3 and o.element == 'H')
         except Exception:
             continue
