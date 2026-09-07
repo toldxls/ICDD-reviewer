@@ -262,6 +262,46 @@ record (`--papers`, `--baseline`): tables checked 44 → 46, clean tables 10 →
   wt% reading itself in doubt the column only "sides with the wt% read — worth a look [unverified]";
   a column that differs from a formula the wt% reproduce is a note.
 
+### Changed — the doubts yield when the reading proves itself (2026-09-07)
+Acting on the recall measurement below. A doubt in the composition check is a statement that the
+tool may have misread the paper's analysis table; the reduction answers that question itself. When
+it reproduces every coefficient of the published formula but one, over four or more elements, the
+reading is demonstrated and the single exception belongs to the paper. Doubts are now marked as
+being about the reading or not, and only the former yield. A hard doubt still blocks: the formula
+would not parse, the wt% do not add up, an element is missing, the basis is circular, or the
+analyses were averaged by the tool, which names a mechanism that moves one element on its own.
+
+Hydrogen and traces are also removed from the deviation list BEFORE the doubts are weighed rather
+than after. Counting a hydrogen the tool itself labels informational as one of the "two or more
+elements deviating" was suppressing real single-element findings on its own.
+
+The paper's own apfu column now defers to the tool's reading only when something independent
+already doubts that reading, not merely when the table was awkward.
+
+Corpus, 1092 papers: composition flags 12 to 13, papers verifying cleanly 597 to 604. The one new
+flag is an amphibole whose formula carries Fe 1.42 where its own analysis supports 1.27, with every
+other element agreeing. One previous flag went away, correctly: its table had a row whose mean fell
+outside its own printed range. Recall, from the seeder:
+
+| fault | before | after |
+|---|---|---|
+| formula coefficient, 10 % | 59 % | 69 % |
+| formula coefficient, 20 % | 55 % | 67 % |
+| one wt%, 10 % | 27 % | 31 % |
+| papers with an apfu column, wt% >= 5 % | 6 % | 9 % |
+
+### Fixed — two reader faults the recall work exposed (2026-09-07)
+Both were found by hand-checking flags that the change above made visible, and both were wrong
+before it, merely hidden.
+- **Tourmaline's boron site was counted as an element.** In `T(Si4.526B1.419Al0.055)Σ6.000O18
+  B(BO3)3` the leading B names a site, so the tool read one boron too many and put every tourmaline
+  paper's boron 1.0 apfu high. A bare B before a bracket is only a label where the formula is
+  already written by site, so `Ca[B(OH)4]2` still parses as a borate.
+- **A constituent whose mean falls outside its own printed range** is now evidence that the column
+  mapping is off, and blocks a finding built on it. It fires on 5 papers in 109 that print a range,
+  every one a real mis-mapping: a magnesium oxide read as 4.82 against the row's own range of 4.87
+  to 5.83, a barium read as 0.12 against 17 to 19.52.
+
 ### Added — the first recall measurement (2026-09-07)
 `tools/seed_faults.py` takes papers whose checks pass, injects one fault of a known size into the
 values already read from them, and records whether the check fires. Four faults, each of a kind a

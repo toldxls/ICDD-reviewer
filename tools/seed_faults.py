@@ -55,9 +55,16 @@ def _seed_wt(ex, frac):
     i = max(range(len(rows)), key=lambda k: rows[k].get('mean') or 0)
     r = rows[i]
     was = r['mean']
-    r['mean'] = round(was * (1 + frac), 4)
+    k = 1 + frac
+    r['mean'] = round(was * k, 4)
     if r.get('all'):
-        r['all'] = [round(v * (1 + frac), 4) if v else v for v in r['all']]
+        r['all'] = [round(v * k, 4) if v else v for v in r['all']]
+    # the row's own range and s.d. move with it: a paper whose printed mean fell outside its own
+    # printed range would be caught by that alone, which is a different fault than the one meant here
+    if r.get('range') and len(r['range']) == 2:
+        r['range'] = tuple(round(v * k, 4) for v in r['range'])
+    if r.get('sd'):
+        r['sd'] = round(r['sd'] * k, 4)
     return ex, '%s %g -> %g' % (r['constituent'], was, r['mean'])
 
 

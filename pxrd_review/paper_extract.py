@@ -1811,8 +1811,11 @@ def _journal_to_icdd(f):
     f = re.sub(r'([)\]])\s*R(?=\s*\d)', r'\1 Σ', f)                                     # a Σ printed as R
     f = re.sub(r'([)\]])\s*6\s*=\s*(?=\d)', r'\1 Σ', f)                                  # ')6=0.96': a Σ printed as 6 (font), with its '='
     f = re.sub(r'Σ\s*=\s*', 'Σ', f)                                                       # 'Σ=48.49'
+    site_notation = len(re.findall(r'(?<![A-Za-z])[XYZTVWAMR]\d?\s*(?=[\(\[])', f)) >= 2   # X(…) Y(…) Z(…) T(…): the formula is written by site
     f = re.sub(r'(?<![A-Za-z])[AMXTRZ]\d?(?:\+[AMXTRZ]\d?)?\s*(?=[\(\[]|Σ|6\d)', ' ', f)   # site labels A1[…], M2+M3(…), M3 Σ3.95(…), ')61.00Y('
     f = re.sub(r'(?<![A-Za-z])[YVW](?=[\(\[])', ' ', f)                                  # Y / V / W site labels right before a bracket (the elements keep their counts)
+    if site_notation:
+        f = re.sub(r'(?<![A-Za-z])B(?=\(B)', ' ', f)                                     # tourmaline's 'B(BO3)3': the label B, only where other sites are labelled too
     f = re.sub(r'(?<![A-Za-z])[XYZTVWAMR](?=[A-Z][a-z]?\d*\.\d)', ' ', f)                # 'ZAl6.00[': a label glued to the element it holds
     f = re.sub(r'(?<![A-Za-z])[XYZTW]\s+(?=[A-Z][a-z]?\d*\.\d)', ' ', f)                # 'Y Mg1.50Fe…': the label with its bracket lost (a bare Y is not yttrium here)
     f = re.sub(r'(?<![A-Za-z])A(?=\d*\.\d)', '?', f)                                      # 'A1.91': a vacancy printed as A (font)
@@ -2116,7 +2119,25 @@ def _check_formula(ex, text, fcand):
         return {'ok': False, 'verified': False, 'lines': ['composition: not verifiable — the wt% table read (%d constituents) and the formula read could not be reconciled on any basis; check the table and the formula sentence by eye' % len(wt)],
                 'formula': ftxt, 'basis': None, 'result': None, 'doubts': ['not reconcilable on any basis'], 'wt': wt, 'counts': counts}
     # confidence: only a clean read with a specific deviation is a finding; anything doubtful is a note
-    doubts = []; notes = []
+    doubts = []; notes = []; reading_doubts = []
+
+    def doubt(text, reading=False):
+        """A doubt turns the finding into a console note. `reading=True` marks one that says the
+        tool may have misread the paper's TABLE — those are set aside when the reading proves
+        itself on the rest of the formula (below)."""
+        doubts.append(text)
+        if reading:
+            reading_doubts.append(text)
+
+    # H comes from hydrate and hydroxyl notation the text extraction mangles, and is usually the
+    # authors' own calculation: informational, never a flag on its own. It is removed HERE, before
+    # the doubts are weighed, so that every rule below counts the same deviations the reader will
+    # see: counting a discarded H as one of the 'two or more elements deviating' was suppressing
+    # real single-element findings (measured 2026-09-07 by seeding faults).
+    h_only = [d for d in r['diffs'] if d[0] == 'H']
+    r['diffs'] = [d for d in r['diffs'] if d[0] != 'H']
+    # a trace (< 0.1 apfu) is a finding only when it is off by half or more: 0.08 vs 0.05 is rounding
+    r['diffs'] = [d for d in r['diffs'] if not (d[1] < 0.1 and d[2] is not None and abs(d[2] - d[1]) < 0.5 * d[1])]
     an = [x for x in f_issues if x.startswith('anion group sum')]
     if an:
         notes.append('the anion group of the formula does not add to its Σ (%s) — the cations were checked regardless' % an[0][17:]); f_issues = [x for x in f_issues if x not in an]
@@ -2125,49 +2146,56 @@ def _check_formula(ex, text, fcand):
     elif len(f_issues) == 1 and f_issues[0].startswith('formula group sums do not add up') and f_issues[0].count('Σ') == 1 and r['score'] <= 0.02 and not r['diffs']:
         notes.append('one Σ of the formula does not add up (%s) — a misprint; every coefficient agrees' % f_issues[0][33:]); f_issues = []
     elif f_issues:
-        doubts.append('the formula did not parse cleanly (%s)' % '; '.join(f_issues))
+        doubt('the formula did not parse cleanly (%s)' % '; '.join(f_issues))
     if len(wt) < 3:
-        doubts.append('only %d constituents were read' % len(wt))
+        doubt('only %d constituents were read' % len(wt))
     tot = e.get('total') if (e.get('total') or 0) >= 50 else sum(wt.values())      # a Total of 8.00 is the apfu block's
     if not (85.0 <= tot <= 112.0):                       # analyses do run 95–105; far outside that the table was misread
-        doubts.append('the wt%% read add to %.1f' % tot)
+        doubt('the wt%% read add to %.1f' % tot)
+    # A constituent whose mean falls outside its OWN printed range is proof the column mapping is
+    # off: the number used is not the mean the paper printed. Evidence, not a guess, so it blocks a
+    # finding outright (7021: MgO read as 4.82 against the row's own range of 4.87-5.83).
+    def _outside(x):
+        rng = x.get('range'); m = x.get('mean')
+        if not rng or len(rng) != 2 or not m or m <= 0:
+            return False                                   # a mean of 0 is 'n.d.' in the mean column, a state the reader sets deliberately: the row serves the named columns only
+        tol = max(0.01, 0.002 * max(rng))          # rounding of the printed values, nothing more: on the corpus this fires on 5 papers in 109, every one a real mis-mapping
+        return not (min(rng) - tol <= m <= max(rng) + tol)
+    outside = [x for x in (e.get('rows') or []) if _outside(x)]
+    if outside:
+        doubt('%s reads %g but that row\'s own range is %g-%g — the column mapping is off, so the values used are not the paper\'s means'
+              % (outside[0]['constituent'], outside[0]['mean'], min(outside[0]['range']), max(outside[0]['range'])))
     if r['score'] > 0.06 and len([d for d in r['diffs'] if d[2] is not None and d[1] >= 0.1]) >= 2:
-        doubts.append('the cations deviate %.0f%% overall — a basis or table-reading problem rather than one slip' % (100 * r['score']))
+        doubt('the cations deviate %.0f%% overall — a basis or table-reading problem rather than one slip' % (100 * r['score']), reading=True)
     def _factor(ratio):
         return any(abs(ratio - f_) <= 0.08 * f_ for f_ in (0.1, 0.2, 0.25, 0.333, 0.5, 2.0, 3.0, 4.0, 5.0, 10.0)) or not 0.4 <= ratio <= 2.5
     factor_like = [d for d in r['diffs'] if d[0] != 'H' and d[2] is not None and ((d[1] >= 0.1 and not 0.6 <= d[2] / d[1] <= 1.6 and _factor(d[2] / d[1])) or (d[1] < 0.1 and d[2] > 5 * max(d[1], 0.02)))]
     if factor_like:
-        doubts.append('%s is off by a factor (%.2f vs %.2f) — a multiplier or notation problem in the read, not a coefficient slip' % (factor_like[0][0], factor_like[0][1], factor_like[0][2]))
+        doubt('%s is off by a factor (%.2f vs %.2f) — a multiplier or notation problem in the read, not a coefficient slip' % (factor_like[0][0], factor_like[0][1], factor_like[0][2]))
     if column_note and r['diffs']:
-        doubts.append('the wt%% column was chosen by fit, not by its header — a residual disagreement there is not evidence')
+        doubt('the wt%% column was chosen by fit, not by its header — a residual disagreement there is not evidence', reading=True)
     if any('analyses under it averaged' in c_ for c_ in converted) and r['diffs']:
-        doubts.append('the analyses under the name were averaged by the tool — the paper\'s own mean may treat the iron split or the H2O differently; a residual there is not evidence')
+        doubt('the analyses under the name were averaged by the tool — the paper\'s own mean may treat the iron split or the H2O differently; a residual there is not evidence')   # NOT a soft doubt: it names a mechanism (the iron split, the water) that moves one element, which is the shape the single-element rule below trusts
     if f_kind == 'structural' and r['diffs']:
-        doubts.append('the formula read is the structural (site-population) one, the paper stating no empirical formula — its coefficients come from the refinement, not the analysis')
+        doubt('the formula read is the structural (site-population) one, the paper stating no empirical formula — its coefficients come from the refinement, not the analysis')
     if any('reproduces the formula' in c_ for c_ in converted) and r['diffs']:
-        doubts.append('the table was chosen over the first read because it carries every element of the formula — a residual disagreement there is not evidence')
+        doubt('the table was chosen over the first read because it carries every element of the formula — a residual disagreement there is not evidence', reading=True)
     hdr = e.get('header') or ''
     n_means = max(len(re.findall(r'\b(mean|average|aver\.?|avg\.?)\b', hdr, re.I)), len(re.findall(r'\bsample\b|#\d|\bn\s*=\s*\d', hdr, re.I)))
     if n_means >= 2 and r['score'] > 0.02 and r['diffs']:
-        doubts.append('the table holds %d samples and the first fits the formula only to %.0f%% — the formula may belong to another' % (n_means, 100 * r['score']))
+        doubt('the table holds %d samples and the first fits the formula only to %.0f%% — the formula may belong to another' % (n_means, 100 * r['score']), reading=True)
     # the doubt this raises is "we may have grabbed a column of numbers that is not the analysis".
     # A transposed table settles it by construction — its header IS the constituent row — and so
     # does a caption that names the table as the chemical one; neither carries the words below.
     hdr_unknown = not re.search(r'wt\.?\s*%|mean|average|range|s\.?d\.?|standard|oxide|constituent|element|component|composition|analys', hdr, re.I)
     if r['diffs'] and hdr_unknown and not e.get('prose') and not e.get('transposed') and not _CAP_YES.search(e.get('caption') or ''):
-        doubts.append('the table\'s header was not recognised — the values used may be one analysis rather than the mean')
-    # H comes from hydrate and hydroxyl notation the text extraction mangles, and is usually the
-    # authors' own calculation: informational, never a flag on its own
-    h_only = [d for d in r['diffs'] if d[0] == 'H']
-    r['diffs'] = [d for d in r['diffs'] if d[0] != 'H']
-    # a trace (< 0.1 apfu) is a finding only when it is off by half or more: 0.08 vs 0.05 is rounding
-    r['diffs'] = [d for d in r['diffs'] if not (d[1] < 0.1 and d[2] is not None and abs(d[2] - d[1]) < 0.5 * d[1])]
+        doubt('the table\'s header was not recognised — the values used may be one analysis rather than the mean', reading=True)
     missing = [el for el, v, t, note in r['diffs'] if t is None]
     if missing:
-        doubts.append('the table read has no %s although the formula carries it — the table was probably read incompletely' % ', '.join(missing))
+        doubt('the table read has no %s although the formula carries it — the table was probably read incompletely' % ', '.join(missing))
     extra = sorted(set(EP.parse_constituent(c).element for c, v in wt.items() if _parses(c) and v >= 1.0 and EP.parse_constituent(c).kind != 'water') - set(counts) - {'O', 'H'})
     if extra:
-        doubts.append('the table has %s at 1 wt%% or more that the formula read does not carry — a simplified or another formula sentence was read' % ', '.join(extra))
+        doubt('the table has %s at 1 wt%% or more that the formula read does not carry — a simplified or another formula sentence was read' % ', '.join(extra))
     # A basis the paper does not state is one the tool chose, and a cation or element sum that is
     # not a round number was not chosen — it was read off the formula's own printed Σ (Ni+Co+Fe =
     # 18.03, Pd+Cu = 2.02). Normalising a formula to the sum of its own cations reproduces those
@@ -2176,8 +2204,8 @@ def _check_formula(ex, text, fcand):
     if r['diffs'] and not ex.get('basis') and r['basis'] and r['basis'][0] in ('cations', 'element'):
         n_ = r['basis'][-1]
         if abs(n_ - round(n_)) > 0.02:
-            doubts.append('the paper states no basis and the one that reproduces its formula, %s, is the formula\'s own '
-                          'printed sum — a deviation against it is circular' % EP._basis_label(r['basis']))
+            doubt('the paper states no basis and the one that reproduces its formula, %s, is the formula\'s own '
+                  'printed sum — a deviation against it is circular' % EP._basis_label(r['basis']))
     # Another part of the paper: its own apfu column, printed under or beside the wt%. Where the wt%
     # read do not reproduce the formula, the apfu column agreeing with it says the reading of the
     # wt% table is the tool's shortfall and the formula the paper's; where the wt% reproduce all but
@@ -2188,7 +2216,13 @@ def _check_formula(ex, text, fcand):
     if len(apfu_shared) >= 3:
         apfu_off = [el for el in apfu_shared if abs(apfu_col[el] - counts[el]) > max(0.03, 0.04 * counts[el])]
         apfu_vouches = not apfu_off
-    if apfu_vouches and r['diffs'] and doubts:
+    # The column excuses the tool's reading only when something INDEPENDENT already says the reading
+    # is suspect — a total that does not add up, an element missing, a coefficient off by a factor.
+    # A merely awkward table (a column picked by fit, several samples) is not that: measured
+    # 2026-09-07, blanket deference cost recall, catching 6 % of seeded wt% faults where a paper
+    # prints an apfu column against 17 % where it does not.
+    hard_doubts = [d for d in doubts if d not in reading_doubts]
+    if apfu_vouches and r['diffs'] and hard_doubts:
         apfu_note = ("the wt%% read miss the formula (rms %.1f %%), but the paper's own apfu column reproduces it (%s) — the reading of the wt%% table is "
                      "the tool's shortfall, the formula is the paper's" % (100 * r['score'], ', '.join(apfu_shared[:8])))   # worded to stay a note in the GUI, not a red line
         doubts = []; r['diffs'] = []; r['unanalysed'] = []
@@ -2202,6 +2236,21 @@ def _check_formula(ex, text, fcand):
             apfu_note = "the paper's own apfu column (%s) sides with the wt%% read rather than with the formula — worth a look at the table [unverified]" % ', '.join('%s %.3g' % (el, apfu_col[el]) for el in same_side[:4])
     elif apfu_off and not r['diffs']:
         apfu_note = "the paper's own apfu column differs from its formula in %s — the formula follows from the wt%%; the column may be rounded or another sample's" % '; '.join('%s %.3g vs %.3g' % (el, apfu_col[el], counts[el]) for el in apfu_off[:4])
+    # Every doubt marked `reading` says the same thing: the tool may not have read the paper's
+    # analysis table properly. The reduction answers that question itself. When it reproduces every
+    # coefficient of the published formula but one, over enough elements for that to mean anything,
+    # the reading is demonstrated and the single exception belongs to the paper. Measured by seeding
+    # faults on 2026-09-07: 51 of the 69 findings a 20 % error in a coefficient could not surface
+    # were exactly this shape — one element off, every other one agreeing. A hard doubt (the formula
+    # would not parse, the wt% do not add up, an element is missing, the basis is circular) still
+    # blocks: those say the comparison itself is unsound, not merely that the table was hard to read.
+    solo = [d for d in r['diffs'] if d[2] is not None]
+    els_read = {EP.parse_constituent(c).element for c in wt if _parses(c)}
+    compared = [k for k, v in counts.items() if k not in ('H', 'O') and (v or 0) >= 0.05 and k in els_read]
+    if len(solo) == 1 and len(compared) >= 4 and reading_doubts and all(d in reading_doubts for d in doubts):
+        notes.append('every coefficient of the formula but %s follows from the table read, so the doubts about that '
+                     'reading do not carry to it — check the one cell' % solo[0][0])
+        doubts = []
     verified = not doubts
     lines = []
     b = r['basis']
