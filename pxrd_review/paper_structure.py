@@ -38,8 +38,9 @@ VAL = re.compile(r'^([-−]?(?:\d*\.\d+|[01](?:\.0*)?|\d/\d))(?:\((\d+)\))?$')
 VULGAR = {'½': 0.5, '⅓': 1 / 3.0, '⅔': 2 / 3.0, '¼': 0.25, '¾': 0.75, '⅙': 1 / 6.0, '⅚': 5 / 6.0,
           '⅛': 0.125, '⅜': 0.375, '⅝': 0.625, '⅞': 0.875}
 def _val(t):
-    """'0.12345(7)' -> 0.12345; '1/2' -> 0.5; '-0.0123' -> -0.0123; None when not a coordinate."""
-    t = t.replace('\u2212', '-').rstrip(',')
+    """'0.12345(7)' -> 0.12345; '1/2' -> 0.5; '-0.0123' -> -0.0123; None when not a coordinate.
+    The sign arrives as whichever dash the font has: minus, en, em, figure, non-breaking hyphen."""
+    t = re.sub(r'^[\u2212\u2013\u2014\u2012\u2011\u2010]', '-', t).rstrip(',')
     if t in VULGAR:
         return VULGAR[t]
     if t.startswith('-') and t[1:] in VULGAR:
@@ -49,13 +50,18 @@ def _val(t):
         return None
     v = m.group(1)
     if '/' in v:
-        a, b = v.split('/'); return float(a) / float(b)
+        a, b = v.split('/'); return float(a) / float(b) if float(b) else None   # '1/0' is no coordinate (a d/0 in a powder column)
     return float(v)
 
-LABEL = re.compile(r'^([A-Z][a-z]?)([A-Za-z]?\(?\d{0,2}\)?[A-Za-z]?)$')     # O1, Ow1, O1W, M(2), Na1a
+LABEL = re.compile(r'^([A-Z][a-z]?)([A-Za-z]?\(?\d{0,2}\)?[A-Za-z]?|\d{0,2}\([A-Z][A-Za-z]?\d{0,2}[a-z]?\))$')     # O1, Ow1, O1W, M(2), Na1a — and Cu(M1), Mn(X): the element with its site name
+_OCC_ELS = re.compile(r'^(?:[A-Z][a-z]?\d*\.\d+(?:\(\d+\))?){1,4}$')            # 'Fe0.84Al0.16(2)': an occupancy written by element
 WYCK = re.compile(r'^\(?\d{1,2}[a-z]\)?$')                                # a Wyckoff token between label and x
 FRACT_MAX = 1.05                                                          # a fractional coordinate, nothing else
+FRACT_HDR = 2.0                                                           # under a known x/y/z header a coordinate may be printed past 1 ('1.06477(6)'); an integer there never is
 
+SITE_PAREN = re.compile(r'^\(([A-Z][A-Za-z]?\d{0,2}[a-z]?)\)[*†‡§]*$')    # '(X)', '(M1)', '(M3a)': the site name printed beside its element
+CAPTION = re.compile(r'^(?:TABLE|Table)\s+[A-Z]?\d{1,2}[A-Za-z]?\s*[.:]')                # 'Table 6.' — where the next table begins
+SUBSCRIPT = re.compile(r'^[A-Z]$')                                         # 'XO' 'M': the subscript of a site label, set as a token of its own
 SITE_LETTERS = set('AMTXYZQDEGJLRW')                                       # a crystallographic site name: A1, M2A, T(1), X(3), Q2 — not an element
 
 def _label_ok(t):
@@ -64,12 +70,16 @@ def _label_ok(t):
     is a label too — its element comes from the occupancy column, and its coordinates are what map
     the paper's names onto the .cif's."""
     t = t.rstrip(',*†‡§')
+    if '/' in t:                                                          # 'Fe1/Al1', 'Ca/Mg', 'K/O': a split site, both halves labels
+        parts = t.split('/')
+        return len(parts) == 2 and all(p and _label_ok(p) for p in parts)
     m = LABEL.match(t)
     if not m:
         return False
     if m.group(1) in EP.ATOMIC_WEIGHTS or m.group(1)[:1] in EP.ATOMIC_WEIGHTS:
         return True
-    return len(m.group(1)) == 1 and (m.group(1) in SITE_LETTERS and bool(re.search(r'\d', m.group(2))) or (m.group(1) in 'XYZTMA' and not m.group(2)))   # 'X', 'Y', 'Z', 'T': a tourmaline's sites, bare
+    return len(m.group(1)) == 1 and (m.group(1) in SITE_LETTERS and bool(re.search(r'\d', m.group(2))) or (m.group(1) in 'XYZTMA' and not m.group(2))   # 'X', 'Y', 'Z', 'T': a tourmaline's sites, bare
+                                     or (m.group(1) in SITE_LETTERS and re.fullmatch(r'[A-Z]', m.group(2)) is not None))   # 'MH', 'AP', 'XO': a site named by two letters
 
 def _view(lines, lo, hi):
     """The page restricted to one text column: page_lines merges both columns of a two-column page
@@ -95,6 +105,10 @@ def _scan(lines):
                 cols[m.group(1).lower()] = (w[0] + w[2]) / 2
         if len(cols) < 3:
             continue
+        # a value sits under its header within a share of the column spacing: a right-aligned '0.24850(10)'
+        # under a centred 'y' in a wide table is 27 pt off, a narrow table's columns are 40 pt apart
+        gaps = sorted(cols.values()); span = min((b - a) for a, b in zip(gaps, gaps[1:])) if len(gaps) >= 2 else 60
+        tol = max(26.0, min(0.45 * span, 44.0))
         labx = next(((w[0] + w[2]) / 2 for w in ln['w']
                      if re.fullmatch(r'Site|Atom|Label|Ion|Position', w[4].strip('*.'), re.I)), None)
         rows = []; miss = 0; seen_lab = set()
@@ -102,6 +116,8 @@ def _scan(lines):
             ws = ln2['w']
             if not ws:
                 continue
+            if rows and CAPTION.match(' '.join(w[4] for w in ws[:3])):
+                break                                    # the next table's caption: this one has ended
             xcol = cols['x']
             lab = ws[0][4].strip()
             if not _label_ok(lab):
@@ -113,19 +129,28 @@ def _scan(lines):
             rest = ws[1:]
             if rest and WYCK.match(rest[0][4]):
                 rest = rest[1:]
-            got = {}
+            if _label_ok(lab) and rest and (rest[0][0] + rest[0][2]) / 2 < xcol - 6 and (SITE_PAREN.match(rest[0][4].strip()) or (SUBSCRIPT.match(rest[0][4].strip()) and lab.isalpha())):
+                lab = lab + rest[0][4].strip().rstrip('*†‡§,'); rest = rest[1:]   # 'Mn (X)', 'Al1 (M3a)': the site name beside the element; 'XO' 'M': a subscript set as its own token
+            got = {}; used = set()
             for w in rest:
                 v = _val(w[4])
-                if v is None or abs(v) > FRACT_MAX:      # Ueq, occupancy and any prose number are not coordinates
+                if v is None or abs(v) > FRACT_HDR or (abs(v) > FRACT_MAX and _ndec(w[4]) < 3):   # Ueq, occupancy and any prose number are not coordinates
                     continue
                 xc = (w[0] + w[2]) / 2
                 k = min(cols, key=lambda c: abs(cols[c] - xc))
-                if abs(cols[k] - xc) <= 26 and k not in got:
-                    got[k] = v
+                if abs(cols[k] - xc) <= tol and k not in got:
+                    got[k] = v; used.add(id(w))
             if _label_ok(lab) and len(got) == 3:
                 zx = cols['z']
                 tail = ' '.join(w[4] for w in rest if (w[0] + w[2]) / 2 > zx + 14)   # Uiso, then the occupancy
-                key = lab.upper().strip('*†‡§,')
+                left = [w[4] for w in rest if id(w) not in used and (w[0] + w[2]) / 2 < xcol - 6 and _occupancy('occ=' + w[4]) is not None]   # never a coordinate already placed
+                if left:
+                    tail = 'occ=' + left[-1] + ' ' + tail                              # the occupancy column printed before x
+                named = [w[4] for w in rest if id(w) not in used and (w[0] + w[2]) / 2 < xcol - 6 and _OCC_ELS.search(w[4])]
+                if named:
+                    tail = named[-1] + ' ' + tail                                       # 'K0.76N0.24(2)': the occupancy by element, for site_element
+                lab = lab.rstrip('*†‡§,')                                            # 'Mn*', 'M2**': the footnote mark is not the label
+                key = lab.upper()
                 if key in seen_lab:
                     break            # the same site again: the scan has walked into the NEXT table —
                                      # anisotropic displacement parameters carry the same labels and
@@ -159,12 +184,15 @@ def _scan_by_content(lines):
         ws = ln['w']
         vals = [(w, _val(w[4])) for w in ws]
         nums = [(w, v) for w, v in vals if v is not None and abs(v) <= FRACT_MAX]
+        occ = ''
+        if len(nums) >= 4 and 0 < nums[0][1] <= 1 and _ndec(nums[0][0][4]) <= 3 and all(_ndec(w[4]) >= 4 for w, _v in nums[1:4]):
+            occ = nums[0][0][4]; nums = nums[1:]        # 'Na1 0.62(3) 0.7763(8) 0.0146(16) 0.3690(9)': an occupancy before x, printed shorter
         if len(nums) < 3:
             cand.append(None); continue
         first_x = min((w[0] + w[2]) / 2 for w, _v in nums)
         lab = next((w[4].strip() for w in ws
                     if (w[0] + w[2]) / 2 < first_x and _label_ok(w[4].strip())), None)
-        cand.append((lab, nums) if lab else None)
+        cand.append((lab, nums, occ) if lab else None)
     best = []
     i = 0
     while i < len(cand):
@@ -174,13 +202,13 @@ def _scan_by_content(lines):
         while j < len(cand) and gap <= 2:
             if cand[j] is None:
                 gap += 1; j += 1; continue
-            lab, nums = cand[j]
-            key = lab.upper().strip('*†‡§,')
+            lab, nums, occ = cand[j]
+            lab = lab.rstrip('*†‡§,'); key = lab.upper()
             if key in seen:
                 break                                   # the same site again: the next table
-            seen.add(key); rows.append((j, lab, nums)); gap = 0; j += 1
+            seen.add(key); rows.append((j, lab, nums, occ)); gap = 0; j += 1
         if len(rows) >= 3:
-            xs = sorted((w[0] + w[2]) / 2 for _j, _l, nums in rows for w, _v in nums)
+            xs = sorted((w[0] + w[2]) / 2 for _j, _l, nums, _o in rows for w, _v in nums)
             cols = []
             for x in xs:
                 if cols and x - cols[-1][-1] <= 10:
@@ -188,10 +216,10 @@ def _scan_by_content(lines):
                 else:
                     cols.append([x])
             cols = [sum(c) / len(c) for c in cols if len(c) >= max(2, 0.5 * len(rows))][:3]
-            decs = [_ndec(w[4]) for _j, _l, nums in rows for w, _v in nums if _ndec(w[4])]
+            decs = [_ndec(w[4]) for _j, _l, nums, _o in rows for w, _v in nums if _ndec(w[4])]
             if len(cols) == 3 and decs and sorted(decs)[len(decs) // 2] >= 4:
                 out = []
-                for _j, lab, nums in rows:
+                for _j, lab, nums, occ in rows:
                     got = {}
                     for w, v in nums:
                         xc = (w[0] + w[2]) / 2
@@ -201,30 +229,100 @@ def _scan_by_content(lines):
                     if len(got) == 3:
                         zx = cols[2]
                         tail = ' '.join(w[4] for w, _v in nums if (w[0] + w[2]) / 2 > zx + 14)
-                        out.append((lab, got[0][0], got[1][0], got[2][0], tail))
+                        out.append((lab, got[0][0], got[1][0], got[2][0], ('occ=' + occ + ' ' + tail) if occ else tail))
                 if len(out) > len(best):
                     best = out
         i = max(j, i + 1)
     return best
 
 
-def paper_sites(pdf):
-    """The paper's atom-site table, tried on the whole page and on each text column of it."""
-    best = []
+def paper_sites(pdf, with_page=False):
+    """The paper's atom-site table, tried on the whole page and on each text column of it.
+    `with_page` returns (rows, page number of the table) — the default return is unchanged."""
+    best = []; best_page = None; best_w = 1.0
     try:
-        pages = PE._pages(pdf)
+        pages = _page_tables(pdf)
     except Exception:
-        return best
-    for lines in pages:
-        xs = [w[0] for ln in lines for w in ln['w']] + [w[2] for ln in lines for w in ln['w']]
-        if not xs:
-            continue
-        mid = (min(xs) + max(xs)) / 2
-        for view in (lines, _view(lines, -1e9, mid + 8), _view(lines, mid - 8, 1e9)):
-            for r in (_scan(view), _scan_by_content(view)):
-                if len(r) > len(best):
-                    best = r
-    return best
+        return (best, best_page) if with_page else best
+    for pno, rows, weight, _headed, _cont in pages:
+        if len(rows) * weight > len(best) * best_w:
+            best = rows; best_page = pno; best_w = weight
+    # A table continued over a page break: the next page's part — the paper says so ('Table 4.
+    # Cont.', 'continued'), or the part carries no header of its own and begins the page — joins
+    # the part before it when their labels do not overlap. Only the best table's own continuation.
+    if best_page is not None:
+        by_page = {p: (rows, headed, cont) for p, rows, _w, headed, cont in pages}
+        labels = {r[0].upper() for r in best}
+        p = best_page + 1
+        while p in by_page:
+            rows, headed, cont = by_page[p]
+            dup = next((i for i, r in enumerate(rows) if r[0].upper() in labels), None)
+            if dup is not None:
+                rows = rows[:dup]                        # the scan walked on into the next table (anisotropic parameters carry the same labels): the part before it is the continuation
+            if len(rows) < 2 or not (cont or not headed or _continues(best, rows)):
+                break
+            best = list(best) + list(rows); labels |= {r[0].upper() for r in rows}; p += 1
+            if dup is not None:
+                break
+        # and the part BEFORE it: the widest part of a continued table is often the second, whose
+        # page says 'Cont.' (or which carries no header of its own); the first part, with the
+        # header and the first sites, is on the page before
+        _rows0, headed0, cont0 = by_page[best_page]
+        p = best_page - 1
+        while p in by_page and (cont0 or not headed0):
+            rows, headed, cont = by_page[p]
+            if len(rows) < 2 or not headed or any(r[0].upper() in labels for r in rows):
+                break
+            best = list(rows) + list(best); labels |= {r[0].upper() for r in rows}; best_page = p
+            cont0, headed0 = cont, False; p -= 1
+    return (best, best_page) if with_page else best
+
+
+def _continues(prev, rows):
+    """A table on the next page that repeats its header is still the same table when its site
+    numbering carries on from the page before: O21… after O1…O20, with no label in common."""
+    def num(lab):
+        m = re.match(r'^([A-Za-z]+)(\d+)', lab)
+        return (m.group(1).upper(), int(m.group(2))) if m else None
+    top = {}
+    for r in prev:
+        k = num(r[0])
+        if k:
+            top[k[0]] = max(top.get(k[0], 0), k[1])
+    cont = [num(r[0]) for r in rows]; cont = [k for k in cont if k]
+    if len(cont) < 2 or len(cont) < 0.5 * len(rows):
+        return False
+    return all(k[0] in top and k[1] > top[k[0]] for k in cont)
+
+
+def _page_tables(pdf):
+    """Per page, the widest atom-site table -> [(page no, rows, weight, headed, continued)], where
+    `headed` says the header-driven read found it, `continued` that the page announces a
+    continued table near the top."""
+    out = []
+    for pno, page in enumerate(PE._pages(pdf), 1):
+        best = []; best_w = 1.0; headed = False
+        views = []
+        for lines in ([l for l in page if not l.get('rot')], [l for l in page if l.get('rot')]):   # the upright text, and a table typeset sideways
+            xs = [w[0] for ln in lines for w in ln['w']] + [w[2] for ln in lines for w in ln['w']]
+            if not xs:
+                continue
+            mid = (min(xs) + max(xs)) / 2
+            views += [lines, _view(lines, -1e9, mid + 8), _view(lines, mid - 8, 1e9)]
+        lines = page
+        for view in views:
+            # the header-driven read knows which column is x; the content read guesses the first
+            # three fractions, and an occupancy column before x fools it — so a header read of a
+            # real table (three rows) is preferred unless the content read found twice as much
+            head = _scan(view); body = _scan_by_content(view)
+            for r, weight, h in ((head, 2.0 if len(head) >= 3 else 1.0, True), (body, 1.0, False)):
+                if len(r) * weight > len(best) * best_w:
+                    best = r; best_w = weight; headed = h
+        if best:
+            top = ' '.join(w[4] for ln in lines[:8] for w in ln['w'])
+            cont = bool(re.search(r'\b(?:Cont\.|Cont\b|continued|Continued)', top))
+            out.append((pno, best, best_w, headed, cont))
+    return out
 
 ELEM = re.compile(r'([A-Z][a-z]?)(\d*\.?\d*)')
 
@@ -241,6 +339,8 @@ def site_element(label, tail):
             best = (el, v)
     if best:
         return best[0]
+    if '/' in label:                                                      # 'Fe1/Al1': the paper names the dominant occupant first
+        label = label.split('/')[0]
     m = re.match(r'([A-Z][a-z]?)', label)
     if m and m.group(1) in EP.ATOMIC_WEIGHTS:
         return m.group(1)
@@ -286,9 +386,9 @@ def element_charges(text, name=None):
         pass
     return ox
 
-def synth_cif(cell, symtag, ops, sites, formula=''):
+def synth_cif(cell, symtag, ops, sites, formula='', occ=None):
     """A CIF carrying the paper's cell, coordinates and site elements (with the charges its formula
-    states), and the operators its space-group symbol stands for."""
+    states), the operators its space-group symbol stands for, and the occupancies it prints."""
     L = ['data_paper']
     if formula:
         L.append("_chemical_formula_sum '%s'" % formula)
@@ -299,10 +399,110 @@ def synth_cif(cell, symtag, ops, sites, formula=''):
     L += ['loop_', symtag]
     L += ["'%s'" % s for s in ops]
     L += ['loop_', '_atom_site_label', '_atom_site_type_symbol',
-          '_atom_site_fract_x', '_atom_site_fract_y', '_atom_site_fract_z']
+          '_atom_site_fract_x', '_atom_site_fract_y', '_atom_site_fract_z'] + (['_atom_site_occupancy'] if occ else [])
     for lab, ty, x, y, z in sites:
-        L.append("%s %s %.5f %.5f %.5f" % (lab, ty or re.match(r'[A-Za-z]{1,2}', lab).group(0), x, y, z))
+        L.append("%s %s %.5f %.5f %.5f%s" % (lab, ty or re.match(r'[A-Za-z]{1,2}', lab).group(0), x, y, z,
+                                             (' %.3f' % occ.get(lab, 1.0)) if occ else ''))
     return '\n'.join(L) + '\n'
+
+
+def _occupancy(tail):
+    """The site occupancy the scanners tagged into the tail ('occ=0.62(3) 0.050(4)': the bare
+    fraction a table prints before x), or None when the row printed none. Only the tagged number:
+    the first number of an untagged tail is Ueq, and an element-weighted 'Ca0.674Mn0.326' is read by
+    `site_element`, not here."""
+    m = re.match(r'^\s*occ=(0?\.\d+|1(?:\.0+)?)(?:\(\d+\))?(?=\s|$)', tail or '')
+    return float(m.group(1)) if m else None
+
+
+def bond_hits(st, bonds, tol=0.03):
+    """The printed bond distances the structure reproduces: for each (cation label, anion label,
+    distance) the paper prints, whether the structure has that anion at that distance from that
+    cation, within `tol` Å. -> (reproduced, compared, [the first misses as text]). Labels are
+    matched as printed on both tables (parentheses and case aside). This is the paper's own check
+    of its coordinates, cell and space group together — the one that needs no element, charge or
+    formula to be read right first."""
+    index = [{}, {}, {}]                                    # by the whole label, by the site name, by the element head
+    for s_ in st.sites:
+        for level, k in enumerate(_label_keys(s_.label)):
+            if k:
+                index[level].setdefault(k, []).append(s_)
+    def find(label):
+        # the whole label first ('Mn(X)' on both tables); then the site name the paper prints beside
+        # the element — its own name for the site, kept when the numbering differs between tables
+        # ('Al2 (M3a)' in the bond table, 'Al1 (M3a)' in the coordinates); then the element head,
+        # which two sites may share ('Mn' twice): then every one of them is a candidate
+        for k in _label_keys(label):
+            for level in range(3):
+                got = index[level].get(k) if k else None
+                if got:
+                    return got
+        return []
+    cache = {}; ok = n = 0; miss = []
+    for cat, an, d in bonds:
+        cats, ans = find(cat), find(an)
+        if not cats or not ans or not d:
+            continue
+        n += 1
+        for cs in cats:
+            if cs.label not in cache:
+                try:
+                    cache[cs.label] = st.neighbours(cs, 3.6)
+                except Exception:
+                    cache[cs.label] = []
+        an_labels = {a.label for a in ans}
+        hit = any(o.label in an_labels and abs(dd - d) <= tol for cs in cats for o, dd, _c in cache[cs.label])
+        if hit:
+            ok += 1
+        elif len(miss) < 6:
+            near = sorted((dd for cs in cats for o, dd, _c in cache[cs.label] if o.label in an_labels), key=lambda x: abs(x - d))
+            miss.append('%s–%s %.3f printed, %s in the structure' % (cat, an, d, ('%.3f' % near[0]) if near else 'no such neighbour'))
+    return ok, n, miss
+
+
+def _label_keys(label):
+    """The three names a printed site label answers to, most specific first: the whole label with
+    parentheses and spaces out ('Mn(X)' -> 'MNX'), the site name in parentheses when it has a
+    letter ('X', 'M3a' -> 'M3A'; '(1)' of 'O(1)' is not a name), and the element head before it
+    ('MN'). Bare labels have only the first."""
+    t = re.sub(r'\s+', '', label or '').rstrip('*†‡§,')
+    whole = re.sub(r'[()]', '', t).upper()
+    m = re.match(r'^([A-Za-z]+\d*[a-z]?)\(([A-Za-z]+\d*[a-z]?)\)$', t)
+    if not m:
+        return [whole, None, None]
+    return [whole, m.group(2).upper(), m.group(1).upper()]
+
+
+def occupancy_any(tail):
+    """The site's occupancy from its row, either way it is printed: the tagged bare fraction
+    ('occ=0.62(3) …'), or the dominant element's share of an element-weighted string ('As0.70',
+    'Na0.62(1)Ca0.38') — the weight a paper multiplies that column of its bond-valence table by."""
+    v = _occupancy(tail)
+    if v is not None:
+        return v
+    for tok in (tail or '').split():
+        if _OCC_ELS.search(tok):
+            shares = [float(x) for x in re.findall(r'[A-Z][a-z]?(\d*\.\d+)', tok)]
+            if shares:
+                return max(shares)
+    return None
+
+
+def occupancy_species(tail):
+    """The species on a site as its row prints them — [(element, share), …], the dominant first —
+    from an element-weighted occupancy ('Na0.62(1)Ca0.38' → [('Na', 0.62), ('Ca', 0.38)]; 'As0.70'
+    → [('As', 0.70)], the rest a vacancy). [] when the row prints none."""
+    for tok in (tail or '').split():
+        if _OCC_ELS.search(tok):
+            out = [(el, float(sh)) for el, sh in re.findall(r'([A-Z][a-z]?)(\d*\.\d+)', re.sub(r'\(\d+\)', '', tok)) if el in EP.ATOMIC_WEIGHTS]
+            if out and sum(sh for _e, sh in out) <= 1.05:
+                return sorted(out, key=lambda es: -es[1])
+    return []
+
+
+def _pb_key(lab):
+    from pxrd_review import paper_bonds as PB
+    return PB._key(lab)
 
 def _op_str(op):
     """(rot, tr) -> 'x, y+1/2, -z' for the synthetic CIF."""
@@ -323,6 +523,23 @@ def _op_str(op):
             t += '+%d/%d' % (num // g, 12 // g)
         parts.append(t or '0')
     return ', '.join(parts)
+
+
+def closure_count(st, counts):
+    """The structure against the paper's formula by COUNT: cation sites to anion sites, with their
+    multiplicities, against the formula's cations to anions (H left out of both). A site of mixed
+    occupancy — Y = Fe0.6Mg0.4, named by its dominant element — breaks the element ratios that
+    `closure` compares but not this one, while a table read only in part (its anions cut off, or
+    half its cations) still fails it. -> relative deviation, or None when nothing to compare."""
+    if not counts:
+        return None
+    cat = sum(s.mult * s.occ_total for s in st.cations if s.element != 'H')
+    an = sum(s.mult * s.occ_total for s in st.anions if s.element != 'H')
+    fc = sum(v for k, v in counts.items() if k not in ('H', 'O', 'F', 'Cl', 'S', 'Se', 'Te', 'Br', 'I', 'OH') and v > 0)
+    fa = sum(v for k, v in counts.items() if k in ('O', 'F', 'Cl', 'S', 'Se', 'Te', 'Br', 'I', 'OH') and v > 0)
+    if not (cat and an and fc and fa):
+        return None
+    return abs(cat / an - fc / fa) / (fc / fa)
 
 
 def closure(st, counts):
@@ -352,7 +569,7 @@ def closure(st, counts):
     return sum(devs) / len(devs)
 
 
-def build(pdf, text=None):
+def build(pdf, text=None, bonds=None):
     """The structure the paper prints, or None. -> (Structure, info) where info carries 'gii',
     'closure', 'cell', 'sym' and 'sites'; (None, {'why': ...}) when it cannot be built or does not
     pass the instability gate. A paper prints several cells — a powder one, a single-crystal one,
@@ -363,36 +580,94 @@ def build(pdf, text=None):
     if len(rows) < 3:
         return None, {'why': 'the paper prints no coordinates table the reader could find'}
     sym, _phrase = SO.find_in_text(text)
+    # the cell a coordinates table belongs to is the single-crystal one: those first, the powder
+    # cells last (a powder cell's angle variants would otherwise fill the budget before the true cell)
+    rank = {'single': 0, 'unknown': 1, 'stated': 2, 'powder': 3}
+    cells = [c for _ctx, c in sorted(PE._paper_cells(text), key=lambda xc: rank.get(xc[0], 2))][:8]
+    # A paper states several symbols — its own, and its relatives' in the discussion. The one whose
+    # crystal system a printed cell allows is the paper's: a P1̄ read from "space groups P1̄ and C2/c"
+    # is not, when every cell printed is monoclinic. And a cell the symbol's system forbids (a
+    # monoclinic cell under I-42d: another mineral's) is not tried.
+    systems = set().union(*(SO.cell_system(c) for c in cells)) if cells else set()
+    if systems and (not sym or SO.crystal_system(sym) not in systems):
+        for m_ in SO._NEAR.finditer(text):
+            s2, _p2 = SO.find_in_text(text[m_.start():m_.start() + 130])
+            if s2 and SO.crystal_system(s2) in systems:
+                sym = s2; break
     ops_variants = SO.lookup(sym) if sym else []
     if not ops_variants:
         return None, {'why': 'no space group in the text that the operator table knows'}
+    want = SO.crystal_system(sym)
+    if want and cells:
+        cells = [c for c in cells if want in SO.cell_system(c)] or cells
+    # The overbar of P1̄, R3̄, Fm3̄m is often a drawn stroke the text layer does not carry, so the
+    # symbol arrives unbarred. The barred twin is tried as well and the structure judges: sites
+    # given for P1̄ built in P1 are half a structure and their sums come out half, so the twin wins;
+    # a structure that really is P1 built in P1̄ doubles its atoms and loses.
+    twin = next((t for t in (sym[:i] + '-' + sym[i:] for i in range(1, len(sym))) if '-' not in sym and SO.lookup(t)), None)
+    if twin:
+        ops_variants = ops_variants + SO.lookup(twin)
+    ops_variants = ops_variants[:6]                      # the standard setting and the commonest alternatives: eighteen settings of C2/c cost minutes and change no verdict
     name = PE.mineral_name(text)
     charges = element_charges(text, name)
     fs = PE._formulas(text, name)
     counts = fs[0][1] if fs else {}
-    sites = []
+    # A site the paper names crystallographically — M1, A(1), T2 — carries no element in its label
+    # and, when the table prints no occupancy column, none in its row either: the paper's own
+    # assignment ('M1 = 0.37Mn + 0.27Mg + 0.35Fe', a site-population row, the sentence) names it.
+    # Right 11 times in 17 against the corpus .cif files, so such a site is built — the composition
+    # needs it — but kept out of the instability index, as `paper_bonds` keeps its inferred sites.
+    unnamed = [lab for lab, _x, _y, _z, tail in rows if not site_element(lab, tail)]
+    named = {}
+    if unnamed:
+        try:
+            from pxrd_review import paper_bonds as PB
+            named = PB.sites_from_text(text, unnamed)
+        except Exception:
+            named = {}
+    sites = []; inferred = set(); occs = {}
+    placed = {site_element(lab, tail) for lab, _x, _y, _z, tail in rows if site_element(lab, tail)}
+    cations = sorted(((v, k) for k, v in counts.items() if k not in ('H', 'O', 'F', 'Cl', 'S', 'Se', 'Te', 'Br', 'I') and v > 0), reverse=True)
+    fallback = next((k for _v, k in cations if k not in placed), None) or (cations[0][1] if cations else None)
     for lab, x, y, z, tail in rows:
         el = site_element(lab, tail)
+        if not el and named:
+            el = named.get(_pb_key(lab))
+            if el:
+                inferred.add(lab)
+        if not el and fallback and re.match(r'^[AMTXYZQ]', lab) and lab[:1] not in EP.ATOMIC_WEIGHTS:
+            el = fallback; inferred.add(lab)                         # M1, A(1): a cation site by convention; the formula's dominant cation not yet placed stands in, for the composition only
         if el:
             ch = charges.get(el)
             sites.append((lab, '%s%d+' % (el, ch) if ch else el, x, y, z))
+            occ = _occupancy(tail)
+            if occ is not None:
+                occs[lab] = occ
     if len(sites) < 3:
         return None, {'why': 'no element could be named for the sites read'}
-    cells = [c for _ctx, c in PE._paper_cells(text)][:6]
     if not cells:
         return None, {'why': 'no cell in the text'}
     best = None
     tmp = tempfile.mkdtemp(prefix='pxrd_ps_')
     keep = None
+    # Every cell the paper prints is tried with the STANDARD setting before any alternate setting is
+    # tried with any cell — the cell is far more often the unknown than the setting — under one budget
+    # of builds: a paper that prints nine cells (angle variants restored) and a Cc with eighteen
+    # settings cost minutes and changed no verdict.
+    budget = 24
     try:
-        for ci, cd in enumerate(cells):
+        for vi, ops in enumerate(ops_variants):
+          for ci, cd in enumerate(cells):
             cell = [cd[k] for k in ('a', 'b', 'c', 'α', 'β', 'γ')]
-            for vi, ops in enumerate(ops_variants):
+            if True:
+                budget -= 1
+                if budget < 0:
+                    break
                 path = os.path.join(tmp, 'c%d_%d.cif' % (ci, vi))
                 try:
                     with open(path, 'w', encoding='utf-8') as f:
                         f.write(synth_cif(cell, '_space_group_symop_operation_xyz',
-                                          [_op_str(o) for o in ops], sites))
+                                          [_op_str(o) for o in ops], sites, occ=occs))
                     st = B.Structure(path)
                     P = B.Params(prefer='gh', u6='burns')
                     notes = list(st.notes)
@@ -400,11 +675,23 @@ def build(pdf, text=None):
                     st.notes[:] = notes
                 except Exception:
                     continue
-                if not res:
+                # the index is over the sites the paper NAMES by element and populates fully: an
+                # inferred element is a guess, and a site a third occupied is a disordered position
+                # whose own sum says nothing about the coordinates being read right
+                judged = [(bvs, exp) for c_, _b, bvs, exp, _m in res if c_.label not in inferred and occs.get(c_.label, 1.0) >= 0.5]
+                if not judged:
                     continue
-                gii = (sum((bvs - exp) ** 2 for _c, _b, bvs, exp, _m in res) / len(res)) ** 0.5
-                if best is None or gii < best[1]:
-                    best = (st, gii, cell, sym, len(sites)); keep = path
+                gii = (sum((bvs - exp) ** 2 for bvs, exp in judged) / len(judged)) ** 0.5
+                # the printed bond distances are the direct check of the cell and setting: the
+                # candidate that reproduces the most of them wins, the index deciding only ties
+                hits = bond_hits(st, bonds) if bonds and len(bonds) >= 3 else (0, 0, [])
+                score = (-hits[0], gii)
+                if best is None or score < best[5]:
+                    best = (st, gii, cell, sym, len(sites), score, hits); keep = path
+                if (hits[1] and hits[0] >= 0.9 * hits[1]) or (not hits[1] and gii <= GII_GATE):
+                    break                                # it holds together: another setting cannot change the verdict
+          if (best is not None and ((best[6][1] and best[6][0] >= 0.9 * best[6][1]) or (not best[6][1] and best[1] <= GII_GATE))) or budget < 0:
+                break
     finally:
         for fn in os.listdir(tmp):                       # the losing cells' files go at once
             f_ = os.path.join(tmp, fn)
@@ -416,17 +703,19 @@ def build(pdf, text=None):
     if best is None:
         _discard(keep, tmp)
         return None, {'why': 'no cell and operator set gave a structure'}
-    st, gii, cell, sym, n = best
+    st, gii, cell, sym, n, _score, hits = best
     try:
-        info = {'gii': gii, 'cell': cell, 'sym': sym, 'sites': n, 'closure': closure(st, counts), 'path': keep, 'dir': tmp}
+        info = {'gii': gii, 'cell': cell, 'sym': sym, 'sites': n, 'closure': closure(st, counts), 'closure_count': closure_count(st, counts),
+                'bonds_ok': hits[0], 'bonds_n': hits[1], 'bonds_total': len(bonds or []), 'bonds_miss': hits[2], 'path': keep, 'dir': tmp}
     except Exception:
         _discard(keep, tmp)                              # the caller sees the exception, not a leaked directory
         raise
-    if gii > GII_GATE:
+    info['bonds_verified'] = bool(hits[1] >= 5 and hits[0] >= max(5, 0.8 * hits[1]) and hits[1] >= 0.6 * len(bonds or []))
+    if gii > GII_GATE and not info['bonds_verified']:
         _discard(keep, tmp)
         return None, dict(info, path=None, why='the structure the paper prints does not hold together '
                           '(instability index %.2f vu) — its cell, coordinates or space group is misread' % gii)
-    return st, info
+    return st, info                                          # a structure the printed bonds verify stands whatever its index says
 
 
 def _discard(path, tmpdir):

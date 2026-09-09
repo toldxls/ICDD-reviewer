@@ -72,6 +72,11 @@ class Table(unittest.TestCase):
         # 'space group and the cell …' must not yield the symbol 'And'
         sym2, _ = SO.find_in_text('The space group and the cell were determined from precession images.')
         self.assertIsNone(sym2)
+        self.assertIsNone(SO.find_in_text('In the space group, an inversion twin was implemented in the refinement.')[0])   # 'an' is a word, not the setting An
+        self.assertEqual(SO.find_in_text('space group Cc, a = 5.1')[0], 'CC')
+        self.assertEqual(SO.find_in_text('space group P\x021, with a = 5.4262(11)')[0], 'P-1')        # the overbar as the font's control code
+        self.assertEqual(SO.find_in_text('space group Trigonal, R\x013 Temperature (K) 293')[0], 'R-3')
+        self.assertEqual(SO.normalize('P\x021'), 'P-1')
 
 
 class Fallback(unittest.TestCase):

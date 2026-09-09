@@ -1086,6 +1086,7 @@ class DocxPaper(unittest.TestCase):
         self.assertEqual({k: F[k]['status'] for k in ('epma', 'formula', 'basis', 'method', 'optics.n', 'optics.D_calc', 'cell', 'pxrd.calc', 'pxrd.obs')},
                          {'epma': 'agrees', 'formula': 'agrees', 'basis': 'agrees', 'method': 'none', 'optics.n': 'agrees', 'optics.D_calc': 'agrees', 'cell': 'agrees', 'pxrd.calc': 'agrees', 'pxrd.obs': 'agrees'}, r['lines'])
         self.assertIn(F['name']['status'], ('agrees', 'nooracle', 'none')); self.assertEqual(F['optics.D_meas']['status'], 'none'); self.assertEqual(F['bv.params']['status'], 'none')
+        self.assertEqual((F['gd']['status'], F['gd']['value'], F['coords']['status'], F['bv.table']['status']), ('agrees', {'ci': None, 'category': 'superior'}, 'none', 'none'), r['lines'])
         self.assertEqual((F['epma']['verified_by'], F['pxrd.calc']['verified_by'], F['optics.n']['verified_by']), ('composition', 'cell', 'gd'))
         self.assertTrue(any(l.startswith('cell: a=4.5937') and 'V from the axes 62.4 vs 62.4' in l and 'D from Z=2' in l for l in r['lines']), r['lines'])
         self.assertTrue(any(l.startswith('Gladstone–Dale: n 2.7117') for l in r['lines']), r['lines'])
@@ -1397,3 +1398,509 @@ class HandCheckRules(unittest.TestCase):
         c2 = PE.check_composition(ex2, text)
         self.assertTrue(c2['ok'], c2['lines']); self.assertTrue(c2['verified'])
         self.assertIn("the paper's own apfu column reproduces it", c2.get('apfu') or '', c2['lines'])
+
+
+def _line(y, *cells):
+    """One typeset line in the shape `paper_extract._pages` returns."""
+    return {'y': y, 'top': y - 8.0, 'bot': y + 2.0,
+            'w': [(x, y - 8.0, x + 7.0 * len(t), y + 2.0, t) for x, t in cells]}
+
+
+class _Fake:
+    """The little a bond-valence table reader asks of a structure: its site labels."""
+    def __init__(self, cations, anions):
+        mk = lambda ls: [type('S', (), {'label': l, 'element': l[0]})() for l in ls]
+        self.cations = mk(cations); self.anions = mk(anions); self.aliases = {}
+
+
+class BondValenceTableReading(unittest.TestCase):
+    """The layouts of a printed bond-valence table that the corpus turned up."""
+
+    def pages(self, *pages):
+        self._saved = PE._pages
+        PE._pages = lambda _pdf, **kw: list(pages)
+        self.addCleanup(lambda: setattr(PE, '_pages', self._saved))
+
+    def test_a_cell_holding_two_valences_separated_by_a_comma(self):
+        st = _Fake(['Na1', 'Fe1'], ['O1', 'O2', 'O3'])
+        self.pages([_line(50, (40, 'Na1'), (100, 'Fe1'), (160, 'Sum')),
+                    _line(62, (10, 'O1'), (40, '0.04,0.02→'), (100, '0.50'), (160, '1.90')),
+                    _line(74, (40, '0.13,0.06↓'), (100, '×2↓')),
+                    _line(86, (10, 'O2'), (40, '0.11→'), (100, '0.55'), (160, '1.95')),
+                    _line(98, (10, 'O3'), (40, '0.10→'), (100, '0.50'), (160, '1.87'))])
+        t = PE.bv_tables('x.pdf', st)
+        self.assertEqual(len(t), 1)
+        self.assertEqual([r[0] for r in t[0]['rows']], ['Atom', 'O1', 'O2', 'O3'])   # the ',' row did not end the table
+
+    def test_a_transposed_grid_beside_the_other_page_column(self):
+        st = _Fake(['Ag1', 'Sb1'], ['S1', 'S2', 'S3'])
+        self.pages([_line(50, (10, 'Crystallographic'), (90, 'Nomenclature'), (200, 'Site'),
+                          (240, 'S1'), (280, 'S2'), (320, 'S3'), (360, 'Σcations')),
+                    _line(62, (10, 'an'), (40, 'easier'), (90, 'convergence'), (200, 'Ag1'),
+                          (240, '0.37'), (280, '0.36'), (320, '0.38'), (360, '1.11')),
+                    _line(74, (10, 'was'), (40, 'carried'), (90, 'out'), (200, 'Sb1'),
+                          (240, '1.12'), (280, '1.03'), (320, '1.04'), (360, '3.19'))])
+        t = PE.bv_tables('x.pdf', st)
+        self.assertEqual(len(t), 1)
+        self.assertEqual(t[0]['rows'], [['Atom', 'Ag1', 'Sb1'], ['S1', '0.37', '1.12'],
+                                        ['S2', '0.36', '1.03'], ['S3', '0.38', '1.04'],
+                                        ['Σcations', '1.11', '3.19']])
+
+    def test_a_grid_found_from_its_rows_when_the_header_names_no_known_site(self):
+        st = _Fake(['M1', 'T1'], ['O1', 'O2', 'O3'])
+        self.pages([_line(50, (40, 'M1'), (100, 'T1'), (160, 'Sum')),
+                    _line(62, (10, 'O1'), (40, '0.35'), (100, '1.25'), (160, '1.60')),
+                    _line(74, (10, 'O2'), (40, '0.34'), (100, '1.25'), (160, '1.59')),
+                    _line(86, (10, 'O3'), (40, '0.36'), (100, '1.21'), (160, '1.57'))])
+        t = PE.bv_grids_by_rows('x.pdf', st)
+        self.assertEqual([r[0] for r in t[0]['rows']], ['Atom', 'O1', 'O2', 'O3'])
+        self.assertEqual(t[0]['rows'][0][1:3], ['M1', 'T1'])
+
+    def test_a_coordinates_table_is_not_a_grid(self):
+        st = _Fake(['M1'], ['O1', 'O2', 'O3'])
+        self.pages([_line(50, (40, 'x'), (100, 'y'), (160, 'z')),
+                    _line(62, (10, 'O1'), (40, '0.1607(5)'), (100, '0.7507(11)'), (160, '0.6238(8)')),
+                    _line(74, (10, 'O2'), (40, '0.3250(7)'), (100, '0.6194(8)'), (160, '0.5794(8)')),
+                    _line(86, (10, 'O3'), (40, '0.3103(6)'), (100, '0.9011(8)'), (160, '0.5553(7)'))])
+        self.assertEqual(PE.bv_grids_by_rows('x.pdf', st), [])           # every number carries an esd
+
+    def test_a_bvs_column_whose_label_column_is_unheaded(self):
+        st = _Fake(['Ca', 'P1'], ['O1', 'O2'])
+        self.pages([_line(38, (10, 'Table'), (40, '4.'), (70, 'Atom'), (110, 'coordinates'),
+                          (200, 'and'), (230, 'bond'), (260, 'valence'), (310, 'sums')),
+                    _line(50, (40, 'x'), (100, 'y'), (160, 'z'), (220, 'Ueq'), (280, 'BVS')),
+                    _line(62, (10, 'Ca'), (40, '-0.75'), (100, '-0.0214(2)'), (160, '0'), (220, '0.0163(7)'), (280, '2.12')),
+                    _line(74, (10, 'P1'), (40, '-0.6772'), (100, '0.2565(2)'), (160, '-0.1866'), (220, '0.0152(5)'), (280, '5.05'))])
+        t = PE.bvs_site_tables('x.pdf', st)
+        self.assertEqual(t[0]['rows'], [('Ca', 2.12), ('P1', 5.05)])
+
+    def test_the_sums_a_bond_table_prints_under_each_block(self):
+        from pxrd_review import paper_bonds as PB
+        tabs = PB.read_tables('x.pdf', pages=[[
+            _line(50, (40, 'Ca1–O5'), (110, '2.327(12)')),
+            _line(62, (40, 'Ca1–O1'), (110, '2.356(12)')),
+            _line(74, (40, 'Ca1–O2'), (110, '2.358(12)')),
+            _line(86, (40, '<Ca1–O>'), (110, '2.400')),
+            _line(98, (40, 'BVS'), (110, '2.12')),
+            _line(110, (40, 'U1–O37'), (110, '1.754(11)')),
+            _line(122, (40, 'U1–O3'), (110, '2.435(11)')),
+            _line(134, (40, 'BVS'), (110, '6.18'))]])
+        self.assertEqual(tabs[0]['sums'], [('Ca1', 2.12), ('U1', 6.18)])
+
+
+class CaptionAnchoredTable(unittest.TestCase):
+    """The paper says which table holds the bond valences. That is read first, and the site labels
+    are asked for only afterwards."""
+
+    def pages(self, *pages):
+        saved = PE._pages
+        PE._pages = lambda _pdf, **kw: list(pages)
+        self.addCleanup(lambda: setattr(PE, '_pages', saved))
+
+    def test_the_caption_finds_a_table_naming_no_known_site(self):
+        st = _Fake(['Zz1'], ['Qq1'])                                   # nothing in the table matches
+        self.pages([_line(40, (40, 'Table'), (70, '8.'), (95, 'Weighted'), (150, 'bond-valence'),
+                          (230, 'sums'), (270, 'for'), (300, 'thingite.')),
+                    _line(54, (40, 'Site'), (100, 'M(1)'), (160, 'M(2a)'), (220, 'Σanions')),
+                    _line(66, (40, 'S(1)'), (100, '2×→0.41×4↓'), (160, '0.33×2↓'), (220, '2.16')),
+                    _line(78, (40, 'S(2)'), (100, '0.36'), (160, '0.25'), (220, '2.10')),
+                    _line(90, (40, 'S(3)'), (100, '0.38'), (160, '0.29'), (220, '2.04'))])
+        t = PE.bv_tables_by_caption('x.pdf', st)
+        self.assertEqual(len(t), 1)
+        self.assertEqual(t[0]['rows'][0], ['Atom', 'M(1)', 'M(2a)', 'Σanions'])
+        self.assertEqual([r[0] for r in t[0]['rows'][1:]], ['S(1)', 'S(2)', 'S(3)'])
+
+    def test_the_facing_page_column_is_not_taken_for_the_table(self):
+        st = _Fake(['M1'], ['S1'])
+        self.pages([_line(40, (40, 'Table'), (70, '7.'), (95, 'Bond-valence'), (170, 'sums')),
+                    _line(54, (10, 'Diffractometer'), (90, 'Bruker'), (200, 'Site'), (250, 'M(1)'), (300, 'Σ')),
+                    _line(66, (10, 'Measured'), (70, 'reflections'), (130, '2243'),
+                          (200, 'S(1)'), (250, '0.41'), (300, '2.16')),
+                    _line(78, (10, 'Unique'), (70, 'reflections'), (130, '348'),
+                          (200, 'S(2)'), (250, '0.36'), (300, '2.10'))])
+        t = PE.bv_tables_by_caption('x.pdf', st)
+        self.assertEqual([r[0] for r in t[0]['rows'][1:]], ['S(1)', 'S(2)'])   # '2243' is no valence, so the run starts at the table
+
+    def test_prose_with_no_table_under_the_caption_yields_nothing(self):
+        st = _Fake(['M1'], ['S1'])
+        self.pages([_line(40, (40, 'as'), (60, 'shown'), (90, 'in'), (110, 'Table'), (150, '8.'),
+                          (170, 'The'), (200, 'bond-valence'), (280, 'sums')),
+                    _line(54, (40, 'are'), (70, 'all'), (100, 'close'), (140, 'to'), (170, 'ideal.'))])
+        self.assertEqual(PE.bv_tables_by_caption('x.pdf', st), [])
+
+
+class BvTableFinderOrder(unittest.TestCase):
+    """The order of the finders is the contract: better evidence first. Reading the caption before
+    the header match once replaced tables already matched to the structure and cost 17 papers their
+    verdict, so the order is pinned here rather than left to the reading of the call site."""
+
+    def test_a_header_matched_table_is_preferred_to_a_caption_matched_one(self):
+        calls = []
+        def stub(name, result):
+            def f(_path, _st):
+                calls.append(name); return result
+            return f
+        saved = {n: getattr(PE, n) for n in ('bv_tables', 'bv_tables_by_caption', 'bv_bond_column',
+                                             'bv_grids_by_rows', 'bvs_site_tables', '_bvs_marks_table')}
+        self.addCleanup(lambda: [setattr(PE, n, f) for n, f in saved.items()])
+        for n in saved:
+            setattr(PE, n, stub(n, [{'rows': [], 'kind': 'grid', 'page': 1}]))
+        got = PE._find_bv_tables('x.pdf', None)
+        self.assertEqual(calls, ['bv_tables'])                      # the first that answers, and no other
+        self.assertTrue(got)
+
+    def test_each_finder_answers_only_what_the_one_before_could_not(self):
+        calls = []
+        def stub(name, result):
+            def f(_path, _st):
+                calls.append(name); return result
+            return f
+        saved = {n: getattr(PE, n) for n in ('bv_tables', 'bv_tables_by_caption', 'bv_bond_column',
+                                             'bv_grids_by_rows', 'bvs_site_tables', '_bvs_marks_table')}
+        self.addCleanup(lambda: [setattr(PE, n, f) for n, f in saved.items()])
+        for n in saved:
+            setattr(PE, n, stub(n, []))
+        PE._find_bv_tables('x.pdf', None)
+        self.assertEqual(calls, ['bv_tables', 'bv_tables_by_caption', 'bv_bond_column',
+                                 'bv_grids_by_rows', 'bvs_site_tables', '_bvs_marks_table'])
+
+
+class GauntletRows(unittest.TestCase):
+    """The three readings a description is 'fully read' by, beside the table and the optics: the
+    bond-valence TABLE (checked whether or not the paper cites a parameter set), the coordinates
+    table (settled by a .cif's positions, or by the structure it builds), and the compatibility
+    index the paper states."""
+
+    def _page(self, blocks):
+        """blocks: [(text, x)] lines, top to bottom -> a one-page pdf path (the base font has no en dash)."""
+        import pymupdf
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'page.pdf')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 60
+        for cells in blocks:
+            if isinstance(cells, str):
+                page.insert_text((40, y), cells, fontsize=9)
+            else:
+                for x, t in cells:
+                    page.insert_text((x, y), t, fontsize=9)
+            y += 13
+        doc.save(path); doc.close()
+        return path
+
+    BONDS = (('Ca1', 'O1', '2.340(2)'), ('Ca1', 'O2', '2.360(2)'), ('Ca1', 'O3', '2.380(2)'), ('Ca1', 'O4', '2.350(2)'),
+             ('Si1', 'O1', '1.610(2)'), ('Si1', 'O2', '1.620(2)'), ('Si1', 'O3', '1.630(2)'), ('Si1', 'O4', '1.615(2)'))
+
+    def _head(self):
+        return ['Testite, a new mineral from Nowhere',
+                'The empirical formula, calculated on the basis of 4 O apfu, is Ca1.00Si1.00O4.',
+                'Table 3. Selected bond lengths (A) for testite.'] + \
+               [[(40, c), (70, '-'), (80, a), (120, d)] for c, a, d in self.BONDS]
+
+    def _bv_cells(self):
+        """The grid the paper would print, computed by the tool itself — never a hard-coded constant."""
+        from pxrd_review import paper_bonds as PB, bv_check as B
+        path = self._page(self._head())
+        text = PE.text_of(path); ex = PE.extract(path, None, None, write=False)
+        st, _res, _g = PB.structure_for(path, ex, text)
+        self.assertIsNotNone(st)
+        _r, _an, cells = PB.compute(st, B.Params(prefer='gh', u6='burns'))
+        return {k: v[0][0] for k, v in cells.items()}                  # (anion, cation) -> valence
+
+    def _paper(self, shift=None):
+        cells = self._bv_cells()
+        rows = [[(40, 'Atom'), (100, 'Ca1'), (160, 'Si1'), (220, 'Σ')]]
+        for an in ('O1', 'O2', 'O3', 'O4'):
+            vals = [cells[(an, 'Ca1')], cells[(an, 'Si1')]]
+            if shift and an in shift:
+                vals = [v + shift[an] for v in vals]
+            rows.append([(40, an), (100, '%.2f' % vals[0]), (160, '%.2f' % vals[1]), (220, '%.2f' % sum(vals))])
+        return self._page(self._head() + ['', 'Table 4. Bond-valence analysis (vu) for testite.'] + rows)
+
+    def test_bv_table_without_a_citation(self):
+        r = PE.check_paper(self._paper(), None, None); F = r['fields']
+        self.assertEqual(F['bv.params']['status'], 'none', r['lines'])   # the paper names no parameter set: that reading is absent …
+        self.assertEqual(F['bv.table']['status'], 'agrees', r['lines'])  # … and the table is checked all the same
+        self.assertEqual((F['bv.table']['verified_by'], F['bv.table']['page']), ('bv', 1))
+        self.assertIn('bond-valence table ✓ (p1)', r['lines'][0])
+        self.assertIn('Bond-valence', F['bv.table']['source'])
+        self.assertEqual(F['bv.table']['value']['cells'], 8)
+
+    def test_bv_table_refuted_and_unmatched(self):
+        r = PE.check_paper(self._paper({'O1': 0.25}), None, None)
+        self.assertEqual(r['fields']['bv.table']['status'], 'disagrees', r['lines'])        # 2 of 8 cells off: more than the slip a table is allowed, short of differing throughout
+        r = PE.check_paper(self._paper({'O1': 0.3, 'O2': 0.3, 'O3': 0.3, 'O4': 0.3}), None, None)
+        self.assertEqual(r['fields']['bv.table']['status'], 'unverified', r['lines'])       # differs throughout: a doubt, not a comparison
+
+    RUTILE_P1 = (('Ti1', '0.00000', '0.00000', '0.00000'), ('Ti2', '0.50000', '0.50000', '0.50000'),
+                 ('O1', '0.30479', '0.30479', '0.00000'), ('O2', '0.69521', '0.69521', '0.00000'),
+                 ('O3', '0.80479', '0.19521', '0.50000'), ('O4', '0.19521', '0.80479', '0.50000'))
+
+    def _rutile(self, rows=None, sg='space group P1, '):
+        rows = rows or self.RUTILE_P1
+        return self._page(['Rutile from Nowhere',
+                           'Rutile is tetragonal, %sa = 4.5937(2), b = 4.5937(2), c = 2.9587(1) A, V = 62.43 A3, Z = 2.' % sg,
+                           'The empirical formula, calculated on the basis of 2 O apfu, is Ti1.00O2.',
+                           'Table 2. Atom coordinates and displacement parameters for rutile.',
+                           [(40, 'Atom'), (90, 'x'), (150, 'y'), (210, 'z'), (270, 'Ueq')]] +
+                          [[(40, l), (90, x), (150, y), (210, z), (270, '0.0050(2)')] for l, x, y, z in rows])
+
+    def test_coords_from_the_printed_structure(self):
+        r = PE.check_paper(self._rutile(), None, None); F = r['fields']
+        self.assertEqual(F['coords']['status'], 'agrees', r['lines'])
+        self.assertEqual((F['coords']['verified_by'], F['coords']['page'], F['coords']['value']['sites']), ('paper_structure', 1, 6))
+        self.assertIn('coordinates ✓ (p1)', r['lines'][0])
+        o = {}; PE.coords_check(self._rutile(), None, PE.text_of(self._rutile()), o)
+        self.assertNotIn('paper_structure', o)                         # the coords build never masquerades as a bond-valence check
+        self.assertEqual((F['bv.table']['status'], F['bv.params']['status']), ('none', 'none'))
+        bad = list(self.RUTILE_P1); bad[2] = ('O1', '0.40479', '0.30479', '0.00000')
+        r = PE.check_paper(self._rutile(bad), None, None)
+        self.assertEqual(r['fields']['coords']['status'], 'unverified', r['lines'])   # one x off by 0.1: the sums no longer come out
+        r = PE.check_paper(self._rutile(sg=''), None, None)
+        self.assertEqual(r['fields']['coords']['status'], 'nooracle', r['lines'])     # no space group: nothing to build with
+
+    def test_coords_against_a_cif(self):
+        from tests.test_bv_check import HYDRATE
+        tmp = tempfile.mkdtemp(prefix='pe_'); self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cif = os.path.join(tmp, 'h.cif'); open(cif, 'w').write(HYDRATE)
+        sites = [('Ca1', '0.00000', '0.00000', '0.00000'), ('O1', '0.27500', '0.12500', '0.00000'), ('OW1', '0.00000', '0.30000', '0.00000'),
+                 ('O2', '0.30311', '0.47500', '0.00000'), ('O3', '0.69689', '0.47500', '0.00000')]
+        page = lambda rows: self._page(['Testhydrate from Nowhere', 'Table 2. Atom coordinates for testhydrate.',
+                                        [(40, 'Atom'), (90, 'x'), (150, 'y'), (210, 'z'), (270, 'Ueq')]] +
+                                       [[(40, l), (90, x), (150, y), (210, z), (270, '0.0100(3)')] for l, x, y, z in rows])
+        r = PE.check_paper(page(sites), cif, None); F = r['fields']
+        self.assertEqual((F['coords']['status'], F['coords']['verified_by']), ('agrees', 'cif'), r['lines'])
+        r = PE.check_paper(page([(l, x, y, '0.20000') for l, x, y, _z in sites]), cif, None)
+        self.assertEqual(r['fields']['coords']['status'], 'unverified', r['lines'])   # every z off the .cif's: another setting, or a misread column
+
+    def test_gd_row_needs_an_n(self):
+        r = PE.check_paper(self._page(['Testite from Nowhere', 'The Gladstone-Dale compatibility index, 1 - (KP/KC), is -0.021 (superior) for the empirical formula.']), None, None)
+        F = r['fields']
+        self.assertEqual((F['gd']['status'], F['gd']['value']), ('nooracle', {'ci': -0.021, 'category': 'superior'}), r['lines'])
+        self.assertIn('no n read', F['gd']['detail'])
+        self.assertIn('compatibility · ', r['lines'][0])
+
+    def test_why_prints_the_records(self):
+        import io, contextlib
+        path = self._paper()
+        for flag, want in ((['--why'], True), ([], False)):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                PE.main([path, '--check'] + flag)
+            self.assertEqual('    source:' in buf.getvalue(), want)
+            self.assertEqual('bv.table' in buf.getvalue(), want)
+
+
+class OpticsFonts(unittest.TestCase):
+    """The optics sentence as the font delivers it: a Symbol-font α β γ that reach the text as a b c
+    (or g), '=' as '¼' or a lost glyph, and the index a paper computed instead of measuring."""
+
+    def test_latin_for_greek(self):
+        o = PE.optics('Optically, smamite is biaxial (-), a = 1.556(1), b = 1.581(1), g = 1.588(1) (white light). The 2V (meas) = 54(1)°.')
+        self.assertEqual(o['n'], round((1.556 + 1.581 + 1.588) / 3, 4)); self.assertFalse(o['n_calc'])
+        o = PE.optics('It is optically biaxial (+) with refractive indices a ¼ 1.664(2), b ¼ 1.670(2), c ¼ 1.692(2); 2Vcalc. ¼ 56°. Dcalc. ¼ 3.608 g/cm3.')
+        self.assertEqual((o['n'], o['D_calc']), (round((1.664 + 1.670 + 1.692) / 3, 4), 3.608))
+        o = PE.optics('biaxial (+), a . 1.95, b . 1.95, c . 1.95; 2V = 72(2)8; moderate dispersion')
+        self.assertEqual(o['n'], 1.95)
+        o = PE.optics('The mineral is uniaxial (-), with w = 1.582(2), e = 1.613(2).')
+        self.assertEqual(o['n'], round((2 * 1.582 + 1.613) / 3, 4))
+
+    def test_a_cell_edge_and_a_pleochroism_are_not_indices(self):
+        o = PE.optics('Optically biaxial (+); pleochroism: O = green, E = light yellow. The cell is a = 10.2, b = 1.95, c = 12.1 Å.')
+        self.assertIsNone(o['n'])                                        # 'b = 1.95' stands alone: no triple, no ω/ε pair
+
+    def test_the_index_the_paper_computed(self):
+        for s in ('Mean refractive index, calculated according to the Gladstone–Dale relationship (Mandarino, 1979, 1981), is 1.889 and 1.928 for domains #1 and #2.',
+                  'The Gladstone–Dale relationship (Mandarino, 1981) predicts an average index of refraction of 1.889 for the ideal formula.',
+                  'with a calculated density of 3.775 g⋅cm–3 and a mean refractive index ∼1.889. The triclinic',
+                  'The calculated mean refractive index is 1.889. The chemical composition'):
+            o = PE.optics(s)
+            self.assertEqual((o['n'], o['n_calc']), (1.889, True), s)
+        o = PE.optics('The mean refractive index could not be measured. The cell has a = 1.889 Å.')
+        self.assertIsNone(o['n'])
+        o = PE.optics('with an average Ca–O distance of 2.508 Å and the Ca–F distance of 2.247 Å.')
+        self.assertIsNone(o['n'])                                        # 'a[n av]erage … distance' is not n_av
+        o = PE.optics('The average refractive index (nave) was calculated from the Gladstone‒Dale compatibility index as 1.907, using the unit cell.')
+        self.assertEqual((o['n'], o['n_calc']), (1.907, True))
+
+    def test_a_verified_density_keeps_its_verdict(self):
+        """A misread index makes the compatibility check doubt the density too; the density the cell,
+        Z and the formula reproduce keeps the cell's verdict."""
+        import pymupdf
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'rutile.pdf')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 60
+        for ln in ('Rutile from Nowhere', 'Rutile is tetragonal, a = 4.5937(2), c = 2.9587(1) A, V = 62.43 A3, Z = 2.',
+                   'The calculated density is 4.248 g/cm3. Optically uniaxial (+), omega = 1.616, epsilon = 1.903.',
+                   'The compatibility index, 1 - (KP/KC), is superior.',
+                   'The empirical formula, calculated on the basis of 2 O apfu, is Ti1.00O2.', 'Table 1. Chemical data (wt%) for rutile.',
+                   'Constituent   Mean     Range        S.D.', 'TiO2  99.10  98.80-99.40  0.21', 'FeO  0.40  0.30-0.50  0.07', 'SiO2  0.30  0.20-0.40  0.06', 'Total  99.80'):
+            page.insert_text((40, y), ln, fontsize=9); y += 14
+        doc.save(path); doc.close()
+        r = PE.check_paper(path, None, None); F = r['fields']
+        self.assertEqual(F['optics.n']['status'], 'unverified', r['lines'])                       # the index is a digit off (ω 1.616 for 2.616)
+        self.assertEqual((F['optics.D_calc']['status'], F['optics.D_calc']['verified_by']), ('agrees', 'cell_consistency'), r['lines'])
+
+
+class CompatibilityStatement(unittest.TestCase):
+    """The compatibility statement as papers print it, and as the font and the text layer deliver it."""
+
+    def test_the_forms(self):
+        for s, ci, cat in (('The Gladstone-Dale compatibility (Mandarino 2007), 1  (Kp/Kc), is 0.010 (superior) using the empirical formula and 0.007 (superior) using the ideal formula.', 0.010, 'superior'),
+                           ('The Gladstone-Dale compatibility (Mandarino, 1981) 1  (KP/KC) = 0.048 (good), based on the empirical formula.', 0.048, 'good'),
+                           ('The GladstoneDale compatibility is 0.0416 (good) using the empirical formula and single-crystal unit cell.', 0.0416, 'good'),
+                           ('The calculated compatibility (1  KP/KC) is excellent (0.021) (Mandarino 1981). RAMAN SPECTROSCOPY', 0.021, 'excellent'),
+                           ('The Gladstone-Dale compatibility index (Mandarino, 1981) calculated using the above optical properties with the empirical formula and calculated density is 0.021, which is classed as superior.', 0.021, 'superior'),
+                           ('The Gladstone–Dale compatibility index (Mandarino, Figure 3. Raman spectra for (a) fluormacraeite and (b) macraeite. 1981) is 0.0083 (superior) based on the empirical formula.', 0.0083, 'superior'),
+                           ('The compatibility index, 1 − (KP/KC), is −0.012, in the superior range of Mandarino (1981).', -0.012, 'superior'),
+                           ('The Gladstone–Dale compatibility index calculated based on the empirical formula and unit-cell parameters from the singlecrystal XRD data is 1 – (Kp/Kc) = 0.007 using Dmeas and 0.011 using Dcalc.', 0.007, None)):
+            g = PE.gd_statement(s)
+            self.assertEqual((g['ci'], g['category']), (ci, cat), s)
+
+    def test_not_a_statement(self):
+        g = PE.gd_statement('The average refractive index (nave) was calculated from the Gladstone‒Dale compatibility index as 1.907, using the unit cell. Good agreement was found.')
+        self.assertIsNone(g['ci'])                                       # the .907 of an index is not a compatibility index
+        self.assertIsNone(g['category'])                                 # 'Good agreement' is the next sentence
+        g = PE.gd_statement('The compatibility of the powder pattern with the calculated one is good.')
+        self.assertEqual((g['ci'], g['category']), (None, None))
+
+
+class DensitySentences(unittest.TestCase):
+    """The density as papers state it, beyond 'Dcalc = 3.21'."""
+
+    def test_forms(self):
+        for s, dm, dc in (('The calculated density is Dx = 3.199 g/cm3 and the measured density is Dm = 3.201(3) g/cm3.', 3.201, 3.199),
+                          ('The density calculated using the empirical formula and crystal structure is 2.847 g/cm3.', None, 2.847),
+                          ('The measured density of is 3.40 g/cm3 (Clerici solution). The calculated density obtained from the empirical formula is 3.38 g/cm3.', 3.40, 3.38),
+                          ('The density is 3.05(2) g/cm3. Optically, crystals are biaxial.', 3.05, None),
+                          ('Calculated density (g cm–3) 2.880 Absorption coefficient (mm–1) 1.560', None, 2.880),
+                          ('The calculated density based on the empirical formula and powder unit-cell parameters obtained from the powder X-ray diffraction data is 4.679 g/cm3.', None, 4.679),
+                          ('The density measured via flotation in a mixture of methylene iodide and toluene is 3.05(2) g/cm3. The calculated density based on the empirical formula is 3.09 g/cm3.', 3.05, 3.09)):
+            o = PE.optics(s)
+            self.assertEqual((o['D_meas'], o['D_calc']), (dm, dc), s)
+
+    def test_not_a_density(self):
+        o = PE.optics('Density was not measured owing to the small amount of material. 2V(calc) = 51.68°.')
+        self.assertEqual((o['D_meas'], o['D_calc']), (None, None))       # '1.68' inside 51.68 is no density
+
+
+class TableMarks(unittest.TestCase):
+    """The marks a table hangs on a constituent's name, in whichever glyph the font delivers them."""
+
+    def test_footnote_glyphs_and_welded_qualifiers(self):
+        for tok, want in (('H2O∗', 'H2O'), ('Li2O∗∗', 'Li2O'), ('H2Ocalc', 'H2O'), ('CO2calc', 'CO2'), ('H2Ocalc.', 'H2O'), ('H2O†', 'H2O'), ('SiO2a', 'SiO2'), ('H2O(calc)', 'H2O')):
+            self.assertEqual(PE._constituent_ok(tok)[0], want, tok)
+        self.assertEqual(PE._constituent_ok('Xa'), (None, None))
+        self.assertEqual(PE._constituent_ok('FeOtot'), (None, None))                    # total iron beside the FeO/Fe2O3 split: not a row to add
+
+
+class NormalisedSet(unittest.TestCase):
+    """A table whose Mean column adds to well over 100 is offered normalised, as the paper's own
+    'Norm.' column has it — and only the stated index can accept it."""
+
+    def test_excess_total_offers_the_normalised_set(self):
+        ex = {'epma': {'rows': [{'constituent': 'MgO', 'mean': 14.19}, {'constituent': 'CaO', 'mean': 0.14}, {'constituent': 'V2O5', 'mean': 64.90}, {'constituent': 'H2O', 'mean': 39.38}], 'total': 100.0}}
+        sets, why = PE._gd_wt_sets(ex, None)
+        totals = [round(sum(w.values()), 1) for w, _c in sets]
+        self.assertIn(100.0, totals); self.assertIn(118.6, totals)
+        self.assertTrue(all(not c for w, c in sets if round(sum(w.values()), 1) == 100.0))       # the scaled set is never 'complete'
+        self.assertIn('119', why)                                                             # a failure is still explained by the table as read
+        ex['epma']['rows'] = ex['epma']['rows'][:3]                                            # short of H2O: 79 % — not scaled up
+        sets, why = PE._gd_wt_sets(ex, None)
+        self.assertNotIn(100.0, [round(sum(w.values()), 1) for w, _c in sets])
+
+
+class GladstoneDaleVariants(unittest.TestCase):
+    """Table 7's class constants: a paper picks by its mineral class, and only its own stated index
+    can accept the alternative."""
+
+    def test_the_uranyl_constant_under_arbitration(self):
+        from pxrd_review import gd as GD
+        wt = {'UO3': 60.0, 'SO3': 20.0, 'H2O': 20.0}
+        kc_a = GD.kc(wt)[0]; kc_b = GD.kc(wt, {'UO3': 0.134})[0]
+        self.assertGreater(kc_b, kc_a)
+        n, D = 1.60, 3.0
+        ci_b = 1 - ((n - 1) / D) / kc_b                                   # the index the paper would state on the uranyl convention
+        ex = {'optics': {'n': n, 'n_from': 'n = 1.60', 'D_meas': None, 'D_calc': D, 'sentences': []},
+              'epma': {'rows': [{'constituent': c, 'mean': v} for c, v in wt.items()], 'total': 100.0}}
+        out = PE.gd_check(ex, None, {'ci': round(ci_b, 3), 'category': None, 'sentence': ''})
+        self.assertEqual(out['status']['optics.n'], 'agrees', out)
+        self.assertIn('UO3 at 0.134', out['detail'])
+        out = PE.gd_check(ex, None, {'ci': None, 'category': 'superior', 'sentence': ''})   # a category alone cannot accept a variant
+        self.assertNotIn('UO3 at', out.get('detail') or '')
+        self.assertEqual(sorted(len(o) for o in PE._gd_variant_overrides({'UO3': 60.0, 'MgO': 5.0, 'SiO2': 35.0})), [1, 1, 2])
+
+    def test_an_index_used_as_an_input_is_not_a_statement(self):
+        g = PE.gd_statement('The average refractive index (nave) was calculated from the Gladstone-Dale compatibility index as 1.907, using the unit cell. ω and ε were calculated from nave after measuring a birefringence of 0.075.')
+        self.assertIsNone(g['ci'])
+
+
+class OpticsForms2(unittest.TestCase):
+    def test_primed_indices_and_the_values_of_form(self):
+        o = PE.optics('Sejkoraite-(Y) is yellow, biaxial negative with α′ = 1.62(2), β′ = 1.662(3), γ′ = 1.73(1), 2Vcalc = 79°.')
+        self.assertEqual(o['n'], round((1.62 + 1.662 + 1.73) / 3, 4))
+        o = PE.optics('Keystoneite is uniaxial (+), and the values of x and e (measured at 589 nm) are 1.85(1) and 1.99(1), respectively.')
+        self.assertEqual(o['n'], round((2 * 1.85 + 1.99) / 3, 4))
+        o = PE.optics('The mineral is uniaxial (-); the values of ω and ε are 1.585(2) and 1.600(2).')
+        self.assertEqual(o['n'], round((2 * 1.585 + 1.600) / 3, 4))
+
+
+class ProseAnalyses(unittest.TestCase):
+    def test_three_constituents_with_a_total_and_decorated_values(self):
+        pt = PE.prose_table('The composition (electron microprobe, H2O by gas chromatography) is (in wt.%): Al2O3 24.36, SO3 40.69, H2O 34(2), total 99.05. The empirical formula is')
+        self.assertEqual(([(r['constituent'], r['mean']) for r in pt['rows']], pt['total']), ([('Al2O3', 24.36), ('SO3', 40.69), ('H2O', 34.0)], 99.05))
+        pt = PE.prose_table('analyses gave UO3 78.6 (77.9–79.3) (0.31), SO3 10.1 (9.8–10.4) (0.2), H2O 11.02 (crystal structure), total 100.96 wt.%. The empirical formula')
+        self.assertEqual([(r['constituent'], r['mean']) for r in pt['rows']], [('UO3', 78.6), ('SO3', 10.1), ('H2O', 11.02)])
+        self.assertIsNone(PE.prose_table('Al2O3 24.36, SO3 40.69, H2O 34.00 and nothing else.'))     # three without a total: not enough
+
+
+class SitePrefixB(unittest.TestCase):
+    def test_the_b_site_of_a_monazite_type_formula(self):
+        f = PE._journal_to_icdd('A(Ca3.89Th0.08Sr0.02La0.03)Σ4.02 B(Ce4+ 0.76Nd0.13Y0.08)Σ1.0 (AsO4)4.0')
+        self.assertNotIn('B(', f.replace(' ', '')[:1] + f.replace(' ', ''))
+        self.assertIn('Ce', f)
+        self.assertIn('B(', PE._journal_to_icdd('Na0.95B(OH)4(SO4)').replace(' ', ''))           # boron keeps its bracket
+
+
+class VerifiedStructureChecksTheTable(unittest.TestCase):
+    """A coordinate structure the paper's own bond distances verify stands in for a .cif: the
+    bond-valence table is judged against it at flag grade."""
+
+    def _pdf(self, grid=None):
+        import pymupdf
+        tmp = tempfile.mkdtemp(prefix='pe_'); path = os.path.join(tmp, 'p.pdf'); self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 50
+        for ln in ('Rutile from Nowhere', 'Rutile is tetragonal, space group P1, a = 4.5937(2), b = 4.5937(2), c = 2.9587(1) A, V = 62.43 A3, Z = 2.',
+                   'The empirical formula, calculated on the basis of 2 O apfu, is Ti1.00O2.', 'Table 2. Atom coordinates for rutile.'):
+            page.insert_text((40, y), ln, fontsize=9); y += 13
+        for cells in (('Atom', 'x', 'y', 'z', 'Ueq'), ('Ti1', '0.00000', '0.00000', '0.00000', '0.0050(2)'), ('Ti2', '0.50000', '0.50000', '0.50000', '0.0050(2)'),
+                      ('O1', '0.30479', '0.30479', '0.00000', '0.0060(2)'), ('O2', '0.69521', '0.69521', '0.00000', '0.0060(2)'),
+                      ('O3', '0.80479', '0.19521', '0.50000', '0.0060(2)'), ('O4', '0.19521', '0.80479', '0.50000', '0.0060(2)')):
+            for x, t in zip((40, 100, 160, 220, 280), cells):
+                page.insert_text((x, y), t, fontsize=9)
+            y += 13
+        y += 6; page.insert_text((40, y), 'Table 3. Selected bond lengths (A) for rutile.', fontsize=9); y += 13
+        for c, a, d in (('Ti1', 'O1', '1.980(1)'), ('Ti1', 'O2', '1.980(1)'), ('Ti1', 'O3', '1.949(1)'), ('Ti1', 'O4', '1.949(1)'), ('Ti2', 'O3', '1.980(1)'), ('Ti2', 'O1', '1.949(1)')):
+            page.insert_text((40, y), c, fontsize=9); page.insert_text((70, y), '-', fontsize=9); page.insert_text((80, y), a, fontsize=9); page.insert_text((120, y), d, fontsize=9); y += 13
+        if grid:
+            y += 6; page.insert_text((40, y), 'Table 4. Bond-valence analysis (vu) for rutile.', fontsize=9); y += 13
+            for cells in grid:
+                for x, t in zip((40, 100, 160, 220), cells):
+                    page.insert_text((x, y), t, fontsize=9)
+                y += 13
+        doc.save(path); doc.close()
+        return path
+
+    def test_flag_grade_against_the_verified_structure(self):
+        from pxrd_review import paper_structure as PS, bv_check as B
+        p0 = self._pdf()
+        st, info = PS.build(p0, PE.text_of(p0), bonds=[('Ti1', 'O1', 1.98), ('Ti1', 'O2', 1.98), ('Ti1', 'O3', 1.949), ('Ti1', 'O4', 1.949), ('Ti2', 'O3', 1.98), ('Ti2', 'O1', 1.949)])
+        self.assertTrue(info.get('bonds_verified'), info)
+        res, an, cells, hb = B.compute(st, B.Params(prefer='gh', u6='burns'), None, 'oo'); PS.discard(info)
+        v = lambda a, c: sorted(s for s, _, _ in cells[(a, c)])[0]
+        grid = [('Atom', 'Ti1', 'Ti2', 'Σ')] + [(a, ('%.2f' % v(a, 'Ti1')) if (a, 'Ti1') in cells else '', ('%.2f' % v(a, 'Ti2')) if (a, 'Ti2') in cells else '', '2.00') for a in ('O1', 'O2', 'O3', 'O4')]
+        r = PE.check_paper(self._pdf(grid), None, None); F = r['fields']
+        self.assertEqual((F['coords']['status'], F['coords']['verified_by']), ('agrees', 'bonds'), r['lines'])
+        self.assertEqual(F['bv.table']['status'], 'agrees', r['lines'])
+        self.assertIn('verified by its bond distances', F['bv.table']['detail'])
+        self.assertTrue(any('reproduces 6 of the 6 bond distances' in l and 'structure the paper itself prints' in l for l in r['lines']), r['lines'])
+        self.assertFalse(r.get('paper_structure'))                              # not the note-grade path

@@ -22,17 +22,21 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # runnable from any cwd — and spawn hands this path to every worker
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pxrd_review import paper_extract as PE
+import paper_features as PF
 
 _CTX = mp.get_context('spawn')          # the context the GUI's page worker already uses (pxrd_review/gui/_pdf_worker.py)
 
-READERS = ('epma', 'formula', 'basis', 'method', 'optics.n', 'optics.D_meas', 'optics.D_calc', 'cell', 'bv.params', 'pxrd.obs', 'pxrd.calc', 'name')
+READERS = ('epma', 'formula', 'basis', 'method', 'optics.n', 'optics.D_meas', 'optics.D_calc', 'gd', 'cell', 'coords', 'bv.params', 'bv.table', 'pxrd.obs', 'pxrd.calc', 'name')
+GAUNTLET = ('epma', 'formula', 'bv.table', 'bv.params', 'coords', 'gd', 'optics.n', 'cell')   # the readers the gauntlet reports on S
 
 
-def paper_record(r, ex, cif, text):
+def paper_record(r, ex, cif, text, has=None):
     """What one paper's run leaves behind, for the diff: every field's status and detail, the
     composition verdict and its doubts, the bond-valence and powder outcomes, and whether the text
-    prints a Z at all (the density oracle needs one)."""
+    prints a Z at all (the density oracle needs one). `has` is what the paper PRINTS by the crude
+    reader-independent scan (tools/paper_features.py): the gauntlet's denominator."""
     fields = {k: {'status': v['status'], 'detail': (v.get('detail') or '')[:120], 'value': (str(v['value'])[:40] if v.get('value') not in (None, '') else None)}
               for k, v in (r.get('fields') or {}).items()}
     c = r.get('composition'); p = r.get('powder') or {}; o = ex.get('optics') or {}
@@ -46,7 +50,44 @@ def paper_record(r, ex, cif, text):
                        'bad': len(p.get('bad') or []), 'wild': p.get('wild'), 'red': [l[:150] for l in (p.get('lines') or []) if 'does not follow the cell:' in l][:6],
                        'notes': [l[:60] for l in (p.get('lines') or []) if 'follows no cell' in l or 'off — computed' in l or "the .cif's cell" in l]},
             'D_calc': o.get('D_calc'), 'D_meas': o.get('D_meas'), 'cif': bool(cif),
-            'Z_eq': bool(re.search(r'\bZ\s*=\s*\d{1,2}\b', text)), 'Z_any': bool(re.search(r'(?<![A-Za-z])Z\s*[=:]?\s*\d{1,2}\b', text))}
+            'Z_eq': bool(re.search(r'\bZ\s*=\s*\d{1,2}\b', text)), 'Z_any': bool(re.search(r'(?<![A-Za-z])Z\s*[=:]?\s*\d{1,2}\b', text)),
+            'coords': {k: (r.get('coords') or {}).get(k) for k in ('status', 'gii', 'closure', 'closure_count', 'matched', 'n', 'sites', 'bonds_ok', 'bonds_n', 'bonds_total')},
+            'has': has or {}}
+
+
+def gauntlet_lines(papers, base=None, limit=8):
+    """The gauntlet: on S — the papers whose text prints an EPMA table, a bond-valence table, a
+    coordinates table, a compatibility index and optics, by the crude scan — how many of them each
+    reader VERIFIES (agrees / |S|), the composite, the worklist, and the diff restricted to S. The
+    denominator is the scan's, never the readers': a reader cannot raise its rate by reading less."""
+    S = [n for n, r in papers.items() if PF.is_target(r.get('has'))]
+    out = ['GAUNTLET: S = %d papers whose text prints an EPMA table, a bond-valence table, a coordinates table, a compatibility index and optics (of %d)'
+           % (len(S), len(papers))]
+    if not S:
+        return out
+    stat = lambda n, fld: ((papers[n].get('fields') or {}).get(fld) or {}).get('status', 'none')
+    out.append('  %-12s %8s  %-40s %s' % ('reader', 'agrees', 'other statuses', 'first not agreeing'))
+    for fld in GAUNTLET:
+        c = {}
+        for n in S:
+            s = stat(n, fld); c[s] = c.get(s, 0) + 1
+        a = c.get('agrees', 0)
+        others = ', '.join('%s %d' % (k, c[k]) for k in ('disagrees', 'unverified', 'nooracle', 'none') if c.get(k))
+        names = [n for n in S if stat(n, fld) != 'agrees'][:limit]
+        out.append('  %-12s %3d %3.0f %%  %-40s %s' % (fld, a, 100.0 * a / len(S), others[:40], ', '.join(x[:28] for x in names)))
+    def all_agree(n, flds):
+        return all(stat(n, f) == 'agrees' for f in flds)
+    a3 = sum(1 for n in S if all_agree(n, ('epma', 'bv.params', 'optics.n')))
+    a4 = sum(1 for n in S if all_agree(n, ('epma', 'bv.table', 'coords', 'gd')))
+    out.append('  composite: table + bond-valence set + n all agree %d/%d; table + bond-valence table + coordinates + compatibility all agree %d/%d' % (a3, len(S), a4, len(S)))
+    if base is not None:
+        bS = {n: base[n] for n in S if n in base}
+        if not bS:
+            out.append('  (the baseline carries none of these papers)')
+        else:
+            out.append('  DIFF on S:')
+            out += ['  ' + ln for ln in diff(bS, {n: papers[n] for n in S})[1:]]
+    return out
 
 
 def diff(base, papers, limit=8):
@@ -121,9 +162,13 @@ def _run_one(job):
     for fld, rec in (r.get('fields') or {}).items():
         readers.append((fld, rec['status']))
     try:
-        record = paper_record(r, ex, cif, PE.text_of(pdf))
+        has = PF.features(PF.raw_text(pdf))                              # what the paper prints, read independently of every reader above
+    except Exception:
+        has = {}
+    try:
+        record = paper_record(r, ex, cif, PE.text_of(pdf), has)
     except Exception as e:
-        record = {'fields': {}, 'composition': None, 'error': str(e)[:100]}
+        record = {'fields': {}, 'composition': None, 'error': str(e)[:100], 'has': has}
     if ex['epma']:
         bump('table'); summary.append('table %d' % len(ex['epma']['rows']))
     c = r['composition']
@@ -255,9 +300,13 @@ def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None,
     lines.append('READERS (what was read, and how much of it an oracle adjudicated):')
     for row in table:
         lines.append('  ' + '  '.join('%-14s' % str(x) for x in row))
+    base_rec = None
     if baseline:
         with open(baseline, encoding='utf-8') as f:
-            lines += [''] + diff(json.load(f), papers)
+            base_rec = json.load(f)
+    lines += [''] + gauntlet_lines(papers, base_rec)
+    if base_rec is not None:
+        lines += [''] + diff(base_rec, papers)
     with open(os.path.join(out_dir, 'paper_checks_readers%s.csv' % tag), 'w', encoding='utf-8', newline='') as f:
         csv.writer(f).writerows(table)
     with open(os.path.join(out_dir, 'paper_checks_papers%s.json' % tag), 'w', encoding='utf-8') as f:

@@ -35,7 +35,7 @@ class Cells(unittest.TestCase):
 
     def test_dash_attached_to_the_anion(self):
         c = self.cells((40, 'X'), (60, '–O(2)'), (100, '2.503(4)'))
-        self.assertEqual(c[0][1:], ('X', 'O2', 2.503, 4, 1))
+        self.assertEqual(c[0][1:6], ('X', 'O2', 2.503, 4, 1))
 
     def test_continuation_row_carries_no_cation(self):
         c = self.cells((60, '–O(5)'), (100, '2.733(4)'))
@@ -56,12 +56,12 @@ class Cells(unittest.TestCase):
 
     def test_multiplier_between_the_anion_and_the_distance(self):
         c = self.cells((40, 'X'), (60, '−O(2)'), (90, '×'), (100, '3'), (120, '2.474(3)'))
-        self.assertEqual(c[0][1:], ('X', 'O2', 2.474, 3, 3))
+        self.assertEqual(c[0][1:6], ('X', 'O2', 2.474, 3, 3))
 
     def test_multiplication_sign_that_reaches_the_text_as_a_three(self):
         # several corpus journals set '×' in a font whose glyph arrives as '3' ('0.10 3 0.01 mm')
         c = self.cells((40, 'Si–O6'), (90, '3'), (100, '2'), (120, '1.630(5)'))
-        self.assertEqual(c[0][1:], ('Si', 'O6', 1.630, 5, 2))
+        self.assertEqual(c[0][1:6], ('Si', 'O6', 1.630, 5, 2))
 
     def test_a_mean_row_is_not_a_bond(self):
         self.assertEqual(self.cells((40, 'mean'), (100, '2.671')), [])
@@ -257,3 +257,164 @@ class Compute(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Layouts(unittest.TestCase):
+    """The typesetting the corpus turned up once the dashed forms above were already read."""
+
+    def test_multiplier_welded_onto_the_anion_label(self):
+        c = PB._cells(line(100, (40, 'Sn-O4(×3)'), (100, '1.998(2)')))
+        self.assertEqual(c[0][1:6], ('Sn', 'O4', 1.998, 2, 3))
+
+    def test_multiplier_in_brackets_as_its_own_token(self):
+        c = PB._cells(line(100, (40, 'A'), (60, '–O6B'), (90, '(×2)'), (120, '2.645(5)')))
+        self.assertEqual(c[0][1:6], ('A', 'O6B', 2.645, 5, 2))
+
+    def test_multiplier_in_brackets_after_the_distance(self):
+        c = PB._cells(line(100, (40, 'Ca4'), (60, '–OW19'), (100, '2.18(2)'), (130, '(×2)')))
+        self.assertEqual(c[0][5], 2)
+
+    def test_a_bracketed_multiplier_of_the_next_column_is_not_this_cell_s(self):
+        c = PB._cells(line(100, (40, 'S2–O8'), (100, '1.469(9)'), (130, 'OW9…O10'), (180, '(×2)'), (210, '3.174(14)')))
+        self.assertEqual(c[0][5], 1)                                 # the (×2) belongs to the hydrogen-bond column
+
+    def test_welded_multiplication_sign_before_the_distance(self):
+        c = PB._cells(line(100, (40, 'Cr1–O2'), (90, '33'), (120, '1.677(10)')))
+        self.assertEqual(c[0][1:6], ('Cr1', 'O2', 1.677, 10, 3))       # '33' is '×3' in the font that loses its symbols
+
+    def test_welded_multiplication_sign_after_the_distance_only_on_such_a_page(self):
+        ws = line(100, (40, 'Mn'), (60, '(X)'), (80, 'O1'), (110, '2.196(3)'), (140, '32'))
+        self.assertEqual(PB._cells(ws, True, False)[0][5], 1)         # an ordinary page: '32' is the next column
+        self.assertEqual(PB._cells(ws, True, True)[0][5], 2)          # the mangled font: it is '×2'
+
+    def test_no_dash_at_all_needs_the_relaxed_pass(self):
+        ws = line(100, (40, 'Mn'), (60, '(X)'), (80, 'O1'), (110, '2.196(3)'))
+        self.assertEqual(PB._cells(ws), [])                           # strict: a cell of some other table
+        self.assertEqual(PB._cells(ws, relaxed=True)[0][1:4], ('Mn', 'O1', 2.196))
+
+    def test_a_dashless_cell_needs_an_anion_and_an_esd(self):
+        self.assertEqual(PB._cells(line(100, (40, 'CaO'), (80, '3.03')), relaxed=True), [])
+        self.assertEqual(PB._cells(line(100, (40, 'CaO'), (80, '3.03(2)')), relaxed=True), [])   # Ca is no anion
+        self.assertEqual(PB._cells(line(100, (40, 'O3'), (80, '1.876')), relaxed=True), [])      # no esd
+
+    def test_a_dashless_water_label_is_an_anion(self):
+        c = PB._cells(line(100, (40, 'Al'), (70, 'W2'), (100, '1.875(7)')), relaxed=True)
+        self.assertEqual(c[0][1:4], ('Al', 'W2', 1.875))
+
+    def test_water_resolves_to_oxygen_unless_the_analysis_names_tungsten(self):
+        self.assertEqual(PB.element_of('W2', {}, {'Al', 'S', 'O'}), 'O')
+        self.assertEqual(PB.element_of('W2', {}, {'W', 'O'}), 'W')
+
+    def test_the_dash_typeset_onto_the_cation_with_its_label_split(self):
+        c = PB._cells(line(100, (40, 'T'), (50, '1A–'), (80, 'O1A'), (110, '1.630(2)')), relaxed=True)
+        self.assertEqual(c[0][1:4], ('T1A', 'O1A', 1.63))
+
+    def test_a_bond_caption_admits_the_page_to_the_relaxed_pass(self):
+        self.assertTrue(PB._bond_caption(page(line(50, (40, 'TABLE'), (70, '5.'), (90, 'SELECTED'),
+                                                   (140, 'INTERATOMIC'), (200, 'DISTANCES')))))
+        self.assertFalse(PB._bond_caption(page(line(50, (40, 'Table'), (70, '1.'), (90, 'Chemical'), (140, 'data')))))
+
+    def test_the_mangled_font_is_recognised_by_its_other_substitutions(self):
+        self.assertTrue(PB._mangled(page(line(50, (40, 'R1'), (60, '¼'), (80, '3.96%')),
+                                         line(60, (40, 'Mn2þ')))))
+        self.assertFalse(PB._mangled(page(line(50, (40, 'R1'), (60, '='), (80, '3.96%')))))
+
+
+class SitePopulations(unittest.TestCase):
+    """'M1', 'T2', 'A' name no element; the paper's own assignment does."""
+
+    def test_the_share_that_wins(self):
+        t = '*M1 = 0.37Mn + 0.27Mg + 0.35Fe + 0.03Zn, M2 = 0.59Fe + 0.41Al; M3 = 0.42Fe + 0.58Al.'
+        self.assertEqual(PB.sites_from_text(t, {'M1', 'M2', 'M3'}), {'M1': 'Mn', 'M2': 'Fe', 'M3': 'Al'})
+
+    def test_an_assignment_with_no_shares_takes_the_first_element(self):
+        t = 'T1 = (CrO4)2–/(SeO4)2–/(SO4)2–; T2 = (SO4)2–'
+        self.assertEqual(PB.sites_from_text(t, {'T1', 'T2'}), {'T1': 'Cr', 'T2': 'S'})
+
+    def test_prose_alone_says_nothing_without_an_assignment(self):
+        self.assertEqual(PB.sites_from_text('The M1 site is octahedral and rather regular.', {'M1'}), {})
+
+    def test_the_sentence_that_names_the_occupant(self):
+        t = 'The M2 site was found to be fully occupied by Cd, whereas M1 exhibited less.'
+        self.assertEqual(PB.sites_from_text(t, {'M2'}), {'M2': 'Cd'})
+
+    def test_an_inferred_site_is_kept_out_of_the_instability_index(self):
+        rows = [PB.Row('Si1', 'O1', 1.62, 1, 1, 1, 0, 0), PB.Row('M1', 'O1', 2.10, 1, 1, 1, 1, 0)]
+        st = PB.BondStructure(rows, {'M1': 'Fe'}, {'Si': 4, 'Fe': 2}, None, '', {'M1'})
+        res, _an, _c = PB.compute(st, B.Params(prefer='gh'))
+        self.assertIsNotNone(PB.gii(res))
+        self.assertNotEqual(PB.gii(res), PB.gii(res, st.inferred))
+
+
+class ColumnHeads(unittest.TestCase):
+    """The cation named once over its column instead of on each row."""
+
+    def test_a_column_headed_by_its_cation(self):
+        tabs = PB.read_tables('x.pdf', pages=[page(
+            line(50, (40, 'Pb1'), (140, 'Pb2')),
+            line(62, (40, '–O4'), (80, '2.27(1)'), (140, '–O5'), (180, '2.38(1)')),
+            line(74, (40, '–O2'), (80, '2.37(1)'), (140, '–O4'), (180, '2.529(9)')),
+            line(86, (40, '–O1'), (80, '2.39(1)'), (140, '–O2'), (180, '2.53(1)')))])
+        got = {(r.cation, r.anion) for r in tabs[0]['bonds']}
+        self.assertEqual(got, {('Pb1', 'O4'), ('Pb1', 'O2'), ('Pb1', 'O1'),
+                               ('Pb2', 'O5'), ('Pb2', 'O4'), ('Pb2', 'O2')})
+
+    def test_a_column_that_names_its_own_cation_ignores_the_line_above(self):
+        tabs = PB.read_tables('x.pdf', pages=[page(
+            line(50, (40, 'Zz9')),
+            line(62, (40, 'Si1–O1'), (110, '1.62(1)')),
+            line(74, (40, '–O2'), (110, '1.63(1)')),
+            line(86, (40, '–O3'), (110, '1.61(1)')),
+            line(98, (40, '–O4'), (110, '1.60(1)')))])
+        self.assertEqual({r.cation for r in tabs[0]['bonds']}, {'Si1'})
+
+
+class SplitSiteLabels(unittest.TestCase):
+    """'M(2a)' and 'M(2b)' are the two halves of a split site — the letter is inside the brackets
+    and belongs to the label, unlike the symmetry code outside them."""
+
+    def test_a_letter_inside_the_brackets_is_part_of_the_label(self):
+        self.assertEqual(PB._label('M(2a)')[0], 'M2a')
+        self.assertEqual(PB._pair_token('M(2a)–S(2)'), ('M2a', 'S2'))
+
+    def test_a_letter_outside_them_is_still_a_symmetry_code(self):
+        self.assertEqual(PB._label('O1vi')[0], 'O1')
+        self.assertEqual(PB._pair_token('M1–O1vi'), ('M1', 'O1'))
+
+    def test_both_halves_come_back_normalised(self):
+        self.assertEqual(PB._pair_token('M(1)–S(1)'), ('M1', 'S1'))     # so a continuation row's '–S(1)' names the same site
+
+    def test_the_split_site_reads_as_a_bond(self):
+        c = PB._cells(line(100, (40, 'M(2a)–S(2)'), (110, '2.2145(11)')))
+        self.assertEqual(c[0][1:4], ('M2a', 'S2', 2.2145))
+
+
+class MixedSites(unittest.TestCase):
+    """A site the coordinates table populates with two species ('Na0.62Ca0.38') computes as the
+    share-weighted sum over both — which is what a paper prints in that column of its table."""
+
+    def test_species_from_the_row_and_the_weighted_cell(self):
+        from pxrd_review import paper_structure as PS, bv_check as B
+        self.assertEqual(PS.occupancy_species('Na0.62(1)Ca0.38 0.010(1)'), [('Na', 0.62), ('Ca', 0.38)])
+        self.assertEqual(PS.occupancy_species('As0.70 0.0123(4)'), [('As', 0.7)])
+        self.assertEqual(PS.occupancy_species('0.0197(4)'), [])
+        rows = [PB.Row("A1", "O1", 2.40, 1, 1, 1, 0, 0), PB.Row("A1", "O2", 2.45, 1, 1, 1, 1, 0)]
+        P = B.Params(prefer='gh', u6='burns')
+        plain = PB.BondStructure(rows, {'A1': 'Na'}, {}, None, 't')
+        mixed = PB.BondStructure(rows, {'A1': 'Na'}, {}, None, 't', occ={'A1': [('Na', 0.62), ('Ca', 0.38)]})
+        cp = PB.compute(plain, P)[2][('O1', 'A1')][0][0]; cm = PB.compute(mixed, P)[2][('O1', 'A1')][0][0]
+        sna = P.valence('Na', 1, 'O', -2, 2.40); sca = P.valence('Ca', 2, 'O', -2, 2.40)
+        self.assertAlmostEqual(cp, sna, places=4)
+        self.assertAlmostEqual(cm, 0.62 * sna + 0.38 * sca, places=4)
+        res = PB.compute(mixed, P)[0]
+        self.assertAlmostEqual(res[0][3], 0.62 * 1 + 0.38 * 2, places=6)                     # the formal valence, share-weighted
+        self.assertEqual(mixed.cations[0].species[0].element, 'Na')
+
+
+class SiteNames(unittest.TestCase):
+    def test_the_site_name_beside_the_element_travels_with_the_row(self):
+        c = PB._cells(line(100, (40, 'Mn'), (55, '(X)'), (80, 'O1'), (100, '2.196(3)')), relaxed=True)
+        self.assertEqual(c[0][1:7], ('Mn', 'O1', 2.196, 3, 1, 'X'))
+        c = PB._cells(line(100, (40, 'Pb1'), (60, '–'), (70, 'S7'), (100, '2.814(14)')))
+        self.assertEqual(c[0][6], None)
+        self.assertEqual(PB.Row('Mn', 'O1', 2.196, 3, 1, 1, 0, 0).site, None)

@@ -133,18 +133,73 @@ def build(found, report=False):
     return table, kept, dropped, variants
 
 
+def harvest_spglib(found):
+    """Every setting of every space group from spglib's database (the International Tables, as a
+    library; a dev-time dependency only — the shipped file is what the tool reads), added to `found`
+    under the same normalised keys the corpus harvest uses: the short symbol ('P21/c'), the full one
+    ('P 1 21/c 1' -> 'P121/C1'), and for the rhombohedral groups the ':H'/':R' forms. A setting the
+    corpus already gave is kept as the corpus gave it (proven on a refined structure); the standard
+    setting of each group is put first among what spglib adds. -> (found, stats, checks) where checks
+    lists the corpus keys spglib disagrees with — there must be none."""
+    import spglib
+    stats = collections.Counter(); checks = []
+    by_key = collections.defaultdict(list)                      # key -> [(rank, ops, label)]
+    numbers = harvest_spglib.numbers = {}                        # key -> International Tables number, for the crystal system
+    for h in range(1, 531):
+        t = spglib.get_spacegroup_type(h)
+        d = spglib.get_symmetry_from_database(h)
+        ops = frozenset(canon((r.tolist(), tr.tolist())) for r, tr in zip(d['rotations'], d['translations']))
+        ok, why = is_group(sorted(ops))
+        if not ok:
+            stats['not a group'] += 1; continue
+        short = norm_symbol(t.international_short.replace('_', ''))
+        full = norm_symbol(t.international_full.replace('_', ''))
+        choice = (t.choice or '').strip()
+        rank = 0 if choice in ('', '1', 'b', 'b1', 'H', '2') else 1   # the standard setting first; origin choice 2 keeps its own place after
+        keys = {short, full}
+        # a non-standard monoclinic cell choice is written short in a paper — 'I2/m', 'P21/a' — while
+        # spglib's short symbol is the standard one ('C2/m', 'P21/c'): the short form of the FULL symbol
+        m1 = re.match(r'^([A-Z])1(.+)1$', full) or re.match(r'^([A-Z])11(.+)$', full) or re.match(r'^([A-Z])(.+)11$', full)
+        if m1:
+            keys.add(m1.group(1) + m1.group(2))
+        if short.startswith('R') and choice == 'H':
+            keys |= {short + ':H', full + ':H'}
+        elif short.startswith('R') and choice == 'R':
+            keys = {short + ':R', full + ':R'}
+        label = 'spglib #%d %s %s' % (t.number, t.international_full, choice)
+        for k in keys:
+            by_key[k].append((rank, ops, label)); numbers.setdefault(k, t.number)
+        stats['settings'] += 1
+    for k, entries in by_key.items():
+        if k in found:
+            have = set(found[k])
+            if not any(ops in have for _r, ops, _l in entries):
+                checks.append(k)                                # the corpus's operators for this key match no spglib setting
+        for rank, ops, label in sorted(entries, key=lambda e: e[0]):
+            if ops not in found[k]:
+                found[k][ops].append(label)
+                stats['added'] += 1
+    return found, stats, checks
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('roots', nargs='+', help='corpus folders to harvest .cif files from')
     ap.add_argument('--out', default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                   'pxrd_review', 'data', 'symops.json.gz'))
     ap.add_argument('--report', action='store_true')
+    ap.add_argument('--from-spglib', action='store_true', help='add every setting of all 230 groups from spglib (dev-time dependency), after the corpus harvest')
     a = ap.parse_args(argv)
     found, stats = harvest(a.roots)
+    if a.from_spglib:
+        found, sstats, checks = harvest_spglib(found)
+        print('spglib: %s' % ', '.join('%s %d' % kv for kv in sstats.most_common()))
+        if checks:
+            print('CORPUS KEYS WHOSE OPERATORS MATCH NO SPGLIB SETTING (look at these): %s' % ', '.join(sorted(checks)))
     table, kept, dropped, variants = build(found, a.report)
     payload = {'note': 'space-group operators harvested from corpus .cif files; every set verified to be a '
                        'closed group with identity and inverses (tools/build_symops.py)',
-               'frac': FRAC, 'groups': table}
+               'frac': FRAC, 'groups': table, 'numbers': {k: n for k, n in getattr(harvest_spglib, 'numbers', {}).items() if k in table}}
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     with gzip.open(a.out, 'wt', encoding='utf-8') as f:
         json.dump(payload, f, separators=(',', ':'), sort_keys=True)

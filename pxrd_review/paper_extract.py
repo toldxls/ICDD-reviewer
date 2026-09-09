@@ -18,18 +18,58 @@ filled from the paper and its own calculations re-done its own way:
 Everything is best effort and every value carries the line or sentence it was read from, so the
 reviewer can see why. Nothing here decides — the EPMA / GD / PXRD tools take these as inputs.
 """
-import os, re, sys, json, math, argparse
+import os, re, sys, json, math, argparse, functools
 from collections import OrderedDict
 
 from pxrd_review import epma as EP
 
 # ----------------------------------------------------------------------------- pdf text and lines
 
+ROT_X = 1000.0        # rotated text lives in its own frame, this far right of any upright word
+
+
 def page_lines(page, x_lo=None, x_hi=None):
-    """The page's words grouped into lines (by baseline, ±3 pt), each line's words by x."""
+    """The page's words grouped into lines (by baseline, ±3 pt), each line's words by x.
+
+    A landscape table on a portrait page is typeset rotated: its text runs up (or down) the page,
+    and grouping its words by y would group a COLUMN, not a row. Such words are turned into their
+    own reading frame — the direction of reading becomes +x — and appended after the upright lines,
+    marked `rot` and shifted ROT_X to the right so nothing downstream can mix the two frames."""
     words = page.get_text('words')
     words = [w for w in words if (x_lo is None or w[0] >= x_lo) and (x_hi is None or w[2] <= x_hi)]
-    words.sort(key=lambda w: ((w[1] + w[3]) / 2, w[0]))
+    upright, turned = [], []
+    dirs = _line_dirs(page) if words else {}
+    W, H = float(page.rect.width), float(page.rect.height)
+    for w in words:
+        d = dirs.get((w[5], w[6]), (1.0, 0.0)) if len(w) > 6 else (1.0, 0.0)
+        if abs(d[1]) < 0.7:
+            upright.append(w); continue
+        if d[1] < 0:                                                 # reading upward: x' = H − y, y' = x
+            box = (H - w[3] + ROT_X, w[0], H - w[1] + ROT_X, w[2])
+        else:                                                        # reading downward: x' = y, y' = W − x
+            box = (w[1] + ROT_X, W - w[2], w[3] + ROT_X, W - w[0])
+        turned.append(box + tuple(w[4:]))
+    lines = _group_lines(upright)
+    for ln in _group_lines(turned):
+        ln['rot'] = True
+        lines.append(ln)
+    return lines
+
+
+def _line_dirs(page):
+    """{(block no, line no): the line's direction} from the layout, for the words that share the numbering."""
+    out = {}
+    try:
+        for bi, b in enumerate(page.get_text('dict')['blocks']):
+            for li, ln in enumerate(b.get('lines') or []):
+                out[(bi, li)] = tuple(ln.get('dir') or (1.0, 0.0))
+    except Exception:
+        pass
+    return out
+
+
+def _group_lines(words):
+    words = sorted(words, key=lambda w: ((w[1] + w[3]) / 2, w[0]))
     # pass 1: words on one baseline (centres within 1.2 pt) — a label and its numbers stay together
     # even when the other page column's line sits 3 pt off
     tight = []
@@ -188,15 +228,30 @@ def set_pages_reader(fn, mode='fallback'):
     global _pages_reader, _pages_mode
     _pages_reader = fn; _pages_mode = mode
 
+@functools.lru_cache(maxsize=3)
+def _pages_of_pdf(path, _stamp):
+    import pymupdf
+    with pymupdf.open(path) as doc:
+        return [page_lines(page) for page in doc]
+
+
 def _pages(path):
-    """The document's pages as lines of words: a pdf's pages, or a manuscript .docx's tables."""
+    """The document's pages as lines of words: a pdf's pages, or a manuscript .docx's tables.
+
+    A paper's pages are read several times over in one review — the composition table, the powder
+    table, the bond distances, and each of the four ways a bond-valence table is looked for — and
+    laying out a 12-page pdf is not free, so the last few documents are kept. Nothing downstream
+    writes to what comes back (`page_lines` does all its editing before it returns), and the key
+    carries the file's size and mtime so an edited file is re-read."""
     if path.lower().endswith('.docx'):
         return _docx_pages(path)
     if _pages_reader is not None and _pages_mode == 'replace':
         return _pages_reader(path)
-    import pymupdf
-    with pymupdf.open(path) as doc:
-        return [page_lines(page) for page in doc]
+    try:
+        st = os.stat(path); stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    return _pages_of_pdf(path, stamp)
 
 def text_of(pdf):
     if pdf.lower().endswith('.docx'):                                   # a manuscript: its paragraphs, then its tables' text
@@ -238,7 +293,8 @@ def _dash(t):
 
 def _constituent_ok(tok):
     t = re.sub(r'\([^)]*\)$', '', tok.translate(_CYR))               # 'Fe2O3(tot)', 'H2O(calc)': a qualifier
-    t = re.sub(r'[*†‡§¹²³]+$', '', t)
+    t = re.sub(r'[*∗⁎†‡§¹²³#¶°]+$', '', t)                            # a footnote mark, in whichever glyph the font delivers the asterisk
+    t = re.sub(r'(?<=[O\d])(?:calc|calcd|meas|str|diff)\.?$', '', t, flags=re.I)   # 'H2Ocalc', 'CO2calc': the qualifier welded onto the name — never 'tot': a total-iron row beside the FeO/Fe2O3 split is not a constituent
     if re.fullmatch(r'(?:S|Se|Te|F|Cl|Br|I)2?[\-–−]', t):
         t = re.sub(r'\d?[\-–−]$', '', t)                           # 'S2–', 'Cl–': the anion
     if _TOTAL.match(t):
@@ -454,15 +510,15 @@ def _drop_totals(rows):
     return out
 
 _PROSE_CONST = r'(\(NH4\)2O|H2O[+\-]?|CO2|SO3|[A-Z][a-z]?\d*O\d*|[A-Z][a-z]?)'
-_PROSE_PAREN = r'(?:\s*\((?:\d+|\d+\.\d+\s*[–\-]\s*\d+\.\d+(?:[,;]\s*\d+\.\d+)?)\))?'          # '(8)' an esd; '(8.03–9.01, 0.25)' the range and s.d.
-_PROSE_CORE = _PROSE_CONST + r'\s*=?\s*(\d+\.\d+)' + _PROSE_PAREN + r'\s*(?:wt\.?\s*%)?\s*'
+_PROSE_PAREN = r'(?:\s*\((?:\d+(?:\.\d+)?|\d+\.\d+\s*[–\-]\s*\d+\.\d+(?:[,;]\s*\d+\.\d+)?|[a-z][^()]{0,30})\))*'   # '(8)' an esd; '(8.03–9.01, 0.25)' the range and s.d.; '(77.9–79.3) (0.31)' both; '(crystal structure)' a note
+_PROSE_CORE = _PROSE_CONST + r'\s*=?\s*(\d+\.\d+|\d+(?=\(\d+\)))' + _PROSE_PAREN + r'\s*(?:wt\.?\s*%)?\s*'   # 'H2O 34(2)': a whole number with its esd
 _PROSE_SEP = r'(?:[,;]|\band\b|(?=\s+(?:\(NH4\)2O|H2O|CO2|SO3|[A-Z][a-z]?\d*O\d*|[A-Z][a-z]?)\s*\d+\.\d+))\s*(?:and\s+)?'
 _PROSE_ITEM = re.compile(_PROSE_CORE)
-_PROSE_RUN = re.compile('(?:' + _PROSE_CORE + _PROSE_SEP + '){3,}' + _PROSE_CORE)
+_PROSE_RUN = re.compile('(?:' + _PROSE_CORE + _PROSE_SEP + '){2,}' + _PROSE_CORE)     # three or more; prose_table asks for four unless a total follows
 _PROSE_CORE_R = r'(\d+\.\d+)' + _PROSE_PAREN + r'\s*(?:wt\.?\s*%\s*)?' + _PROSE_CONST + r'(?![a-z])\s*'   # '0.03 Na2O, 3.70 K2O': the value first
 _PROSE_SEP_R = r'(?:[,;]|\band\b)\s*(?:and\s+)?'
 _PROSE_ITEM_R = re.compile(_PROSE_CORE_R)
-_PROSE_RUN_R = re.compile('(?:' + _PROSE_CORE_R + _PROSE_SEP_R + '){3,}' + _PROSE_CORE_R)
+_PROSE_RUN_R = re.compile('(?:' + _PROSE_CORE_R + _PROSE_SEP_R + '){2,}' + _PROSE_CORE_R)
 
 def prose_table(text):
     """A composition given in the running text ('MnO 14.78, Ce2O3 34.19, P2O5 29.57, and H2O 21.46,
@@ -480,11 +536,9 @@ def prose_table(text):
                 rows.append({'constituent': 'N2H8O' if c2 == '(NH4)2O' else c2.rstrip('+-'), 'mean': float(v), 'range': None, 'sd': None, 'standard': None})
         if rows and max(r['mean'] for r in rows) < 5.0:
             continue                                                # 'K0.89 Na0.05 Y0.02': apfu, a formula — not a composition
-        if len(rows) >= 4 and (best is None or len(rows) > best['n']):
-            tot = None
-            mt = re.search(r'(?:total|sum)\s*[=:]?\s*(\d+\.\d+)', text[m.end():m.end() + 40], re.I)
-            if mt:
-                tot = float(mt.group(1))
+        mt = re.search(r'(?:total|sum)\s*[=:]?\s*(\d+\.\d+)', text[m.end():m.end() + 40], re.I)
+        tot = float(mt.group(1)) if mt else None
+        if (len(rows) >= 4 or (len(rows) == 3 and tot is not None)) and (best is None or len(rows) > best['n']):   # three constituents are an analysis when the total follows them
             best = {'rows': rows, 'total': tot, 'header': 'composition given in the text: ' + seg[:120], 'page': None, 'n': len(rows),
                     'score': len(rows) + (5 if 88 <= sum(r['mean'] for r in rows) <= 104 else 0), 'prose': True, 'end': m.end()}
     return best
@@ -811,25 +865,66 @@ def method_statements(text):
 # ----------------------------------------------------------------------------- optics, density
 
 _F = r'(\d\.\d{2,4})'
+_IDX = r'([12]\.\d{2,4})'          # a refractive index (minerals: 1.3–2.99); what tells it from a cell edge or a density is its context
+_OPT_CTX = r'(?:biaxial|uniaxial|refractive|indices|index of refraction|optical(?:ly)?|in white light|n[αω])'
+
+def _optics_font(t):
+    """The optics sentence as printed, whatever the font did to it. A Symbol-font α β γ ω ε reaches
+    the text as the Latin letter of the same keystroke — 'a = 1.556(1), b = 1.581(1), g = 1.588(1)'
+    (or c for γ, w/o for ω, e for ε) — and '=' as '¼' or as a lost-glyph '.'. Normalised only inside
+    an optics sentence and only where the letter is followed by an index, so a cell edge 'a = 10.2'
+    or a pleochroism 'O = green' is never touched."""
+    t = t.replace('¼', '=')
+    def fix(m):
+        s = m.group(0)
+        s = re.sub(r'(?<![A-Za-z])n?a\s*[=.]\s*(?=[12]\.\d\d)', 'α = ', s)
+        s = re.sub(r'(?<![A-Za-z])n?b\s*[=.]\s*(?=[12]\.\d\d)', 'β = ', s)
+        s = re.sub(r'(?<![A-Za-z])n?[cg]\s*[=.]\s*(?=[12]\.\d\d)', 'γ = ', s)
+        s = re.sub(r'(?<![A-Za-z])n?[wo]\s*[=.]\s*(?=[12]\.\d\d)', 'ω = ', s)
+        s = re.sub(r'(?<![A-Za-z])n?e\s*[=.]\s*(?=[12]\.\d\d)', 'ε = ', s)
+        return s
+    return re.sub(_OPT_CTX + r'[^\n]{0,260}', fix, t, flags=re.I)
 
 def optics(text):
-    """{'n': mean refractive index or None, 'n_from': how, 'D_meas', 'D_calc', 'sentences'}"""
-    out = {'n': None, 'n_from': '', 'D_meas': None, 'D_calc': None, 'sentences': []}
-    t = text.replace('−', '-')
+    """{'n': mean refractive index or None, 'n_from': how, 'n_calc': the paper computed it (from
+    Gladstone–Dale) rather than measuring it, 'D_meas', 'D_calc', 'sentences'}"""
+    out = {'n': None, 'n_from': '', 'n_calc': False, 'D_meas': None, 'D_calc': None, 'sentences': []}
+    t = _optics_font(text.replace('−', '-'))
     m = re.search(r'\b(?:n\s*=|n\s*\(?\s*(?:mean|average|calc)\s*\)?\s*=|nmean\s*=|n\s*≈)\s*' + _F, t)
-    abg = re.findall(r'\b(?:n?α|nα|alpha)\s*=\s*' + _F + r'.{0,60}?\b(?:n?β|nβ|beta)\s*=\s*' + _F + r'.{0,60}?\b(?:n?γ|nγ|gamma)\s*=\s*' + _F, t)
-    we = re.findall(r'\b(?:n?ω|nω|omega)\s*=\s*' + _F + r'.{0,60}?\b(?:n?ε|nε|epsilon)\s*=\s*' + _F, t)
+    P = r"[′'`]?"                                                         # α′ = 1.62: a primed index, measured on a section
+    abg = re.findall(r'\b(?:n?α|nα|alpha)' + P + r'\s*[=≈]\s*' + _F + r'.{0,60}?\b(?:n?β|nβ|beta)' + P + r'\s*[=≈]\s*' + _F + r'.{0,60}?\b(?:n?γ|nγ|gamma)' + P + r'\s*[=≈]\s*' + _F, t)
+    we = re.findall(r'\b(?:n?ω|nω|omega)' + P + r'\s*[=≈]\s*' + _F + r'.{0,60}?\b(?:n?ε|nε|epsilon)' + P + r'\s*[=≈]\s*' + _F, t)
+    if not we:                                                            # 'the values of ω and ε (measured at 589 nm) are 1.85(1) and 1.99(1)' — the font may deliver ω as w or x
+        we = re.findall(r'(?:uniaxial|indices|values of)[^.]{0,60}?\b(?:ω|w|x)\s+and\s+(?:ε|e)\b[^.]{0,60}?(?:are|=|of)\s*' + _IDX + r'(?:\(\d+\))?\s+and\s+' + _IDX, t)
+    # the index a paper could not measure and computed instead — 'the mean refractive index,
+    # calculated according to the Gladstone–Dale relationship, is 1.889'; 'n_av = 2.034';
+    # 'the Gladstone–Dale relationship predicts an average index of refraction of 1.905'
+    calc = re.search(r'(?:(?:mean|average|calculated)\s+(?:refractive\s+)?index(?:\s+of\s+refraction)?|(?:calculated|mean)\s+average|(?<![A-Za-z])n\s?(?:av|avg|mean|calc)\b\.?)'
+                     r'[^.;]{0,100}?(?:\bis|\bof|=|≈|∼|~|about|close to(?: a value of)?)\s*' + _IDX +
+                     r'|Gladstone[-–‒ ]+Dale[^.;]{0,80}?(?:gives|predicts|yields|(?:calculated|index)\s+as)[^.;]{0,60}?' + _IDX, t, re.I)   # 'a[n av]erage Ca–O distance' is not n_av
     if abg:
         a, b, g = (float(x) for x in abg[0]); out['n'] = round((a + b + g) / 3, 4); out['n_from'] = 'mean of α %s, β %s, γ %s' % abg[0]
     elif we:
         w, e = (float(x) for x in we[0]); out['n'] = round((2 * w + e) / 3, 4); out['n_from'] = 'mean of ω %s (×2), ε %s' % we[0]
     elif m:
         out['n'] = float(m.group(1)); out['n_from'] = 'n = %s' % m.group(1)
-    for key, pat in (('D_meas', r'(?:D\s*meas\.?|Dmeas|measured density|density[^.]{0,50}?(?:measured|floatation|flotation|pycnomet)[^.]{0,40}?)\s*(?:=|is|of|was|:)?\s*' + _F),
-                     ('D_calc', r'(?:D\s*calc\.?|Dcalc|calculated density|density[^.]{0,30}?calculated[^.]{0,40}?)\s*(?:=|is|of|was|:)?\s*' + _F)):
+    elif calc:
+        v = next(g_ for g_ in calc.groups() if g_)
+        out['n'] = float(v); out['n_from'] = 'mean index as the paper computed it, %s' % v; out['n_calc'] = True
+    # The density sentence as papers print it: 'Dcalc = 3.21'; 'The calculated density is Dx = 3.199
+    # and the measured density is Dm = 3.201(3)'; 'The density calculated using the empirical formula
+    # and crystal structure is 2.847'; 'The measured density of is 3.40 (Clerici solution)'; a crystal-data
+    # table's 'Calculated density (g cm–3) 2.880'; and a plain 'The density is 3.05(2) g/cm3', measured
+    # because it carries an esd. A window runs to the sentence's end, a decimal point allowed.
+    W = r'(?:[^.;]|\.(?=\d))'
+    lead = r'(?:\s*(?:=|is|of|was|:|to\s+be|as|equal\s+to)){0,3}\s*(?:D\s?[a-z]{0,5}\.?\s*[=:]\s*)?(?:\(?\s*(?:in\s+)?g\s?[/·⋅]?\s?cm[^)\d]{0,6}\)?\s*)?'
+    D = r'(?<![\d.])((?:[1-9]|1\d|2[0-5])\.\d{2,4})'                   # a density: 1–25.9 g/cm³, so a compatibility index of 0.021 in the same sentence is never one
+    for key, pat in (('D_meas', r'(?:D\s*meas\.?|Dmeas|\bDm\b|measured density' + W + r'{0,100}?|density' + W + r'{0,80}?(?:measured|floatation|flotation|pycnomet|Clerici|Berman|hydrostatic|torsion)(?!\s+(?:ind|refract))' + W + r'{0,100}?)' + lead + D +
+                                r'|\bdensity\s*(?:=|is|of|:)\s*' + D + r'\(\d+\)'),
+                     ('D_calc', r'(?:D\s*calc\.?|Dcalc|\bDx\b|calculated density' + W + r'{0,120}?|density' + W + r'{0,160}?(?:calculated|computed)' + W + r'{0,120}?)' + lead + D)):
         mm = re.search(pat, t, re.I)
         if mm:
-            out[key] = float(mm.group(1)); out['sentences'].append(t[max(0, mm.start() - 40): mm.end() + 30].strip())
+            out[key] = float(mm.group(1) or mm.group(2)); out['sentences'].append(t[max(0, mm.start() - 40): mm.end() + 30].strip())
     if out['n'] and out['n_from']:
         out['sentences'].append(out['n_from'])
     return out
@@ -1428,11 +1523,38 @@ def _paper_cells(text):
         if not any(abs(v - b_) < 0.3 for b_ in betas):
             betas.append(v)
     triples = []                                                       # 'α = 93.4, β = 91.3, γ = 91.3': a triclinic cell's angles
-    for m_ in re.finditer(r'(?:α|alpha|a)\s*[=:]?\s*(\d{2,3}\.\d+)(?:\(\d+\))?\s*°?,?\s*(?:β|beta|b)\s*[=:]?\s*(\d{2,3}\.\d+)(?:\(\d+\))?\s*°?,?\s*(?:and\s+)?(?:γ|gamma|g|c)\s*[=:]?\s*(\d{2,3}\.\d+)', text):   # a Symbol font prints α β γ as a b c: 'a = 98.77(2), b = 96.21(2), c = 108.45(2)' after the axes
+    for m_ in re.finditer(r'(?:α|alpha|a)\s*[=:]?\s*(\d{2,3}\.\d+)(?:\(\d+\))?\s*[°º◦8]?,?\s*(?:β|beta|b)\s*[=:]?\s*(\d{2,3}\.\d+)(?:\(\d+\))?\s*[°º◦8]?,?\s*(?:and\s+)?(?:γ|gamma|g|c)\s*[=:]?\s*(\d{2,3}\.\d+)', text):   # a Symbol font prints α β γ as a b c: 'a = 98.77(2), b = 96.21(2), c = 108.45(2)' after the axes — and the degree sign as '8'
         t_ = tuple(float(g) for g in m_.groups())
         if all(60 < v < 140 for v in t_) and not any(all(abs(a_ - b_) < 0.3 for a_, b_ in zip(t_, u_)) for u_ in triples):
             triples.append(t_)
     mono = bool(re.search(r'\bmonoclinic\b', text, re.I)); tric = bool(re.search(r'\btriclinic\b', text, re.I))
+    # A Symbol-font α β γ arrive as a b c, so a triclinic cell's angles are read as a second "cell"
+    # of three values between 60 and 150 — those are angles, and belong to the length-only cell
+    # printed just before them; a "cell" with one such value among two lengths mixed an angle
+    # into an axis and is no cell at all.
+    def _angles(cc_):
+        f_ = _cell_floats({'a': cc_.a, 'b': cc_.b, 'c': cc_.c, 'α': None, 'β': None, 'γ': None})
+        return f_ and all(60 < f_[k] < 150 for k in ('a', 'b', 'c'))
+    floats = [_cell_floats({'a': c_.a, 'b': c_.b, 'c': c_.c, 'α': None, 'β': None, 'γ': None}) for c_ in cands]
+    def _mixed(i_):
+        # 'a = 104.205, b = 9.4672, c = 9.5529': α in the a slot, with the b and c of the real cell,
+        # which another statement gives with its own a — a long a axis with short b and c is a cell
+        f_ = floats[i_]
+        if not f_ or not (60 < f_['a'] < 150) or f_['b'] > 40 or f_['c'] > 40:
+            return False
+        return any(g_ and j_ != i_ and abs(g_['b'] - f_['b']) < 0.005 * f_['b'] and abs(g_['c'] - f_['c']) < 0.005 * f_['c'] and g_['a'] < 60
+                   for j_, g_ in enumerate(floats))
+    kept = []
+    for i_, cc in enumerate(cands):
+        if _mixed(i_):
+            continue
+        if _angles(cc):
+            t_ = tuple(float(x) for x in (_cell_floats({'a': cc.a, 'b': cc.b, 'c': cc.c, 'α': None, 'β': None, 'γ': None})[k] for k in ('a', 'b', 'c')))
+            if not any(all(abs(a_ - b_) < 0.3 for a_, b_ in zip(t_, u_)) for u_ in triples):
+                triples.insert(0, t_)
+            continue
+        kept.append(cc)
+    cands = kept
     out = []; seen = set()
     for cc in cands:
         variants = [{'a': cc.a, 'b': cc.b, 'c': cc.c, 'α': cc.al, 'β': cc.be, 'γ': cc.ga}]
@@ -1826,6 +1948,7 @@ def _journal_to_icdd(f):
     f = re.sub(r'(?<![A-Za-z])[YVW](?=[\(\[])', ' ', f)                                  # Y / V / W site labels right before a bracket (the elements keep their counts)
     if site_notation:
         f = re.sub(r'(?<![A-Za-z])B(?=\(B)', ' ', f)                                     # tourmaline's 'B(BO3)3': the label B, only where other sites are labelled too
+    f = re.sub(r'(?<![A-Za-z])B(?=\((?:[A-Z][a-z]?(?:\d\+)?\s?\d*\.\d+\s?)+\)\s?[Σ∑S]\d)', ' ', f)   # 'B(Ce4+0.76Nd0.13…)Σ1.0': the B site of a monazite-type formula, not boron — a Σ-summed group never follows an element
     f = re.sub(r'(?<![A-Za-z])[XYZTVWAMR](?=[A-Z][a-z]?\d*\.\d)', ' ', f)                # 'ZAl6.00[': a label glued to the element it holds
     f = re.sub(r'(?<![A-Za-z])[XYZTW]\s+(?=[A-Z][a-z]?\d*\.\d)', ' ', f)                # 'Y Mg1.50Fe…': the label with its bracket lost (a bare Y is not yttrium here)
     f = re.sub(r'(?<![A-Za-z])A(?=\d*\.\d)', '?', f)                                      # 'A1.91': a vacancy printed as A (font)
@@ -2164,15 +2287,19 @@ def _check_formula(ex, text, fcand):
         return {'ok': False, 'verified': False, 'lines': ['composition: not verifiable — the wt%% table read (%d constituents) and the formula read could not be reconciled on any basis; check the table and the formula sentence by eye' % len(wt)],
                 'formula': ftxt, 'basis': None, 'result': None, 'doubts': ['not reconcilable on any basis'], 'wt': wt, 'counts': counts}
     # confidence: only a clean read with a specific deviation is a finding; anything doubtful is a note
-    doubts = []; notes = []; reading_doubts = []
+    doubts = []; notes = []; reading_doubts = []; strict_doubts = []
 
-    def doubt(text, reading=False):
+    def doubt(text, reading=False, strict=False):
         """A doubt turns the finding into a console note. `reading=True` marks one that says the
         tool may have misread the paper's TABLE — those are set aside when the reading proves
-        itself on the rest of the formula (below)."""
+        itself on the rest of the formula (below). `strict=True` is a reading doubt that yields only
+        when EVERY coefficient reproduces: a column mapped wrong can leave one coefficient off, and
+        that one must never become a finding."""
         doubts.append(text)
         if reading:
             reading_doubts.append(text)
+        if strict:
+            strict_doubts.append(text)
 
     # H comes from hydrate and hydroxyl notation the text extraction mangles, and is usually the
     # authors' own calculation: informational, never a flag on its own. It is removed HERE, before
@@ -2196,7 +2323,7 @@ def _check_formula(ex, text, fcand):
         doubt('only %d constituents were read' % len(wt))
     tot = e.get('total') if (e.get('total') or 0) >= 50 else sum(wt.values())      # a Total of 8.00 is the apfu block's
     if not (85.0 <= tot <= 112.0):                       # analyses do run 95–105; far outside that the table was misread
-        doubt('the wt%% read add to %.1f' % tot)
+        doubt('the wt%% read add to %.1f' % tot, reading=tot > 112.0, strict=True)   # an excess (an H2O by structure the analysis does not hold) is a reading doubt; a short table stays hard
     # A constituent whose mean falls outside its OWN printed range is proof the column mapping is
     # off: the number used is not the mean the paper printed. Evidence, not a guess, so it blocks a
     # finding outright (7021: MgO read as 4.82 against the row's own range of 4.87-5.83).
@@ -2209,7 +2336,7 @@ def _check_formula(ex, text, fcand):
     outside = [x for x in (e.get('rows') or []) if _outside(x)]
     if outside:
         doubt('%s reads %g but that row\'s own range is %g-%g — the column mapping is off, so the values used are not the paper\'s means'
-              % (outside[0]['constituent'], outside[0]['mean'], min(outside[0]['range']), max(outside[0]['range'])))
+              % (outside[0]['constituent'], outside[0]['mean'], min(outside[0]['range']), max(outside[0]['range'])), reading=True, strict=True)   # yields only when every coefficient reproduces: then the range column, not the mean, was mis-mapped
     if r['score'] > 0.06 and len([d for d in r['diffs'] if d[2] is not None and d[1] >= 0.1]) >= 2:
         doubt('the cations deviate %.0f%% overall — a basis or table-reading problem rather than one slip' % (100 * r['score']), reading=True)
     def _factor(ratio):
@@ -2266,7 +2393,7 @@ def _check_formula(ex, text, fcand):
     # A merely awkward table (a column picked by fit, several samples) is not that: measured
     # 2026-09-07, blanket deference cost recall, catching 6 % of seeded wt% faults where a paper
     # prints an apfu column against 17 % where it does not.
-    hard_doubts = [d for d in doubts if d not in reading_doubts]
+    hard_doubts = [d for d in doubts if d not in reading_doubts or d in strict_doubts]   # a strict reading doubt says the wt% read is suspect: the apfu column may still vouch
     if apfu_vouches and r['diffs'] and hard_doubts:
         apfu_note = ("the wt%% read miss the formula (rms %.1f %%), but the paper's own apfu column reproduces it (%s) — the reading of the wt%% table is "
                      "the tool's shortfall, the formula is the paper's" % (100 * r['score'], ', '.join(apfu_shared[:8])))   # worded to stay a note in the GUI, not a red line
@@ -2297,9 +2424,11 @@ def _check_formula(ex, text, fcand):
     # a smaller one, because it pushed a second element past tolerance and broke `len(solo) == 1`.
     outlier = solo[0][0] if len(solo) == 1 else (
         _single_outlier(counts, r.get('apfu') or {}, ox_paper) if r['diffs'] else None)   # nothing deviates (the apfu column already vouched): there is no one cell to name
-    if outlier and len(compared) >= 4 and reading_doubts and all(d in reading_doubts for d in doubts):
-        notes.append('every coefficient of the formula but %s follows from the table read, so the doubts about that '
-                     'reading do not carry to it — check the one cell' % outlier)
+    proven = (outlier and not strict_doubts) or not r['diffs']       # one cell off with the rest agreeing — or nothing off at all
+    if proven and len(compared) >= 4 and reading_doubts and all(d in reading_doubts for d in doubts):
+        notes.append(('every coefficient of the formula but %s follows from the table read, so the doubts about that '
+                      'reading do not carry to it — check the one cell' % outlier) if r['diffs'] else
+                     'every coefficient of the formula follows from the table read, so the doubts about that reading do not carry')
         doubts = []
     verified = not doubts
     lines = []
@@ -2716,7 +2845,12 @@ def _derived_composition(ex, wt, species):
 # is 'agrees' or 'disagrees'; one it looked at with doubts is 'unverified'; one nothing could check
 # is 'nooracle'; one not read is 'none'. A misread value that fails its oracle is then a doubt to
 # report, never a verdict.
-FIELDS = ('name', 'formula', 'basis', 'method', 'epma', 'optics.n', 'optics.D_meas', 'optics.D_calc', 'cell', 'bv.params', 'pxrd.obs', 'pxrd.calc')
+FIELDS = ('name', 'formula', 'basis', 'method', 'epma', 'optics.n', 'optics.D_meas', 'optics.D_calc', 'cell', 'bv.params', 'pxrd.obs', 'pxrd.calc',
+          'bv.table', 'coords', 'gd')
+# The last three are the readings a paper description is judged "fully read" by, beside the table
+# and the optics: the bond-valence TABLE (as distinct from the parameter set the paper cites — a
+# table can be checked whether or not the paper names Gagné or Brese), the coordinates table, and the
+# compatibility index the paper states. Each is a reading of its own with its own oracle.
 STATUSES = ('agrees', 'disagrees', 'unverified', 'nooracle', 'none')
 
 def _record(value, source='', page=None, reader='regex'):
@@ -2742,9 +2876,27 @@ def _fields_init(ex, text):
          'pxrd.obs': _record(ex['pxrd']['obs'] or None), 'pxrd.calc': _record(ex['pxrd']['calc'] or None)}
     if ex.get('_table') and ex['_table'][2] and not str(ex.get('_path', '')).lower().endswith('.docx'):
         f['pxrd.obs']['page'] = f['pxrd.calc']['page'] = ex['_table'][2][0]
+    # The three readings a description is "fully read" by, beside the table and the optics. Each is
+    # read here structure-free — is the thing PRINTED — and verify() says whether it holds up.
+    path = str(ex.get('_path') or ''); is_pdf = bool(path) and not path.lower().endswith('.docx')
+    try:
+        tabs = bv_tables_by_caption(path, None) if is_pdf else []     # the paper's own caption: a table exists whether or not its sites can be named
+    except Exception:
+        tabs = []
+    f['bv.table'] = _record({'page': tabs[0].get('page'), 'tables': len(tabs)} if tabs else None,
+                            (tabs[0].get('caption') or tabs[0].get('head') or '') if tabs else '', tabs[0].get('page') if tabs else None)
+    try:
+        from pxrd_review import paper_structure as PS
+        rows, cpage = PS.paper_sites(path, with_page=True) if is_pdf else ([], None)
+    except Exception:
+        rows, cpage = [], None
+    f['coords'] = _record({'sites': len(rows), 'page': cpage} if len(rows) >= 3 else None,
+                          ' · '.join('%s %s %s %s' % tuple(r[:4]) for r in rows[:3]), cpage)
+    g = gd_statement(text)
+    f['gd'] = _record({'ci': g['ci'], 'category': g['category']} if (g['ci'] is not None or g['category']) else None, g['sentence'])   # a dict: a stated 0.000 is a reading
     return f
 
-def _set(fields, name, status, by=None, detail='', value=None):
+def _set(fields, name, status, by=None, detail='', value=None, page=None, source=None):
     r = fields.get(name)
     if r is None:
         return
@@ -2753,6 +2905,10 @@ def _set(fields, name, status, by=None, detail='', value=None):
     r['status'] = status; r['verified_by'] = by; r['detail'] = detail[:200]
     if value is not None:
         r['value'] = value
+    if page is not None:
+        r['page'] = page
+    if source is not None:
+        r['source'] = source[:200]
 
 def _same_basis(a, b):
     if not a or not b or a[0] != b[0]:
@@ -2766,16 +2922,28 @@ def gd_statement(text):
     """The paper's own compatibility statement: {'ci': 1 − K_P/K_C as stated or None, 'category':
     Mandarino's word or None, 'sentence'}. The category word is taken only in the sentence that
     speaks of the compatibility index (every paper has a 'good' somewhere)."""
-    t = text.replace('−', '-').replace('–', '-')
+    t = text.replace('−', '-').replace('–', '-').replace('‒', '-')
     out = {'ci': None, 'category': None, 'sentence': ''}
-    for m in re.finditer(r'(?:compatibility index|1\s*-\s*\(?\s*K\s*_?[Pp]\s*/\s*K\s*_?[Cc]\s*\)?)((?:[^.]|\.(?=\d)){0,120})', t):   # the sentence, a decimal point allowed
-        seg = m.group(1)
-        num = re.search(r'(-?\s?0?\.\d{2,4})', seg)
+    # The statement as papers print it: 'compatibility index … is 0.021'; 'The Gladstone-Dale
+    # compatibility (Mandarino 2007), 1 (Kp/Kc), is 0.010 (superior)' — the minus lost by the font;
+    # 'GladstoneDale compatibility is 0.0416 (good)' — the dash lost; '(1 KP/KC) is excellent (0.021)';
+    # the number 130 characters on ('… with the empirical formula and calculated density is 0.021');
+    # and a figure caption the text layer typesets into the middle of the sentence.
+    for m in re.finditer(r'(?:Gladstone[- ]*Dale\s+)?compatibility(?:\s+ind(?:ex|ices))?|1\s*-?\s*\(?\s*K\s*_?[Pp]\s*/\s*K\s*_?[Cc]\s*\)?', t, re.I):
+        if m.group(0).lower().startswith('compatib') and not re.search(r'ind(?:ex|ices)|Gladstone|Mandarino|K\s*_?[Pp]\s*/|\(\s*1\s*-?\s*\(?\s*K', t[max(0, m.start() - 40):m.end() + 70], re.I):
+            continue                                                    # 'compatibility' in another sense
+        if re.search(r'(?:calculated|derived|estimated|obtained|computed)\s+(?:from|using|via|with)\s+the\s*$', t[max(0, m.start() - 40):m.start()], re.I):
+            continue                                                    # 'n was calculated from the compatibility index': the index is an input here, not a result
+        seg = t[m.end():m.end() + 240]
+        seg = re.sub(r'\bFig(?:ure|\.)?\s*\d+\.\s[^.]{0,160}\.\s', ' ', seg)          # the caption typeset into the sentence
+        end = re.search(r'\.\s+(?=[A-Z][a-z]|[α-ω(])', seg)                            # the sentence ends at '. Word', never at a decimal point
+        seg = seg[:end.start()] if end else seg
+        num = re.search(r'(?<![\d.])(-?\s?0?\.\d{2,4})(?!\d)', seg)                   # a CI, never the .907 of an index of 1.907
         if num and out['ci'] is None:
-            out['ci'] = float(num.group(1).replace(' ', '')); out['sentence'] = t[max(0, m.start() - 20):m.end()].strip()
+            out['ci'] = float(num.group(1).replace(' ', '')); out['sentence'] = t[max(0, m.start() - 20):m.end() + min(len(seg), 120)].strip()
         cat = re.search(r'\b(superior|excellent|good|fair|poor)\b', seg, re.I)
         if cat and out['category'] is None:
-            out['category'] = cat.group(1).lower(); out['sentence'] = out['sentence'] or t[max(0, m.start() - 20):m.end()].strip()
+            out['category'] = cat.group(1).lower(); out['sentence'] = out['sentence'] or t[max(0, m.start() - 20):m.end() + min(len(seg), 120)].strip()
         if out['ci'] is not None and out['category']:
             break
     if out['category'] is None:
@@ -2816,13 +2984,22 @@ def _gd_wt_sets(ex, comp):
         ox = _as_oxides(wt, K)                   # a table given in elements, as the oxides G-D is defined over
         if ox is not None:
             sets.append((None, ox))              # None: a conversion may be accepted but never explains a failure
+    # A table whose Mean column adds to well over 100 — an H2O by structure that the analysis does not
+    # accommodate — is one the paper itself normalises (a 'Norm.' column beside it), and K_C is what
+    # that column gives. Offered as a set of its own; a short table is NOT scaled up, since the missing
+    # constituent's constant is not the average of the rest. Accepted only if the paper's own stated
+    # index vouches for it (None: it never explains a failure).
+    for label, wt in list(sets):
+        total = sum(v for c, v in wt.items() if v and not c.startswith('O='))
+        if label and GD_TOTAL[1] < total <= 135:
+            sets.append((None, OrderedDict((c, v * 100.0 / total) for c, v in wt.items())))
     good = []; rest = []; missing = None; short = None
     for label, wt in sets:
         miss = sorted({c for c, v in wt.items() if v and not c.startswith('O=') and c not in K})
         total = sum(v for c, v in wt.items() if v and not c.startswith('O='))
-        if not miss and GD_TOTAL[0] <= total <= GD_TOTAL[1]:
+        if not miss and GD_TOTAL[0] <= total <= GD_TOTAL[1] and label:
             good.append(wt); continue
-        rest.append(wt)
+        rest.append(wt)                          # a scaled or converted set is never 'complete': it is tried, and a failure is not charged to the paper
         if miss:
             if label and (missing is None or len(miss) < len(missing)):
                 missing = miss
@@ -2890,6 +3067,16 @@ def gd_check(ex, comp, stmt=None):
             return out
         if first is None:
             first = (out, complete)
+    # Table 7 prints, for some constituents, a second constant for a class of minerals (sulfates,
+    # silicates; the uranyl 0.134 the owner's sheets use for UO3), and a paper picks by its class.
+    # Those alternatives are tried too, and the same rule arbitrates: only a stated NUMERIC index
+    # can accept one, and the reading is then reported with the constant it was reproduced on.
+    if (stmt or {}).get('ci') is not None:
+        for wt, _complete in sets:
+            for ov in _gd_variant_overrides(wt):
+                out = _gd_eval(ex, wt, stmt, k_override=ov)
+                if out['status'].get('optics.n') == 'agrees':
+                    return out
     if first is None:
         n = (ex.get('optics') or {}).get('n')
         return {'status': {k: 'nooracle' for k in ('optics.n', 'optics.D_meas', 'optics.D_calc')},
@@ -2904,7 +3091,24 @@ def gd_check(ex, comp, stmt=None):
     return out
 
 
-def _gd_eval(ex, wt, stmt):
+def _gd_variant_overrides(wt, limit=3):
+    """The class variants Table 7 prints for the constituents of `wt` that weigh at least half a
+    percent, as k_override dicts — every combination over at most `limit` constituents (the
+    heaviest first), single substitutions before double ones. -> [{constituent: k}, …]"""
+    from pxrd_review import gd as GD
+    import itertools
+    K = GD.constants()
+    opts = sorted(((c, [v_['k'] for v_ in K[c]['variants']]) for c, w in wt.items()
+                   if w and w >= 0.5 and c in K and K[c].get('variants')), key=lambda cv: -wt[cv[0]])[:limit]
+    combos = []
+    for choice in itertools.product(*[[None] + ks for _c, ks in opts]):
+        ov = {c: k for (c, _ks), k in zip(opts, choice) if k is not None}
+        if ov:
+            combos.append(ov)
+    return sorted(combos, key=len)
+
+
+def _gd_eval(ex, wt, stmt, k_override=None):
     """One wt% set against the optics: K_C from `wt`, K_P = (n − 1)/D, 1 − K_P/K_C for each density
     the paper gives, judged against the paper's own stated index or category when it gives one, else
     against Mandarino's 'poor' boundary — a misread n or D moves the index by a tenth.
@@ -2916,7 +3120,7 @@ def _gd_eval(ex, wt, stmt):
     if not n or not wt:
         return out
     try:
-        KC, rows = GD.kc({c: v for c, v in wt.items() if v})
+        KC, rows = GD.kc({c: v for c, v in wt.items() if v}, k_override or None)
     except Exception as ex_:
         out['detail'] = 'could not compute K_C (%s)' % ex_
         out['lines'] = ['Gladstone–Dale: could not compute K_C (%s)' % ex_]
@@ -2951,8 +3155,9 @@ def _gd_eval(ex, wt, stmt):
         # has, and the paper's own index often used another density or wt% column — on the corpus a
         # strict comparison flagged 50 papers, most of them with K_C, not the paper, at fault
         if gap <= 0.03:
-            status_all('agrees', 'the paper states %+.3f, this gives %+.3f' % (theirs, ci))
-            lines.append('the paper states %+.3f (%s): reproduced with D_%s' % (theirs, GD.category(theirs), key))
+            used = ('; with %s' % ', '.join('%s at %g' % kv for kv in sorted(k_override.items()))) if k_override else ''   # the class constant it took
+            status_all('agrees', 'the paper states %+.3f, this gives %+.3f%s' % (theirs, ci, used))
+            lines.append('the paper states %+.3f (%s): reproduced with D_%s%s' % (theirs, GD.category(theirs), key, used.replace('; with', ' and') if used else ''))
         else:
             status_all('unverified', 'the paper states %+.3f, this gives %+.3f' % (theirs, ci))
             lines.append('the paper states %+.3f, this gives %+.3f with D_%s — the wt%% column, a constant, or the n or D read may differ from the paper\'s [unverified]' % (theirs, ci, key))
@@ -3134,11 +3339,45 @@ def _section(lines):
     reader of those lines (the manuscript review) takes a head apart from a finding by."""
     return lines[:1] + ['  ' + ln for ln in lines[1:]]
 
-def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
+def verify(ex, text, cif=None, comp=None, bv=None, powder=None, coords=None):
     """Fill the records of ex['fields'] from the oracles (those already run are passed in; the
     Gladstone–Dale, cell and species ones run here). -> {'lines': the new sections' lines, 'gd', 'cell', 'species'}."""
     f = ex.get('fields') or {}
     lines = []
+    # the coordinates table: were the x y z read as printed — settled by a .cif's positions, or by the
+    # structure they build (its instability index AND its closure on the formula: a wrong digit moves a
+    # sum by tenths of a valence unit, a table read in part passes the sums but not the composition)
+    c = coords or {}
+    if c.get('status') == 'cif':
+        ok = c['n'] >= 3 and c['matched'] >= max(3, 0.8 * c['n'])
+        _set(f, 'coords', 'agrees' if ok else 'unverified', 'cif',
+             '%d of %d printed sites fall on a .cif site within 0.25 Å%s' % (c['matched'], c['n'], '' if ok else ' — another setting or origin, or a misread column'))
+    elif c.get('status') == 'built' and (c.get('bonds_n') or 0) >= 5:
+        bo, bn, bt = c['bonds_ok'], c['bonds_n'], c.get('bonds_total') or c['bonds_n']
+        # the compared bonds must cover most of the printed ones: a table read in part reproduces
+        # the bonds of the rows it did read and says nothing about the rest
+        if bo >= max(5, 0.8 * bn) and bn >= 0.6 * bt:
+            _set(f, 'coords', 'agrees', 'bonds', 'the structure built from it reproduces %d of the %d bond distances the paper prints' % (bo, bn))
+        elif bo >= max(5, 0.8 * bn):
+            _set(f, 'coords', 'unverified', 'bonds', 'the structure built from it reproduces %d of %d bond distances, but %d of the %d printed name a site the coordinates table read does not hold' % (bo, bn, bt - bn, bt))
+        else:
+            _set(f, 'coords', 'unverified', 'bonds', 'the structure built from it reproduces only %d of the %d bond distances the paper prints (%s) — a cell, a setting or a row misread'
+                 % (bo, bn, '; '.join(c.get('bonds_miss') or [])[:120]))
+    elif c.get('status') == 'built':
+        from pxrd_review import paper_structure as _PS
+        g_, clo, cnt = c.get('gii'), c.get('closure'), c.get('closure_count')
+        # closes on the formula either by element ratios or — for the mixed-occupancy sites that break
+        # those, Y = Fe0.6Mg0.4 named by its dominant element — by the count of cation to anion sites
+        closes = (clo is not None and clo <= _PS.CLOSURE_GATE) or (cnt is not None and cnt <= 0.15)
+        if g_ is not None and g_ <= _PS.GII_GATE and closes:
+            _set(f, 'coords', 'agrees', 'paper_structure', 'a structure built from it holds together (instability index %.2f vu) and closes on the formula (%s)'
+                 % (g_, ('%.0f %% off by element' % (clo * 100)) if clo is not None and clo <= _PS.CLOSURE_GATE else 'cation to anion sites %.0f %% off' % (cnt * 100)))
+        elif g_ is not None and g_ <= _PS.GII_GATE and clo is None and cnt is None:
+            _set(f, 'coords', 'nooracle', None, 'the valences come out (%.2f vu) but there is no formula to close the composition on' % g_)
+        else:
+            _set(f, 'coords', 'unverified', 'paper_structure', 'instability index %.2f vu%s' % (g_ if g_ is not None else 9.0, '' if clo is None else ', composition %.0f %% off the formula' % (clo * 100)))
+    elif c.get('status') == 'nobuild':
+        _set(f, 'coords', 'nooracle', None, c.get('why') or 'no cell or space group to build with')
     # the composition oracle: table, formula, basis, method
     if comp:
         s = 'agrees' if comp.get('verified') and comp.get('ok') else 'disagrees' if comp.get('verified') else 'unverified'
@@ -3192,7 +3431,7 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
                 # checked against the distances the paper itself prints: a verdict while its sums
                 # come out at the formal valences, a doubt once they do not
                 from pxrd_review import paper_bonds as _PB
-                good = (bv.get('gii') or 9) <= _PB.GII_GATE
+                good = not bv.get('sums') or (bv.get('gii') is not None and bv['gii'] <= _PB.GII_GATE)
                 # What the reader read is the set the paper CITES, so that is what is judged: the
                 # U6+ sub-choice is compared only where the paper states one (it defaults to Burns'
                 # in `cited`, and a paper that says nothing has not been contradicted by it). And
@@ -3204,15 +3443,60 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
                         and (u6_stated is None or bv.get('u6') == u6_stated)) \
                     or (cn and cb is not None and cb <= max(1, 0.1 * cn))
                 _set(f, 'bv.params', ('agrees' if fits else 'disagrees') if good else 'unverified', 'bv',
-                     "the table agrees best with %s, from the paper's own bond distances (%.2f vu)" % (bv.get('params'), bv.get('gii') or 0))
+                     "the table agrees best with %s, from the paper's own bond distances (%s)"
+                     % (bv.get('params'),
+                        ('sums within %.2f vu' % bv['gii']) if bv.get('sums') else
+                        'cell by cell' if bv.get('gii') is None else 'cell by cell; sums off by %.2f vu' % bv['gii']))
             else:
-                _set(f, 'bv.params', 'agrees' if same else 'disagrees', 'bv', 'the table agrees best with %s' % bv.get('params'))
+                # against a .cif, and the same rule as above: the sets sit within a few hundredths
+                # of a valence unit of each other for many pairs, so the paper's own set has to be
+                # plainly refuted — beaten is not refuted — before the reader is told it read the
+                # wrong one. (Under the strict reading eleven papers were called wrong; five of
+                # them differed from the winner by one or two cells in fifty.)
+                cn, cb = bv.get('cited_n'), bv.get('cited_bad')
+                ok = same or (cn and cb is not None and cb <= max(1, 0.1 * cn))
+                u6_say = '' if bv.get('u6') == cited[1] or bv.get('params') != cited[0] else \
+                    ', with U6+ %s' % ("from Burns'" if bv.get('u6') == 'burns' else 'from that set itself')
+                _set(f, 'bv.params', 'agrees' if ok else 'disagrees', 'bv',
+                     'the table agrees best with %s%s' % (bv.get('params'), u6_say))
         elif bs in ('unmatched', 'foreign'):
             _set(f, 'bv.params', 'unverified', 'bv', bv.get('message') or bv.get('head', '')[:120])
         else:
             _set(f, 'bv.params', 'nooracle', None, (bv.get('message') or '')[:120])
+        # the bond-valence TABLE itself — read, and do its cells reproduce — whatever set the paper
+        # cites. Judged on the tables the check KEPT (a table that differs throughout is a doubt,
+        # not a comparison), by the same margin the cited set is held to: a slip or two in a
+        # published table is a finding on those cells, not on the table. Red only where the oracle
+        # already prints red cell lines: a .cif, or the paper's own distances inside their gate.
+        tinfo = bv.get('table') or {}
+        tval = {'page': tinfo.get('page'), 'tables': tinfo.get('tables'), 'cells': bv.get('compared')}
+        if bs == 'checked':
+            from pxrd_review import paper_bonds as _PB
+            per = _bv_per_table(bv.get('lines') or [])
+            n_k = sum(n_ for _t, n_, _b, _l in per); b_k = sum(b_ for _t, _n, b_, _l in per)
+            good = (not bv.get('from_bonds') and not bv.get('from_paper')) or not bv.get('sums') \
+                or (bv.get('gii') is not None and bv['gii'] <= _PB.GII_GATE)
+            if bv.get('from_paper'):
+                s_, d_ = 'unverified', 'checked against the structure the paper itself prints, not a .cif'
+            elif not good:
+                s_, d_ = 'unverified', 'a BVS column whose sums sit off the formal valences by %.2f vu' % (bv.get('gii') or 9.0)
+            elif n_k == 0:
+                s_, d_ = 'unverified', 'every table read differs throughout under every parameter set'
+            else:
+                s_ = 'agrees' if b_k <= max(1, 0.1 * n_k) else 'disagrees'
+                d_ = '%d of %d cells reproduce with %s%s' % (n_k - b_k, n_k, bv.get('params'), " from the paper's own bond distances" if bv.get('from_bonds') else " from the structure the paper prints, verified by its bond distances" if bv.get('from_verified_coords') else '')
+            _set(f, 'bv.table', s_, 'bv', d_, value=tval, page=tinfo.get('page'), source=tinfo.get('caption') or None)
+        elif bs in ('unmatched', 'foreign'):
+            _set(f, 'bv.table', 'unverified', 'bv', (bv.get('message') or bv.get('head', ''))[:200], value=tval, page=tinfo.get('page'), source=tinfo.get('caption') or None)
+        elif bs == 'none':
+            if f.get('bv.table', {}).get('status') == 'nooracle':
+                f['bv.table']['detail'] = (bv.get('message') or '')[:200]
+        else:
+            _set(f, 'bv.table', 'nooracle', None, (bv.get('message') or '')[:120])
     elif f.get('bv.params', {}).get('status') == 'nooracle':
         f['bv.params']['detail'] = 'no .cif to check the table against'
+    if bv is None and f.get('bv.table', {}).get('status') == 'nooracle':
+        f['bv.table']['detail'] = 'no .cif, bond-distance table or printed structure to check it against'
     # Gladstone–Dale — after a sanity range: no mineral has n outside 1.3–3.0 or D outside 1–25 g/cm³
     o = ex.get('optics') or {}
     gd = gd_check(ex, comp, gd_statement(text))
@@ -3221,6 +3505,16 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
         if v and not ((1.3 <= v <= 3.0) if k == 'optics.n' else (1.0 <= v <= 25.0)):
             _set(f, k, 'unverified', 'range', '%g is outside the range of minerals — misread' % v); continue
         _set(f, k, s, 'gd' if s != 'nooracle' else None, gd.get('detail') or ('no n to check it against' if k != 'optics.n' and not o.get('n') else 'no density, or no wt% table, to check it against' if s == 'nooracle' else ''))
+    # the compatibility index the paper STATES: the same verdict as the n it was formed from, or the
+    # reason nothing could reproduce it (no n read, no K_C)
+    if f.get('gd', {}).get('status') != 'none':
+        n_ = o.get('n'); s_ = gd['status'].get('optics.n', 'nooracle')
+        if n_ and not (1.3 <= n_ <= 3.0):
+            _set(f, 'gd', 'unverified', 'range', '%g is outside the range of minerals — misread' % n_)
+        elif s_ in ('agrees', 'unverified'):
+            _set(f, 'gd', s_, 'gd', gd.get('detail') or '')
+        else:
+            _set(f, 'gd', 'nooracle', None, 'no n read to form K_P' if not n_ else (gd.get('detail') or 'no density, or no wt% table, to form K_C'))
     lines += _section(gd['lines'])
     # the cell against itself and the density
     masses = []
@@ -3239,7 +3533,11 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
     # agreed, that is what it agreed on); and the two printed densities vouch for each other: a measured
     # density within 4 % of the calculated one is the usual case, and a misread value (another mineral's
     # density, a digit lost) is far outside it. Only for a field no other oracle adjudicated.
-    if f.get('optics.D_calc', {}).get('status') == 'nooracle' and cc.get('D'):
+    # A Gladstone–Dale doubt is a doubt about the index, the wt% set or the density together, so it
+    # does not outrank a density another oracle verified on its own: an 'agrees' from the cell (or
+    # from the other printed density) stands over the compatibility check's 'unverified'.
+    open_ = lambda key: f.get(key, {}).get('status') == 'nooracle' or (f.get(key, {}).get('status') == 'unverified' and f[key].get('verified_by') == 'gd')
+    if open_('optics.D_calc') and cc.get('D') and (cc['D']['ok'] or f['optics.D_calc']['status'] == 'nooracle'):
         dd = cc['D']
         _set(f, 'optics.D_calc', 'agrees' if dd['ok'] else 'unverified', 'cell_consistency',
              'D from Z = %g, the cell and the formula %.3f vs %.3f printed (%+.1f %%)' % (dd['Z'], dd['computed'], dd['printed'], (dd['computed'] - dd['printed']) / dd['printed'] * 100))
@@ -3247,7 +3545,7 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
     if Dm and Dc and 1.0 <= Dm <= 25.0 and 1.0 <= Dc <= 25.0:
         gap = abs(Dm - Dc) / Dc
         for key in ('optics.D_meas', 'optics.D_calc'):
-            if f.get(key, {}).get('status') == 'nooracle':
+            if f.get(key, {}).get('status') == 'nooracle' or (open_(key) and gap <= 0.04):
                 _set(f, key, 'agrees' if gap <= 0.04 else 'unverified', 'density',
                      'D_meas %.3f vs D_calc %.3f (%+.1f %%)%s' % (Dm, Dc, (Dm - Dc) / Dc * 100, '' if gap <= 0.04 else ' — beyond the usual 4 %'))
         if gap > 0.04 and gap <= 0.5:
@@ -3277,8 +3575,27 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None):
     return {'lines': lines, 'gd': gd, 'cell': cc, 'species': sp}
 
 _READER_LABELS = (('epma', 'table'), ('formula', 'formula'), ('basis', 'basis'), ('optics.n', 'n'), ('optics.D_meas', 'D_meas'), ('optics.D_calc', 'D_calc'),
-                  ('cell', 'cell'), ('bv.params', 'bond-valence set'), ('pxrd.calc', 'powder'), ('name', 'name'))
+                  ('gd', 'compatibility'), ('cell', 'cell'), ('coords', 'coordinates'), ('bv.params', 'bond-valence set'), ('bv.table', 'bond-valence table'),
+                  ('pxrd.calc', 'powder'), ('name', 'name'))
 _MARK = {'agrees': '✓', 'disagrees': '✗', 'unverified': '?', 'nooracle': '·', 'none': '—'}
+
+def why_lines(fields):
+    """Every record in full, including the ones that read nothing — the per-paper inspection: which
+    sentence a value came from, what vouched for it, and what it said."""
+    out = []
+    order = [k for k, _l in _READER_LABELS] + [k for k in FIELDS if k not in dict(_READER_LABELS)]
+    for key in order:
+        r = fields.get(key)
+        if not r:
+            continue
+        out.append('%-14s %s %-11s %-5s by %s' % (key, _MARK.get(r['status'], '?'), r['status'], ('p%d' % r['page']) if r.get('page') else '-', r.get('verified_by') or '-'))
+        if r.get('value') not in (None, ''):
+            out.append('    value:  %s' % str(r['value'])[:120])
+        if r.get('source'):
+            out.append('    source: %s' % r['source'][:200])
+        if r.get('detail'):
+            out.append('    detail: %s' % r['detail'][:200])
+    return out
 
 def readers_line(fields):
     """One line on what was read and what vouched for it: 'readers: table ✓ (p6) · formula ✓ · …'."""
@@ -3305,9 +3622,102 @@ def _paper_cif(pdf, text, out):
     except Exception:
         return None
     if st is None or not info.get('path'):
+        out['_ps_build'] = {k: v for k, v in (info or {}).items() if k not in ('path', 'dir')}   # what the build found, for the coords record; not a structure the check used
         return None
     out['paper_structure'] = info
     return info['path']
+
+
+def _verified_coords(pdf, text, out):
+    """The structure the paper prints, built against its printed bond distances; -> the build's
+    info (its synthetic .cif still on disk, for the caller to use and discard) when the bonds verify
+    it, else None. Either way the coordinates verdict is left in out['coords'] for verify()."""
+    if pdf.lower().endswith('.docx'):
+        return None
+    try:
+        from pxrd_review import paper_structure as PS, paper_bonds as PB
+        rows = PS.paper_sites(pdf)
+        if len(rows) < 3:
+            out['coords'] = {'status': 'none'}; return None
+        bonds = [(r.cation + ('(%s)' % r.site if r.site else ''), r.anion, r.dist) for t in PB.read_tables(pdf) for r in t['bonds'] if r.dist]
+        st, info = PS.build(pdf, text, bonds=bonds)
+        if info.get('gii') is None:
+            out['coords'] = {'status': 'nobuild', 'why': (info.get('why') or '')[:200]}
+            if st is not None:
+                PS.discard(info)
+            return None
+        out['coords'] = {'status': 'built', 'gii': info.get('gii'), 'closure': info.get('closure'), 'closure_count': info.get('closure_count'), 'sites': info.get('sites'), 'sym': info.get('sym'),
+                         'bonds_ok': info.get('bonds_ok'), 'bonds_n': info.get('bonds_n'), 'bonds_total': info.get('bonds_total'), 'bonds_miss': info.get('bonds_miss') or [], 'why': (info.get('why') or '')[:200]}
+        if st is not None and info.get('bonds_verified') and info.get('path'):
+            return info
+        if st is not None:
+            PS.discard(info)
+        return None
+    except Exception as ex_:
+        out['coords'] = {'status': 'error', 'why': str(ex_)[:120]}
+        return None
+
+
+def _coords_on_structure(rows, st, tol=0.25):
+    """How many of the printed sites fall on a position of the structure (within tol Å, any
+    equivalent position, periodic) -> (matched, n)."""
+    m = n = 0
+    for lab, x, y, z, _tail in rows:
+        try:
+            xyz = [float(x), float(y), float(z)]
+        except (TypeError, ValueError):
+            continue
+        n += 1
+        best = None
+        for site in st.sites:
+            for pos in (site.positions or [site.frac]):
+                try:
+                    d = st._min_dist(list(pos), xyz)
+                except Exception:
+                    continue
+                if best is None or d < best:
+                    best = d
+        if best is not None and best <= tol:
+            m += 1
+    return m, n
+
+
+def coords_check(pdf, cif, text, out):
+    """Were the coordinates the paper prints read right? -> {'status': 'none' | 'cif' | 'built' |
+    'nobuild' | 'error', …}. With a .cif: how many printed sites fall on one of its positions.
+    Without: the structure built from them (`paper_structure.build`), judged by its own instability
+    index and its closure on the formula. The caller stores this as out['coords'] — never as
+    out['paper_structure'], which means "the bond-valence check used the paper's structure"."""
+    if pdf.lower().endswith('.docx'):
+        return {'status': 'none'}
+    if not cif and out.get('coords'):
+        return out['coords']                                 # _verified_coords built it already, with the bonds
+    try:
+        from pxrd_review import paper_structure as PS
+        rows = PS.paper_sites(pdf)
+        if len(rows) < 3:
+            return {'status': 'none'}
+        if cif:
+            from pxrd_review import bv_check as B
+            m, n = _coords_on_structure(rows, B.Structure(cif))
+            return {'status': 'cif', 'matched': m, 'n': n}
+        # the paper's printed bond distances are the direct check of its coordinates, cell and
+        # symbol together: the build chooses the cell and setting that reproduce them
+        try:
+            from pxrd_review import paper_bonds as PB
+            bonds = [(r.cation + ('(%s)' % r.site if r.site else ''), r.anion, r.dist) for t in PB.read_tables(pdf) for r in t['bonds'] if r.dist]
+        except Exception:
+            bonds = []
+        info = None if bonds else (out.get('paper_structure') or out.get('_ps_build'))   # the bond-valence block built it already, without the bonds
+        if not info:
+            _st, info = PS.build(pdf, text, bonds=bonds)
+            PS.discard(info)
+        if info.get('gii') is None:
+            return {'status': 'nobuild', 'why': (info.get('why') or '')[:200]}
+        return {'status': 'built', 'gii': info.get('gii'), 'closure': info.get('closure'), 'closure_count': info.get('closure_count'), 'sites': info.get('sites'), 'sym': info.get('sym'),
+                'bonds_ok': info.get('bonds_ok'), 'bonds_n': info.get('bonds_n'), 'bonds_total': info.get('bonds_total'), 'bonds_miss': info.get('bonds_miss') or [], 'why': (info.get('why') or '')[:200]}
+    except Exception as ex_:
+        return {'status': 'error', 'why': str(ex_)[:120]}
 
 
 def _bv_from_bonds(pdf, ex, text, out):
@@ -3321,7 +3731,7 @@ def _bv_from_bonds(pdf, ex, text, out):
         st, res, g = PB.structure_for(pdf, ex, text)
     except Exception:
         return None
-    if st is None or g is None or g > PB.GII_NOTE:
+    if st is None:
         return None
     try:
         bc = bv_check_paper(pdf, None, ex, text, structure=st)
@@ -3332,11 +3742,22 @@ def _bv_from_bonds(pdf, ex, text, out):
     if bc['status'] != 'checked' and bc['status'] != 'unmatched':
         return bc                                # says why the paper's own table cannot serve; the
                                                  # caller may still try the structure the paper prints
+    if bc.get('sums') and (g is None or g > PB.GII_NOTE):
+        return None                              # a BVS column is a claim about the WHOLE coordination
     bc['from_bonds'] = True; bc['gii'] = g
     out['paper_bonds'] = {'sites': len(res), 'bonds': len(st.rows), 'gii': g}
-    where = ("the bond distances the paper itself prints (%d bonds over %d sites, which add to the "
-             "formal valences within %.2f vu)" % (len(st.rows), len(res), g))
-    note = g > PB.GII_GATE                       # above the gate the reading is a doubt, not a verdict
+    where = ("the bond distances the paper itself prints (%d bonds over %d sites, %s)"
+             % (len(st.rows), len(res),
+                'whose sums the paper states no valences to test' if g is None else
+                'which add to the formal valences within %.2f vu' % g if g <= PB.GII_GATE else
+                'whose sums sit off the formal valences by %.2f vu' % g))
+    # The gate is on the SUMS, not on the individual bond valences. A BVS column states a whole
+    # site's coordination, so a table read short of one bond states it wrong — that is what
+    # GII_GATE guards. A grid states each bond on its own, and which parameter set reproduces a
+    # cell does not depend on whether its neighbours were read: measured against the .cif on the
+    # corpus, the set chosen from the paper's own distances matched the .cif's for 5 of 5 papers
+    # with gii between the two gates and 7 of 8 above them — the same 80–90 % as inside the gate.
+    note = bool(bc.get('sums')) and (g is None or g > PB.GII_GATE)
     def _say(t, full):
         t = t.replace('the .cif', where if full else "the paper's own bond distances")
         t = t.replace('.cif', where if full else "the paper's own bond distances")
@@ -3374,8 +3795,50 @@ def check_paper(pdf, cif=None, out_dir=None):
     #                                 (`paper_structure`): 91 % of sites, and note-grade throughout.
     if cif:
         bc = bv_check_paper(pdf, cif, ex, text)
+        if bc is not None and bc.get('status') == 'none':
+            # the .cif names its sites differently from the table the paper prints, or the table
+            # is one the .cif's vocabulary cannot recognise: the paper's own bond distances name
+            # the same sites the table's header does
+            bc = _bv_from_bonds(pdf, ex, text, out) or bc
     else:
-        bc = _bv_from_bonds(pdf, ex, text, out)
+        # The structure the paper prints, VERIFIED by its own bond distances (paper_structure.bond_hits:
+        # ≥ 80 % of at least five printed bonds reproduced, covering ≥ 60 % of them), stands in for a
+        # .cif at flag grade — it is the paper's structure, shown to be read right by the paper's own
+        # numbers. The old rule kept every paper-built structure note-grade because its correctness
+        # was measured only in aggregate (91 % of sites); this one is measured paper by paper.
+        vc = _verified_coords(pdf, text, out)
+        bc_coords = None
+        if vc:
+            try:
+                bc_coords = bv_check_paper(pdf, vc['path'], ex, text)
+            finally:
+                from pxrd_review import paper_structure as _PS
+                _PS.discard(vc)
+            if bc_coords is not None and bc_coords.get('status') in ('checked', 'unmatched'):
+                bc_coords['from_verified_coords'] = True
+                where = 'the structure the paper itself prints (%s), which reproduces %d of the %d bond distances it prints' % (vc.get('sym', '?'), vc['bonds_ok'], vc['bonds_n'])
+                for k_ in ('head', 'message'):
+                    if bc_coords.get(k_):
+                        bc_coords[k_] = bc_coords[k_].replace('the .cif', where).replace('.cif', where)
+                if bc_coords.get('lines'):
+                    bc_coords['lines'] = [ln.replace('the .cif', "the paper's own structure").replace('.cif', "the paper's own structure") for ln in bc_coords['lines']]
+            else:
+                bc_coords = None
+        # Both are the paper's own structure — the bond distances it prints, and the coordinates it
+        # prints, verified by those distances. The paper computed its table from its distances, so
+        # the distance structure reproduces the cells the reader got right; the coordinate structure
+        # holds every site and the multiplicities. A table that follows from either follows from the
+        # paper: the reading with the fewer disagreements stands, the distances on a tie.
+        bc_bonds = _bv_from_bonds(pdf, ex, text, out)
+        def _rank(b_):
+            if b_ is None:
+                return (3, 0, 0)
+            st_ = b_.get('status'); n_ = b_.get('compared') or 0; bad_ = b_.get('disagree') or 0
+            return ({'checked': 0, 'unmatched': 1}.get(st_, 2), (bad_ / n_) if n_ else 1.0, -n_)
+        bc = min((bc_bonds, bc_coords), key=_rank) if (bc_bonds is not None or bc_coords is not None) else None
+        if bc is not None and bc is bc_coords and bc_bonds is not None and bc_bonds.get('status') == 'checked':
+            bc['lines'] = list(bc.get('lines') or []) + ['the bond distances the paper prints gave %d of %d cells differing; the structure the paper prints, %d of %d — the latter stands'
+                                                       % (bc_bonds.get('disagree') or 0, bc_bonds.get('compared') or 0, bc.get('disagree') or 0, bc.get('compared') or 0)]
         if bc is None or bc.get('status') == 'none':
             bv_cif = _paper_cif(pdf, text, out)
             if bv_cif:
@@ -3404,9 +3867,11 @@ def check_paper(pdf, cif=None, out_dir=None):
             out['lines'].append('bond valence: ' + bc['message'])
         else:
             out['bv'] = {k: bc[k] for k in ('tables', 'lines', 'params', 'u6', 'cited', 'compared', 'disagree')}
-            out['bv'].update({k: bc.get(k) for k in ('cited_n', 'cited_bad')})
+            out['bv'].update({k: bc.get(k) for k in ('cited_n', 'cited_bad', 'sums', 'table')})
             out['bv'].update({k: bc[k] for k in ('from_paper', 'from_bonds', 'gii') if k in bc})
             out['lines'] += [bc['head']] + ['  ' + ln for ln in bc['lines']]
+    out['coords'] = coords_check(pdf, cif, text, out)      # the coordinates table on its own: a record, no lines
+    out.pop('_ps_build', None)
     # the water the formula claims against the hydrogen the structure accounts for — note-grade, and
     # only where a .cif was supplied (the structure the paper prints is not independent of it)
     if cif:
@@ -3420,7 +3885,7 @@ def check_paper(pdf, cif=None, out_dir=None):
         out['powder'] = cc
         out['lines'] += [cc['head']] + ['  ' + ln for ln in cc['lines']]
     try:
-        v = verify(ex, text, cif, comp=out['composition'], bv=bc, powder=cc if cc.get('status') != 'error' else None)
+        v = verify(ex, text, cif, comp=out['composition'], bv=bc, powder=cc if cc.get('status') != 'error' else None, coords=out.get('coords'))
         out['lines'] += v['lines']
     except Exception as ex_:
         out['lines'].append('readers: could not verify the readings (%s)' % ex_)
@@ -3429,9 +3894,13 @@ def check_paper(pdf, cif=None, out_dir=None):
 
 _AN_RE = re.compile(r'^(O|OH|OW|Ow|W|Wat|F|Cl|OD|Oh|Hw|H2O)\d*[A-Za-z]?\d*(?:\((?:OH|OH2|H2O|W|OW|HW|Wat)\))?$')   # 'O8(OH)': the paper tags its hydroxyl
 
+_BV_TAIL = re.compile(r'(?:\s*×\s*\d+(?:\.\d+)?)?[↓→]*[*†‡§#¶]{0,3}$')   # 'M1*', 'Na1×0.20→': a footnote mark and the occupancy a header weights its column by
+
+
 def _bv_norm(t):
     from pxrd_review import bv_check as B
-    return B._norm_label(t.replace('−', '-').replace('–', '-'))
+    t = t.replace('−', '-').replace('–', '-').strip()
+    return B._norm_label(_BV_TAIL.sub('', t) or t)
 
 def _cation_labels(st):
     """The structure's cation site labels as bv_check normalises them (hydrogen left out), plus the
@@ -3439,6 +3908,11 @@ def _cation_labels(st):
     cats = {_bv_norm(x) for r in st.cations for x in r.label.split('/')} | {_bv_norm(r.label) for r in st.cations}
     cat_full = {r.label for r in st.cations}
     cats |= {k for k, v in (getattr(st, 'aliases', None) or {}).items() if v in cat_full}
+    # a site the paper's bond table heads but nothing can name an element for ('M1', 'T2'): it is
+    # a site of this structure all the same, and saying so is what lets a bond-valence table
+    # headed by those names be found at all. Its cells are compared against nothing, so it adds
+    # vocabulary and no verdict.
+    cats |= {_bv_norm(x) for x in getattr(st, 'unnamed', None) or ()}
     return {c for c in cats if not c.startswith('H')}
 
 def _anion_labels(st):
@@ -3661,6 +4135,22 @@ def water_check(cif, counts, name=''):
     return []
 
 
+def _find_bv_tables(path, st):
+    """The paper's bond-valence table, by every way there is of finding one, best evidence first.
+
+    The ORDER is the contract. A table matched to the structure's own site labels is better
+    evidence than one matched to a caption, which is better than one recognised only by its shape:
+    each fallback answers the papers the one before it cannot reach, and none may pre-empt it.
+    Reading the caption FIRST was tried and cost 17 papers their verdict, because it replaced
+    tables already matched to the structure with its own looser parse of the same page."""
+    return (bv_tables(path, st)                 # the grid, by a header naming the structure's cations
+            or bv_tables_by_caption(path, st)   # the table the paper itself points to
+            or bv_bond_column(path, st)         # the valence printed beside each distance
+            or bv_grids_by_rows(path, st)       # the grid, by its anion rows
+            or bvs_site_tables(path, st)        # one sum per site, in a BVS column
+            or _bvs_marks_table(path, st))      # 'BVS 2.12' under each site's block
+
+
 def bv_check_paper(path, cif, ex, text=None, structure=None):
     """The paper's bond-valence table (a pdf's, read from the page; a manuscript .docx's, from
     its Word table) against the .cif, under every parameter set — the one that agrees best wins,
@@ -3682,7 +4172,7 @@ def bv_check_paper(path, cif, ex, text=None, structure=None):
             from pxrd_review import paper_bonds as PB
             st = structure
             compute = lambda st_, P: PB.compute(st_, P) + ((),)
-            tabs = bv_tables(path, st) or bvs_site_tables(path, st)
+            tabs = _find_bv_tables(path, st)
             if not tabs:
                 return {'status': 'none', 'message': 'no bond-valence table found in the paper (nothing to check against its own bond distances)'}
             cats = _cation_labels(st)
@@ -3702,10 +4192,11 @@ def bv_check_paper(path, cif, ex, text=None, structure=None):
                 tabs = [{'page': None, 'kind': 'sites', 'head': 'BVS', 'rows': rs} for rs in (_site_rows_from_grid(t, st) for t in all_tabs if has_bvs_col(t)) if len(rs) >= 2]
             if not tabs and any(_bv_like(t) for t in all_tabs):
                 return {'status': 'foreign', 'message': 'a bond-valence-like table was read but it names none of the .cif\'s cation sites (%s) — is that the right structure?'
-                        % ', '.join(sorted(r.label for r in st.cations if not r.label.upper().startswith('H')))[:80]}
+                        % ', '.join(sorted(r.label for r in st.cations if not r.label.upper().startswith('H')))[:80],
+                        'table': {'page': None, 'kind': 'grid', 'tables': 0, 'caption': ''}}
         else:
             st = _structure_for_paper(cif, ex, text if text is not None else text_of(path), B); st.aliases = site_name_map(path, st)
-            tabs = bv_tables(path, st) or bvs_site_tables(path, st)
+            tabs = _find_bv_tables(path, st)
         if not tabs:
             return {'status': 'none', 'message': 'no bond-valence table found in the paper (nothing to check against the .cif)'}
         if structure is None:
@@ -3713,6 +4204,8 @@ def bv_check_paper(path, cif, ex, text=None, structure=None):
             tabs, left_out = _own_mineral_tables(tabs, cif, st)
         sites = tabs[0].get('kind') == 'sites'
         where = ('the paper\'s %s (p%d)' % ('BVS column' if sites else 'table', tabs[0]['page'])) if tabs[0].get('page') else ('the manuscript\'s %s' % ('BVS column' if sites else 'table'))
+        tab_info = {'page': tabs[0].get('page'), 'kind': tabs[0].get('kind'), 'tables': len(tabs),   # the table itself, for the bv.table record
+                    'caption': (tabs[0].get('caption') or tabs[0].get('head') or '')[:160]}
         cited = (ex['bv'].get('params') or 'gh', ex['bv'].get('u6') or 'burns')
         best = None; as_cited = None; cited_n = cited_bad = None
         # a paper may print several BVS columns (two parameter sets, with and without H): each is judged on
@@ -3742,9 +4235,9 @@ def bv_check_paper(path, cif, ex, text=None, structure=None):
             lines = [ln for ln in lines if not ln.startswith('no bond-valence table found')]   # the head below says why
             head = ('bond valence: %s was read but none of its cells matched a bond of the .cif — the site labels may differ '
                     '(Ow/OH in the table vs O in the .cif); the row and column sums below were still checked' % where)
-            return {'status': 'unmatched', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': 0, 'disagree': 0, 'cited_n': cited_n, 'cited_bad': cited_bad}
+            return {'status': 'unmatched', 'head': head, 'lines': lines, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': 0, 'disagree': 0, 'cited_n': cited_n, 'cited_bad': cited_bad, 'sums': sites, 'table': tab_info}
         bad, _, key, u6, P, lines, n = best
-        trips = lambda n_, bad_: (n_ >= 4 and 2 * bad_ >= n_) or bad_ >= 8   # half or more of the cells differ, or eight of them: not this convention, or not this reading — a published table has one or two slips, not a list
+        trips = lambda n_, bad_: (n_ >= 4 and 2 * bad_ >= n_) or bad_ >= max(8, 0.2 * n_)   # half or more of the cells differ, or eight of them (a fifth, for a table of more than forty): not this convention, or not this reading — a published table has one or two slips, not a list
         kept = []; doubted = []
         for tno, n_i, bad_i, tl in _bv_per_table(lines):
             if trips(n_i, bad_i):
@@ -3756,11 +4249,11 @@ def bv_check_paper(path, cif, ex, text=None, structure=None):
                     kept.append('table %d: the differences — %s' % (tno, _bv_pattern(tl, n_i, bad_i)))   # where they sit: one column throughout is a convention, scattered ones are slips
         if not kept:                                                   # a doubt for the reviewer, never a list of findings
             head = 'bond valence: %s vs the .cif — %d of %d cells differ under every parameter set; not compared cell by cell [unverified]' % (where, bad, n)
-            return {'status': 'unmatched', 'head': head, 'lines': doubted + [ln for ln in st.notes if "from the paper's formula" in ln] + left_out, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad}
+            return {'status': 'unmatched', 'head': head, 'lines': doubted + [ln for ln in st.notes if "from the paper's formula" in ln] + left_out, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad, 'sums': sites, 'table': tab_info}
         head = 'bond valence: %s vs the .cif — agrees best with %s%s' % (
             where, P.note(), '' if (key, u6) == cited else ' (the paper cites %s%s)' % (B.PARAM_NAMES.get(cited[0], cited[0]), ', U6+ from Burns' if cited[1] == 'burns' else ''))
         kept += [ln for ln in st.notes if "from the paper's formula" in ln] + left_out
-        return {'status': 'checked', 'head': head, 'lines': kept + doubted, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad}
+        return {'status': 'checked', 'head': head, 'lines': kept + doubted, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad, 'sums': sites, 'table': tab_info}
     except Exception as ex_:
         return {'status': 'error', 'message': 'could not check (%s)' % ex_}
 
@@ -3852,6 +4345,18 @@ def _bv_pattern(lines, n, bad):
         parts.append('the other %d cell%s agree%s' % (rest, '' if rest == 1 else 's', 's' if rest == 1 else ''))
     return '; '.join(parts) if parts else 'no cell-by-cell detail'
 
+# A cell's own text: a valence, or several separated by commas (two bonds from one cation to one
+# anion, 'Na1 0.13,0.06↓'), carrying the ×n and the arrow that say how many equivalent bonds it
+# stands for — BEFORE it, after it, or both, and welded on with no space ('↓×40.07→×2',
+# '2×→0.41×4↓'); or the mark alone on a line of its own under the row it belongs to.
+_VAL_MARK = r'(?:[↓→]|[×x]\s*\d{1,2}|\d{1,2}\s*[×x])'
+_BV_VAL = re.compile(r'^%s*\d\.\d+(?:,\d\.\d+)*%s*$|^[×x]?\d*[↓→]+$|^[×x]\d+[↓→]*$|^\(\d+\)$|^[↓→]+$'
+                     % (_VAL_MARK, _VAL_MARK))
+
+
+_SITE_ROW = re.compile(r"^[A-Z][A-Za-z]?(?:\(\d{1,2}[a-z]?\)|\d{1,2}[a-z]?)['′*]?$")
+
+
 def bv_tables(pdf, st):
     """The paper's bond-valence grids (anion rows × cation columns) as row lists, read from the pdf
     by word positions. The header line names ≥2 of the structure's cations (or ≥2 of its anions,
@@ -3865,7 +4370,7 @@ def bv_tables(pdf, st):
     an_re = _AN_RE
     is_an = lambda t: norm(t) in anions or bool(an_re.match(t))
     is_cat = lambda t: norm(t) in cats
-    val_re = re.compile(r'^\d\.\d+(?:\s*[×x]\d+)?[↓→]*$|^[×x]?\d*[↓→]+$|^[×x]\d+[↓→]*$|^\(\d+\)$|^[↓→]+$')
+    val_re = _BV_VAL
     out = []
     for pno, lines in enumerate(_pages(pdf)):
         i = 0
@@ -3875,8 +4380,13 @@ def bv_tables(pdf, st):
             an_hits = [k for k, t in enumerate(toks) if is_an(t) and not is_cat(t)]
             transposed = False
             if not (len(hits) >= 2 and len({norm(toks[k]) for k in hits}) >= 2):
+                # the first word INSIDE the labelled span, not the first of the typeset line: a
+                # two-column page prints the other column's prose to the left of the table, and
+                # asking that for a cation site missed every transposed grid set that way
+                x_an = min((lines[i]['w'][k][0] for k in an_hits), default=0)
+                below = lambda j: any(is_cat(w[4]) and w[0] < x_an for w in lines[j]['w'])
                 if len(an_hits) >= 2 and len({norm(toks[k]) for k in an_hits}) >= 2 and len(hits) < 2 \
-                        and any(is_cat((lines[j]['w'] or [(0, 0, 0, 0, '')])[0][4]) for j in range(i + 1, min(len(lines), i + 4))):
+                        and any(below(j) for j in range(i + 1, min(len(lines), i + 4))):
                     transposed = True; hits = an_hits                    # anions across, cations down: 'Site F(1) F(2) … Σcations'
                 else:
                     i += 1; continue
@@ -3884,9 +4394,26 @@ def bv_tables(pdf, st):
             k0 = min(hits)
             while k0 > 0 and re.fullmatch(r"[A-Z][a-z]{0,2}\d{0,2}[a-z]?(?:\([^)]{1,6}\))?'*\*?", toks[k0 - 1]):
                 k0 -= 1                                                    # 'Pb M1 M2' before the first matched label: the paper's own site names, part of the header
-            x_lo = min(lines[i]['w'][k0][0], min(w[0] for w in lab_ws)) - 130; x_hi = max(w[2] for w in lab_ws) + 130   # the row labels to the left, a Σ column to the right
+            x_hi = max(w[2] for w in lab_ws) + 130                      # a Σ column to the right
+            # The row labels are printed to the LEFT of the first header label, so the window has
+            # to reach that far — but no further, or a two-column page hands the row loop the other
+            # column's lines and three of them end the table before it starts. Two things say where
+            # to stop: a word further left on the header line itself, and the header the label
+            # column carries ('Site', 'Atom') — under which the row labels already sit, so no
+            # margin at all is wanted.
+            x_lo = min(lines[i]['w'][k0][0], min(w[0] for w in lab_ws)) - 130
+            if re.fullmatch(r'(Atom|Site|Sites|Atoms|Label|Cation|Anion|Position)s?', toks[k0], re.I):
+                x_lo = lines[i]['w'][k0][0] - 10
+            if k0 > 0:
+                x_lo = max(x_lo, lines[i]['w'][k0 - 1][2] + 1)             # a word further left on the header line is the other page column's prose, not this table
             head = [w for w in lines[i]['w'] if w[0] >= x_lo and w[2] <= x_hi]; j = i + 1
-            row_ok = is_cat if transposed else is_an
+            # A transposed grid's rows are the paper's own CATION site names, and the structure
+            # rarely holds all of them — a site the paper prints and the tool could not name broke
+            # the run and, with a page column's prose between the rows, ended the table one row in.
+            # The header has already proved this is the table; a row it cannot match is simply
+            # never compared. A numbered site label is the shape ('M(2a)', 'Ba1'), so prose cannot
+            # pass for one.
+            row_ok = (lambda t: is_cat(t) or bool(_SITE_ROW.match(t))) if transposed else is_an
             while j < len(lines) and j <= i + 2:
                 lw = [w for w in lines[j]['w'] if w[0] >= x_lo and w[2] <= x_hi]
                 if not lw or row_ok(lw[0][4]) or re.search(r'\d\.\d\d', ' '.join(w[4] for w in lw)):
@@ -3911,11 +4438,9 @@ def bv_tables(pdf, st):
                         j += 1; break
                 elif all(val_re.match(w[4]) for w in lw):
                     pending.append((y, lw))                                # bare valences: the nearest row's cell with two distances
-                elif raw and not any(re.search(r'\d', w[4]) for w in lw):
-                    blank += 1                                             # the other page column's prose between two rows: skipped, not the end
-                    if blank > 3: break
                 elif raw:
-                    break
+                    blank += 1                                             # the other page column's text between two rows — with figures in it
+                    if blank > 3: break                                    # as often as not; three of them in a row end the table
                 j += 1
             if pending and raw:
                 raw[-1] = (raw[-1][0], raw[-1][1] + [w for _, ws in pending for w in ws])
@@ -3958,7 +4483,245 @@ def bv_tables(pdf, st):
             i = j
     return out
 
-_BVS_HEAD = re.compile(r'^(BVS|BVSs|BVS\*|BVS[a-c]|ΣBVS?|Σv|BV|BVsum|BVsums|Σs|Σ\(s\)|BVS\d)\*{0,2}$')   # a bare 'Σ' is a grid's sum column, not a BVS column
+_BV_CAPTION = re.compile(r'(?:TABLE|Table|Tab\.)\s*[A-Za-z]?\d+[A-Za-z]?\s*[.:]?[^\n]{0,130}?'
+                         r'(?:bond[-\s]?valence|bond[-\s]?strength|\bBVS\b|valence\s+sums?|valence\s+balance)', re.I)
+_ANY_CAPTION = re.compile(r'(?:TABLE|Table)\s*[A-Za-z]?\d+[A-Za-z]?\s*[.:]')
+_ROW_LABEL = re.compile(r"^(?:Σ|Sum|Total|[A-Z][A-Za-z]?(?:\(\d{1,2}[a-z]?\)|\d{0,2}[a-z]?))[\w()'′*†+-]{0,6}$")
+
+
+def _value_run(ws):
+    """The cells of one typeset line of a grid: the longest run of adjacent bare-valence tokens,
+    and the token immediately left of it, which is the row's label. A page column printed beside
+    the table contributes prose and whole numbers, neither of which is a valence, so the run picks
+    the table out of the line without knowing where the column is. -> (label word, [value words])."""
+    best = None; i = 0
+    while i < len(ws):
+        if not _BV_VAL.match(ws[i][4]):
+            i += 1; continue
+        j = i
+        while j < len(ws) and _BV_VAL.match(ws[j][4]):
+            j += 1
+        if j - i >= 2 and i >= 1 and (best is None or j - i > best[1] - best[0]):
+            best = (i, j)
+        i = j
+    if best is None:
+        return None
+    lab = ws[best[0] - 1]
+    return (lab, list(ws[best[0]:best[1]])) if _ROW_LABEL.match(lab[4]) else None
+
+
+def _grid_from_runs(lines, runs, pno, cap_i=None):
+    """Rows already located as (line index, label word, [value words]) -> the `bv_tables` shape.
+    The columns are the value x-clusters; their names come from the nearest line above the first
+    row that holds labels rather than numbers."""
+    x_lo = min(w[0] for _j, lab, vs in runs for w in [lab]) - 10
+    x_hi = max(w[2] for _j, _lab, vs in runs for w in vs) + 60   # a header's 'Σanions' runs past its own column
+    head = []
+    for k in range(runs[0][0] - 1, max(-1, (cap_i if cap_i is not None else runs[0][0] - 6)), -1):
+        hw = [w for w in lines[k]['w'] if w[0] >= x_lo and w[2] <= x_hi]
+        if len([w for w in hw if not _BV_VAL.match(w[4])]) >= 2:
+            head = hw; break
+    cols = []
+    for x in sorted((w[0] + w[2]) / 2 for _j, _lab, vs in runs for w in vs):
+        if cols and x - cols[-1][-1] <= 9.0:
+            cols[-1].append(x)
+        else:
+            cols.append([x])
+    cols = [sum(c) / len(c) for c in cols]
+    hw = [((w[0] + w[2]) / 2, w[4]) for w in head]
+    labels = [next((t for x, t in sorted(hw, key=lambda h: abs(h[0] - cx)) if abs(x - cx) < 28), '?') for cx in cols]
+    merged = []
+    for cx, lab in zip(cols, labels):
+        if merged and merged[-1][1] == lab and lab != '?' and cx - merged[-1][0][-1] <= 60:
+            merged[-1][0].append(cx)
+        else:
+            merged.append(([cx], lab))
+    rows = []
+    for _j, lab, vs in runs:
+        cells = [[] for _ in merged]
+        for w in sorted(vs, key=lambda w: w[0]):
+            k = min(range(len(merged)), key=lambda c: min(abs(x - (w[0] + w[2]) / 2) for x in merged[c][0]))
+            cells[k].append(w[4])
+        rows.append([lab[4]] + [' '.join(c) for c in cells])
+    return {'page': pno + 1, 'rows': [['Atom'] + [lab for _c, lab in merged]] + rows, 'kind': 'grid',
+            'caption': (' '.join(w[4] for w in lines[cap_i]['w'])[:160] if cap_i is not None else '')}
+
+
+def bv_tables_by_caption(pdf, st):
+    """The bond-valence table found the way the paper announces it — by its own caption.
+
+    Every other finder here starts from the structure's site labels and asks which line of the page
+    could be a header. That is backwards: the paper says outright which table holds the bond
+    valences ('Table 8. Weighted bond-valence sums for …'), and it says so whether or not the tool
+    managed to name the sites underneath. So the caption is read first and the block below it is
+    parsed for rows; the site labels are needed only afterwards, to decide which cells can be
+    compared. A table whose labels match nothing is then an unmatched table — a doubt — rather than
+    no table at all, which is the honest outcome."""
+    out = []
+    for pno, lines in enumerate(_pages(pdf)):
+        for ci, ln in enumerate(lines):
+            if not _BV_CAPTION.search(' '.join(w[4] for w in ln['w'])):
+                continue
+            runs = []; miss = 0
+            for j in range(ci + 1, min(len(lines), ci + 46)):
+                ws = lines[j]['w']
+                if not ws:
+                    miss += 1
+                    if runs and miss > 4:
+                        break
+                    continue
+                if runs and _ANY_CAPTION.search(' '.join(w[4] for w in ws[:6])):
+                    break                                    # the next table begins
+                run = _value_run(ws)
+                if run:
+                    runs.append((j,) + run); miss = 0
+                else:
+                    miss += 1
+                    if runs and miss > 5:
+                        break
+                    if not runs and j > ci + 8:
+                        break                                # nothing table-shaped follows this caption
+            if len(runs) >= 2:
+                labs = [lab[4] for _j, lab, _vs in runs]
+                esds = sum(1 for _j, _lab, vs in runs for w in vs if re.fullmatch(r'\(\d+\)', w[4]))
+                if len(set(labs)) < 0.75 * len(labs) and esds >= 2:
+                    continue                                     # the same anion row after row, with esds on the numbers: a bond table with a vu column, which bv_bond_column reads
+                out.append(_grid_from_runs(lines, runs, pno, ci))
+    return out
+
+
+def bv_bond_column(pdf, st):
+    """The valence a paper prints BESIDE each distance, in a third column — 'Table 2. Selected bond
+    distances (Å) and bond valences (v.u.)': `V1–O12 1.599(11) 1.74`. It is not a grid, but it says
+    the same thing one bond at a time, so it is turned into one: the cation columns and anion rows
+    the checker reads, each cell the valence the paper printed for that bond.
+
+    The bond and its cation come from `paper_bonds.read_tables`, which has already carried the
+    cation down its continuation rows; only the number standing immediately after the distance is
+    read here, and only as a bare two-decimal valence — a second distance carries an esd, a mean
+    carries three decimals, so neither can pass for one."""
+    from pxrd_review import paper_bonds as PB
+    try:
+        tabs = PB.read_tables(pdf)
+    except Exception:
+        return []
+    if not tabs:
+        return []
+    known = {(r.page, r.line, round(r.dist, 4)): r for t in tabs for r in t['bonds']}
+    cells = {}
+    for pno, lines in enumerate(_pages(pdf)):
+        for li, ln in enumerate(lines):
+            ws = ln['w']
+            for i, w in enumerate(ws):
+                m = PB.DIST.match(w[4].strip())
+                if not m or i + 1 >= len(ws):
+                    continue
+                row = known.get((pno + 1, li, round(float(m.group(1)), 4)))
+                if row is None or not re.fullmatch(r'[0-3]\.\d\d', ws[i + 1][4].strip()):
+                    continue
+                v = float(ws[i + 1][4])
+                if 0.02 <= v <= 3.0:
+                    cells.setdefault((row.anion, row.cation), []).append(v)
+    if len(cells) < 6:
+        return []
+    cats = list(dict.fromkeys(c for _a, c in cells))
+    ans = list(dict.fromkeys(a for a, _c in cells))
+    rows = [['Atom'] + cats]
+    for a in ans:
+        rows.append([a] + [(' '.join('%.2f' % x for x in cells.get((a, c), [])) or '') for c in cats])
+    return [{'page': None, 'rows': rows, 'kind': 'grid', 'caption': 'bond valences printed beside the distances'}]
+
+
+def bv_grids_by_rows(pdf, st):
+    """The same grids as `bv_tables`, found from their ROWS instead of their header. A
+    bond-valence grid's rows are the anions — 'O3 0.35 0.38 1.08' — and that shape needs none of
+    the structure's cation names to recognise, which is what `bv_tables` asks for and what a
+    paper naming its sites M1, T2 or A cannot give. The header is then whatever line stands above
+    the run, and a column it does not name is simply never compared.
+
+    A coordinates table reads the same way until its numbers are looked at: theirs carry esds, and
+    a row here is admitted only when EVERY number on it is a bare valence. -> the `bv_tables`
+    shape."""
+    norm = _bv_norm; anions = _anion_labels(st); cats = _cation_labels(st)
+    is_an = lambda t: norm(t) in anions or bool(_AN_RE.match(t))
+    out = []
+    for pno, lines in enumerate(_pages(pdf)):
+        i = 0
+        while i < len(lines):
+            run = []
+            j = i
+            while j < len(lines):
+                ws = lines[j]['w']
+                if not ws:
+                    break
+                vals = [w for w in ws if _BV_VAL.match(w[4])]
+                if len(vals) == len(ws) and run:
+                    run[-1][1].extend(vals); j += 1; continue      # a cell's second valence, printed on its own line under the row
+                vals = [w for w in ws[1:] if _BV_VAL.match(w[4])]
+                nums = [float(m.group()) for w in vals for m in [re.match(r'\d\.\d+', w[4])] if m]
+                if not is_an(ws[0][4]) or len(vals) != len(ws) - 1 or not any(0.05 <= v <= 2.5 for v in nums):
+                    break
+                run.append((ws[0][4], list(vals))); j += 1
+            if len(run) < 3:
+                i += 1; continue
+            x_lo = min(w[0] for _f, vs in run for w in vs) - 60; x_hi = max(w[2] for _f, vs in run for w in vs) + 20
+            head = []
+            for k in range(i - 1, max(-1, i - 4), -1):
+                hw = [w for w in lines[k]['w'] if w[0] >= x_lo and w[2] <= x_hi]
+                if len([w for w in hw if not _BV_VAL.match(w[4]) and not is_an(w[4])]) >= 2:
+                    head = hw; break
+            cols = []
+            for x in sorted((w[0] + w[2]) / 2 for _f, vs in run for w in vs):
+                if cols and x - cols[-1][-1] <= 9.0:
+                    cols[-1].append(x)
+                else:
+                    cols.append([x])
+            cols = [sum(c) / len(c) for c in cols]
+            hw = [((w[0] + w[2]) / 2, w[4]) for w in head]
+            labels = [next((t for x, t in sorted(hw, key=lambda h: abs(h[0] - cx)) if abs(x - cx) < 28), '?') for cx in cols]
+            merged = []
+            for cx, lab in zip(cols, labels):
+                if merged and merged[-1][1] == lab and lab != '?' and cx - merged[-1][0][-1] <= 60:
+                    merged[-1][0].append(cx)
+                else:
+                    merged.append(([cx], lab))
+            if not any(norm(lab) in cats for _c, lab in merged):
+                i = j; continue                                # names none of the structure's sites: nothing to compare
+            rows = []
+            for first, vs in run:
+                cells = [[] for _ in merged]
+                for w in sorted(vs, key=lambda w: w[0]):
+                    k = min(range(len(merged)), key=lambda c: min(abs(x - (w[0] + w[2]) / 2) for x in merged[c][0]))
+                    cells[k].append(w[4])
+                rows.append([first] + [' '.join(c) for c in cells])
+            caption = next((' '.join(w[4] for w in lines[k]['w']) for k in range(i, max(-1, i - 40), -1)
+                            if re.match(r'^(TABLE|Table)\s+[A-Z]?\d+[A-Za-z]?[.:]', ' '.join(w[4] for w in lines[k]['w'][:3]))), '')
+            out.append({'page': pno + 1, 'rows': [['Atom'] + [lab for _c, lab in merged]] + rows,
+                        'kind': 'grid', 'caption': caption[:160]})
+            i = j
+    return out
+
+
+def _bvs_marks_table(path, st):
+    """The bond-valence sums a bond table prints under each site's own block ('BVS 2.12' beneath
+    '<Ca1–O> 2.400'), read alongside the distances by `paper_bonds.read_tables` — the same shape
+    `bvs_site_tables` returns, for the papers that print their sums there and nowhere else. The
+    structure built from those distances carries them already; against a .cif they are read here."""
+    rows = getattr(st, 'printed_sums', None)
+    if rows is None:
+        if path.lower().endswith('.docx'):
+            return []
+        try:
+            from pxrd_review import paper_bonds as PB
+            rows = [pair for t in PB.read_tables(path) for pair in (t.get('sums') or [])]
+        except Exception:
+            return []
+    if len(rows) < 2:
+        return []
+    return [{'page': None, 'kind': 'sites', 'head': 'BVS', 'rows': list(rows)}]
+
+
+_BVS_HEAD = re.compile(r'^(BVS|BVSs|BVS\*|BVS[a-c]|ΣBVS?|Σv|BV|BVsum|BVsums|Σs|Σ\(s\)|BVS\d|PBV|ΣBV|BVΣ)\*{0,2}$')   # 'PBV': the sum as some journals head it   # a bare 'Σ' is a grid's sum column, not a BVS column
 
 def bvs_site_tables(pdf, st):
     """Bond-valence SUMS printed as a column of another table — the coordinates table ('Atom x y z
@@ -3973,7 +4736,12 @@ def bvs_site_tables(pdf, st):
         for i, ln in enumerate(lines):
             ws = ln['w']; toks = [w[4] for w in ws]
             bcols = [k for k, t in enumerate(toks) if _BVS_HEAD.match(t)]
-            if not bcols or not any(re.match(r'^(Atom|Site|Sites?|Atoms?|Label|Cation|Anion|Position)$', t, re.I) for t in toks):
+            # 'Atom'/'Site' over the label column says the line is a table header. Plenty of
+            # coordinates tables leave that column unheaded ('x y z Ueq BVS'), and there the
+            # caption above says what the column is instead.
+            told = any(re.search(r'bond[- ]valence|\bBVS\b', ' '.join(w[4] for w in lines[k]['w']), re.I)
+                       for k in range(max(0, i - 4), i))
+            if not bcols or not (told or any(re.match(r'^(Atom|Site|Sites?|Atoms?|Label|Cation|Anion|Position)$', t, re.I) for t in toks)):
                 continue
             for k in bcols:
                 x_b = (ws[k][0] + ws[k][2]) / 2
@@ -4123,10 +4891,13 @@ def main(argv=None):
     ap.add_argument('pdf'); ap.add_argument('--out', help='where the data files go (default <pdf dir>/review_out)')
     ap.add_argument('--check', action='store_true', help="check the paper against itself: its formula from its own table and basis, its bond-valence table against the .cif")
     ap.add_argument('--cif', help='the structure .cif, for the bond-valence check')
+    ap.add_argument('--why', action='store_true', help='after the check, one block per reader: status, value, page, the sentence it was read from, and what the oracle said')
     a = ap.parse_args(argv)
     if a.check:
         r = check_paper(a.pdf, a.cif, None)
         print('\n'.join(r['lines']) or 'nothing to check: no analytical table or formula sentence found')
+        if a.why:
+            print(); print('\n'.join(why_lines(r['fields'])))
         return 0
     out = extract(a.pdf, a.out or os.path.join(os.path.dirname(os.path.abspath(a.pdf)), 'review_out'))
     e = out['epma']

@@ -57,10 +57,7 @@ def _run_one(job):
     try:
         text = PE.text_of(pdf)
         name = PE.mineral_name(text)
-        els = PB.site_elements(PS.paper_sites(pdf))
-        charges = PS.element_charges(text, name)
-        fs = PE._formulas(text, name)
-        known = set((fs[0][1] or {})) if fs else None
+        els, charges, known, _unnamed, inferred = PB.context(pdf, tabs, text, name)   # the same resolution structure_for uses
         P = B.Params(prefer='gh', u6='burns')
         real = B.Structure(cif)
         rres, _ras, _rc, _rh = B.compute(real, P, None, 'oo')
@@ -74,17 +71,18 @@ def _run_one(job):
     best = None
     for rows in cands:                      # a two-mineral paper prints a table each; the .cif is one of them
         try:
-            st = PB.BondStructure(rows, els, charges, known, base)
+            st = PB.BondStructure(rows, els, charges, known, base, inferred)
             res, _an, _cells = PB.compute(st, P)
         except Exception as e:
             return {'base': base, 'fail': '%s: %s' % (type(e).__name__, e)}
-        devs = [(bvs - exp) for _c, _b, bvs, exp, _m in res if exp]
-        gii = (sum(x * x for x in devs) / len(devs)) ** 0.5 if devs else None
-        matched = 0; agree = 0; worst = []
+        gii = PB.gii(res, st.inferred)
+        matched = 0; agree = 0; worst = []; inf = 0
         for c, _b, bvs, _e, _m in res:
             hit = ref.get(B._norm_label(c.label))
             if not hit:
                 continue
+            if PB._key(c.label) in st.inferred:
+                inf += 1; continue                  # the element came from the paper's prose, not the table: reported apart
             matched += 1
             if abs(bvs - hit[1]) <= TOL + 0.03 * max(bvs, hit[1]):
                 agree += 1
@@ -92,7 +90,7 @@ def _run_one(job):
                 worst.append((c.label, round(bvs, 2), round(hit[1], 2)))
         worst.sort(key=lambda t: -abs(t[1] - t[2]))
         cand = {'base': base, 'nrows': len(rows), 'sites': len(res), 'matched': matched, 'agree': agree,
-                'worst': worst[:4], 'tables': len(tabs), 'gii': gii}
+                'worst': worst[:4], 'tables': len(tabs), 'gii': gii, 'inferred': inf}
         if best is None or (matched, agree) > (best['matched'], best['agree']):
             best = cand
     return best

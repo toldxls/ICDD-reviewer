@@ -1314,9 +1314,15 @@ def _bv_cell(txt):
     each with its own marks ('0.70×4↓×2→, 0.64×2↓'). Marks may be '×3↓', '×3 →', or a
     superscript '²↓' (kept as ^2↓^ by the table reader)."""
     segs = []
+    # Mineralogical Magazine welds the mark onto the value on both sides — '↓×40.07→×2' is 0.07
+    # with four equivalent bonds down and two across, and '2×→0.41×4↓' the same the other way
+    # round. '×40.07' cannot be split by counting digits (×4 then 0.07, or ×40 then a stray '.07'),
+    # so a bar is planted between the mark and the value it runs into; nothing below reads a bar,
+    # and the digit scan can no longer cross it.
+    txt = re.sub(r'([×x]\s*\d)(?=\d\.\d)', r'\1|', txt.strip())
     # two values in one cell come comma-listed or, read off a page, space-separated ('0.06 0.05×2↓':
     # the mark belongs to the value it follows, not to both)
-    for part in re.split(r'\s*[,;]\s*(?=\d)|(?<=[↓→^])\s+(?=\d)|(?<=\d)\s+(?=\d+\.\d)', txt.strip()):
+    for part in re.split(r'\s*[,;]\s*(?=\d)|(?<=[↓→^])\s+(?=\d)|(?<=\d)\s+(?=\d+\.\d)', txt):
         n_down = n_across = 1
         for mk in re.findall(r'\^([^^]*)\^', part):
             m = re.search(r'(\d+)\s*([↓→]?)', mk)
@@ -1326,12 +1332,22 @@ def _bv_cell(txt):
                 else:
                     n_down = int(m.group(1))
         body = re.sub(r'\^[^^]*\^', ' ', part)
-        for n, arrow in re.findall(r'[×x]\s*(\d+)\s*([↓→]?)', body):
+        # the arrow that says which way the mark counts stands on either side of it: '×2↓' as often
+        # as '↓×2', and '→×4' as often as '0.41×4→'. Whichever side carries it, it is the same mark.
+        for pre, n, post in re.findall(r'([↓→])?\s*[×x]\s*(\d+)\s*([↓→])?', body):
+            if (pre or post) == '→':
+                n_across = int(n)
+            else:
+                n_down = int(n)
+        body = re.sub(r'[↓→]?\s*[×x]\s*\d+\s*[↓→]?', ' ', body)
+        # the mark printed the other way round, the count before its sign ('2×→0.41', '6×→0.36').
+        # The digits of a value are not a count, so they are fenced off by what precedes them.
+        for n, arrow in re.findall(r'(?<![\d.])(\d{1,2})\s*[×x]\s*([↓→]?)', body):
             if arrow == '→':
                 n_across = int(n)
             else:
                 n_down = int(n)
-        body = re.sub(r'[×x]\s*\d+\s*[↓→]?', ' ', body)
+        body = re.sub(r'(?<![\d.])\d{1,2}\s*[×x]\s*[↓→]?', ' ', body)
         for v in re.findall(r'\d+\.\d+', body):
             segs.append((float(v), n_down, n_across))
     return segs
@@ -1373,7 +1389,47 @@ def _element_aliases(result, anions=()):
     return out
 
 def _strip_charge(key):
+    """'FE3+' -> 'FE'; 'FE3' -> 'FE' (the sign lost in the text layer). It also turns a SITE label
+    into its element ('FE2' -> 'FE'), which is why callers go through `_resolve_sites` rather than
+    matching the stripped key on its own."""
     return re.sub(r'\d?[+\-]$|(?<=[A-Z])\d(?=$)', '', key) if key else key
+
+_WEIGHT_TAIL = re.compile(r'\s*[×x]\s*(0?\.\d+|1\.0+)\s*[↓→]*\s*$')
+
+
+def _header_weights(header):
+    """{column index: weight} for the columns a header weights by occupancy — 'Na1×0.20→': every
+    valence in that column is the bond's times 0.20, the site's occupancy."""
+    out = {}
+    for i, x in enumerate(header):
+        m = _WEIGHT_TAIL.search(x or '')
+        if m:
+            out[i] = float(m.group(1))
+    return out
+
+
+def _resolve_sites(tokens, table):
+    """{index: site} for the tokens of a header row, or the labels of a BVS column, that name a
+    cation site of `table` ({normalised label: site}). An exact label wins. A token that resolves
+    only once its charge is dropped ('Fe3+', or 'Fe3' with the sign lost in the text layer) stands
+    for the element's lone site — unless another token of the same row already does, or two such
+    tokens do: then it is a second site of that element the .cif does not have ('Fe1' and 'Fe2'
+    against a .cif with one Fe), and comparing it with the lone site's valences would only
+    manufacture disagreements."""
+    out = {}; stripped = {}
+    for i, x in enumerate(tokens):
+        n = _norm_label(_WEIGHT_TAIL.sub('', x))                       # 'Na1×0.20→': the column's occupancy weight is not part of the label
+        if n in table:
+            out[i] = table[n]
+        else:
+            s = _strip_charge(n)
+            if s != n and s in table:
+                stripped.setdefault(table[s], []).append(i)
+    taken = set(out.values())
+    for site, idx in stripped.items():
+        if site not in taken and len(idx) == 1:
+            out[idx[0]] = site
+    return out
 
 def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', compare_anion_sums=True):
     """Findings about a manuscript bond-valence table (anion rows × cation columns).
@@ -1391,7 +1447,7 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
     cat_labels = {_norm_label(x): r[0].label for r in result for x in r[0].label.split('/')}   # 'Mg' -> 'Mg/Mn'
     cat_labels.update({_norm_label(r[0].label): r[0].label for r in result})
     for k_, v_ in _element_aliases(result).items():                     # 'Fe3+' / 'Ge' for a single Fe1 / Ge2 site
-        cat_labels.setdefault(k_, v_); cat_labels.setdefault(_strip_charge(k_), v_)
+        cat_labels.setdefault(k_, v_)
     an_labels = {_norm_label(x): a.label for a in st.anions for x in a.label.split('/')}
     an_labels.update({_norm_label(a.label): a.label for a in st.anions})
     for k_, v_ in (getattr(st, 'aliases', None) or {}).items():         # the paper's own site names, mapped by coordinates
@@ -1419,17 +1475,45 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
             continue
         hdr = None
         for ri in range(min(3, len(rows))):
-            hits = [ci for ci, x in enumerate(rows[ri]) if _norm_label(x) in cat_labels or _strip_charge(_norm_label(x)) in cat_labels]
+            hits = sorted(_resolve_sites(rows[ri], cat_labels))
             below = sum(1 for r in rows[ri + 1:ri + 4] if r and _norm_label(r[0]) in an_labels)
-            numeric = any(re.search(r'\d\.\d', x) for x in rows[ri])       # a bond-distance table, not a header
+            numeric = any(re.search(r'\d\.\d', _WEIGHT_TAIL.sub('', x)) for x in rows[ri])       # a bond-distance table, not a header ('Na1×0.20→' is a weighted header, not a distance)
             if not numeric and (len(hits) >= 2 or (hits and below >= 1)):
                 hdr = ri; break
         if hdr is None:
             continue
         found = True
         header = rows[hdr]
-        col_cat = {ci: cat_labels.get(_norm_label(x)) or cat_labels[_strip_charge(_norm_label(x))] for ci, x in enumerate(header)
-                   if _norm_label(x) in cat_labels or _strip_charge(_norm_label(x)) in cat_labels}
+        col_cat = _resolve_sites(header, cat_labels)
+        # A column may be printed occupancy-weighted — the header says so ('Na1×0.20→'), or the site
+        # is partly occupied and the paper multiplied through. That is a convention of the COLUMN,
+        # never of one cell: it is taken only where it fits more of the column's cells than the
+        # plain reading does, so a lucky ratio cannot excuse a single slip.
+        col_w = _header_weights(header)
+        for ci, cat in col_cat.items():
+            if ci not in col_w and cat_occ.get(cat, 1.0) < 0.999 and not getattr(st, 'from_bonds', False):
+                col_w[ci] = cat_occ[cat]                                   # a .cif's partly occupied site; a bond-distance structure weights its own cells by share
+        col_mode = {}
+        for ci, w in list(col_w.items()):
+            cat = col_cat.get(ci)
+            if cat is None or cat in h_cols:
+                continue
+            plain = weighted = 0
+            for ri in range(hdr + 1, len(rows)):
+                row = rows[ri]
+                if ci >= len(row):
+                    continue
+                an = resolve_anion(_norm_label(row[0])); calc = cells.get((an, cat)) if an else None
+                segs = _bv_cell(row[ci]); nums, _nd, _na = _segs_split(segs)
+                if not calc or len(nums) != 1:
+                    continue
+                cv0 = sorted(s for s, _, _ in calc)[0]; tot = sum(s * n for s, n, _ in calc)
+                if abs(nums[0] - cv0) <= 0.015 or abs(nums[0] - tot) <= 0.015 * max(calc[0][1], 1) + 0.01:
+                    plain += 1
+                if abs(nums[0] - cv0 * w) <= 0.015 or abs(nums[0] - tot * w) <= 0.015 * max(calc[0][1], 1) + 0.01:
+                    weighted += 1
+            if weighted > plain and weighted >= 2:
+                col_mode[ci] = w
         sum_col = next((ci for ci, x in enumerate(header) if re.match(r'^\s*(Σ|Sum|Total)', x, re.I)), None)
         col_kind = {}
         for ci, x in enumerate(header):
@@ -1481,6 +1565,9 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
                     cv = sorted(s for s, _, _ in calc)
                     nd, na = calc[0][1], calc[0][2]
                     ok = False
+                    wt = col_mode.get(ci)
+                    if wt:                                         # the column is occupancy-weighted throughout
+                        cv = [v * wt for v in cv]; calc = [(s * wt, n, n2) for s, n, n2 in calc]
                     if len(nums) == len(cv) and max(abs(x - y) for x, y in zip(sorted(nums), cv)) <= 0.015:
                         ok = True                                  # per-bond values
                     elif len(nums) == 1:
@@ -1693,7 +1780,10 @@ def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_ani
     [{'rows': [(label, value), …], 'head'}]."""
     L = []
     bvs_of = {}
+    skip = {_norm_label(x) for x in getattr(st, 'inferred', None) or ()}   # a site whose element the paper's prose supplied: its computed sum is not evidence
     for r in result:
+        if _norm_label(r[0].label) in skip:
+            continue
         occ = min(getattr(r[0], 'occ_total', 1.0) or 1.0, 1.0)
         for x in r[0].label.split('/'):
             bvs_of[_norm_label(x)] = (r[0].label, r[2], 'cation', occ)
@@ -1701,7 +1791,7 @@ def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_ani
     for k_, v_ in _element_aliases(result).items():
         if k_ not in bvs_of:
             row = next(r for r in result if r[0].label == v_)
-            bvs_of[k_] = bvs_of[_strip_charge(k_)] = (v_, row[2], 'cation', min(getattr(row[0], 'occ_total', 1.0) or 1.0, 1.0))
+            bvs_of[k_] = (v_, row[2], 'cation', min(getattr(row[0], 'occ_total', 1.0) or 1.0, 1.0))
     for k_, v_ in (getattr(st, 'aliases', None) or {}).items():         # the paper's own site names, mapped by coordinates
         hit = bvs_of.get(_norm_label(v_))
         if hit and k_ not in bvs_of:
@@ -1712,8 +1802,11 @@ def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_ani
         bvs_of[_norm_label(a.label)] = (a.label, anion_sum.get(a.label, 0.0), 'anion', 1.0)
     for ti, tab in enumerate(tables):
         ncell = nbad = 0; found = False
-        for lab, v in tab.get('rows') or []:
-            hit = bvs_of.get(_norm_label(lab)) or bvs_of.get(_strip_charge(_norm_label(lab)))
+        rows_ = list(tab.get('rows') or [])
+        site_of = _resolve_sites([lab for lab, _v in rows_], {k: v[0] for k, v in bvs_of.items()})
+        by_site = {v[0]: v for v in bvs_of.values()}
+        for i, (lab, v) in enumerate(rows_):
+            hit = by_site.get(site_of.get(i))
             if not hit or (hit[2] == 'anion' and not compare_anions):
                 continue
             found = True; site, mine, kind, occ = hit

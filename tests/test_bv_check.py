@@ -292,6 +292,30 @@ class PaperTableConventions(unittest.TestCase):
         self.assertEqual(B._bv_cell('0.70 ×2↓'), [(0.7, 2, 1)])                        # a space before the mark is still one value
         self.assertEqual(B._bv_cell('0.70×4↓×2→, 0.64×2↓'), [(0.7, 4, 2), (0.64, 2, 1)])
 
+    def test_a_charge_resolves_to_the_lone_site_but_a_second_site_does_not(self):
+        # 'Fe3+' in a paper's header, or 'Fe3' with the sign lost in the text layer, is the .cif's one
+        # Fe site; 'Fe2' beside an 'Fe1' is a second site the .cif does not have and must not be
+        # compared with the first one's valences
+        table = {'TI1': 'Ti1', 'TI': 'Ti1'}
+        self.assertEqual(B._resolve_sites(['Atom', 'Ti4+', 'Σ'], table), {1: 'Ti1'})
+        self.assertEqual(B._resolve_sites(['Atom', 'Ti4', 'Σ'], table), {1: 'Ti1'})
+        self.assertEqual(B._resolve_sites(['Atom', 'Ti1', 'Ti2'], table), {1: 'Ti1'})
+        self.assertEqual(B._resolve_sites(['Atom', 'Ti2', 'Ti3'], table), {})
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        try:
+            st = B.Structure(_write(tmp, 'rutile.cif', RUTILE)); P = B.Params(prefer='bo')
+            result, anion_sum, cells, _ = B.compute(st, P)
+            grid = [['Atom', 'Ti1', 'Ti2'], ['O1', '0.70×4↓×2→, 0.64×2↓', '0.50×6↓'], ['Σ', '4.07', '3.00']]
+            bvs = B.check_bvs_table(st, result, cells, anion_sum, [grid], 'test')
+            self.assertIn('1 cells compared, 0 disagree', bvs[0])
+            self.assertFalse(any('Ti2' in x for x in bvs), bvs)
+            sites = B.check_bvs_sites(st, result, anion_sum, [{'rows': [('Ti1', 4.07), ('Ti2', 3.00)], 'head': 'BVS'}], 'test', compare_anions=False)
+            self.assertIn('1 cells compared, 0 disagree', sites[0]); self.assertFalse(any('Ti2' in x for x in sites), sites)
+            sites = B.check_bvs_sites(st, result, anion_sum, [{'rows': [('Ti4+', 4.07)], 'head': 'BVS'}], 'test', compare_anions=False)
+            self.assertIn('1 cells compared, 0 disagree', sites[0])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_sum_may_include_the_hydroxyl_hydrogen(self):
         tmp = tempfile.mkdtemp(prefix='bv_')
         try:
@@ -439,3 +463,24 @@ class LocatedHydrogen(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WeightedColumns(unittest.TestCase):
+    """A bond-valence column printed occupancy-weighted — 'Na1×0.20→' in the header, or a site the
+    structure knows to be partly occupied — is read so throughout the column, never cell by cell."""
+
+    def test_header_weight_and_column_mode(self):
+        self.assertEqual(B._header_weights(['Atom', 'Na1×0.20→', 'Al1', 'Σ']), {1: 0.2})
+        self.assertEqual(B._resolve_sites(['Atom', 'Na1×0.20→', 'Al1'], {'NA1': 'Na1', 'AL1': 'Al1'}), {1: 'Na1', 2: 'Al1'})
+        tmp = tempfile.mkdtemp(prefix='bv_'); self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cif = os.path.join(tmp, 'h.cif'); open(cif, 'w').write(HYDRATE)
+        st = B.Structure(cif); P = B.Params(prefer='gh', u6='burns')
+        res, an, cells, hb = B.compute(st, P, None, 'oo')
+        vals = {a: sorted(s for s, _, _ in v)[0] for (a, c), v in cells.items() if c == 'Ca1'}
+        rows = [['Atom', 'Ca1×0.50→', 'Σ']] + [[a, '%.2f' % (v * 0.5), '%.2f' % (v * 0.5)] for a, v in sorted(vals.items())]
+        lines = B.check_bvs_table(st, res, cells, an, [rows], 'GH')
+        hits = [ln for ln in lines if 'cells compared' in ln]
+        self.assertTrue(hits and hits[0].endswith('0 disagree (computed with GH; H columns not compared)') or ', 0 disagree' in hits[0], lines)
+        rows[1][1] = '%.2f' % (vals[rows[1][0]] * 0.5 + 0.2)                                   # one of two cells off: the column can no longer be called weighted (two matches are needed), so both cells are findings — conservative
+        lines = B.check_bvs_table(st, res, cells, an, [rows], 'GH')
+        self.assertTrue(any('2 disagree' in ln for ln in lines), lines)

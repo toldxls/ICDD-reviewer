@@ -664,11 +664,6 @@
   "source": "M1981 Table 7",
   "reliability": "M"
  },
- "O2-": {
-  "k": 0.203,
-  "source": "M1981 Table 7",
-  "reliability": "H"
- },
  "S": {
   "k": 0.628,
   "source": "M1981 Table 7",
