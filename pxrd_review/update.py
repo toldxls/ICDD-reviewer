@@ -106,7 +106,9 @@ def checkout():
     the wrong thing for a developer's machine — so `pxrd update` runs git pull there instead."""
     import pxrd_review
     root = os.path.dirname(os.path.dirname(os.path.abspath(pxrd_review.__file__)))
-    return root if os.path.isdir(os.path.join(root, '.git')) and os.path.exists(os.path.join(root, 'pyproject.toml')) else None
+    # `.git` is a directory in a clone and a FILE in a git worktree (it names the gitdir); both are
+    # live checkouts that `git pull` serves and a pip install would wrongly paper over.
+    return root if os.path.exists(os.path.join(root, '.git')) and os.path.exists(os.path.join(root, 'pyproject.toml')) else None
 
 # ------------------------------------------------------------------ the GUI's background check
 _state = {'status': 'idle', 'result': None}

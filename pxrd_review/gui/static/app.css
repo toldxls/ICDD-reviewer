@@ -573,3 +573,6 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 #ms-page-overlay .cap { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); color: #fff; font-size: 12px; background: rgba(0, 0, 0, .55); padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
 .tb-mscheck { margin-bottom: 12px; }
 .tb-mscheck pre { white-space: pre-wrap; }
+
+/* the entry-level note (an imported triage report's decisions on findings this version does not raise) */
+.e-note { margin: 4px 12px 2px; padding: 4px 8px; font-size: 12px; line-height: 1.35; color: #5a4a1a; background: #fff8dc; border-left: 3px solid #d9b34a; white-space: pre-wrap; }

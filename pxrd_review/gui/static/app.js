@@ -407,6 +407,8 @@ function renderHead() {
   $('#e-preview').textContent = pv.write
     ? `rerun writes ${pv.write}${pv.suppress ? ` · ${pv.suppress} suppressed` : ''}`
     : (pv.suppress ? `${pv.suppress} suppressed (clean)` : 'nothing to write');
+  const en = $('#e-note');                       // another reviewer's decisions on findings not raised now, + their entry note
+  if (en) { en.textContent = S.t.note || ''; en.hidden = !S.t.note; }
   const rv = $('#e-reviewed'); rv.checked = !!S.t.reviewed;
   rv.onchange = () => {
     S.t.reviewed = rv.checked;
@@ -1317,10 +1319,13 @@ function renderMindat() {
     if (a.synthetic)
       body.append(el('div', { class: 'note-line' },
         'synthetic — the tool skips the Mindat CELL compare (a synthetic cell ≠ the natural species); the formula check still applies.'));
-    body.append(cellGrid([M.a, M.b, M.c, M.al, M.be, M.ga, M.sg, ''], {}, []));
+    // SG is deliberately left blank here: Mindat's space-group field is an internal id,
+    // not the ITA number, so printing it in the SG cell invites a compare against the
+    // docx/.cif symbol beside it. It is shown, labelled, in the kv table below.
+    body.append(cellGrid([M.a, M.b, M.c, M.al, M.be, M.ga, '', ''], {}, []));
     const kv = [];
     if (M.sorted && M.sorted.length) kv.push(['sorted axes', M.sorted.map(x => (+x).toFixed(3)).join(', ')]);
-    if (M.sg) kv.push(['SG (IT no.)', M.sg]);
+    if (M.sg) kv.push(['SG (Mindat id, not IT no.)', M.sg]);
     if (M.formula) kv.push(['IMA formula', fmtFormula(M.formula)]);
     if (M.group) kv.push(['group', M.group]);
     if (M.ima_status) kv.push(['IMA status', M.ima_status]);

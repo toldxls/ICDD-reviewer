@@ -440,6 +440,8 @@ def _badges(s):
         add('no-pdf', 'no .pdf', 'danger')
     if status == 'notext':
         add('no-text', '.pdf: no text layer', 'danger')   # scanned image — cell/λ not checked
+    if (s.get('pdf') or {}).get('unreadable'):
+        add('pdf-unreadable', '.pdf unreadable', 'warn')  # the page scan timed out or the decoder crashed; opening the entry retries it
     if status == 'nocell':
         add('no-cell', 'no cell parsed', 'danger')
     if status == 'investigate':
@@ -518,19 +520,28 @@ def _fingerprint(key):
             fp.append(0)
     return fp
 
-def get_analysis(key, force=False):
+def get_analysis(key, force=False, retry=False):
+    """The entry's analysis — from the cache while its source files are unchanged.
+
+    `retry` re-runs an entry whose .pdf scan failed last time. The OPEN passes it (the reviewer
+    asked to look, so the scan is tried again); the background pass does not. Leaving such an
+    entry out of the cache instead, as 0.5.6 first did, made it 'pending' for ever: the dashboard
+    re-kicks an idle analysis pass every 30 s while anything is pending, and each pass re-ran the
+    failed scan — a 40 s worker timeout — so one bad .pdf kept a worker busy for as long as the GUI
+    was open and the folder never reached pending 0."""
     with STATE['lock']:
         if key not in STATE['docx']:                 # the folder switched mid-request — entry gone
             raise KeyError(key)
         fp = _fingerprint(key)
         c = STATE['cache'].get(key)
-        if not force and c and c.get('fp') == fp:
+        if not force and c and c.get('fp') == fp and not (retry and c.get('unreadable')):
             return c['data']
         data = _serialize(key)
-        if ((data.get('pdf') or {}).get('unreadable')):
-            return data              # a scan that timed out is not an answer: hand it back, but do not
-                                     # cache it, so reopening the entry retries instead of pinning the failure
-        STATE['cache'][key] = {'fp': fp, 'data': data}
+        # A scan that timed out is cached like any other result, but FLAGGED: the row counts as
+        # analysed (the poll settles), the pane says the .pdf could not be read and the row carries
+        # a badge (never a blank pane behind 'pdf ✓'), and the next open retries it.
+        STATE['cache'][key] = {'fp': fp, 'data': data,
+                               'unreadable': bool((data.get('pdf') or {}).get('unreadable'))}
         return data
 
 def _cache_path():
@@ -1136,7 +1147,7 @@ def api_entry(key):
     if key not in STATE['docx']:
         abort(404)
     try:
-        d = get_analysis(key)
+        d = get_analysis(key, retry=True)            # the open: a .pdf scan that failed is tried again
     except KeyError:                                 # folder switched between the check and the lock
         abort(404)
     except Exception as ex:                          # analysis crash -> clean JSON, not an HTML 500
@@ -1442,6 +1453,165 @@ def api_rerun_entry(key):
 @app.route('/api/rerun', methods=['POST'])
 def api_rerun_all():
     return _run_annotate(_annotate_cmd([]))
+
+# ------------------------------------------------------------------ import (another reviewer's report)
+# ICDD returns its review as the tool's OWN triage_report.txt (the reviewer's verdict and note per
+# finding), not as triage.json — so the decisions were readable only as text. This reads the report
+# back into the triage sidecar: each '[CONFIRMED] code: message…' line is matched to the finding the
+# CURRENT analysis raises (same code, same message prefix — the report holds the first 80 characters
+# the GUI labelled it with), the verdict and note land on that finding, and a decision on a finding
+# this version no longer raises is kept on the entry as a note, so nothing the other reviewer decided
+# is lost. An existing verdict of the local reviewer is never overwritten.
+_RPT_ENTRY = re.compile(r'^(?P<name>\S.*?)\s+\((?P<eid>[A-Z]\d{5,7}|\?)\)(?P<rev>\s+\[REVIEWED\])?\s*$')
+_RPT_VERDICT = re.compile(r'^  \[(?P<v>CONFIRMED|dismissed|NEEDS A LOOK)\s*\] (?P<label>.*)$')
+_RPT_NOTE = re.compile(r'^\s{5,}note: (?P<note>.*)$')
+_RPT_ACCEPT = re.compile(r'^  Accept decision : (?P<a>.+?)\s*$')
+_RPT_ENTRY_NOTE = re.compile(r'^  entry note: (?P<n>.*)$')
+_RPT_VERDICTS = {'CONFIRMED': 'confirm', 'dismissed': 'dismiss', 'NEEDS A LOOK': None}
+
+def _parse_triage_report(text):
+    """triage_report.txt -> [{'eid', 'name', 'reviewed', 'accept', 'note', 'verdicts': [{'verdict',
+    'label', 'note'}]}], in report order. A '↳ …' continuation line belongs to the label above it."""
+    blocks = []; cur = None
+    for raw in text.splitlines():
+        line = raw.rstrip('\n')
+        m = _RPT_ENTRY.match(line)
+        if m and not line.startswith(' ') and not line.startswith('PXRD review'):
+            cur = {'eid': m.group('eid'), 'name': m.group('name').strip(), 'reviewed': bool(m.group('rev')),
+                   'accept': None, 'note': None, 'verdicts': []}
+            blocks.append(cur); continue
+        if cur is None:
+            continue
+        m = _RPT_VERDICT.match(line)
+        if m:
+            cur['verdicts'].append({'verdict': m.group('v'), 'label': m.group('label').strip(), 'note': None}); continue
+        m = _RPT_NOTE.match(line)
+        if m and cur['verdicts']:
+            cur['verdicts'][-1]['note'] = m.group('note').strip(); continue
+        m = _RPT_ACCEPT.match(line)
+        if m:
+            cur['accept'] = m.group('a'); continue
+        m = _RPT_ENTRY_NOTE.match(line)
+        if m:
+            cur['note'] = m.group('n').strip(); continue
+        if line.startswith('↳') and cur['verdicts']:
+            cur['verdicts'][-1]['label'] += '\n' + line.strip()
+    return blocks
+
+def _match_report_label(label, rows):
+    """The current finding a report label names, or None. `rows` = [(fkey, code, msg)] as the GUI
+    renders them (the synthesised CELL / CELL β / RADIATION rows included). The label is
+    'code: message[:80]'; a CELL / RADIATION / per-parameter row is unique by its code, an
+    extra-check finding is matched on its code and message prefix, else — when the entry has
+    exactly one current finding of that code — on the code alone (a reworded message)."""
+    head = label.split('\n')[0]
+    if ': ' not in head:
+        return None
+    code, msg = head.split(': ', 1)
+    code = code.strip(); msg = msg.strip()
+    same = [r for r in rows if r[1] == code]
+    if code in ('CELL', 'RADIATION') or code.startswith('CELL '):
+        return same[0][0] if same else None
+    for fkey, _c, m in same:
+        m = (m or '').strip()
+        if (len(msg) >= 80 and m[:len(msg)] == msg) or (len(msg) < 80 and m == msg):
+            return fkey
+    if len(same) == 1:
+        return same[0][0]
+    return None
+
+def _entry_rows(d):
+    """The (fkey, code, msg) rows of an analysis, in the GUI's own vocabulary."""
+    rows = [('cell', 'CELL', d['cell'].get('status') or '')]
+    for ax in (d.get('params') or {}):
+        rows.append(('param:' + ax, 'CELL ' + ax, '; '.join('%s: %s' % (k, n) for k, n in d['params'][ax])))
+    if d.get('lam') and d['lam'][0] != 'ok':
+        rows.append(('lam', 'RADIATION', d['lam'][1]))
+    for f in d.get('findings') or []:
+        rows.append((f['fkey'], f['code'], f.get('msg') or ''))
+    return rows
+
+def _without_import_notes(note, tag):
+    """The entry note with every segment an earlier import of `tag` appended removed (segments are
+    joined by ' ‖ ' — a separator no report text contains — and begin with the report's file name)."""
+    keep = [seg.strip() for seg in note.split('‖') if seg.strip() and not seg.strip().startswith(tag + ' ')]
+    return ' ‖ '.join(keep)
+
+
+def import_triage_report(path):
+    """Merge another reviewer's triage_report.txt into this folder's triage. -> summary dict."""
+    with open(path, encoding='utf-8') as fh:
+        blocks = _parse_triage_report(fh.read())
+    tag = os.path.basename(path)
+    by_eid = {}
+    for key in STATE['order']:
+        eid = C.entry_id(STATE['docx'][key])
+        if eid:
+            by_eid.setdefault(eid, key)
+    summary = {'entries': 0, 'matched': 0, 'kept_as_note': 0, 'unknown_entries': [], 'kept_local': 0}
+    for b in blocks:
+        key = by_eid.get(b['eid'])
+        if not key:
+            summary['unknown_entries'].append(b['eid']); continue
+        summary['entries'] += 1
+        try:
+            d = get_analysis(key)
+        except Exception:
+            d = None
+        rows = _entry_rows(d) if d else []
+        t = STATE['triage'].setdefault(key, {})
+        t.setdefault('findings', {})
+        # re-importing the same report is idempotent: what an earlier import of it wrote is replaced,
+        # what the local reviewer decided is kept
+        for fk in list(t['findings']):
+            if t['findings'][fk].get('imported') == tag:
+                del t['findings'][fk]
+        t['note'] = _without_import_notes(t.get('note') or '', tag) or None
+        leftovers = []
+        for v in b['verdicts']:
+            verdict = _RPT_VERDICTS.get(v['verdict'])
+            fkey = _match_report_label(v['label'], rows)
+            if fkey and verdict:
+                rec = t['findings'].setdefault(fkey, {})
+                if rec.get('verdict'):
+                    summary['kept_local'] += 1                     # the local reviewer decided already
+                    if v['note'] and not rec.get('note'):
+                        rec['note'] = v['note']
+                    continue
+                rec['verdict'] = verdict; rec['label'] = v['label'].split('\n')[0][:100]; rec['imported'] = tag
+                if v['note']:
+                    rec['note'] = v['note']
+                summary['matched'] += 1
+            else:
+                leftovers.append('[%s] %s%s' % (v['verdict'], v['label'].split('\n')[0][:90],
+                                                (' — ' + v['note']) if v['note'] else ''))
+        added = []
+        if leftovers:
+            added.append('%s decided on findings this version does not raise: ' % tag + ' | '.join(leftovers))
+            summary['kept_as_note'] += len(leftovers)
+        if b['note']:
+            added.append('%s entry note: %s' % (tag, b['note']))
+        if added:
+            t['note'] = ' ‖ '.join(([t['note']] if t.get('note') else []) + added)
+        if b['reviewed'] and not t.get('reviewed'):
+            t['reviewed'] = True
+        if b['accept'] and t.get('accept') is None:
+            t['accept'] = b['accept']
+    return summary
+
+@app.route('/api/triage/import', methods=['POST'])
+def api_triage_import():
+    data = request.get_json(force=True, silent=True) or {}
+    path = data.get('path') or ''
+    if not os.path.isfile(path):
+        return jsonify({'ok': False, 'error': 'no such file: %s' % path}), 400
+    try:
+        with STATE['lock']:
+            summary = import_triage_report(path)
+        _save_triage()
+        return jsonify({'ok': True, 'summary': summary})
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 500
 
 # ------------------------------------------------------------------ export
 VERDICT_LABEL = {'confirm': 'CONFIRMED', 'dismiss': 'dismissed', 'look': 'NEEDS A LOOK'}
@@ -2401,11 +2571,23 @@ def main():
                          'shortly after the last tab closes — never while one is open)')
     ap.add_argument('--manuscript', action='store_true',
                     help='open in Manuscript mode on this folder (a folder of paper .docx, not entries)')
+    ap.add_argument('--import-triage', metavar='REPORT',
+                    help="merge another reviewer's triage_report.txt (e.g. the one ICDD returns) into this "
+                         "folder's triage before serving: their verdict and note land on each finding")
     args = ap.parse_args()
 
     if not os.path.isdir(args.folder):
         sys.exit('not a folder: %s' % args.folder)
     build_index(args.folder, args.out, args.pdf_root)
+    if args.import_triage:
+        if not os.path.isfile(args.import_triage):
+            sys.exit('no such report: %s' % args.import_triage)
+        summ = import_triage_report(args.import_triage)
+        _save_triage()
+        print('[review_gui] imported %s: %d entries, %d verdicts matched to current findings, %d kept as entry notes '
+              '(findings this version does not raise), %d left to the local reviewer%s'
+              % (os.path.basename(args.import_triage), summ['entries'], summ['matched'], summ['kept_as_note'], summ['kept_local'],
+                 ('; not in this folder: ' + ', '.join(summ['unknown_entries'])) if summ['unknown_entries'] else ''))
     if args.manuscript or not STATE['order']:
         # no ICDD entries here: a folder of manuscripts (or .cif files) opens in the other modes
         if ms_set_folder(args.folder):
