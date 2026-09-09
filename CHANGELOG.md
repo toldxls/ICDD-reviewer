@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.5.7](#057--2026-09-09) | 9 Sep | The gauntlet: paper readers driven to 91/83/86/52 % on the papers that print everything; ICDD's Part 2 review corrects five entry rules; another reviewer's triage report reads back into the GUI |
 | [0.5.6](#056--2026-09-07) | 7 Sep | Every reading says which oracle vouched for it; recall measured by seeding faults; corpus runs in parallel; seven issues fixed |
 | [0.5.5](#055--2026-09-05) | 5 Sep | The powder table checked against the cell — every calculated d recomputed from its own indices |
 | [0.5.4](#054--2026-09-03) | 3 Sep | Five papers hand-checked, one rule each; the reader defects behind "column chosen by fit" |
@@ -18,6 +19,252 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.5.7] — 2026-09-09
+
+### Added — the gauntlet: the paper readers driven to a measured target, class by class
+
+The owner asked for a recursive gauntlet: measure the readers on the papers that print everything
+a description should — an EPMA table, a bond-valence table, atomic coordinates, a stated
+Gladstone–Dale compatibility index and optics — fix the largest reader fault as a CLASS, re-measure,
+repeat. Thirteen iterations (2026-09-09), each with a unit test pinning its mechanism; the log with
+every class, mechanism, number and loss is `…/review_out/gauntlet_log.md`, every accepted
+iteration's diff `…/review_out/gauntlet_patches/`.
+
+**The metric.** `tools/paper_features.py` (dev-only) scans the RAW pdf text with five crude regexes
+that share no code with the readers; the harness `tools/corpus_paper_extract.py` records the result
+per paper (`has`) and prints a GAUNTLET section: for S — the 103 of 1092 corpus papers that print all
+five — how many each reader VERIFIES (agrees / |S|), both composites, the diff restricted to S. The
+denominator is the scan's, so a reader cannot raise its rate by reading less. Three reader rows join
+`paper_extract.FIELDS`: **`bv.table`** (the bond-valence table itself, checked whether or not the
+paper cites a parameter set — 37 verdicts had been dropped because the record's value was the
+citation), **`coords`** (the coordinates table: agrees when the structure built from it holds
+together, GII ≤ 0.15, AND closes on the formula — by element ratios ≤ 0.25 or by cation-to-anion
+SITE count ≤ 0.15, which mixed-occupancy sites do not break — or when ≥ 80 % of its sites fall on a
+.cif's positions), **`gd`** (the stated index, carrying n's verdict or the reason none could be
+formed). `pxrd paper X.pdf --check --why` prints every record with the sentence it came from.
+
+**What moved on S** (103 papers, baseline → final): epma 84 → **91 %**, gd 43 → **83 %**, optics.n
+45 → 84 %, coords 25 → **42 %**, bond-valence table 40 → **45 %**, cell 86 → 90 %; the composite
+"table + bond-valence set + n" 11 → 28, "table + BV table + coordinates + compatibility" 8 → 15.
+Corpus-wide: D_meas 77 → 93 %, D_calc 72 → 79 %, optics.n 57 → 74 % verified. **Recall, by seeding
+faults, is unchanged to within one paper at every fault size**, and the entries regression gate
+passed at every checkpoint: no precision was sold.
+
+**The classes, in the order they paid.** Optics: the Symbol-font α β γ that reach the text as the
+Latin letter of the same keystroke (`a = 1.556(1), b = 1.581(1), g = 1.588(1)`), `¼` and a lost glyph
+for `=`, a primed α′, "the values of ω and ε … are 1.85(1) and 1.99(1)", the index a paper COMPUTED
+from Gladstone–Dale (`n_calc`). The compatibility statement: the minus lost by the font, "GladstoneDale",
+a figure caption typeset into the sentence, the number 130 characters on, never the .907 of an index
+of 1.907, never "n was calculated FROM the compatibility index". The density sentence: "Dx = 3.199",
+"density of is 3.40", the unit before the number in a crystal-data table, a plain "density is 3.05(2)"
+(measured, by its esd), a density being 1–25 g/cm³ by construction. K_C: `H2O∗` (U+2217) and `H2Ocalc`
+as constituents (never `tot`), the normalised set for a table whose Mean column adds to 117 % (the
+paper's own 'Norm.' practice) and Table 7's class constants (UO3's uranyl 0.134, Fe2O3, Al2O3, MgO)
+— each only where the paper's own stated index accepts it, and the record says which constant it
+took. Composition: the release valve fires when NOTHING deviates, not only on a single outlier; the
+range-column and excess-total doubts are `strict` reading doubts — dropped only then, so a column
+mapped wrong can never turn its one deviating coefficient into a finding, and still hard for the
+apfu column's vouching; analyses given in prose with three constituents and a total, or with
+parenthesised ranges and esds; the B site of a monazite-type formula is not boron. A Gladstone–Dale
+doubt no longer outranks a density the cell oracle verified.
+
+Coordinates: an en-dash negative, the header read preferred to the content read (an occupancy
+column before x had been taken as x), the occupancy tagged (`occ=`) and written into the synthetic
+.cif with sites under half occupied left out of the index, split sites (`Fe1/Al1`), a table
+continued over a page break in either direction, **tables typeset sideways** — `page_lines` turns
+rotated text into its own reading frame (`rot`, `ROT_X`), so every reader sees a landscape table as
+a table — the occupancy by element before x, the site-prefixed formula ("M(1)Mg M(2)(Mg0.5Fe3+0.5)2")
+and `¼` in the prose site reader, the formula's dominant unplaced cation for a site-lettered label
+(inferred: out of the index, in the composition), a '1/0' token no longer raising inside `_val`,
+and a column tolerance that scales with the header spacing. Space groups: `data/symops.json.gz` now
+holds **every setting of all 230 groups** (702 keys; `tools/build_symops.py --from-spglib`, a
+dev-time dependency in a throwaway venv — the 73 corpus-harvested sets all match and stay first),
+non-standard monoclinic short symbols (I2/m, P21/a) derived from the full symbol, the symbol required
+to be a word of its own with a capital lattice letter ("and the cell", "an inversion twin" had
+matched the setting `An`), the barred twin tried when the bar is lost, **the overbar delivered as a
+control code** (`P\x021` is P1̄), and `build` under a 24-build budget with the standard setting
+tried on every cell first (C2/c's eighteen settings had made the full corpus run 12:51 instead of 3).
+Bond valence: the `PBV` column head, a caption-found grid whose row labels repeat WITH esds rejected
+as a bond table, the "differs throughout" cap `max(8, 0.2·n)` for large tables, and
+occupancy-weighted columns — the header's `Na1×0.20→` read as a weight instead of dropped with the
+label, a column read weighted only where that fits more of its cells and at least two (a convention
+of the column, never of one cell), the bond-distance structure carrying the coordinates table's
+occupancies (`BondStructure(occ=)`) — and a mixed site modelled as the paper populates it: the species
+from the occupancy string ("Na0.62(1)Ca0.38"), every cell and the formal valence share-weighted
+(`occupancy_species`, `paper_bonds.compute`). That last change let tables be compared in full where
+they had been compared on two cells of one site; nine papers outside the subset lost a thin verdict
+to the fuller comparison (listed in the log: 1994, 4750, I002917, MM78_1775, markwelchite; 1010,
+77449, 77539, 79263) — conventions the checker does not model yet.
+
+**Ceilings, stated.** gd's residue on S (11) is the constant set a paper used — none prints K_P or
+K_C, so nothing arbitrates. Coordinates: 54 structures on S build but fail a gate — a wrong cell
+chosen among several, a header split over two lines in a rotated frame, site elements in a separate
+site-population table; five cannot build. Bond-valence tables: 30 unmatched (labels that differ
+between the printed table and the bond-distance structure; Σ rows off by the ×2↓→ marks) and 18
+`disagrees` of the convention kind (split sites, the Fe valence choice). `bv.table disagrees`
+corpus-wide 72 → 82 — a status in the record, not a finding written anywhere; listed for the owner.
+Two denominator corrections on the way: the bare word "Gladstone" (45 papers that only compute an
+index) and "coordinates … in Online Materials Table S2" (a table in a supplement).
+
+**Round 2 (it15–18): the paper's own bond distances as the coordinates oracle.** The owner's
+direction: every remaining failure is a reading fault — the data is on the page. The coordinates
+row had been gated on valence sums and formula closure, both of which depend on FURTHER readings;
+the paper prints the direct check, its bond-distance table. `paper_structure.bond_hits` counts the
+printed (cation, anion, distance) triples the rebuilt structure reproduces within 0.03 Å; `build`
+scores every cell and setting by that count and stops at 90 %; the row is `agrees` by 'bonds' when
+≥ 80 % of at least five reproduce and the compared bonds cover ≥ 60 % of the printed ones (a table
+read in part must not pass), else the record names the bonds that fail. On the way: the cell reader
+reads a Symbol-font angle triplet ("a = 104.205(7)8" is α = 104.205°) as the angles of the cell before
+it; `symops` carries each group's number, and `build` takes the symbol a printed cell's lattice
+allows. A structure the paper's own bonds verify then checks the bond-valence table at flag grade
+beside the bond-distance structure (the reading with fewer disagreements stands; the report says
+which) — **a deviation from the note-grade rule for `paper_structure`, on the evidence of the bonds
+oracle; `_verified_coords` → `bc_coords = None` restores the rule.** Then the labels the two tables
+share: footnote marks off the label, two-letter site names (`MH`, `AP`), the site name printed
+beside the element kept on both tables (`Mn (X)`/`Mn (M1)` are two sites; `Cu(M1)*`; `Al1 (M3a)`
+meets the bond table's `Al2 (M3a)` on the paper's own site name — `Row.site`, `_label_keys`), a
+coordinate printed past 1 under a known header, a continuation page that repeats its header
+(`_continues`), and the next caption ending a table. S: coords 42 → **86 %**, bond-valence table
+45 → **52 %**, the four-reader composite 15 → **37**; one new red (I002984, a split-site weighting).
+
+### Changed — ICDD's own review of Part 2 (2026-09): the reviewer's notes correct four rules
+ICDD ran the tool on the 37 entries of 2028 Part 2 and returned its review_out with the reviewer's
+verdict on every finding (`Review_out/triage_report.txt`, `Meg_Notes_UPDATEpxrdtool.docx`). The
+current tool reproduced ICDD's seven findings exactly; the reviewer refuted four and explained two,
+and each was a rule, not a paper:
+- **Bragg-Brentano does not mean Peak** (argentopearceite, "This is Integrated"): the Intensity Type
+  follows how the data were PROCESSED — JADE integrates Bragg-Brentano data; a modern diffractometer
+  (Bruker D2/D8, Rigaku MiniFlex/Rapid, Proto AXD) is typically Integrated. The BB→Peak flag is
+  retired; a Peak on an entry whose Spacing and Intensity Instr. both say Diffractometer is a console
+  note to confirm. Training corpus: four flags retired (I002366, I002437, I002982, I003048).
+- **Visual is an Intensity INSTRUMENT, not a Type** (suenoite, "Intensity Type can only be I or P,
+  Intensity Instrument is Visual"): the vocabulary is Integrated | Peak; a visually estimated pattern
+  is Type Peak with Intensity Instr. = Visual (Film when the film was scanned), and each wrong field
+  is flagged on its own cell. A docx with Type 'Visual' gets the vocabulary flag → Peak.
+- **A paper that says its pattern was measured has a measured pattern** (touretite, "PXRD was
+  measured"): 'Calculated d values were obtained from the unit-cell parameter refinement … calculated
+  intensities … simulated with VESTA' describes the dcalc/Icalc comparison columns; check 4 reads those
+  phrases as measured, and a sentence stating the entry's pattern was measured / collected / recorded
+  silences the calculated flag outright.
+- **The CIF Z check reconciles cell contents, not formula units** (anningite-(Ce), "Z should be 4;
+  Z = 2 gives a 115 % density error"): the CIF's formula sum was written for two substituted units
+  ('Ca1.16 Ce0.84 O8 P0.75 V1.25', Z = 2, V split with P), so the dominant-cation rule failed; the O
+  count (4 × 4 = 2 × 8) or the cation total now reconciles it (`_z_reconciles`).
+- **A cell parameter taken from the .cif is not a sig-figs slip** (cadvanite, "from CIF"): a docx
+  value written exactly as the .cif writes it (β 103.967(24); the paper rounds to 103.97(2)) is a
+  co-equal source — the precision/esd finding becomes a console note (`cif_vouches`).
+- **A powder table's own 'Unit-cell parameters' row** (petersite-(Y), "See table 2"): the powder cell
+  sat in the table, values without a =/c = under a Russian label ('Параметры гексагональной
+  элементарной ячейки 13.257(2) 5.869(1) 893.3(4)'); `find_cells_param_row` reads such rows (two
+  lengths = uniaxial, three = general, a volume closes a cell), so the cell matches instead of
+  'investigate'.
+- **A Levinson suffix typed without its parentheses** (lepersonnite-(Gd)/-(Nd), the GUI's two
+  "attention" entries): the docx names 'Lepersonnite-Gd' / 'Lepersonnite-Nd' resolved on Mindat as
+  nothing, so the fault surfaced only as 'Mindat: not resolved'. `mindat._candidates` now tries the
+  '-(Gd)' form, and check 18 flags the name when the paper (or Mindat) confirms the parenthesised
+  species — every Levinson name in the corpus (91 of 91) carries the parentheses.
+- **Another reviewer's triage report reads back into the GUI** (`pxrd gui <folder> --import-triage
+  <triage_report.txt>`, also `POST /api/triage/import`): ICDD returned its decisions as the tool's own
+  `triage_report.txt`, readable only as text. The importer matches each '[CONFIRMED] code: message…'
+  line to the finding the current analysis raises (same code and message prefix; a reworded finding
+  of a code the entry raises once still takes it), lands the verdict and note on it, keeps a decision
+  on a finding this version no longer raises as an entry note ("… decided on findings this version
+  does not raise: …"), never overwrites the local reviewer's verdict, and is idempotent per report.
+- **'? look' on the Levinson-parentheses flag** lands on the paper's own spelling of the name (the
+  finding carries it as evidence) instead of the cell's evidence page.
+Re-run on Part 2: 4 findings — suenoite's Intensity Instr., metaheimite's strongest line (both confirmed
+by the reviewer) and the two lepersonnite names. The regression suite replaces the retired rule's cases
+and adds a unit case per rule.
+
+### Fixed — an unreadable .pdf spun the background pass; a site digit read as a charge
+- **A .pdf whose page scan fails no longer keeps the GUI analysing it.** The 0.5.6 fix for issue #3
+  left such an entry out of the cache so that reopening it would retry — but the dashboard counts
+  every un-cached entry as pending and re-kicks an idle pass every 30 s while anything is, and each
+  pass re-ran the failed scan (a 40 s worker timeout). One bad .pdf therefore kept a worker busy for
+  as long as the GUI was open, and the folder never reached pending 0. The failure is now cached and
+  flagged: the row carries a `.pdf unreadable` badge, the pane says so, the background pass is served
+  from the cache, and only opening the entry retries the scan (`tests.test_gui_cache`).
+- **`Fe2` beside `Fe1` is a second site, not a charge.** The rule that lets a paper's `Fe3+` (or
+  `Fe3`, the sign lost in the text layer) stand for a .cif's lone Fe site stripped any trailing
+  digit, so a paper printing Fe1 and Fe2 against a .cif with one Fe had its Fe2 column, and its Fe2
+  BVS row, compared with Fe1's valences — manufactured disagreements. `bv_check._resolve_sites` now
+  grants the charge-dropped match only when no other label of the same row already stands for that
+  site. It can only remove comparisons, never add a finding.
+- `gd_constants.json` carried the O²⁻ constant its own note says it leaves out (the oxides carry
+  their oxygen already); removed.
+- `pxrd update` recognises a git worktree as a checkout (`.git` is a file there): `git pull`, not
+  pip. The two `tests.test_update` cases that assert this now pass from a worktree.
+
+### Changed — the bond-valence gate was answering the wrong question
+`bv.params` — which bond-valence parameter set a paper's own printed table follows — verified on
+**19 % of the 219 corpus papers that cite one; it now verifies on 38 % (84 papers)**, and no other
+reader moved a single paper.
+
+The block was a gate, not a reader. A bond-valence check built from the distances a paper prints
+was allowed to reach a verdict only while those distances summed to the formal valences (rms
+≤ 0.15 v.u.). That gate belongs to a claim about SUMS: a BVS column states a site's whole
+coordination, so a table read one bond short states it wrong. It does not belong to a GRID of
+individual bond valences, where which parameter set reproduces a cell has nothing to do with
+whether the cell next to it was read. Measured, against the 156 corpus papers that have a `.cif`:
+the set chosen from the paper's own distances matched the `.cif`'s for 18 of 21 papers inside the
+gate, **5 of 5 between the gates and 8 of 8 above them**. The gate was buying nothing and costing
+half the corpus. Sums are still gated; grids are judged at any index, and the index is reported.
+
+### Changed — the bond-valence table is found by its caption, not by guessing its header
+The paper says outright which table holds the bond valences — `Table 8. Weighted bond-valence sums
+for bianchiniite` — and says so whether or not the tool managed to name the sites underneath. The
+reader was not consulting it: it scanned every line of every page for one naming two or more of the
+structure's own cation sites, so a table whose sites the tool could not name was a table that did
+not exist. That is backwards, and it is why the check was silent on papers that spell out where the
+answer is. The caption is now read where the header match fails, the block beneath it is
+parsed for rows, and the site labels are used only afterwards, to decide which cells can be
+compared — so a table whose labels match nothing is an unmatched table, a doubt, rather than no
+table at all. 58 of the 89 papers still without a verdict announce their table this way.
+
+The order matters and was got wrong once: read BEFORE the header match, the caption overrode tables
+that had already been matched to the structure's own sites, and 17 papers lost a verdict they had
+(41 % → 33 % on the corpus). A table matched to the structure is better evidence than a table
+matched to a caption; the caption's job is the papers where nothing else finds a table at all.
+
+A row under a caption is the longest run of adjacent bare-valence tokens with the token to its left
+as its label, which picks the table out of a line it shares with the facing page column: prose and
+whole numbers are not valences. Two further layouts came with it — the valence printed beside each
+distance (`V1–O12 1.599(11) 1.74`), turned into a grid; and a split site written `M(2a)`, whose
+letter sits inside the brackets and had not parsed as a label at all, so tetrahedrite- and
+pyrochlore-group papers yielded no bonds whatever.
+
+### Added — the layouts a bond table is printed in
+Every one of these was found by reading the page, and each was worth papers: the `(×3)` welded onto
+a site label (`Sn-O4(×3)`) or bracketed beside it; the `×` that several journals' fonts deliver as a
+`3`, read after the distance only where the same font's `þ` and `¼` prove what it is; the journals
+that print no dash at all (`Mn (X) O1 2.196(3)`), admitted per page by the table's own caption and
+required to name an anion and carry an esd; the dash typeset onto a split cation (`T 1A– O1A`); the
+cation named once over its COLUMN instead of on each row; `W1`/`W2` read as water rather than
+tungsten unless the analysis names tungsten. Bond tables are now read on 103 of the 156 papers with
+a `.cif` (was 88), and 36 of them reach the sums gate (was 27).
+
+A paper's bond-valence table is looked for four ways instead of two: by its header, by its ANION
+ROWS (for the papers whose header names sites nothing can match — a coordinates table is told apart
+by the esd on every number), by a BVS column (whose label column may be unheaded, the caption saying
+what it is), and by the `BVS 2.12` a bond table prints under each site's block. Row-level fixes: a
+cell holding two comma-separated valences no longer ends the table, a two-column page's prose is
+clipped out of the window rather than mistaken for the table, and `M1*` and `Na1×0.20→` now match
+`M1` and `Na1`.
+
+A site the paper names `M1`, `T2` or `A` carries no element. The paper's own assignment is read
+(`M1 = 0.37Mn + 0.27Mg + 0.35Fe`, a site-population row, the sentence naming the occupant) — but
+measured against the corpus `.cif` files that reading is right 11 times in 17, so such a site is
+computed and never counted: it stays out of the instability index and out of the sums comparison.
+Sites nothing can name become vocabulary alone, which is what lets a table headed `M1 M2 M3` be
+found at all.
+
+### Changed — a parameter set has to be refuted, not merely beaten
+Against a `.cif` the tool used to call the paper's cited set wrong whenever another set fitted
+better. The sets sit within a few hundredths of a valence unit of each other for many pairs, and
+five of the eleven papers so called differed from the winner by one or two cells in fifty. The cited
+set must now disagree on more than a tenth of its own cells — the rule the bond-distance path
+already used.
 
 ### Fixed — a bigger error was caught less often than a small one
 Recall was measured for the first time on 2026-09-07 by seeding faults, and it did not rise with

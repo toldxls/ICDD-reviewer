@@ -399,8 +399,13 @@ paper — for checking a procedure step by step.
 **What vouches for a reading.** Every value the paper reader takes carries a record — the value,
 where it was read, and which oracle adjudicated it — and `pxrd paper --check` (Manuscript mode, and
 Fill ▸ in the Tables mode) prints them first: `readers: table ✓ (p6) · formula ✓ · basis ? · n ✓ ·
-D_calc ✓ · cell ✓ · powder ✓ (p7) · name ✓`. ✓ agrees, ✗ disagrees, ? looked at with doubts, · nothing
-could check it. The oracles: the composition re-derived from the paper's own table, basis and
+D_calc ✓ · compatibility ✓ · cell ✓ · coordinates ✓ (p5) · bond-valence set ? · bond-valence table ✓ (p8) ·
+powder ✓ (p7) · name ✓`. ✓ agrees, ✗ disagrees, ? looked at with doubts, · nothing
+could check it. `pxrd paper X.pdf --check --why` prints every record in full — status, page, the sentence
+it was read from, and what the oracle said. The coordinates row vouches for the coordinates table by the
+structure built from it (its valences come out and its composition closes on the formula) or by a .cif's
+positions; the bond-valence table row is the table itself, checked whether or not the paper names a
+parameter set; the compatibility row is the index the paper states. The oracles: the composition re-derived from the paper's own table, basis and
 method (table, formula, basis, method); the powder table against the cell — the .cif's, else the one
 the paper states — for the calculated lines, and every reflection the cell allows for the observed
 ones (a line the table leaves unindexed is fine if it sits on the cell); the bond-valence table
@@ -418,11 +423,31 @@ than dismissed. A calculated powder line is flagged only 2 % or more off its cel
 reached almost none of them. A bond-distance table is enough on its own: it states the two sites and
 the distance between them, which is everything a bond valence needs — no cell, no space group, no
 coordinates. The tool reads that table off the page and checks the paper's own bond-valence table
-against it. Because nothing is inferred, this is a verdict rather than a note, but only while the
-paper's own sums come out at the formal valences (root-mean-square deviation ≤ 0.15 v.u.); at that
-gate it reproduced 98 % of the `.cif`'s cation sums on the corpus papers that have one (93 of 94),
-against 74 % ungated. Above it and up to 0.35 v.u. the reading is reported as a doubt. Anion sums are never
-compared this way — they need site multiplicities a bond table does not print.
+against it. Because nothing is inferred, this is a verdict rather than a note.
+
+The instability index (root-mean-square deviation of the sums from the formal valences) gates what
+that verdict may be about. A **bond-valence SUM** — a paper's BVS column, or the 'BVS 2.12' it
+prints under a site's block — states the site's whole coordination, so a table read one bond short
+states it wrong: those are compared only at ≤ 0.15 v.u., where the reading reproduced 110 of 115 of
+the `.cif`'s own cation sums on the corpus papers that have one (the five that differ are, one by
+one, the `.cif` side: a sulfate S the `.cif` puts at 4.5 v.u., an organic whose C–C bonds it does
+not parameterise, a site label that matched the wrong atom, and a V site the paper's own printed
+table agrees with the tool about). Between 0.15 and 0.35 v.u. a sum is a doubt. A **grid** of
+individual bond valences is another matter: which parameter set reproduces a cell does not depend
+on whether its neighbours were read, and measured against the `.cif` the set chosen from the
+paper's own distances matched the `.cif`'s for 5 of 5 papers with an index between the two gates
+and 7 of 8 above them — the same 80–90 % as inside it. So a grid is judged at any index, and the
+index is reported with the verdict. Anion sums are never compared this way — they need site
+multiplicities a bond table does not print.
+
+A site the paper names crystallographically — `M1`, `T2`, `A` — carries no element in its label,
+and the coordinates table's occupancy column often cannot be read. The paper's own assignment is
+taken instead (`*M1 = 0.37Mn + 0.27Mg + 0.35Fe`, a site-population row, the sentence that names the
+occupant), but that reading was right 11 times in 17 against the corpus `.cif` files, so a site
+resolved that way is computed and never counted: it stays out of the instability index, which is
+the gate on how the TABLE was read and must not answer for a guess, and out of the BVS-sum
+comparison. What it does do is name a column, which is what lets a bond-valence table headed
+`M1 M2 M3` be found at all.
 
 **The constants.** `data/gd_constants.json` carries all 117 usable entries of Mandarino (1981),
 Can. Mineral. 19, 441–450, Table 7 — the table that paper says should replace all former constants —
@@ -720,7 +745,9 @@ the one exception: it writes its correction as a reviewable tracked change — s
       Instr.`, `Intensity Type`, `Filter` — suggests the canonical value (⚑ flag).
       Catches typos (`Diffractomer`/`Diffractomter` → `Diffractometer`), casing
       (`Monochromator crystal` → `Monochromator Crystal`, `Beta-filter` →
-      `Beta-Filter`), and `Visual?` → `Visual`. Unseen typos are caught by
+      `Beta-Filter`), and `Visual`/`Visual?` as an Intensity Type → `Peak` (ICDD's Intensity
+      Type is Integrated or Peak only; a visual estimate is recorded as Intensity Instr. =
+      Visual). Unseen typos are caught by
       closeness to a canonical value (never forces a far-off value).
     - **β-filter element vs anode** (textbook Kβ rule): with `Filter = Beta-Filter`,
       `FilterType` is fixed by the anode — Cu→Ni, Co→Fe, Fe→Mn, Cr→V, Mo→Zr, Ag→Pd
@@ -755,14 +782,21 @@ the one exception: it writes its correction as a reviewable tracked change — s
     (`-1M`/`-2O`/`-3T`…) letter must be consistent with the crystal system
     (M↔monoclinic, O↔orthorhombic, T↔trigonal, Q↔tetragonal, …).
 19. **Intensity Type ↔ detector** *(the reviewers' single most frequent comment)* —
-    Intensity Type is set by the detector: **area detectors** (image-plate, Gandolfi/
-    pseudo-Gandolfi, Guinier camera, R-AXIS RAPID, curved imaging plate) integrate the
-    2D ring → **Integrated**; **Bragg-Brentano** slit optics → **Peak**. Detected in a
-    powder-context sentence; flags the mismatch (⚑). "Guinier" is guarded against the
-    author surname. **Skips docx-Calculated patterns** (Intensity Type is a modelling
-    choice there, not a detector fact); patterns where it matters are recorded as
-    measured in the docx and still reach the check. Validated ~90% consistent;
-    independently reproduces the reviewer's own I001361 and I002366 comments.
+    **area detectors** (image-plate, Gandolfi/pseudo-Gandolfi, Guinier camera, R-AXIS RAPID,
+    curved imaging plate) integrate the 2D ring → **Integrated** (⚑ when the docx says Peak).
+    **Bragg-Brentano geometry does NOT imply Peak** (ICDD, Part 2 review 2026-09): the type
+    follows how the data were PROCESSED, not collected — Bragg-Brentano data reduced with JADE
+    are Integrated, and a modern diffractometer (Bruker D2/D8, Rigaku MiniFlex/Rapid, Proto
+    AXD) is typically Integrated, so geometry never asks for Peak; a Peak whose docx says
+    Diffractometer for both Spacing and Intensity Instr. is a console note to confirm. (The
+    retired BB→Peak flag had reproduced two earlier reviewer comments, I001361 and I002366;
+    ICDD's database rule supersedes them.) **ICDD's Intensity Type is Integrated or Peak
+    only**: a visually estimated pattern (the .pdf says so, or every observed intensity is a
+    multiple of 10) is Type **Peak** with **Intensity Instr. = Visual** (V; Film when the film
+    was scanned) — each wrong field is flagged (⚑) on its own cell, Film for a visual estimate
+    is a note. Detected in a powder-context sentence; "Guinier" is guarded against the author
+    surname. **Skips docx-Calculated patterns** (Intensity Type is a modelling choice there,
+    not a detector fact).
 20. **Calculated pattern, λ not stated** — when the docx pattern is Calculated and its
     λ (and anode) appear nowhere in the paper, flag "confirm the wavelength used" (⚑).
     Catches default CuKα λ on synchrotron-derived calcs (Feiite/Liuite/Tschaunerite).
@@ -800,7 +834,7 @@ NOT compared.
 
 #### Cross-source cell consensus + Mindat feedback (check 22)
 `parse_cif` now also reads the **cell** (a/b/c/α/β/γ), and `extra_checks.mindat_struct`
-resolves a species to its Mindat **structural** record (cell, SG=IT number, elements,
+resolves a species to its Mindat **structural** record (cell, SG code, elements,
 formula) — ~93 % of reviewed entries resolve. check 22 compares the cell across
 **docx (powder), `.cif`, and Mindat** using **sorted axis lengths** — angle-free (Mindat
 stores γ=0 for uniaxial cells, so a *volume* comparison wrongly inflates hexagonal
@@ -976,7 +1010,10 @@ It is a **thin, read-only presentation/triage layer over `annotate_review.analyz
 — it reuses the check logic verbatim, never duplicates or changes it, and **never
 edits a docx**. Its only writes are sidecars under `<folder>/review_out`:
 `gui_cache.json` (analysis cache), `triage.json` (verdicts), `triage_report.txt`
-(the exported summary).
+(the exported summary). **Another reviewer's report reads back in**: `pxrd gui <folder>
+--import-triage <their triage_report.txt>` (ICDD returns its decisions that way) puts their
+verdict and note on each finding the current analysis raises, keeps a decision on a finding this
+version no longer raises as an entry note, never overwrites a local verdict, and can be repeated.
 
 - **Dashboard** — one row per entry, the **primary lens being the major
   fixes/annotations the tool writes into the docx** (`N fixes` badge: flagged cell
@@ -1227,8 +1264,10 @@ Run it after touching `pxrd_review/extra_checks.py`, `pxrd_review/cell_lambda_ch
   coefficients (ambiguous ideal formula) must NOT flag. Polytype letter↔system uses
   the docx system letter (trigonal 'T' maps to h/r, tetragonal is 'Q', not 't').
   *(I003511/I003523/I003521 correctly named = no flag.)*
-- **Intensity Type ↔ detector (check19).** Area detector ⇒ Integrated, Bragg-Brentano
-  ⇒ Peak; the detector keyword must be in a powder-context sentence. **Guard "Guinier"**
+- **Intensity Type ↔ detector (check19).** Area detector ⇒ Integrated; Bragg-Brentano
+  ⇒ NOTHING (ICDD 2026-09: the type follows the processing, JADE integrates BB data — a Peak on
+  a Diffractometer/Diffractometer entry is a note); Visual is an Intensity INSTRUMENT, never a
+  Type (a visual estimate = Peak + Instr. Visual); the detector keyword must be in a powder-context sentence. **Guard "Guinier"**
   with camera/method context — it is also the author surname (André Guinier), and a
   "Guinier et al." citation must NOT be read as the method. Do NOT teach the full
   Integrated/Peak distinction from raw data — only the geometry rule. The **crystal-
