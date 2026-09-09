@@ -729,7 +729,11 @@ def check4_calculated(e, text):
         _MEASURED = re.compile(
             r'observed|experiment|measured|collected|\bmatch|\bfits?\b|agreement|consistent\s+with'
             r'|\btheoretical\b|from\s+(?:the\s+)?powder|refined\s+from\s+powder|indexing\s+of'
-            r'|rietveld|\b[id]\s?obs\b|\b[id]\s?meas\b',
+            r'|rietveld|\b[id]\s?obs\b|\b[id]\s?meas\b'
+            # 'Calculated d values were obtained from the unit-cell parameter refinement … and
+            # calculated intensities from the pattern simulated with VESTA' describes the dcalc /
+            # Icalc COMPARISON columns of a measured table (touretite, ICDD Part 2 review 2026-09)
+            r'|calculated\s+d[\s-]?(?:values?|spacings?)|\bd\s?calc\b|unit[\s-]?cell(?:\s+parameters?)?\s+refinement',
             re.I)
         # An explicit "(powder) diffraction data were NOT collected/measured" is definitive proof
         # that the entry's pattern is the calculated/theoretical one — there is NO measured pattern,
@@ -752,6 +756,20 @@ def check4_calculated(e, text):
         not_collected = any(
             _nc.search(s) and (_mentions_entry(s) or not _names_other_species(s, nm))
             for s in _sentences(text))
+        # and the converse, which is definitive the other way: the paper SAYS the powder pattern of
+        # this entry was measured / collected / recorded ('The X-ray powder diffraction pattern of
+        # touretite was measured with a Rigaku Xcalibur … using a Gandolfi motion'). Then no
+        # 'calculated' sentence elsewhere can make the entry's pattern a simulated one — they
+        # describe the comparison columns. Scoped like `not_collected`: the sentence names this
+        # entry, or names no other species.
+        _mc = re.compile(
+            r'(?:powder|pxrd)[^.]{0,60}\b(?:was|were)\s+(?:measured|collected|recorded|obtained|acquired)'
+            r'|(?:collected|recorded|measured)\s+(?:the\s+)?(?:x-ray\s+)?powder', re.I)
+        measured_stated = any(
+            _mc.search(s) and (_mentions_entry(s) or not _names_other_species(s, nm))
+            for s in _sentences(text))
+        if measured_stated and not not_collected:
+            sents = []
         sents = [s for s in sents
                  if re.search(r'powder|pxrd|x-ray diffraction pattern|diffraction pattern', s.lower())
                  # a sentence naming a DIFFERENT co-described species (and not this entry)
@@ -1376,7 +1394,8 @@ def check11_ima(e, text):
 _MINDAT_STRUCT_IDX = None
 def mindat_struct(name, exact=False):
     """Resolve a mineral name to its Mindat structural record — dict with cell
-    (a,b,c,al,be,ga), sg (IT number), elements, formula, groupid — or None.
+    (a,b,c,al,be,ga), sg (Mindat's own space-group id — NOT the ITA number; see
+    mindat.STRUCT_FIELDS), elements, formula, groupid — or None.
     Uses the offline struct cache (no API call during a review). Most reviewed
     species ARE in Mindat (~93% of the corpus); new minerals return None.
     NB: Mindat's cell is usually the SINGLE-CRYSTAL cell, so a comparison to the
@@ -1553,6 +1572,25 @@ def _formula_atoms(s):
             d[el] = d.get(el, 0.0) + (float(n) if n else 1.0)
     return d
 
+def _z_reconciles(docx_z, da, cif_z, ca, anchor):
+    """Whether docx Z x docx formula and CIF Z x CIF formula describe the same cell contents.
+    The dominant cation settles it when the two formulas are the same formula unit; a CIF whose
+    formula sum is written for TWO units of a substituted formula (anningite-(Ce): docx
+    (Ca0.5Ce0.5)(VO4) with Z = 4, CIF 'Ca1.16 Ce0.84 O8 P0.75 V1.25' with Z = 2 — the V is split
+    with P) reconciles on the OXYGEN count (4 x 4 = 2 x 8) or on the cation total (4 x 2 = 2 x 4)
+    instead. Any one agreeing means the cell contents agree; Z is then not wrong (ICDD Part 2
+    review 2026-09: 'Z should be 4 — changing it to 2 gives a 115 % density error')."""
+    if not (anchor and ca.get(anchor)) or not da:
+        return False
+    if abs(docx_z * da[anchor] - cif_z * ca[anchor]) < 0.5:
+        return True
+    do, co = da.get('O', 0), ca.get('O', 0)
+    if do and co and abs(docx_z * do - cif_z * co) <= 0.05 * max(docx_z * do, cif_z * co):
+        return True
+    dc = sum(v for el, v in da.items() if el not in ('O', 'H')); cc = sum(v for el, v in ca.items() if el not in ('O', 'H'))
+    return bool(dc and cc and abs(docx_z * dc - cif_z * cc) <= 0.05 * max(docx_z * dc, cif_z * cc))
+
+
 def check_cif(e, cif_data):
     """Cross-check docx Z against the CIF, skipping obviously wrong CIF matches."""
     out = []
@@ -1582,8 +1620,7 @@ def check_cif(e, cif_data):
             out.append(Finding('cif', 'note',
                        "CIF chemistry doesn't match this mineral (no %s in the CIF formula) — "
                        "possibly a mis-filed CIF; Z cross-check skipped." % anchor, None, 'cif'))
-        elif not (anchor and ca.get(anchor)
-                  and abs(docx_z * da[anchor] - cif_z * ca[anchor]) < 0.5):
+        elif not _z_reconciles(docx_z, da, cif_z, ca, anchor):
             out.append(Finding('cif', 'flag',
                        "Z mismatch: docx Z=%d but CIF Z=%d" % (docx_z, cif_z),
                        None, 'cell:Z'))
@@ -2133,7 +2170,7 @@ VOCAB_CANON = {
                         'Guinier', 'Visual', 'Image plate', 'Other'},
     'intensity_instr': {'Diffractometer', 'Calculated', 'Film', 'Gandolfi', 'Guinier',
                         'Visual', 'Image plate', 'Other'},
-    'intensity_type':  {'Integrated', 'Peak', 'Visual'},
+    'intensity_type':  {'Integrated', 'Peak'},        # ICDD 2026-09: Integrated or Peak only — 'Visual' is an Intensity INSTRUMENT (V), not a type
     'filter':          {'Monochromator Crystal', 'Beta-Filter', 'None'},
 }
 # observed misspellings / casing variants -> canonical (lowercased keys).
@@ -2146,7 +2183,7 @@ VOCAB_FIX = {
                         'debye-scherrer': 'Diffractometer'},
     'intensity_instr': {'diffractomter': 'Diffractometer', 'diffractomer': 'Diffractometer',
                         'debye-scherrer': 'Diffractometer'},
-    'intensity_type':  {'visual?': 'Visual'},
+    'intensity_type':  {'visual?': 'Peak', 'visual': 'Peak'},   # a visual estimate is Type Peak, Intensity Instr. Visual
     'filter':          {'monochromator crystal': 'Monochromator Crystal',
                         'monochromator': 'Monochromator Crystal',
                         'beta-filter': 'Beta-Filter', 'beta filter': 'Beta-Filter',
@@ -2225,6 +2262,11 @@ def check16_instr_vocab(e, text):
             m = difflib.get_close_matches(v, canon, n=1, cutoff=0.86)
             fix = m[0] if m else None
         if fix and fix != v:
+            if field == 'intensity_type' and v.lower().startswith('visual'):
+                out.append(Finding('instr_vocab', 'flag',
+                           "Intensity Type = %r — ICDD records Integrated or Peak only; a visually "
+                           "estimated pattern is Type Peak with Intensity Instr. = Visual." % v, None, 'intensity_type'))
+                continue
             out.append(Finding('instr_vocab', 'flag',
                        "%s = %r — should be %r." % (label, v, fix), None, 'instr'))
     # β-filter element must match the anode
@@ -2342,6 +2384,26 @@ def check18_name_formula(e, text):
     polytype suffix letter must be consistent with the crystal system."""
     out = []
     nm = e.primary or e.name or ''
+    # a Levinson suffix typed WITHOUT its parentheses ('Lepersonnite-Gd' for lepersonnite-(Gd)):
+    # the IMA form is '-(Gd)', every Levinson name in the corpus is written so (91 of 91), and the
+    # paper itself writes it so — flag when the paper or Mindat confirms the parenthesised species,
+    # else note. The Mindat lookup misses the bare form, so this was surfacing only as
+    # 'Mindat: not resolved' (lepersonnite-(Gd)/-(Nd), ICDD Part 2 review 2026-09).
+    for cand in (e.name or '', nm):
+        mb = re.match(r'^(.+?)-([A-Z][a-z]?)\s*$', cand.strip())
+        if mb and mb.group(2) in REE_ELEMENTS and '(' not in cand:
+            stem, suf = mb.group(1), mb.group(2)
+            fixed = '%s-(%s)' % (stem, suf)
+            mp = re.search(re.escape(stem) + r'-\(' + suf + r'\)', text or '', re.I)
+            in_pdf = bool(mp)
+            known = bool(mindat_struct(fixed, exact=True)) if not in_pdf else False
+            out.append(Finding('name_formula', 'flag' if (in_pdf or known) else 'note',
+                       "Mineral name %r — the Levinson suffix takes parentheses: %r%s."
+                       % (cand.strip(), fixed, ' (as the .pdf writes it)' if in_pdf else (' (as Mindat lists it)' if known else '')),
+                       mp.group(0) if mp else None, 'name'))    # '? look' lands on the paper's own spelling
+            if cand == nm or not nm:
+                nm = fixed                                  # and check the suffix against the formula as written properly
+            break
     # Levinson suffix -(Ce)/-(La)/-(Y)... — use the empirical/measured formula
     m = re.search(r'-\(([A-Z][a-z]?)\)\s*$', nm)
     if m and m.group(1) in REE_ELEMENTS:
@@ -2381,9 +2443,15 @@ def check18_name_formula(e, text):
 # --- 19. Intensity Type follows the detector -------------------------------
 # Area detectors collect the diffraction as a 2D ring and INTEGRATE it over the
 # area (Integrated): image plate, Gandolfi / pseudo-Gandolfi, Guinier, R-AXIS
-# RAPID, curved imaging plate. Bragg-Brentano slit optics give true peak heights
-# (Peak). (Detected only in a powder-context sentence so an SC detector isn't
-# mis-attributed.) This is the reviewer's single most frequent comment.
+# RAPID, curved imaging plate. (Detected only in a powder-context sentence so an SC
+# detector isn't mis-attributed.) This is the reviewer's single most frequent comment.
+# Bragg-Brentano geometry does NOT imply Peak (ICDD, 2026-09, Part 2 review): the type is set by
+# how the data were PROCESSED, not collected — Bragg-Brentano data reduced with JADE are
+# Integrated, and a modern diffractometer (Bruker D2/D8, Rigaku MiniFlex/Rapid, Proto AXD) is
+# typically Integrated. Peak belongs to film / visual estimates. So geometry never asks for Peak;
+# a Peak on a diffractometer pattern is a console note to confirm, not a flag.
+# ICDD's Intensity Type is Integrated or Peak ONLY. A visually estimated pattern is Type Peak with
+# Intensity Instr. = Visual (V; F when the film was scanned) — 'Visual' was never a type.
 # 'Guinier' is also a common author surname (André Guinier) — require camera/method
 # context so a "Guinier et al." citation isn't read as the diffraction method.
 AREA_DETECTOR  = (r'image[- ]?plate|imaging plate|gandolfi|\br[-\s]*axis\s*rapid|curved imaging'
@@ -2428,7 +2496,7 @@ def check19_intensity_detector(e, text):
     visually_estimated = bool(text and re.search(
         r'intensit\w*[^.]{0,30}visual\w*\s+estimat|visual\w*\s+estimat\w*[^.]{0,30}intensit'
         r'|estimat\w*\s+visual\w*[^.]{0,30}intensit', text, re.I))
-    if (allx10 or visually_estimated) and it.lower() != 'visual':
+    if allx10 or visually_estimated:
         if allx10:
             why, ev = "are all multiples of 10 (visually estimated from film)", None
         else:
@@ -2437,9 +2505,20 @@ def check19_intensity_detector(e, text):
             # ('…visually estimated. Note that vs denotes very strong…'), so it lands on the table.
             loc = re.search(r'visual\w*\s+estimat\w*|estimat\w*\s+visual\w*', text, re.I)
             ev = loc.group(0) if loc else None
-        out.append(Finding('intensity_type', 'flag',
-                   "the powder pattern intensities %s, so Intensity Type should be Visual, "
-                   "not %s." % (why, it), ev, 'intensity_type'))
+        ii = (e.instr.get('intensity_instr') or '').strip()
+        if it.lower() not in ('peak', 'visual'):           # a Type of 'Visual' is check 16's vocabulary flag (-> Peak); not twice on one cell
+            out.append(Finding('intensity_type', 'flag',
+                       "the powder pattern intensities %s, so Intensity Type should be Peak, "
+                       "not %s (ICDD records a visual estimate as Type Peak, Intensity Instr. Visual)."
+                       % (why, it), ev, 'intensity_type'))
+        if ii.lower() == 'film':
+            out.append(Finding('intensity_type', 'note',
+                       "the powder pattern intensities %s — Intensity Instr. is Film; ICDD uses Visual "
+                       "for a visual estimate and Film for a scanned film." % why, ev, 'intensity_instr'))
+        elif ii.lower() != 'visual':
+            out.append(Finding('intensity_type', 'flag',
+                       "the powder pattern intensities %s, so Intensity Instr. should be Visual, "
+                       "not %s." % (why, ii or 'blank'), ev, 'intensity_instr'))
         return out
     if not text:
         return out
@@ -2457,10 +2536,14 @@ def check19_intensity_detector(e, text):
         out.append(Finding('intensity_type', 'flag',
                    ".pdf describes an area detector (%s), so Intensity Type should be "
                    "Integrated, not Peak." % area_kw, area_kw, 'intensity_type'))
-    elif bb_kw and not area_kw and it.lower() == 'integrated':
-        out.append(Finding('intensity_type', 'flag',
-                   ".pdf describes Bragg-Brentano geometry, so Intensity Type should be "
-                   "Peak, not Integrated.", bb_kw, 'intensity_type'))
+    elif it.lower() == 'peak' and (e.instr.get('spacing_instr') or '').strip().lower() == 'diffractometer' \
+            and (e.instr.get('intensity_instr') or '').strip().lower() == 'diffractometer':
+        # the docx's OWN designators say diffractometer twice (a film/Gandolfi camera keeps its Peak
+        # without a word): ICDD's 'Spacing D means Type I, typically' — a note to confirm, never a flag
+        out.append(Finding('intensity_type', 'note',
+                   "Intensity Type is Peak on a diffractometer pattern%s — ICDD: data from a modern "
+                   "diffractometer processed with e.g. JADE are Integrated; Peak is for film / visual "
+                   "estimates. Confirm." % (' (%s)' % bb_kw if bb_kw else ''), bb_kw, 'intensity_type'))
     return out
 
 # --- 20. calculated pattern must document its wavelength --------------------

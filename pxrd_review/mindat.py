@@ -190,7 +190,11 @@ def _pull(key, page_size=2000, **params):
 # ----------------------------------------------------------------------------- structural cache (for the candidate-group scan)
 # Heavier pull (cell + space-group code + element list) kept SEPARATE from the
 # lightweight group-lookup cache so normal reviews stay fast. spacegroup is a
-# Mindat integer code (consistent per space group; 0 = unknown). b/angles == 0
+# Mindat INTERNAL id, not the ITA number (id 49 is No. 64; id 71 is Pnma, No. 62;
+# the two coincide only for the first two, and the ids run past 230). It is
+# consistent per space group, so id == id is a valid 'same space group' test
+# (candidate_groups) and that is ALL it may be used for — never compare it with a
+# space group a paper or an entry states. 0 = unknown. b/angles == 0
 # mean 'uniaxial / symmetry-default' (b = a).
 STRUCT_FIELDS = 'id,name,groupid,spacegroup,a,b,c,alpha,beta,gamma,elements,ima_formula,ima_status'
 STRUCT_CACHE = os.path.join(_paths.cache_dir(), 'mindat_struct.json')
@@ -565,6 +569,11 @@ def _norm(name):
 def _candidates(name):
     n = _norm(name)
     yield n
+    # a Levinson suffix typed without its parentheses ('Lepersonnite-Gd'): Mindat keys the
+    # species as 'lepersonnite-(gd)' — try that form before giving up on the name
+    ml = re.match(r'^(.+?)-([a-z][a-z]?)$', n)
+    if ml:
+        yield '%s-(%s)' % (ml.group(1), ml.group(2))
     m = re.sub(r'-[0-9ivxabcmht]+(-[0-9]+)?$', '', n, flags=re.I)   # polytype tail
     if m != n: yield m
     # base species before a variety adjective / suffix: 'gypsum, strontian',

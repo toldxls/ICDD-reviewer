@@ -357,6 +357,35 @@ CASES = [
  ("calculated: 'not collected' relax still needs a calc-powder sentence", lambda: X.check4_calculated(
      type('S', (), {'instr': {}, 'name': 'testite', 'primary': ''}),
      'Powder diffraction data were not collected owing to the tiny crystal size.') == []),
+ # touretite (ICDD Part 2 review 2026-09, 'PXRD was measured'): 'Calculated d values were obtained
+ # from the unit-cell parameter refinement … calculated intensities … simulated with VESTA' is the
+ # dcalc/Icalc COMPARISON column of a measured table; and a paper that SAYS the pattern was measured
+ # settles it whatever else it says about calculated columns.
+ ("calculated: 'calculated d values from the unit-cell refinement' is a comparison column", lambda: X.check4_calculated(
+     _stub(), 'Calculated d values were obtained from the unit-cell parameter refinement, and calculated intensities '
+              'were obtained from the X-ray powder pattern simulated from the crystal structure model.') == []),
+ ("calculated: 'the powder pattern of X was measured' silences a later calc sentence", lambda: X.check4_calculated(
+     _stub(name='touretite', primary='Touretite'),
+     'The X-ray powder diffraction pattern of touretite was measured with a Rigaku Xcalibur diffractometer using a Gandolfi motion. '
+     'The intensities were calculated from the crystal structure of touretite with VESTA.') == []),
+ ("calculated: 'measured' guard does not silence a genuine not-collected + calculated case", lambda: bool(X.check4_calculated(
+     _stub(instr={'spacing_instr': 'Diffractometer'}),
+     'X-ray powder diffraction data were not collected. The theoretical powder pattern was calculated from the structure.'))),
+ # anningite-(Ce) (ICDD Part 2 review 2026-09, 'Z should be 4; Z = 2 gives a 115 % density error'): the
+ # CIF's formula sum is written for TWO substituted units — the O count (4 x 4 = 2 x 8) reconciles Z.
+ ("cif Z: a CIF formula written for two substituted units reconciles on the oxygen count", lambda: X.check_cif(
+     _stub_entry(4, 'Ca0.5 Ce0.5 O4 V'), {'Z': 2, 'formula': 'Ca1.16 Ce0.84 O8 P0.75 V1.25', 'name': 'testite'}) == []),
+ ("cif Z: a real Z mismatch still flags", lambda: bool(X.check_cif(
+     _stub_entry(4, 'Ca O4 V'), {'Z': 2, 'formula': 'Ca1 O4 V1', 'name': 'testite'}))),
+ # cadvanite (ICDD Part 2 review 2026-09, 'from CIF'): a cell parameter written exactly as the .cif
+ # writes it was taken from the .cif; its sig-figs/esd are not a slip against the paper's rounding.
+ ("cell precision: a value that is the .cif's own is not a sig-figs slip", lambda: A.cif_vouches('103.967(24)', '103.967 (24)')
+  and not A.cif_vouches('103.967(24)', '103.97(2)')),
+ # petersite-(Y) (ICDD Part 2 review 2026-09, 'see Table 2'): the powder cell lives in the table's own
+ # 'Unit-cell parameters' row, values without a =/c = (Russian label in Zapiski RMO)
+ ("pdf cells: a table's 'unit-cell parameters' row without a =/c = is a cell", lambda: any(
+     (c.a, c.c) == ('13.257(2)', '5.869(1)') for c in C.find_cells(
+         'Table 2. Powder data\nПараметры гексагональной элементарной ячейки\n13.257(2)\n5.869(1)\n893.3(4)\n13.2348(4)\n5.8574(2)\n\nd obs\n'))),
  # --- radiation ---
  ("O002127 radiation OK (CuK found)",  lambda: not lam_flag('O002127')),
  ("I003815 radiation NOT flagged",     lambda: not lam_flag('I003815')),
@@ -1064,19 +1093,39 @@ CASES = [
  ("I003747 .pdf graphite mono (powder)",      lambda: bool(extras('I003747', 'instr_filter', substr='graphite'))),
  ("I003745 SC mono NOT attributed",          lambda: not extras('I003745', 'instr_filter')),
  ("I003566 SC mono NOT attributed",          lambda: not extras('I003566', 'instr_filter')),
- # --- 19. Intensity Type follows the detector (area→Integrated, BB→Peak) ---
- ("I003657 Bragg-Brentano -> Peak flag",     lambda: bool(extras('I003657', 'intensity_type'))),
+ # --- 19. Intensity Type follows the detector (area→Integrated; geometry never asks for Peak) ---
+ # ICDD (Part 2 review, 2026-09): Bragg-Brentano does NOT imply Peak — the type follows the data
+ # PROCESSING (JADE integrates Bragg-Brentano data), so julgoldite's Integrated is right and the
+ # old 'BB -> Peak' flag is retired; a Peak on a diffractometer pattern is a console note only.
+ ("I003657 Bragg-Brentano + Integrated: no flag (ICDD: geometry does not set Peak)",
+  lambda: not extras('I003657', 'intensity_type', 'flag')),
+ ("intensity_type: Bragg-Brentano + Integrated is silent, + Peak a note",
+  lambda: X.check19_intensity_detector(_stub(instr={'intensity_type': 'Integrated', 'spacing_instr': 'Diffractometer'}, refl=[]),
+                                       'Powder X-ray diffraction data were collected in Bragg-Brentano geometry.') == []
+  and [f.sev for f in X.check19_intensity_detector(_stub(instr={'intensity_type': 'Peak', 'spacing_instr': 'Diffractometer', 'intensity_instr': 'Diffractometer'}, refl=[]),
+                                                    'Powder X-ray diffraction data were collected in Bragg-Brentano geometry.')] == ['note']),
  ("I003563 Gandolfi/area -> Integrated flag", lambda: bool(extras('I003563', 'intensity_type'))),
- # a powder pattern whose OBSERVED intensities are ALL multiples of 10 was visually estimated
- # from film -> Intensity Type Visual. This OVERRIDES the Gandolfi/area rule (a Gandolfi FILM
- # camera is not a digital detector): spaltiite (I003807, all-×10 Irel) -> Visual not Peak. The
- # measured film cameras (intensities not all-×10) and modern Gandolfi (I003563) are unaffected.
- ("I003807 visual: all-×10 intensities -> Intensity Type Visual, not Peak",
-  lambda: bool(extras('I003807', 'intensity_type', 'flag', 'Visual'))),
+ # ICDD's Intensity Type is Integrated or Peak ONLY: a visual estimate is Type Peak with Intensity
+ # Instr. = Visual (V). A powder pattern whose OBSERVED intensities are ALL multiples of 10 was
+ # visually estimated from film: spaltiite (I003807, all-×10 Irel, Type Peak already) needs its
+ # Intensity Instr. ('Other') set to Visual. Measured film cameras (intensities not all-×10) and
+ # modern Gandolfi (I003563) are unaffected.
+ ("I003807 visual: all-×10 intensities -> Intensity Instr. Visual (Type Peak stays)",
+  lambda: bool(extras('I003807', 'intensity_type', 'flag', 'Intensity Instr. should be Visual'))
+  and not extras('I003807', 'intensity_type', 'flag', 'Intensity Type should be')),
  # a measured (diffractometer) pattern can still carry VISUALLY-ESTIMATED intensities; the .pdf
  # saying so is its own signal (keutschite: Rigaku Rapid II d-spacings, Table-5 vs/s/ms/w Irel).
- ("I003806 keutschite: '.pdf visually estimated' -> Intensity Type Visual, not Peak",
-  lambda: bool(extras('I003806', 'intensity_type', 'flag', 'Visual'))),
+ ("I003806 keutschite: '.pdf visually estimated' -> Intensity Instr. Visual, not Diffractometer",
+  lambda: bool(extras('I003806', 'intensity_type', 'flag', 'Intensity Instr. should be Visual'))),
+ ("intensity_type: visually estimated + Integrated -> Type Peak AND Intensity Instr. Visual",
+  lambda: sorted(f.anchor for f in X.check19_intensity_detector(_stub(instr={'intensity_type': 'Integrated', 'spacing_instr': 'Diffractometer', 'intensity_instr': 'Diffractometer'}, refl=[]),
+                                                                 'Powder pattern: intensities were visually estimated.') if f.sev == 'flag') == ['intensity_instr', 'intensity_type']),
+ ("intensity_type: visually estimated, Peak + Visual already -> silent",
+  lambda: X.check19_intensity_detector(_stub(instr={'intensity_type': 'Peak', 'spacing_instr': 'Film', 'intensity_instr': 'Visual'}, refl=[]),
+                                       'Powder pattern: intensities were visually estimated.') == []),
+ ("instr_vocab: Intensity Type 'Visual' is not a type -> Peak, Intensity Instr. Visual",
+  lambda: any(f.code == 'instr_vocab' and f.anchor == 'intensity_type' and 'Integrated or Peak only' in f.msg
+              for f in X.check16_instr_vocab(_stub(instr={'intensity_type': 'Visual', 'spacing_instr': 'Film', 'anode': 'CuKa'}), ''))),
  # the Visual flag must carry '?look' evidence (the 'visually estimated' phrase, at the PXRD-table
  # legend) so the button lands on the table instead of going nowhere.
  ("I003806 visual flag carries '?look' evidence",
@@ -1137,6 +1186,17 @@ CASES = [
  ("I003511 Allanite-(Y) name OK",            lambda: not extras('I003511', 'name_formula', 'flag')),
  ("I003523 Parisite-(Nd) name OK",           lambda: not extras('I003523', 'name_formula', 'flag')),
  ("I003521 Marsaalamite-(Y) name OK",        lambda: not extras('I003521', 'name_formula', 'flag')),
+ # lepersonnite-(Gd)/-(Nd) (ICDD Part 2 review 2026-09): a Levinson suffix typed without its
+ # parentheses — the paper writes '-(Gd)'; Mindat keys the species so, and now resolves the bare form
+ ("check18: 'Lepersonnite-Gd' -> the Levinson suffix takes parentheses (paper confirms)",
+  lambda: any(f.sev == 'flag' and "'Lepersonnite-(Gd)'" in f.msg for f in X.check18_name_formula(
+      _stub(name='Lepersonnite-Gd', primary='Lps-Gd', formulas={'Empirical': 'Ca Gd2 U24 O158 C8 H130'}),
+      'The new mineral lepersonnite-(Gd) is isostructural with lepersonnite-(Nd).'))),
+ ("check18: a parenthesised Levinson name is not flagged for its parentheses",
+  lambda: not any('takes parentheses' in f.msg for f in X.check18_name_formula(
+      _stub(name='Lepersonnite-(Gd)', primary='Lepersonnite-(Gd)', formulas={'Empirical': 'Ca Gd2 U24 O158 C8 H130'}), ''))),
+ ("mindat: the bare Levinson form resolves to the parenthesised species",
+  lambda: 'lepersonnite-(gd)' in list(M._candidates('Lepersonnite-Gd'))),
  # --- 2026-07 fix batch: errored-check filing, parser hardening, misfire guards ---
  ("run_all files an errored check under its real code", _errored_check_filed_under_real_code),
  ("pdf_index pairs uppercase '.PDF'", _pdf_index_uppercase_ok),

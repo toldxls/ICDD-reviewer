@@ -614,6 +614,65 @@ def find_cells_named_rows(text):
                             classify_context(flat, pos), pos, m.group(0)[:120], phase=m.group(1)))
     return out
 
+PARAM_ROW = re.compile(r'(?:unit[\s-]?cell\s+parameters?|cell\s+parameters|lattice\s+parameters'
+                       r'|параметры\s+(?:\S+\s+){0,3}?(?:элементарной\s+)?ячейки)', re.I)
+
+def find_cells_param_row(text):
+    """A powder table's own cell row: the label 'Unit-cell parameters' (or the Russian
+    'Параметры гексагональной элементарной ячейки', Zapiski RMO) followed by the values with no
+    a =/c = in front — '13.257(2) 5.869(1) 893.3(4)' and, in the next column, the comparison
+    sample's '13.2348(4) 5.8574(2)'. Values are read in order after the label; a volume (> 200)
+    or the end of the run closes a cell; two lengths make a uniaxial cell (a = b), three a general
+    one, a value between 80 and 180 an angle. Only the powder-refined cell of an entry lives in
+    such a row (petersite-(Y), ICDD Part 2 review 2026-09: the abstract cell is another sample's)."""
+    lines = text.splitlines()
+    out = []
+    for i, ln in enumerate(lines):
+        m = PARAM_ROW.search(ln)
+        if not m:
+            continue
+        toks = re.findall(NUM, ln[m.end():])
+        j = i + 1; blank = 0
+        while j < len(lines) and j <= i + 14:
+            t = lines[j].strip()
+            if not t:
+                blank += 1; j += 1
+                if blank > 2:
+                    break
+                continue
+            row = re.findall(NUM, t)
+            if not row or not re.fullmatch(r'(?:' + NUM + r'[\s,;]*)+', t):
+                break
+            toks += row; j += 1
+        groups = [[]]
+        for tk in toks:
+            v = num_val(tk)
+            if v is None:
+                continue
+            if v > 200:                                   # a volume closes the cell
+                if groups[-1]:
+                    groups.append([])
+                continue
+            groups[-1].append(tk)
+        pos = sum(len(l) + 1 for l in lines[:i])
+        for g in groups:
+            lens = [t for t in g if 2.5 <= num_val(t) <= 80]
+            angs = [t for t in g if 80 < num_val(t) <= 180]
+            if len(lens) == 2:
+                a, b, c = lens[0], lens[0], lens[1]
+            elif len(lens) >= 3:
+                a, b, c = lens[:3]
+            else:
+                continue
+            al = be = ga = None
+            if len(angs) == 1:
+                be = angs[0]; al = ga = '90'
+            elif len(angs) >= 3:
+                al, be, ga = angs[:3]
+            snippet = re.sub(r'\s+', ' ', ' '.join(lines[i:j])).strip()[:160]
+            out.append(CellCand(a, b, c, al, be, ga, None, None, classify_context(text, pos), pos, snippet))
+    return out
+
 def find_cells_multicol(text):
     """Comparison tables with one parameter per ROW and one phase per COLUMN:
     'a (Å) v1 v2 v3 v4  b (Å) w1 w2 w3 w4  c (Å) x1 x2 x3 x4'. Builds one cell per
@@ -749,6 +808,7 @@ def find_cells(text):
     # multi-phase papers: named grid rows and multi-column comparison tables
     cands += find_cells_named_rows(text)
     cands += find_cells_multicol(text)
+    cands += find_cells_param_row(text)                     # a powder table's 'Unit-cell parameters' row, values without a =/c =
     # fallback: numeric grid rows 'spacegroup  a  b  c  V' (one phase per row).
     # Anchored on volume consistency — a strong crystallographic constraint that
     # all but eliminates chance 4-number runs.  V ≤ a·b·c always (non-90 angles

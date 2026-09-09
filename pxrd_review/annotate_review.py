@@ -166,6 +166,16 @@ def _is_clean(res):
             and not _has_lam_flag(res) and not _writable_extras(res))
 
 # ----------------------------------------------------------------------------- analysis
+def cif_vouches(docx_val, cif_val):
+    """A docx cell parameter written exactly as the .cif writes it — same digits, same esd —
+    was taken from the .cif; its sig-figs / esd cannot then be a transcription slip against the
+    paper's rounded print. Strings compared after spaces are dropped ('103.967 (24)')."""
+    if not docx_val or not cif_val:
+        return False
+    norm = lambda v: re.sub(r'\s+', '', str(v))
+    return norm(docx_val) == norm(cif_val)
+
+
 def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
     """Return a structured verdict mirroring cell_lambda_check.report()."""
     d = C.parse_docx(docx_path)
@@ -218,7 +228,16 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
             pdf_p = dict(zip(keys, [cd.a, cd.b, cd.c, cd.al, cd.be, cd.ga]))
             # collapse symmetry-equivalent axes (cubic a=b=c, uniaxial a=b) so the same
             # sig-fig/esd error flags ONCE, on the representative axis, under a combined label
+            cif_p = (cif_data.get('cell') or {}) if cif_data else {}
             for label, rep, kind, note in C.grouped_axis_issues(docx_p, pdf_p, keys):
+                if kind in ('precision', 'esd') and cif_vouches(docx_p.get(rep), cif_p.get(rep)):
+                    # the docx carries the .cif's own value and esd (cadvanite: β 103.967(24) from the
+                    # .cif, which the paper rounds to 103.97(2)) — a co-equal source, not a slip
+                    res.setdefault('extra', []).append(X.Finding(
+                        'cell_precision', 'note',
+                        '%s=%s is the .cif value (the .pdf prints %s) — %s; taken from the .cif, not a transcription error.'
+                        % (label, docx_p.get(rep), pdf_p.get(rep), note), None, 'cell:%s' % rep))
+                    continue
                 res['params'].setdefault(rep, []).append((kind, note))
                 res['param_labels'][rep] = label
             # Z (formula units): a/b/c match, so this IS the same cell — a different Z is a
