@@ -6,7 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
-| [0.5.7](#057--2026-09-09) | 9 Sep | The gauntlet: paper readers driven to 91/83/86/52 % on the papers that print everything; ICDD's Part 2 review corrects five entry rules; another reviewer's triage report reads back into the GUI |
+| [0.6.0](#060--2026-09-09) | 9 Sep | The gauntlet: paper readers driven to 91/83/86/52 % on the papers that print everything; ICDD's Part 2 review corrects five entry rules; another reviewer's triage report reads back into the GUI |
 | [0.5.6](#056--2026-09-07) | 7 Sep | Every reading says which oracle vouched for it; recall measured by seeding faults; corpus runs in parallel; seven issues fixed |
 | [0.5.5](#055--2026-09-05) | 5 Sep | The powder table checked against the cell — every calculated d recomputed from its own indices |
 | [0.5.4](#054--2026-09-03) | 3 Sep | Five papers hand-checked, one rule each; the reader defects behind "column chosen by fit" |
@@ -20,7 +20,7 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
-## [0.5.7] — 2026-09-09
+## [0.6.0] — 2026-09-09
 
 ### Added — the gauntlet: the paper readers driven to a measured target, class by class
 
