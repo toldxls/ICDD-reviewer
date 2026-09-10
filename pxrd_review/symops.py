@@ -62,16 +62,19 @@ def cell_system(cell, tol=0.002):
     """The lattice system a cell's metric allows — {'a','b','c','α','β','γ'} in Å and degrees — as
     the LOWEST-symmetry reading that fits: a cell with a = b and γ = 120 is hexagonal or trigonal,
     a = b = c with 90° angles cubic (or a rhombohedral cell at 90°), all 90° orthorhombic (which a
-    tetragonal cell with a = b also is), one angle off monoclinic, else triclinic."""
+    tetragonal cell with a = b also is), one angle off monoclinic, else triclinic. A cell with every
+    angle at 90° is allowed the monoclinic reading too: a pseudo-orthorhombic monoclinic cell prints
+    β = 90.00 within the 0.05° this asks, and the symbol's system, not the metric, has the say —
+    without it a P21/c read from the paper was disowned for a relative's orthorhombic symbol."""
     a, b, c = cell['a'], cell['b'], cell['c']; al, be, ga = cell.get('α', 90), cell.get('β', 90), cell.get('γ', 90)
     eq = lambda x, y: abs(x - y) <= tol * max(x, y)
     right = [abs(x - 90) < 0.05 for x in (al, be, ga)]
     if all(right):
         if eq(a, b) and eq(b, c):
-            return {'cubic', 'tetragonal', 'orthorhombic'}
+            return {'cubic', 'tetragonal', 'orthorhombic', 'monoclinic'}
         if eq(a, b) or eq(b, c) or eq(a, c):
-            return {'tetragonal', 'orthorhombic'}
-        return {'orthorhombic'}
+            return {'tetragonal', 'orthorhombic', 'monoclinic'}
+        return {'orthorhombic', 'monoclinic'}
     if eq(a, b) and abs(ga - 120) < 0.05 and right[0] and right[1]:
         return {'hexagonal', 'trigonal'}
     if eq(a, b) and eq(b, c) and abs(al - be) < 0.05 and abs(be - ga) < 0.05:

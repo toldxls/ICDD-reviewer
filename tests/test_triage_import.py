@@ -109,6 +109,17 @@ class UploadRoute(unittest.TestCase):
         self.assertEqual(t['accept'], 'agree')
         self.assertTrue(t['reviewed'])
 
+    def test_the_path_form_takes_a_text_file_only(self):
+        # the JSON {path} form names a file on the machine hosting the GUI: only a .txt report is
+        # opened, so the endpoint cannot be used to probe for other files (audit 2026-09-10)
+        with G.app.test_client() as c:
+            r = c.post('/api/triage/import', json={'path': '/etc/passwd'})
+            self.assertEqual(r.status_code, 400)
+            self.assertIn('.txt', r.get_json()['error'])
+            r = c.post('/api/triage/import', json={'path': '/no/such/dir/triage_report.txt'})
+            self.assertEqual(r.status_code, 400)
+            self.assertIn('no such file', r.get_json()['error'])
+
     def test_not_a_report_is_a_400(self):
         import io
         with G.app.test_client() as c:

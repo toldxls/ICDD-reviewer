@@ -279,8 +279,10 @@ class Layouts(unittest.TestCase):
         self.assertEqual(c[0][5], 1)                                 # the (×2) belongs to the hydrogen-bond column
 
     def test_welded_multiplication_sign_before_the_distance(self):
-        c = PB._cells(line(100, (40, 'Cr1–O2'), (90, '33'), (120, '1.677(10)')))
+        ws = line(100, (40, 'Cr1–O2'), (90, '33'), (120, '1.677(10)'))
+        c = PB._cells(ws, mangled=True)
         self.assertEqual(c[0][1:6], ('Cr1', 'O2', 1.677, 10, 3))       # '33' is '×3' in the font that loses its symbols
+        self.assertEqual(PB._cells(ws), [])                             # on an ordinary page '33' is a column of its own: no cell, as `_mult_after` leaves the number
 
     def test_welded_multiplication_sign_after_the_distance_only_on_such_a_page(self):
         ws = line(100, (40, 'Mn'), (60, '(X)'), (80, 'O1'), (110, '2.196(3)'), (140, '32'))

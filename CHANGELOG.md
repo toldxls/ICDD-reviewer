@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.7.2](#072--2026-09-10) | 10 Sep | An adversarial audit of the 0.6.0–0.7.1 commits: seven defects fixed — a continued coordinates table walked into another mineral's, a "powder was obtained" sentence silenced the calculated-pattern flag, a β = 90.00 monoclinic cell lost its symbol, an arrowless ×n mark lost its value; nothing changed on the corpus A/B |
 | [0.7.1](#071--2026-09-10) | 10 Sep | The silent classes: every reader that could not verify now says why (parameter sets, one-site tables, unusable .cif); coordinates 59 → 62 %, parameter sets 60 → 64 %, bond-valence reds 6 → 5; two-mineral papers judged by their own bond table |
 | [0.7.0](#070--2026-09-10) | 10 Sep | The gauntlet on the whole 1,130-paper corpus: bond-valence tables 51 → 69 % verified (52 reds → 6), parameter sets 31 → 60 %, coordinates 55 → 59 %, optics 60 → 66 %; a reader failure log; a 50× faster neighbour search |
 | [0.6.0](#060--2026-09-09) | 9 Sep | The gauntlet: paper readers driven to 91/83/86/52 % on the papers that print everything; ICDD's Part 2 review corrects five entry rules; another reviewer's triage report reads back into the GUI |
@@ -19,6 +20,31 @@ package version in `pyproject.toml`.
 | [0.4.0](#040--2026-08-25) | 25 Aug | `pxrd bv`, `pxrd tables`, `pxrd refs`, and Manuscript mode |
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
+
+## [0.7.2] — 2026-09-10
+
+An adversarial audit of the 2026-09-09/10 commits (0.6.0–0.7.1), read diff by diff and probed against
+the fixtures; every finding fixed, each with its regression case. Unit suite 322, entries regression
+all PASS, corpus A/B on the gauntlet subset (`review_out/paper_checks_papersaudit{0,1}.json`).
+
+### Fixed
+- **Continued coordinates tables walked too far back** (`paper_structure.paper_sites`): after the
+  widest 'Cont.' part absorbed the headed part before it, the walk went on into any earlier headed
+  table with other labels — another mineral's — and merged that too. It stops at the head now.
+- **The check4 'pattern was measured' guard read the sample as the pattern** ('Powder for the
+  microprobe mounts was obtained by crushing a crystal') and silenced a genuine calculated-pattern
+  flag. The guard asks for the pattern, the data or the diffraction between 'powder' and the verb.
+- **A monoclinic cell printed at β = 90.00** read as orthorhombic to `symops.cell_system`, so the
+  paper's own P21/c could be disowned for a relative's orthorhombic symbol; an all-right-angle cell
+  is allowed the monoclinic reading too.
+- **A bond-valence cell's count before its sign with no arrow** ('2×0.41', '2× 0.22') lost its
+  value: the '0' of the value was read as the count. The count may not be followed by a decimal point.
+- **The welded '33' before a distance** is read as ×3 only on a page set in the font that loses its
+  symbols, as the same count after the distance already was (both corpus pages that print it are).
+- **The per-page coordinates-table cache** is keyed on the file's size and mtime like the page cache,
+  so a pdf replaced under a running GUI is read again.
+- **The triage import's JSON `{path}` form** opens a `.txt` under 8 MB only, so it cannot be used to
+  probe for other files on the machine.
 
 ## [0.7.1] — 2026-09-10
 

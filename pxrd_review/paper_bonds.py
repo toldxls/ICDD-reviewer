@@ -240,9 +240,10 @@ def _key(label):
     return re.sub(r'[()\s]', '', label).upper()
 
 
-def _mult_before(ws, j):
+def _mult_before(ws, j, mangled=False):
     """The '* 3' a table prints BETWEEN the anion and the distance ('X -O(2) * 3 2.474(3)').
-    -> (count, index of the token left of it)."""
+    -> (count, index of the token left of it). `mangled` says the page is set in the font of
+    `_mangled`, which is the only page where a bare '33' is read as ×3 (below)."""
     if j >= 1 and re.fullmatch(r'\d{1,2}', ws[j][4].strip()) and ws[j - 1][4].strip() in MULT_SIGNS_BEFORE:
         return int(ws[j][4].strip()), j - 2
     m = (MULT.match(ws[j][4].strip()) or MULT_PAREN.match(ws[j][4].strip())) if j >= 0 else None
@@ -251,8 +252,10 @@ def _mult_before(ws, j):
     # the same font trap, with the sign and the count welded into one token: 'Cr1–O2 33 1.677(10)'
     # is Cr1–O2 ×3. A bare '33' means nothing else where the cell's own label stands to its left,
     # and the multiplicities a table prints run 2 to 9 — '30' and '31' are left as the numbers
-    # they look like.
-    m = re.fullmatch(r'3([2-9])', ws[j][4].strip()) if j >= 1 else None
+    # they look like. Read only on a page `_mangled` identifies, as `_mult_after` reads its own
+    # welded count: elsewhere a two-digit number is a column (the two corpus pages that print the
+    # form are both such pages — audit 2026-09-10).
+    m = re.fullmatch(r'3([2-9])', ws[j][4].strip()) if (j >= 1 and mangled) else None
     if m and (_label(ws[j - 1][4])[0] or _pair_token(ws[j - 1][4])[1]):
         return int(m.group(1)), j - 1
     return 1, j
@@ -324,7 +327,7 @@ def _cells(line, relaxed=False, mangled=False):
         d = float(m.group(1))
         if not (D_MIN <= d <= D_MAX):
             continue
-        count, j = _mult_before(ws, i - 1)
+        count, j = _mult_before(ws, i - 1, mangled)
         if j < 0:
             continue
         tok, welded = _strip_mult(ws[j][4])         # 'O4(×3)', 'Sn-O4(×3)': the count welded onto the label

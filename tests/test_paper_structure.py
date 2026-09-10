@@ -180,6 +180,23 @@ class ContinuedAndOccupied(unittest.TestCase):
         doc.save(path); doc.close()
         return path
 
+    def test_the_backward_walk_stops_at_the_headed_first_part(self):
+        # the widest part of a continued table is the 'Cont.' page; the headed part before it is the
+        # table's head and joins — but an unrelated headed coordinates table two pages earlier (another
+        # mineral's, its labels disjoint) must not: the walk once went on past the head (audit 2026-09-10)
+        row = lambda lab: (lab, 0.1, 0.2, 0.3, '')
+        pages = [(3, [row('Ca1'), row('Si1'), row('O1')], 2.0, True, False),
+                 (4, [row('Pb1'), row('S1'), row('S2')], 2.0, True, False),
+                 (5, [row('S3'), row('S4'), row('S5'), row('S6')], 2.0, True, True)]
+        saved = PS._page_tables
+        PS._page_tables = lambda pdf: pages
+        try:
+            rows, page = PS.paper_sites('fake.pdf', with_page=True)
+        finally:
+            PS._page_tables = saved
+        self.assertEqual([r[0] for r in rows], ['Pb1', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6'])
+        self.assertEqual(page, 4)
+
     def test_continued_over_the_page(self):
         rows, pno = PS.paper_sites(self._two_page('Table 4. Cont.'), with_page=True)
         self.assertEqual(([r[0] for r in rows], pno), (['Sr1', 'Ca1', 'B1', 'B2', 'O1', 'O2', 'O3'], 1))
@@ -264,8 +281,16 @@ class SymbolAndCellAgree(unittest.TestCase):
         from pxrd_review import symops as SO
         self.assertEqual(SO.crystal_system('P-1'), 'triclinic'); self.assertEqual(SO.crystal_system('I-42d'), 'tetragonal'); self.assertEqual(SO.crystal_system('C2/c'), 'monoclinic')
         self.assertEqual(SO.cell_system({'a': 11.9, 'b': 12.7, 'c': 6.7, 'α': 90, 'β': 113.3, 'γ': 90}), {'monoclinic'})
-        self.assertEqual(SO.cell_system({'a': 6.8, 'b': 6.8, 'c': 18.6, 'α': 90, 'β': 90, 'γ': 90}), {'tetragonal', 'orthorhombic'})
+        self.assertEqual(SO.cell_system({'a': 6.8, 'b': 6.8, 'c': 18.6, 'α': 90, 'β': 90, 'γ': 90}), {'tetragonal', 'orthorhombic', 'monoclinic'})
         self.assertEqual(SO.cell_system({'a': 15.7, 'b': 15.7, 'c': 47.8, 'α': 90, 'β': 90, 'γ': 120}), {'trigonal', 'hexagonal'})
+
+    def test_a_monoclinic_cell_printed_at_ninety_keeps_its_symbol(self):
+        # a pseudo-orthorhombic monoclinic cell prints β = 90.00 (or 90.03): the paper's own P21/c
+        # must still be a symbol that cell allows, or the builder disowns it for a relative's symbol
+        from pxrd_review import symops as SO
+        for be in (90.0, 90.03):
+            self.assertIn(SO.crystal_system('P21/c'), SO.cell_system({'a': 10.1, 'b': 5.2, 'c': 7.3, 'α': 90, 'β': be, 'γ': 90}))
+        self.assertNotIn('monoclinic', SO.cell_system({'a': 15.7, 'b': 15.7, 'c': 47.8, 'α': 90, 'β': 90, 'γ': 120}))
 
 
 class AnglesAsLatin(unittest.TestCase):

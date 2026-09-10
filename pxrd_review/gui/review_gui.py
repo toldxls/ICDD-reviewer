@@ -1626,8 +1626,14 @@ def api_triage_import():
         else:
             data = request.get_json(force=True, silent=True) or {}
             path = data.get('path') or ''
+            # a report is a .txt of a few KB: anything else is refused before it is opened, so this
+            # form cannot be used to probe or read other files on the machine (audit 2026-09-10)
+            if not path.lower().endswith('.txt'):
+                return jsonify({'ok': False, 'error': 'a triage report is a .txt file: %s' % path}), 400
             if not os.path.isfile(path):
                 return jsonify({'ok': False, 'error': 'no such file: %s' % path}), 400
+            if os.path.getsize(path) > 8 * 1024 * 1024:
+                return jsonify({'ok': False, 'error': 'that file is too large to be a triage report'}), 400
             with STATE['lock']:
                 summary = import_triage_report(path)
         _save_triage()

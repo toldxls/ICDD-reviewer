@@ -291,6 +291,13 @@ class PaperTableConventions(unittest.TestCase):
         self.assertEqual(B._bv_cell('0.36×2↓ 0.23×2↓'), [(0.36, 2, 1), (0.23, 2, 1)])
         self.assertEqual(B._bv_cell('0.70 ×2↓'), [(0.7, 2, 1)])                        # a space before the mark is still one value
         self.assertEqual(B._bv_cell('0.70×4↓×2→, 0.64×2↓'), [(0.7, 4, 2), (0.64, 2, 1)])
+        # the count before its sign, with no arrow ('2×0.41', and '2× 0.22' as a line break delivers
+        # it): the '0' that begins the value is not the count — read so, the cell had no value at all
+        self.assertEqual(B._bv_cell('2×0.41'), [(0.41, 2, 1)])
+        self.assertEqual(B._bv_cell('2× 0.22'), [(0.22, 2, 1)])
+        self.assertEqual(B._bv_cell('12×0.05'), [(0.05, 12, 1)])
+        self.assertEqual(B._bv_cell('↓×40.07→×2'), [(0.07, 4, 2)])                     # the welded forms still read
+        self.assertEqual(B._bv_cell('2×→0.41×4↓'), [(0.41, 4, 2)])
 
     def test_a_charge_resolves_to_the_lone_site_but_a_second_site_does_not(self):
         # 'Fe3+' in a paper's header, or 'Fe3' with the sign lost in the text layer, is the .cif's one

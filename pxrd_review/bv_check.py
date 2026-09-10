@@ -1356,12 +1356,15 @@ def _bv_cell(txt):
         body = re.sub(r'\^[^^]*\^', ' ', part)
         # the arrow that says which way the mark counts stands on either side of it: '×2↓' as often
         # as '↓×2', and '→×4' as often as '0.41×4→'. Whichever side carries it, it is the same mark.
-        for pre, n, post in re.findall(r'([↓→])?\s*[×x]\s*(\d+)\s*([↓→])?', body):
+        # The count is never the digit that begins a value ('2×0.41', '2× 0.22': the '0' of the value
+        # is not '×0' — read as one it left no value at all, audit 2026-09-10), so a count may not be
+        # followed by a decimal point.
+        for pre, n, post in re.findall(r'([↓→])?\s*[×x]\s*(\d+)(?!\.\d)\s*([↓→])?', body):
             if (pre or post) == '→':
                 n_across = int(n)
             else:
                 n_down = int(n)
-        body = re.sub(r'[↓→]?\s*[×x]\s*\d+\s*[↓→]?', ' ', body)
+        body = re.sub(r'[↓→]?\s*[×x]\s*\d+(?!\.\d)\s*[↓→]?', ' ', body)
         # the mark printed the other way round, the count before its sign ('2×→0.41', '6×→0.36').
         # The digits of a value are not a count, so they are fenced off by what precedes them.
         for n, arrow in re.findall(r'(?<![\d.])(\d{1,2})\s*[×x]\s*([↓→]?)', body):

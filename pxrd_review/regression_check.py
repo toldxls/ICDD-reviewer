@@ -371,6 +371,15 @@ CASES = [
  ("calculated: 'measured' guard does not silence a genuine not-collected + calculated case", lambda: bool(X.check4_calculated(
      _stub(instr={'spacing_instr': 'Diffractometer'}),
      'X-ray powder diffraction data were not collected. The theoretical powder pattern was calculated from the structure.'))),
+ # audit 2026-09-10: the guard asks for the pattern, data or diffraction — 'powder … was obtained' about
+ # the SAMPLE (crushed for the microprobe mounts) silenced a genuine calculated-pattern flag
+ ("calculated: 'powder for the probe mounts was obtained' is the sample, not a measured pattern", lambda: bool(X.check4_calculated(
+     _stub(instr={'spacing_instr': 'Diffractometer'}, name='testite', primary='Testite'),
+     'The X-ray powder diffraction pattern of testite was calculated from the crystal structure with PowderCell. '
+     'Powder for the electron-microprobe mounts was obtained by crushing a single crystal.'))),
+ ("calculated: 'PXRD data were collected' still settles a measured pattern", lambda: X.check4_calculated(
+     _stub(name='testite', primary='Testite'),
+     'PXRD data were collected with a Rigaku R-AXIS Rapid II. The intensities were calculated from the crystal structure of testite with VESTA.') == []),
  # anningite-(Ce) (ICDD Part 2 review 2026-09, 'Z should be 4; Z = 2 gives a 115 % density error'): the
  # CIF's formula sum is written for TWO substituted units — the O count (4 x 4 = 2 x 8) reconciles Z.
  ("cif Z: a CIF formula written for two substituted units reconciles on the oxygen count", lambda: X.check_cif(

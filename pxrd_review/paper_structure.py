@@ -359,7 +359,10 @@ def paper_sites(pdf, with_page=False):
             if len(rows) < 2 or not headed or any(r[0].upper() in labels for r in rows):
                 break
             best = list(rows) + list(best); labels |= {r[0].upper() for r in rows}; best_page = p
-            cont0, headed0 = cont, False; p -= 1
+            # the part just absorbed is now the head of the table: the walk goes on only when IT says
+            # 'Cont.' as well. (`headed0 = False` here kept the loop condition true and walked into any
+            # earlier headed table with other labels — another mineral's — audit 2026-09-10.)
+            cont0, headed0 = cont, headed; p -= 1
     return (best, best_page) if with_page else best
 
 
@@ -410,11 +413,21 @@ def _continues(prev, rows):
     return all(k[0] in top and k[1] > top[k[0]] for k in cont)
 
 
-@functools.lru_cache(maxsize=4)
 def _page_tables(pdf):
     """Per page, the widest atom-site table -> [(page no, rows, weight, headed, continued)], where
     `headed` says the header-driven read found it, `continued` that the page announces a
-    continued table near the top."""
+    continued table near the top. The last four documents are kept, keyed as `paper_extract._pages`
+    keys its pages — on the file's size and mtime — so a pdf replaced under a running GUI is read
+    again rather than served its predecessor's tables."""
+    try:
+        st = os.stat(pdf); stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    return _page_tables_cached(pdf, stamp)
+
+
+@functools.lru_cache(maxsize=4)
+def _page_tables_cached(pdf, _stamp):
     out = []
     for pno, page in enumerate(PE._pages(pdf), 1):
         best = []; best_w = 1.0; headed = False

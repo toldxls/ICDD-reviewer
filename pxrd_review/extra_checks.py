@@ -762,9 +762,13 @@ def check4_calculated(e, text):
         # 'calculated' sentence elsewhere can make the entry's pattern a simulated one — they
         # describe the comparison columns. Scoped like `not_collected`: the sentence names this
         # entry, or names no other species.
+        # The thing measured must be the PATTERN, the DATA or the DIFFRACTION — 'Powder for the
+        # microprobe mounts was obtained by crushing a crystal' is the sample, and read as the
+        # pattern it silenced a genuine calculated-pattern flag (audit 2026-09-10).
         _mc = re.compile(
-            r'(?:powder|pxrd)[^.]{0,60}\b(?:was|were)\s+(?:measured|collected|recorded|obtained|acquired)'
-            r'|(?:collected|recorded|measured)\s+(?:the\s+)?(?:x-ray\s+)?powder', re.I)
+            r'(?:powder[^.]{0,40}?\b(?:pattern|data|diffraction|diffractogram)\b|\bpxrd\b(?:\s+(?:pattern|data))?)'
+            r'[^.]{0,60}\b(?:was|were)\s+(?:measured|collected|recorded|obtained|acquired)'
+            r'|(?:collected|recorded|measured)\s+(?:the\s+)?(?:x-ray\s+)?powder[^.]{0,30}\b(?:pattern|data|diffraction)', re.I)
         measured_stated = any(
             _mc.search(s) and (_mentions_entry(s) or not _names_other_species(s, nm))
             for s in _sentences(text))
