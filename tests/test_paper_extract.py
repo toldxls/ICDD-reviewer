@@ -1904,3 +1904,38 @@ class VerifiedStructureChecksTheTable(unittest.TestCase):
         self.assertIn('verified by its bond distances', F['bv.table']['detail'])
         self.assertTrue(any('reproduces 6 of the 6 bond distances' in l and 'structure the paper itself prints' in l for l in r['lines']), r['lines'])
         self.assertFalse(r.get('paper_structure'))                              # not the note-grade path
+
+
+class FailureLog(unittest.TestCase):
+    """`failure_records` turns the readers that did not verify into records with what they read;
+    `log_failures` appends them as JSON lines."""
+
+    def test_records_and_log(self):
+        import json
+        r = {'extract': {'optics': {'n': 1.6, 'n_from': 'n = 1.6', 'n_calc': False}, 'epma': {'page': 3, 'header': 'wt.%', 'rows': [{'constituent': 'SiO2', 'mean': 40.0}], 'total': 99.0}, 'basis': ('O', 4.0)},
+             'fields': {'epma': {'value': 1, 'source': 'wt.%', 'page': 3, 'reader': 'layout', 'verified_by': None, 'status': 'unverified', 'detail': 'the wt% read add to 40.0'},
+                        'optics.n': {'value': 1.6, 'source': 'n = 1.6', 'page': None, 'reader': 'regex', 'verified_by': 'gd', 'status': 'agrees', 'detail': ''},
+                        'coords': {'value': None, 'source': '', 'page': None, 'reader': 'regex', 'verified_by': None, 'status': 'none', 'detail': ''}},
+             'coords': {'status': 'none'}, 'bv': None, 'composition': {'lines': ['composition: 1 constituent']}}
+        recs = PE.failure_records(r, '/x/paper.pdf', None, has={'coords': True})
+        self.assertEqual({x['field'] for x in recs}, {'epma', 'coords'})                # the agreeing reader is no failure
+        ep = next(x for x in recs if x['field'] == 'epma')
+        self.assertEqual((ep['status'], ep['page'], ep['context']['rows']), ('unverified', 3, [('SiO2', 40.0)]))
+        self.assertTrue(next(x for x in recs if x['field'] == 'coords')['silent'])     # the scan says the paper prints coordinates and the reader has nothing
+        tmp = tempfile.mkdtemp(prefix='pe_'); self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        path = PE.log_failures(recs, os.path.join(tmp, 'sub', 'f.jsonl')); PE.log_failures(recs, path)
+        lines = [json.loads(l) for l in open(path, encoding='utf-8')]
+        self.assertEqual(len(lines), 4); self.assertEqual(lines[0]['paper'], 'paper.pdf')
+
+
+class ValenceSwap(unittest.TestCase):
+    """A column that reproduces under the element's other oxidation state is the paper's
+    convention, noted and not counted; one that reproduces under neither stays a finding."""
+
+    def test_cell_devs_and_swap_shape(self):
+        lines = ['bond-valence table 1: 6 cells compared, 2 disagree (computed with X; H columns not compared)',
+                 'table 1: O1–Fe1 0.33 vs 0.48 computed', 'table 1: O2–Fe1 0.32 vs 0.49 computed']
+        self.assertEqual(PE._cell_devs(lines[1])[:2], ('1', 'Fe1'))
+        # no .cif: the swap reading is not attempted and the lines pass through unchanged
+        out, bad = PE._swap_valence(lines, 2, type('S', (), {'sites': []})(), None, {}, '', None, [{'kind': 'grid'}], [], None, 'gh', None)
+        self.assertEqual((out, bad), (lines, 2))

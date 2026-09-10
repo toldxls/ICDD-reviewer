@@ -1491,6 +1491,38 @@ $('#export').addEventListener('click', async () => {
   }
   setTimeout(() => $('#export').textContent = 'Export triage', 1800);
 });
+// ---- import another reviewer's triage report --------------------------------
+// The file is chosen with the browser's own picker and uploaded to /api/triage/import; the server
+// merges it into triage.json (their verdicts on matching findings, leftovers as entry notes, local
+// verdicts kept). Then the list and the open entry are reloaded so the verdicts show at once.
+$('#import').addEventListener('click', () => { $('#import-file').value = ''; $('#import-file').click(); });
+$('#import-file').addEventListener('change', async e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  await flushTriage();                          // a pending local verdict must land BEFORE the merge,
+  const btn = $('#import'), st = $('#rerun-status');   // or the import could not see it to keep it
+  btn.classList.add('busy'); btn.textContent = 'Importing…';
+  let r;
+  try {
+    const fd = new FormData(); fd.append('report', f, f.name);
+    r = await fetch('/api/triage/import', { method: 'POST', body: fd }).then(x => x.json());
+  } catch (ex) { r = { ok: false, error: String(ex) }; }
+  btn.classList.remove('busy');
+  if (r && r.ok) {
+    const s = r.summary || {};
+    btn.textContent = 'Imported ✓';
+    st.textContent = `${f.name}: ${s.entries || 0} entries · ${s.matched || 0} verdicts placed on current findings`
+      + ` · ${s.kept_as_note || 0} kept as entry notes · ${s.kept_local || 0} left to your own verdict`
+      + ((s.unknown_entries || []).length ? ` · not in this folder: ${s.unknown_entries.join(', ')}` : '');
+    await loadEntries();
+    if (S.key) openEntry(S.key);                // re-read the open entry's triage from the server
+  } else {
+    btn.textContent = 'Import failed';
+    st.textContent = 'triage import failed' + (r && r.error ? ': ' + r.error : '');
+  }
+  setTimeout(() => { btn.textContent = 'Import triage'; }, 1800);
+  setTimeout(() => { st.textContent = ''; }, 12000);
+});
 document.addEventListener('keydown', e => {
   if (e.target.matches('input, textarea')) return;
   const go = window.MODE === 'manuscript' ? msStep : step;

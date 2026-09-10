@@ -42,7 +42,7 @@ DASH = '–—−‐-'
 # the symmetry-code rule below, where 'O1vi' must still read as O1.
 LAB = re.compile(r"^[%s]?\s*([A-Z][A-Za-z]?)(?:\((\d{1,2}[a-z]?)\)|(\d{1,2}))?([A-Z]?)([a-z]{0,4}['′*†‡#]{0,2})$" % DASH)
 PAIR = re.compile(r"^([A-Z][A-Za-z]?(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[%s]"
-                  r"([A-Z][A-Za-z]?(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[a-z]{0,4}$" % DASH)
+                  r"([A-Z][A-Za-z]?(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[a-z]{0,4}['′″*†‡#]{0,2}$" % DASH)   # 'Z–O8′': the same anion under a symmetry code, a second bond
 BARE_DASH = re.compile(r'^[%s]+$' % DASH)
 MULT_SIGNS = ('×', 'x', 'X', '·', '∙', '*')
 # several corpus journals set the multiplication sign in a font whose '×' reaches the text as a 3
@@ -222,8 +222,8 @@ def element_of(label, sites=None, known=None):
     head = None
     if m:
         head = m.group(1) if m.group(1) in EP.ATOMIC_WEIGHTS else (label[0] if label[0] in EP.ATOMIC_WEIGHTS else None)
-    if head and head not in AMBIGUOUS:
-        return head
+    if head and head not in AMBIGUOUS and not (len(head) == 1 and known and head not in known and re.fullmatch(r'[A-Z]\d{0,2}', label)):
+        return head                                              # a bare 'B' (with 'A' and 'X' beside it) in a paper whose analysis names no boron is a site letter, put to the paper's own assignment
     if sites:
         hit = sites.get(_key(label))
         if hit:
@@ -492,7 +492,8 @@ def _column_heads(lines, centres, placed):
             ws = [w for w in lines[j]['w'] if lo <= (w[0] + w[2]) / 2 <= hi]
             if not ws:
                 continue
-            labs = [_label(w[4])[0] for w in ws if _label(w[4])[0] and not _label(w[4])[1]]
+            heads = [re.sub(r'[%s]+$' % DASH, '', w[4].strip()) for w in ws]   # 'Pb1–', 'Me4–': the dash of the bonds below, typeset on the head (the sartorite homologues)
+            labs = [_label(h)[0] for h in heads if _label(h)[0] and not _label(h)[1]]
             if len(labs) == len(ws):                 # the line holds site names in this column and nothing else
                 out[k] = labs[0]
             break                                    # the first line above with anything on it, or none

@@ -402,7 +402,9 @@ Fill ▸ in the Tables mode) prints them first: `readers: table ✓ (p6) · form
 D_calc ✓ · compatibility ✓ · cell ✓ · coordinates ✓ (p5) · bond-valence set ? · bond-valence table ✓ (p8) ·
 powder ✓ (p7) · name ✓`. ✓ agrees, ✗ disagrees, ? looked at with doubts, · nothing
 could check it. `pxrd paper X.pdf --check --why` prints every record in full — status, page, the sentence
-it was read from, and what the oracle said. The coordinates row vouches for the coordinates table by the
+it was read from, and what the oracle said; `--log-failures [FILE]` appends the readers that did not verify,
+with what they read and the oracle's lines, as JSON lines to `review_out/reader_failures.jsonl` (the file grows
+across runs), so a reader can be refined later on what it actually saw. The coordinates row vouches for the coordinates table by the
 structure built from it (its valences come out and its composition closes on the formula) or by a .cif's
 positions; the bond-valence table row is the table itself, checked whether or not the paper names a
 parameter set; the compatibility row is the index the paper states. The oracles: the composition re-derived from the paper's own table, basis and
@@ -1010,10 +1012,12 @@ It is a **thin, read-only presentation/triage layer over `annotate_review.analyz
 — it reuses the check logic verbatim, never duplicates or changes it, and **never
 edits a docx**. Its only writes are sidecars under `<folder>/review_out`:
 `gui_cache.json` (analysis cache), `triage.json` (verdicts), `triage_report.txt`
-(the exported summary). **Another reviewer's report reads back in**: `pxrd gui <folder>
---import-triage <their triage_report.txt>` (ICDD returns its decisions that way) puts their
-verdict and note on each finding the current analysis raises, keeps a decision on a finding this
-version no longer raises as an entry note, never overwrites a local verdict, and can be repeated.
+(the exported summary). **Another reviewer's report reads back in** — the **Import triage** button
+beside Export (the browser's file chooser; the report is uploaded to the local server and merged),
+or `pxrd gui <folder> --import-triage <their triage_report.txt>` (ICDD returns its decisions that
+way). Either puts their verdict and note on each finding the current analysis raises, keeps a
+decision on a finding this version no longer raises as an entry note, never overwrites a local
+verdict, and can be repeated.
 
 - **Dashboard** — one row per entry, the **primary lens being the major
   fixes/annotations the tool writes into the docx** (`N fixes` badge: flagged cell

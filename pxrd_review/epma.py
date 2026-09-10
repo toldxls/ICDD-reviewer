@@ -676,8 +676,10 @@ def parse_icdd_formula(text, has_sulfur=False):
                         stated = v; k += 1                                  # '(As3.99S0.01)4': the Σ glyph lost — the integer is the cations' own sum
                     else:
                         gm = v; k += 1; explicit = True                     # '(H2O)2.70': a multiplier
-                if stated is not None and stated >= 1.5 and 0.85 <= cat_total <= 1.15 and 'O' in toks[i + 1:j - 1] and n_dec >= 1:
-                    gm = stated; stated = None; explicit = True            # '((As0.95Sb0.08)O4)Σ2.03': the number of such groups, not a sum
+                if stated is not None and stated >= 1.5 and 0.85 <= cat_total <= 1.15 and 'O' in toks[i + 1:j - 1] and n_dec >= 1 \
+                        and abs(total - stated) > max(0.06, 0.03 * stated):
+                    gm = stated; stated = None; explicit = True            # '((As0.95Sb0.08)O4)Σ2.03': the number of such groups, not a sum —
+                                                                           # but '(O1.09F0.92)Σ2.01', whose parts INCLUDING the O add to the Σ, is a sum
                 items.append(0.0)
                 inner(i + 1, j - 1, mult * gm)
                 got = items.pop()

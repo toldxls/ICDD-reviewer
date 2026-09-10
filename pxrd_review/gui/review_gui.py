@@ -1541,8 +1541,17 @@ def _without_import_notes(note, tag):
 def import_triage_report(path):
     """Merge another reviewer's triage_report.txt into this folder's triage. -> summary dict."""
     with open(path, encoding='utf-8') as fh:
-        blocks = _parse_triage_report(fh.read())
-    tag = os.path.basename(path)
+        text = fh.read()
+    return import_triage_text(text, os.path.basename(path))
+
+def import_triage_text(text, tag):
+    """`import_triage_report` on the report's TEXT (the GUI's Import button uploads the file from the
+    browser, so there is no path). `tag` names the report in the notes it leaves and is what makes a
+    re-import idempotent, so the same file must arrive under the same tag. Raises ValueError when the
+    text is not a triage report at all."""
+    blocks = _parse_triage_report(text)
+    if not blocks:
+        raise ValueError('not a triage report (no entry blocks found) — expected the triage_report.txt the GUI exports')
     by_eid = {}
     for key in STATE['order']:
         eid = C.entry_id(STATE['docx'][key])
@@ -1601,15 +1610,30 @@ def import_triage_report(path):
 
 @app.route('/api/triage/import', methods=['POST'])
 def api_triage_import():
-    data = request.get_json(force=True, silent=True) or {}
-    path = data.get('path') or ''
-    if not os.path.isfile(path):
-        return jsonify({'ok': False, 'error': 'no such file: %s' % path}), 400
+    """The Import triage button: the report arrives as a multipart upload (`report`) — the browser's
+    own file chooser, so it works the same on every platform — or, for scripts, as JSON {path} naming
+    a file on the machine hosting the GUI (localhost only)."""
+    up = request.files.get('report')
     try:
-        with STATE['lock']:
-            summary = import_triage_report(path)
+        if up is not None:
+            raw = up.read()
+            if len(raw) > 8 * 1024 * 1024:                  # a triage report is a few KB; a docx is not one
+                return jsonify({'ok': False, 'error': 'that file is too large to be a triage report'}), 400
+            text = raw.decode('utf-8-sig', errors='replace')
+            tag = os.path.basename(up.filename or '') or 'triage_report.txt'
+            with STATE['lock']:
+                summary = import_triage_text(text, tag)
+        else:
+            data = request.get_json(force=True, silent=True) or {}
+            path = data.get('path') or ''
+            if not os.path.isfile(path):
+                return jsonify({'ok': False, 'error': 'no such file: %s' % path}), 400
+            with STATE['lock']:
+                summary = import_triage_report(path)
         _save_triage()
         return jsonify({'ok': True, 'summary': summary})
+    except ValueError as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 400
     except Exception as ex:
         return jsonify({'ok': False, 'error': str(ex)}), 500
 

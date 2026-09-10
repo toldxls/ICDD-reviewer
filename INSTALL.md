@@ -160,7 +160,8 @@ python -m pxrd_review.gui.review_gui "C:\Users\You\Desktop\2028_PART1"
   applying your triage. **`Rerun all ▸`** does the whole batch when you're finished.
 - **`Export triage`** is separate and optional: it writes a plain-text summary of your
   decisions (`review_out\triage_report.txt`). It does **not** write the docx — the Rerun
-  buttons do that.
+  buttons do that. **`Import triage`** reads such a report from another reviewer back in
+  (their verdicts land on the matching findings; yours are kept).
 
 **Your source files are never modified.** Everything the tool writes goes into a `review_out`
 subfolder, as *copies* with Word comments and yellow highlights. Your own manual edits to those

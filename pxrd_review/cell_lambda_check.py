@@ -631,9 +631,15 @@ def find_cells_param_row(text):
         m = PARAM_ROW.search(ln)
         if not m:
             continue
+        # A table ROW: the label heads the line, and what follows it is numbers. The prose 'Unit-cell
+        # parameters refined from the powder data using JADE …' is not one — read as one, it ran
+        # into the powder table below it and returned every 'h k l' triple as a cell (188 cells on
+        # one paper, and the coordinates builder's budget never reached the true one).
+        if m.start() > 3 or re.search(r'[A-Za-z]{3,}', ln[m.end():].replace('Å', '')):
+            continue
         toks = re.findall(NUM, ln[m.end():])
         j = i + 1; blank = 0
-        while j < len(lines) and j <= i + 14:
+        while j < len(lines) and j <= i + 6 and len(toks) < 16:
             t = lines[j].strip()
             if not t:
                 blank += 1; j += 1
@@ -644,6 +650,8 @@ def find_cells_param_row(text):
             if not row or not re.fullmatch(r'(?:' + NUM + r'[\s,;]*)+', t):
                 break
             toks += row; j += 1
+        if not any('.' in tk for tk in toks):
+            continue                                          # cell lengths carry decimals; a run of integers is an h k l column
         groups = [[]]
         for tk in toks:
             v = num_val(tk)
@@ -655,8 +663,8 @@ def find_cells_param_row(text):
                 continue
             groups[-1].append(tk)
         pos = sum(len(l) + 1 for l in lines[:i])
-        for g in groups:
-            lens = [t for t in g if 2.5 <= num_val(t) <= 80]
+        for g in groups[:2]:
+            lens = [t for t in g if 2.5 <= num_val(t) <= 80 and '.' in t]
             angs = [t for t in g if 80 < num_val(t) <= 180]
             if len(lens) == 2:
                 a, b, c = lens[0], lens[0], lens[1]
@@ -700,6 +708,7 @@ def find_cells_multicol(text):
 def find_cells(text):
     flat = re.sub(r'[\n\r]+', ' ', text)
     flat = re.sub(r'[ \t]+', ' ', flat)
+    flat = re.sub(r'(?:˚|°|\u030a)\s?A(?![a-z])|A\s?(?:˚|\u030a)', 'Å', flat)   # the ångström as a ring accent set beside its A ('˚A', 'A˚'): a LaTeX journal's text layer
     cands = []
     for m in re.finditer(r'\ba\s*=\s*(' + NUM + r')', flat):
         pos = m.start()
@@ -761,17 +770,24 @@ def find_cells(text):
                               classify_context(flat, pos), pos, flat[max(0, pos - 60):pos + 100]))
     # Space-separated form (no '='): 'a 23.9019(7), b 10.99(3), c 17.05(5) Å'.
     # Anchored on the trailing Å + comma structure to avoid matching prose.
-    for m in re.finditer(r'\ba\s+(' + NUM + r')\s*,\s*b\s+(' + NUM +
-                         r')\s*,\s*c\s+(' + NUM + r')\s*Å', flat):
+    # … with the unit allowed after each axis ('a 5.600(2) Å, b 7.450(3) Å, c 7.671(3) Å'), an 'and'
+    # before the last ('a 4.0307(1), b 22.7011(6), and c 54.615(1) Å'), and a degree sign the text
+    # layer delivers as '8' or 'º' after the angle
+    for m in re.finditer(r'\ba\s+(' + NUM + r')\s*Å?\s*,\s*b\s+(' + NUM +
+                         r')\s*Å?\s*,?\s*(?:and\s+)?c\s+(' + NUM + r')\s*Å', flat):
         pos = m.start()
         a, b, c = (g.replace(' ', '') for g in m.groups())
         if num_val(a) is None or num_val(a) < 2.5:
             continue
-        tail = flat[m.end() - 1:m.end() + 60]    # '…Å, b 118.284(1)°'
-        bm = re.search(r'[,]\s*[βb]\s+(' + NUM + r')\s*°', tail)
+        tail = flat[m.end() - 1:m.end() + 80]    # '…Å, b 118.284(1)°'; a triclinic's 'a 74.785(7)8, b 86.042(8)8, c 75.810(7)8'
+        bm = re.search(r'[,;]\s*[βb]\s+(' + NUM + r')\s*[°º◦8]', tail)
         be = bm.group(1).replace(' ', '') if bm else None
+        am = re.search(r'[,;]\s*[αa]\s+(' + NUM + r')\s*[°º◦8]', tail)
+        gm = re.search(r'[,;]\s*(?:and\s+)?[γgc]\s+(' + NUM + r')\s*[°º◦8]', tail)
+        al = am.group(1).replace(' ', '') if am and be else None       # α and γ only beside a β: a lone 'c 75.8°' is nothing
+        ga = gm.group(1).replace(' ', '') if gm and be else None
         Zm = re.search(r'\bZ\s*=?\s*(\d+)', flat[pos:pos + 220])
-        cands.append(CellCand(a, b, c, None, be, None,
+        cands.append(CellCand(a, b, c, al, be, ga,
                               None, Zm.group(1) if Zm else None,
                               classify_context(flat, pos), pos,
                               flat[max(0, pos - 90):pos + 90]))

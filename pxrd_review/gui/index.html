@@ -32,6 +32,10 @@
     <button id="gear" title="Appearance &amp; layout">⚙</button>
     <button id="rerun-all" title="Regenerate every docx, applying your triage (suppress dismissed findings, fold your notes into the comments, set Accept).&#10;&#10;Runs:  pxrd review <folder> --triage review_out/triage.json&#10;Comments and highlights only, with ONE exception: a Title-Cased reference title is corrected in the copy as a Word TRACKED CHANGE (open it in Word to Accept or Reject). A cell you have already edited is never overwritten, and your manual docx edits are preserved (a timestamped copy goes to review_out/.edit_backup/ first).">Rerun all ▸</button>
     <button id="export" title="Write review_out/triage_report.txt — a plain-text summary of your triage decisions.&#10;Never edits a docx.">Export triage</button>
+    <!-- The browser's own file chooser: the same on every platform, and the report is read in the
+         page, so the server needs no path. The CLI form is  pxrd gui <folder> --import-triage <report> -->
+    <button id="import" title="Read another reviewer's exported triage_report.txt (e.g. the one ICDD returns) into this folder's triage: their verdict and note land on each finding the current analysis raises; a decision on a finding this version does not raise is kept as an entry note; your own verdicts are never overwritten. Importing the same report twice changes nothing.&#10;&#10;Same as:  pxrd gui <folder> --import-triage <their triage_report.txt>&#10;Never edits a docx.">Import triage</button>
+    <input type="file" id="import-file" accept=".txt,text/plain" class="hidden">
     <button id="ms-export" class="ms-only hidden" title="Write review_out/ms_triage_report.txt — your verdicts and notes per manuscript.&#10;Never edits a docx.">Export triage</button>
   </header>
 

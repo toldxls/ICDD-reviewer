@@ -48,7 +48,7 @@ class Gauntlet(unittest.TestCase):
         self.assertIn('S = 2 papers', out[0])                                                       # c prints no bond-valence table: not in S
         epma = next(l for l in out if l.strip().startswith('epma')); bvt = next(l for l in out if l.strip().startswith('bv.table'))
         self.assertIn('2 100 %', epma); self.assertIn('1  50 %', bvt); self.assertIn('unverified 1', bvt); self.assertIn('b.pdf', bvt)
-        self.assertIn('all agree 1/2; table + bond-valence table + coordinates + compatibility all agree 1/2', out[-1])
+        self.assertIn('all agree 1/2; table + bond-valence table + coordinates + compatibility all agree 1/2', '\n'.join(out))
         base = {'a.pdf': self._paper(full, epma='agrees', bv_table='unverified'), 'c.pdf': papers['c.pdf']}
         out = CPE.gauntlet_lines(papers, base)
         self.assertTrue(any('DIFF on S' in l for l in out))

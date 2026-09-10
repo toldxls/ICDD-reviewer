@@ -30,7 +30,7 @@ function setMode(mode, opts) {
   $('#ms-app').classList.toggle('hidden', !ms || tb);
   $('#tb-app').classList.toggle('hidden', !tb);
   // entries-only controls
-  for (const id of ['#rerun-all', '#export', '#open-log']) { const e = $(id); if (e) e.classList.toggle('hidden', ms); }
+  for (const id of ['#rerun-all', '#export', '#import', '#open-log']) { const e = $(id); if (e) e.classList.toggle('hidden', ms); }
   const chip = $('#mindat-chip'); if (chip) { if (ms) chip.classList.add('hidden'); else if (chip.textContent) chip.classList.remove('hidden'); }
   document.querySelectorAll('.ms-only').forEach(e => e.classList.toggle('hidden', mode !== 'manuscript'));
   try { localStorage.setItem('pxrd-mode', mode); } catch (_) {}

@@ -374,6 +374,15 @@ class Structure:
             bonded_o = any(o[1] == 'O' and self._min_dist(r[3], o[3]) < 1.5 for o in raw)
             if has_h or not bonded_o:
                 self.nh4.add(r[0])          # ammonium — with or without its H refined
+        # a sulfide sulfur in a structure that also holds oxygen (a thiosulfate, an oxysulfide, a
+        # sulfate-sulfide): S, Se or Te with no oxygen within 1.8 Å is the anion, not S6+ (12835's S3
+        # came out 0.15 vu as a cation where the paper's 1.86 is its sum as S2-)
+        self.chalc_anion = set()
+        if has_o:
+            for r in raw:
+                if r[1] in ('S', 'Se', 'Te') and r[2] is None and not (r[0] in ox_override or r[1] in ox_override or r[1] in type_ox) \
+                        and not any(o[1] in ('O', 'F', 'Cl') and self._min_dist(r[3], o[3]) < {'S': 1.65, 'Se': 1.9, 'Te': 2.15}[r[1]] for o in raw):   # S–O 1.47, Se–O 1.70, Te–O 1.88–2.0 Å
+                    self.chalc_anion.add(r[0])
         # merge rows sharing a position into one (mixed) site
         merged = []
         for r in raw:
@@ -389,10 +398,14 @@ class Structure:
                 is_nh = lab in self.nh4
                 if is_nh:
                     ox_final = 1
+                elif lab in self.chalc_anion:
+                    ox_final = ANION_OX[el]
+                elif lab in ox_override:
+                    ox_final = ox_override[lab]                          # a SITE's own valence ('Fe2': 3) is deliberate — it beats the .cif's statement (the valence-swap reading asks 'what if this site were Cu+')
                 elif ox is not None:
                     ox_final = ox
-                elif lab in ox_override or el in ox_override:            # a site's own valence ('Fe2': 3) before its element's
-                    ox_final = ox_override[lab] if lab in ox_override else ox_override[el]
+                elif el in ox_override:                                 # an element's (--ox Fe=2) yields to the .cif's own statement
+                    ox_final = ox_override[el]
                 elif el in type_ox:
                     ox_final = type_ox[el]
                 elif el in ANION_ELEMENTS and not (el in ('S', 'Se', 'Te', 'N') and has_o) and el != 'H':
@@ -446,20 +459,32 @@ class Structure:
         return False
 
     # -- neighbours
+    def _images_within(self, p0, q, cutoff):
+        """The lattice translations (i, j, k) under which q CAN lie within cutoff of p0: along
+        each axis the distance between the planes x = const is the cell's perpendicular width,
+        so |Δx + i| · width ≤ cutoff is necessary — an exact prune, never a loss. A ± 2 box is
+        125 translations per atom pair; this is typically 8, and a sulfosalt cell with 700
+        atoms went from 170 s to seconds (2026-09-10)."""
+        axes = []
+        for c in range(3):
+            lim = cutoff / self.widths[c]; dx = p0[c] - q[c]
+            lo = int(math.ceil(dx - lim)); hi = int(math.floor(dx + lim))       # |(q + i) − p0| along the normal = |i − dx| · width
+            if hi < lo:
+                return ()
+            axes.append(range(lo, hi + 1))
+        return ((i, j, k) for i in axes[0] for j in axes[1] for k in axes[2])
+
     def neighbours(self, site, cutoff):
         """[(other site, distance, count)] within cutoff of one representative of `site`,
         merged into distinct distances (0.0015 Å) with their multiplicity."""
         p0 = site.positions[0]
-        rng = [int(math.ceil(cutoff / w)) + 1 for w in self.widths]
         found = []
         for other in self.sites:
             for q in other.positions:
-                for i in range(-rng[0], rng[0] + 1):
-                    for j in range(-rng[1], rng[1] + 1):
-                        for k in range(-rng[2], rng[2] + 1):
-                            d = self.dist(p0, [q[0] + i, q[1] + j, q[2] + k])
-                            if 0.3 < d <= cutoff:
-                                found.append((other, d))
+                for i, j, k in self._images_within(p0, q, cutoff):
+                    d = self.dist(p0, [q[0] + i, q[1] + j, q[2] + k])
+                    if 0.3 < d <= cutoff:
+                        found.append((other, d))
         found.sort(key=lambda x: (x[0].label, x[1]))
         merged = []
         for other, d in found:
@@ -472,17 +497,14 @@ class Structure:
     def images(self, p0, cutoff, sites=None):
         """Every atom image within cutoff of the fractional position p0: [(site, distance,
         position)] by distance — the positions the hydrogen-bond geometry needs."""
-        rng = [int(math.ceil(cutoff / w)) + 1 for w in self.widths]
         out = []
         for other in (sites if sites is not None else self.sites):
             for q in other.positions:
-                for i in range(-rng[0], rng[0] + 1):
-                    for j in range(-rng[1], rng[1] + 1):
-                        for k in range(-rng[2], rng[2] + 1):
-                            qq = [q[0] + i, q[1] + j, q[2] + k]
-                            d = self.dist(p0, qq)
-                            if 0.3 < d <= cutoff:
-                                out.append((other, d, qq))
+                for i, j, k in self._images_within(p0, q, cutoff):
+                    qq = [q[0] + i, q[1] + j, q[2] + k]
+                    d = self.dist(p0, qq)
+                    if 0.3 < d <= cutoff:
+                        out.append((other, d, qq))
         out.sort(key=lambda x: (x[1], x[0].label))
         return out
 
@@ -1408,7 +1430,7 @@ def _header_weights(header):
     return out
 
 
-def _resolve_sites(tokens, table):
+def _resolve_sites(tokens, table, loose=False):
     """{index: site} for the tokens of a header row, or the labels of a BVS column, that name a
     cation site of `table` ({normalised label: site}). An exact label wins. A token that resolves
     only once its charge is dropped ('Fe3+', or 'Fe3' with the sign lost in the text layer) stands
@@ -1425,11 +1447,63 @@ def _resolve_sites(tokens, table):
             s = _strip_charge(n)
             if s != n and s in table:
                 stripped.setdefault(table[s], []).append(i)
+            else:
+                m = re.match(r'^([A-Z][A-Z]?)\d{1,2}$', n)                 # 'U1' in the header for a bond table that writes its lone uranium site 'U' (4756)
+                if m and m.group(1) in table and n not in table:
+                    stripped.setdefault(table[m.group(1)], []).append(i)
     taken = set(out.values())
     for site, idx in stripped.items():
         if site not in taken and len(idx) == 1:
             out[idx[0]] = site
+    if not loose:
+        return out                                                    # the finder's reading: exact labels only — the readings below are for the columns of a table already found (a lone 'S' or '(C)' would otherwise make a foreign table look like the grid)
+    # a header that names a site by its SPECIES ('(Zn0.699Fe3+0.301)', 'Mn0.6Fe0.4'): the site whose
+    # halves are those elements — 'Zn/Fe' — and no other
+    by_elements = {}
+    for k_, site in table.items():
+        els = frozenset(re.sub(r'\d.*$', '', p_).capitalize() for p_ in site.split('/') if re.match(r'^[A-Z][a-z]?', p_))
+        if len(els) >= 2:
+            by_elements.setdefault(els, set()).add(site)
+    for i, x in enumerate(tokens):
+        if i in out:
+            continue
+        els = frozenset(m_.group(0) for m_ in re.finditer(r'[A-Z][a-z]?(?=\d|\+|$|\))', re.sub(r'\d?\+', '', x or '')) if m_.group(0) in ELEMENTS)
+        hit = by_elements.get(els)
+        if len(els) >= 2 and hit and len(hit) == 1 and next(iter(hit)) not in out.values():
+            out[i] = next(iter(hit))
+    # a tourmaline's header letters — X, Y, Z, T, B, V, W — for a .cif that labels its sites by
+    # element with the site letter as a suffix ('AlZ', 'LiY/AlY', 'SiT/BT'): the one site whose
+    # halves all end in that letter
+    for i, x in enumerate(tokens):
+        if i in out or not re.fullmatch(r'[A-Z]', (x or '').strip()):
+            continue
+        cand = {site for site in set(table.values()) if all(re.fullmatch(r'[A-Z][a-z]?' + x.strip(), p_) for p_ in site.split('/'))}
+        if len(cand) == 1 and next(iter(cand)) not in out.values():
+            out[i] = next(iter(cand))
+    # a lone element in the header — '(Cu)' beside '(Cu0.67Ni0.24Fe0.09)' — for the one site of that
+    # element not already taken by another column
+    for i, x in enumerate(tokens):
+        if i in out:
+            continue
+        el = re.fullmatch(r'\(?\s*([A-Z][a-z]?)(?:\d?\+)?\s*\)?', (x or '').strip())
+        if not el or el.group(1) not in ELEMENTS:
+            continue
+        cand = {site for site in set(table.values()) if site not in out.values() and re.match(r'^' + el.group(1) + r'(?![a-z])', site)}
+        if len(cand) == 1:
+            out[i] = next(iter(cand))
     return out
+
+def _tol(v):
+    """The tolerance on one printed valence: 0.015 vu plus 2.5 % of the value — a paper prints two
+    decimals and its parameter set is rarely the tool's to the last digit, so 0.892 against 0.92 is
+    the same bond and 0.30 against 0.33 is not."""
+    return 0.015 + 0.025 * abs(v)
+
+def _same_but_contacts(nums, cv):
+    """Two value lists that name the same bonds once the contacts of ≤ 0.05 vu — which one side's
+    cutoff reaches and the other's does not — are set aside; at least one real value on each side."""
+    big = sorted(v for v in nums if v > 0.05); small = sorted(v for v in cv if v > 0.05)
+    return bool(big) and len(big) == len(small) and max(abs(x - y) for x, y in zip(big, small)) <= 0.015
 
 def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', compare_anion_sums=True):
     """Findings about a manuscript bond-valence table (anion rows × cation columns).
@@ -1467,9 +1541,11 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
     cat_occ = {x: min(r[0].occ_total, 1.0) for r in result for x in r[0].label.split('/')}
     cat_occ.update({r[0].label: min(r[0].occ_total, 1.0) for r in result})
     bvs_of = {r[0].label: r[2] for r in result}
-    h_cols = {r[0].label for r in result if r[0].element == 'H'}
+    h_cols = {r[0].label for r in result if r[0].element == 'H' or (r[0].element == 'N' and (any(sp.ox == 1 for sp in r[0].species) or r[2] < 1.6))}   # H, and the ammonium N (a sum near 1, never nitrate's 5): how a paper shares their valence out varies too much to compare
     donors = _h_donor_anions(st)
+    inferred_cols = {_norm_label(x) for x in getattr(st, 'inferred', None) or ()}
     found = False
+    thin_noted = set()                                               # sites under half occupied, noted once each
     for ti, rows in enumerate(tables):
         if len(rows) < 3:
             continue
@@ -1477,28 +1553,35 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
         for ri in range(min(3, len(rows))):
             hits = sorted(_resolve_sites(rows[ri], cat_labels))
             below = sum(1 for r in rows[ri + 1:ri + 4] if r and _norm_label(r[0]) in an_labels)
-            numeric = any(re.search(r'\d\.\d', _WEIGHT_TAIL.sub('', x)) for x in rows[ri])       # a bond-distance table, not a header ('Na1×0.20→' is a weighted header, not a distance)
+            numeric = any(re.search(r'\d\.\d', re.sub(r'[A-Z][a-z]?\d?\+?\d\.\d+', '', _WEIGHT_TAIL.sub('', x))) for x in rows[ri])   # a bond-distance table, not a header ('Na1×0.20→' is a weighted header, '(Zn0.699Fe3+0.301)' a species header — not distances)
             if not numeric and (len(hits) >= 2 or (hits and below >= 1)):
                 hdr = ri; break
         if hdr is None:
             continue
         found = True
         header = rows[hdr]
-        col_cat = _resolve_sites(header, cat_labels)
+        col_cat = _resolve_sites(header, cat_labels, loose=True)
         # A column may be printed occupancy-weighted — the header says so ('Na1×0.20→'), or the site
         # is partly occupied and the paper multiplied through. That is a convention of the COLUMN,
         # never of one cell: it is taken only where it fits more of the column's cells than the
         # plain reading does, so a lucky ratio cannot excuse a single slip.
         col_w = _header_weights(header)
+        cands = {ci: [w] for ci, w in col_w.items()}                       # the weights a column may be printed under, tried against its cells
+        shares_of = {r[0].label: [sp.occ for sp in r[0].species if sp.ox and sp.ox > 0 and 0 < sp.occ < 0.98] for r in result}
         for ci, cat in col_cat.items():
             if ci not in col_w and cat_occ.get(cat, 1.0) < 0.999 and not getattr(st, 'from_bonds', False):
-                col_w[ci] = cat_occ[cat]                                   # a .cif's partly occupied site; a bond-distance structure weights its own cells by share
+                cands.setdefault(ci, []).append(cat_occ[cat])              # a .cif's partly occupied site; a bond-distance structure weights its own cells by share
+            elif ci not in col_w and 0 < cat_occ.get(cat, 1.0) < 0.999 and getattr(st, 'from_bonds', False):
+                cands.setdefault(ci, []).append(1.0 / cat_occ[cat])        # … so the paper printing that site's values UNWEIGHTED (jeankempite's Ca5, 0.72 occupied) is the other reading
+            for sh in shares_of.get(cat) or []:
+                if 0.1 <= sh <= 0.9 and cat_occ.get(cat, 1.0) >= 0.5:
+                    cands.setdefault(ci, []).append(sh)                    # one species' share of a mixed site (Fe0.68Mg0.32: the Fe part alone) — the sums rule of check_bvs_sites, for a column
         col_mode = {}
-        for ci, w in list(col_w.items()):
+        for ci, ws in cands.items():
             cat = col_cat.get(ci)
             if cat is None or cat in h_cols:
                 continue
-            plain = weighted = 0
+            plain = 0; weighted = {w: 0 for w in ws}
             for ri in range(hdr + 1, len(rows)):
                 row = rows[ri]
                 if ci >= len(row):
@@ -1508,23 +1591,42 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
                 if not calc or len(nums) != 1:
                     continue
                 cv0 = sorted(s for s, _, _ in calc)[0]; tot = sum(s * n for s, n, _ in calc)
-                if abs(nums[0] - cv0) <= 0.015 or abs(nums[0] - tot) <= 0.015 * max(calc[0][1], 1) + 0.01:
+                if abs(nums[0] - cv0) <= _tol(cv0) or abs(nums[0] - tot) <= _tol(tot) * max(calc[0][1], 1) + 0.01:
                     plain += 1
-                if abs(nums[0] - cv0 * w) <= 0.015 or abs(nums[0] - tot * w) <= 0.015 * max(calc[0][1], 1) + 0.01:
-                    weighted += 1
-            if weighted > plain and weighted >= 2:
-                col_mode[ci] = w
+                for w in ws:
+                    if abs(nums[0] - cv0 * w) <= _tol(cv0 * w) or abs(nums[0] - tot * w) <= _tol(tot * w) * max(calc[0][1], 1) + 0.01:
+                        weighted[w] += 1
+            w_best = max(ws, key=lambda w: weighted[w])
+            if weighted[w_best] > plain and weighted[w_best] >= 2:
+                col_mode[ci] = w_best
+                if w_best not in col_w and (shares_of.get(cat) and w_best in shares_of[cat]):
+                    L.append('table %d: the %s column is printed as one species\' share (×%.2f) of a mixed site' % (ti + 1, cat, w_best))
         sum_col = next((ci for ci, x in enumerate(header) if re.match(r'^\s*(Σ|Sum|Total)', x, re.I)), None)
         col_kind = {}
         for ci, x in enumerate(header):
             if ci in col_cat or ci == sum_col:
                 continue
-            if re.match(r'^\s*(D|Donor)\b', x.strip(), re.I) or re.search(r'\bdonor\b', x, re.I) and 'vu' not in x.lower():
-                col_kind[ci] = 'donor' if re.fullmatch(r'\s*(D|Donor)\s*\*{0,2}', x, re.I) else 'label'
-            elif re.match(r'^\s*(A|Acceptor|H[- ]?bonds?|vu)', x.strip(), re.I):
+            if re.match(r'^\s*(D|Donor|Donated)\b', x.strip(), re.I) or re.search(r'\bdonor\b', x, re.I) and 'vu' not in x.lower():
+                col_kind[ci] = 'donor' if re.fullmatch(r'\s*(D|Donor|Donated)\s*\*{0,2}', x, re.I) else 'label'
+            elif re.match(r'^\s*(A|Acceptor|Accepted|H[- ]?bonds?|vu)', x.strip(), re.I):
                 col_kind[ci] = 'acceptor'
         ncell = nbad = 0
         col_tot = {ci: [0.0, 0.0] for ci in col_cat}       # [per-bond reading, total reading]
+        col_ok = {}; col_bad_lines = {}                     # per cation column: cells agreeing, and the line indices of those that do not
+        # The paper's own Σ row says how much of a site it counted: a column whose printed sum is under
+        # half the computed one is a site the paper weights by an occupancy the table does not print
+        # (7044's PbB, a split partner at ~15 %) — not compared, like a site the occupancy column shows
+        # to be thin. Read before the cells, since the Σ row comes last.
+        sig_row = next((rows[ri] for ri in range(hdr + 1, len(rows)) if rows[ri] and re.match(r'^\s*(Σ|Sum|Total)', rows[ri][0] or '', re.I)), None)
+        thin_by_sigma = set()
+        if sig_row:
+            for ci, cat in col_cat.items():
+                if ci < len(sig_row) and cat not in h_cols and bvs_of.get(cat):
+                    segs_s = _bv_cell(sig_row[ci]); nums_s = [v for v, _, _ in segs_s]
+                    if nums_s and 0 < nums_s[0] < 0.5 * bvs_of[cat] and cat_occ.get(cat, 1.0) >= 0.98:
+                        thin_by_sigma.add(cat)
+        for cat in sorted(thin_by_sigma):
+            L.append('table %d: the %s column is not compared — its printed Σ is under half the computed sum: a site the paper weights by an occupancy this table does not print' % (ti + 1, cat))
         for ri in range(hdr + 1, len(rows)):
             row = rows[hdr + 1:][ri - hdr - 1]
             lab = _norm_label(row[0])
@@ -1558,8 +1660,33 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
                     row_alt += sum(v * max(nd, na) for v, nd, na in segs)   # a '×3↓' some authors also count in the row
                     if cat in h_cols:
                         continue
+                    if cat in thin_by_sigma:
+                        continue
+                    if _norm_label(cat) in inferred_cols and not getattr(st, 'from_bonds', False):
+                        if cat not in thin_noted:
+                            L.append('table %d: the %s column is not compared — the element on that site is the builder\'s guess, not the table\'s' % (ti + 1, cat)); thin_noted.add(cat)
+                        continue                                       # what the coordinates builder GUESSED for a site cannot judge the paper's cells for it; a bond-distance structure's inferred site is the paper's OWN assignment, compared below and excused as a column if nothing in it agrees
+                    if cat_occ.get(cat, 1.0) < 0.5:
+                        # A site under half occupied (naalasite's Na1, 0.17 Na on a Na/OW position) says
+                        # nothing about the reading: how the paper weighted its cells is its own choice,
+                        # and neither the plain nor the share-weighted value need reproduce them. The
+                        # same rule keeps such sites out of the structure builder's index.
+                        if cat not in thin_noted:
+                            L.append('table %d: %s (%.0f %% occupied) is not compared — a site under half occupied is weighted as the paper chooses'
+                                     % (ti + 1, cat, 100 * cat_occ[cat])); thin_noted.add(cat)
+                        continue
                     ncell += 1
+                    col_max = max((s for (a2, c2), lst in cells.items() if c2 == cat for s, _, _ in lst), default=0.0)
                     if not calc:
+                        if nums and max(nums) <= 0.05:
+                            L.append('table %d: %s–%s %s in the table for a bond beyond the cutoff — a longer contact the paper counted (not a difference)'
+                                     % (ti + 1, an, cat, row[ci].strip())); ncell -= 1; continue      # ≤ 0.05 vu: the paper's cutoff reaches further than the tool's; nothing to weigh
+                        if nums and min(nums) >= max(1.0, 1.5 * col_max):
+                            L.append('table %d: %s–%s %s in the table — not a bond valence for %s (a distance, or a sum, in that cell; not compared)'
+                                     % (ti + 1, an, cat, row[ci].strip(), cat)); ncell -= 1; continue   # 2.028 under an M1 column whose bonds bear 0.4 vu at most: a bond-distance row, or a Σ, read into the grid
+                        if getattr(st, 'from_bonds', False):
+                            L.append('table %d: %s–%s %s in the table but the bond table read prints no such distance — the table read is short, not compared'
+                                     % (ti + 1, an, cat, row[ci].strip())); ncell -= 1; continue       # an oracle built from the paper's printed bonds is only as complete as the read: a bond it lacks is no finding against the paper
                         L.append('table %d: %s–%s %s in the table but the .cif has no such bond within the cutoff'
                                  % (ti + 1, an, cat, row[ci])); nbad += 1; continue
                     cv = sorted(s for s, _, _ in calc)
@@ -1568,15 +1695,32 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
                     wt = col_mode.get(ci)
                     if wt:                                         # the column is occupancy-weighted throughout
                         cv = [v * wt for v in cv]; calc = [(s * wt, n, n2) for s, n, n2 in calc]
-                    if len(nums) == len(cv) and max(abs(x - y) for x, y in zip(sorted(nums), cv)) <= 0.015:
+                    mixed = len([sp for sp in next((r[0].species for r in result if r[0].label == cat), []) if sp.ox and sp.ox > 0]) > 1 \
+                        or len({sp.element for a_ in st.anions if a_.label == an for sp in a_.species}) > 1   # a mixed ANION site too (F1/OH1: Ca–F or Ca–O parameters, as the paper chose)
+                    an_el = next((a_.element for a_ in st.anions if a_.label == an), 'O')
+                    soft = an_el not in ('O', 'F', None)                   # a bond to S, Se, Te, Cl, Br, I: the parameter sets differ more (Bi–Se, Pb–Se from 'Brown unpublished', Cu–Se from Shields)
+                    tolv = (lambda v: _tol(v) + (0.02 + 0.04 * v if mixed else 0.0) + (0.005 + 0.015 * v if soft else 0.0))   # a mixed site (Bi/Ag, Ce/Ca): how the paper weighted the species is its own convention
+                    if len(nums) > 1 and col_max < 1.2 and any(v < 1.2 for v in nums):
+                        nums = [v for v in nums if v < 1.5]        # '1.98 0.30', '2.165 0.391': the bond DISTANCE printed beside its valence is not a second value
+                    if len(nums) == len(cv) and max(abs(x - y) for x, y in zip(sorted(nums), cv)) <= max(tolv(v) for v in cv):
                         ok = True                                  # per-bond values
+                    elif len(nums) != len(cv) and _same_but_contacts(nums, cv):
+                        ok = True                                  # the same bonds, one side also listing a contact of ≤ 0.05 vu the other's cutoff excludes ('0.06, 0.02' vs 0.06; '1.25, 0.11' vs 0.04, 0.10, 1.25)
+                    elif len(nums) == len(calc) > 1 and max(abs(x - y) for x, y in zip(sorted(nums), sorted(s * n for s, n, _ in calc))) <= _tol(max(cv)) * max(nd, 1) + 0.01:
+                        ok = True                                  # each value the total over ITS distance's ×n ('Ca–O2 2.4788 ×2 0.50, 2.5802 ×2 0.38': saccoite)
                     elif len(nums) == 1:
                         total_down = sum(s * n for s, n, _ in calc)
                         total_across = sum(s * (n2 if isinstance(n2, int) else 1) for s, _, n2 in calc)
-                        tol = 0.015 * max(nd, 1) + 0.01
+                        tol = _tol(total_down) * max(nd, 1) + 0.01
                         if abs(nums[0] - total_down) <= tol or abs(nums[0] - total_across) <= tol \
                                 or abs(nums[0] - sum(cv)) <= tol:
                             ok = True                              # the total over the bonds
+                        elif len(cv) > 1 and any(abs(nums[0] - v) <= tolv(v) for v in cv):
+                            ok = True                              # ONE of the distinct bonds' values, its ×n mark not read ('0.107' for two bonds of 0.11)
+                    if not ok and len(nums) > 1:
+                        totals = [sum(s * n for s, n, _ in calc), sum(s * (n2 if isinstance(n2, int) else 1) for s, _, n2 in calc), sum(cv)]
+                        if any(abs(v - c_) <= tolv(c_) for v in nums for c_ in cv) or any(abs(v - t_) <= _tol(t_) * max(nd, 1) + 0.01 for v in nums for t_ in totals):
+                            ok = True                              # a multi-value cell ('0.2336; 2.34', '0.14 0.14', '0.29 0.05'): one value is this bond's, the other a Σ, a duplicate, or the other species' share
                     if not ok:
                         if re.search(r'(?<![\d.])0\d\d(?![\d.])', row[ci]):
                             L.append('table %d: %s–%s "%s" — a missing decimal point?' % (ti + 1, an, cat, row[ci].strip()))
@@ -1587,7 +1731,9 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
                         elif nd > 1 or (isinstance(na, int) and na > 1):
                             hint = ' (%.2f per bond, %s)' % (cv[0], _mark(nd, na))
                         L.append('table %d: %s–%s %s vs %.2f computed%s' % (ti + 1, an, cat, row[ci].strip(), cv[0] if len(cv) == 1 else sum(cv), hint))
-                        nbad += 1; row_flagged = True
+                        nbad += 1; row_flagged = True; col_bad_lines.setdefault(cat, []).append(len(L) - 1)
+                    else:
+                        col_ok[cat] = col_ok.get(cat, 0) + 1
                 if sum_col is not None and sum_col < len(row):
                     m = re.search(r'\d+\.\d+', row[sum_col])
                     if m:
@@ -1634,8 +1780,18 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
                             given = float(m.group(0))
                             if min(abs(t - given) for t in col_tot[ci]) > 0.025:
                                 L.append('table %d: Σ for %s is %.2f but its column adds to %.2f' % (ti + 1, cat, given, col_tot[ci][0]))
-                            elif abs(bvs_of.get(cat, given) - given) > 0.08:
+                            elif abs(bvs_of.get(cat, given) - given) > 0.08 and cat_occ.get(cat, 1.0) >= 0.5:   # a site under half occupied: its sum is weighted as the paper chooses
                                 L.append('table %d: Σ for %s %.2f vs %.2f from the .cif (parameters: %s)' % (ti + 1, cat, given, bvs_of.get(cat), params_label))
+        # a column for a site whose element is the paper's own assignment (a bond-distance structure's
+        # 'X', 'A', 'M1' read from its prose — right 11 times in 17 on the corpus) in which NOTHING
+        # agrees is the wrong element, not a paper's slip: those cells are set aside, not counted
+        gone = set()
+        for cat, idx in col_bad_lines.items():
+            if _norm_label(cat) in inferred_cols and not col_ok.get(cat) and len(idx) >= 2:
+                gone |= set(idx); nbad -= len(idx); ncell -= len(idx)
+                L.append('table %d: the %s column is not compared — none of its %d cells follow from the element the paper\'s prose assigns that site, so the assignment, not the table, is in doubt' % (ti + 1, cat, len(idx)))
+        for i in sorted(gone, reverse=True):
+            del L[i]                                            # all at once, in reverse: deleting one column's lines would shift the next column's indices
         L.insert(0, 'bond-valence table %d: %d cells compared, %d disagree (computed with %s; H columns not compared)'
                  % (ti + 1, ncell, nbad, params_label))
     if not found:
@@ -1785,21 +1941,23 @@ def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_ani
         if _norm_label(r[0].label) in skip:
             continue
         occ = min(getattr(r[0], 'occ_total', 1.0) or 1.0, 1.0)
+        shares = [sp.occ for sp in (getattr(r[0], 'species', None) or []) if sp.ox and sp.ox > 0 and 0 < sp.occ < 0.98]   # a split site's cation shares: the paper may sum one species' part alone
         for x in r[0].label.split('/'):
-            bvs_of[_norm_label(x)] = (r[0].label, r[2], 'cation', occ)
-        bvs_of[_norm_label(r[0].label)] = (r[0].label, r[2], 'cation', occ)
+            bvs_of[_norm_label(x)] = (r[0].label, r[2], 'cation', occ, shares)
+        bvs_of[_norm_label(r[0].label)] = (r[0].label, r[2], 'cation', occ, shares)
     for k_, v_ in _element_aliases(result).items():
         if k_ not in bvs_of:
             row = next(r for r in result if r[0].label == v_)
-            bvs_of[k_] = (v_, row[2], 'cation', min(getattr(row[0], 'occ_total', 1.0) or 1.0, 1.0))
+            bvs_of[k_] = (v_, row[2], 'cation', min(getattr(row[0], 'occ_total', 1.0) or 1.0, 1.0),
+                          [sp.occ for sp in (getattr(row[0], 'species', None) or []) if sp.ox and sp.ox > 0 and 0 < sp.occ < 0.98])
     for k_, v_ in (getattr(st, 'aliases', None) or {}).items():         # the paper's own site names, mapped by coordinates
         hit = bvs_of.get(_norm_label(v_))
         if hit and k_ not in bvs_of:
             bvs_of[k_] = hit
     for a in st.anions:
         for x in a.label.split('/'):
-            bvs_of[_norm_label(x)] = (a.label, anion_sum.get(a.label, 0.0), 'anion', 1.0)
-        bvs_of[_norm_label(a.label)] = (a.label, anion_sum.get(a.label, 0.0), 'anion', 1.0)
+            bvs_of[_norm_label(x)] = (a.label, anion_sum.get(a.label, 0.0), 'anion', 1.0, [])
+        bvs_of[_norm_label(a.label)] = (a.label, anion_sum.get(a.label, 0.0), 'anion', 1.0, [])
     for ti, tab in enumerate(tables):
         ncell = nbad = 0; found = False
         rows_ = list(tab.get('rows') or [])
@@ -1809,10 +1967,18 @@ def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_ani
             hit = by_site.get(site_of.get(i))
             if not hit or (hit[2] == 'anion' and not compare_anions):
                 continue
-            found = True; site, mine, kind, occ = hit
+            found = True; site, mine, kind, occ, shares = hit
             tol = (0.05 if kind == 'cation' else 0.12) + 0.03 * max(v, mine)
+            if kind == 'cation' and not any(a_.element in ('O', 'F') for a_ in st.anions):
+                tol += 0.05 + 0.05 * max(v, mine)                      # a sulfosalt (S, Se, Te anions only): the sets differ more, and where a paper cuts its long Pb–S / Sb–S bonds off moves a sum by tenths
+            if kind == 'cation' and shares and len(shares) >= 2:
+                tol += 0.12 * max(v, mine)                             # a mixed site (Si/Al on T, Ce/Ca): the expected sum depends on how the species were weighted — a convention
+            if kind == 'cation' and occ <= 0.5:
+                L.append('table %d: BVS of %s (%.0f %% occupied) is not compared — a site half occupied or less is weighted as the paper chooses' % (ti + 1, site, 100 * occ))
+                continue                                                   # the split-site rule of check_bvs_table, for sums (78897's Na7/Ca7, Na8/Ca8 pairs, Sr9 at 12 %)
             ncell += 1
-            if abs(v - mine) > tol and not (occ < 0.98 and abs(v - mine * occ) <= tol):   # an occupancy-weighted sum for a split site
+            if abs(v - mine) > tol and not (occ < 0.98 and abs(v - mine * occ) <= tol) \
+                    and not any(abs(v - mine * sh) <= tol for sh in shares):   # an occupancy-weighted sum for a split site — the whole site's, or one species' part (fluormacraeite's A1/Ow1: the K share of a K/H2O site)
                 nbad += 1
                 L.append('table %d: BVS of %s %.2f in the table vs %.2f from the .cif (parameters: %s)%s' % (
                     ti + 1, site, v, mine, params_label, '' if kind == 'cation' else ' — an anion sum: hydrogen bonds and H conventions vary'))

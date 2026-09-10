@@ -158,28 +158,46 @@ def find_in_text(text, window=90):
         seg = text[m.end():m.end() + window]
         flat, back = _flat(seg)
         best = None
-        for k in vocab:
-            i = flat.find(k)
+        cands = [(k, k) for k in vocab] + [(k, k.replace('-', '')) for k in vocab if '-' in k and k.replace('-', '') not in vocab]   # the barred group's unbarred twin ('FD3M' for Fd3̄m, the overbar lost to the font) when that form is no group of its own (P31m is)
+        for k, k_ in cands:
+            i = flat.find(k_)
             while i >= 0:
                 # the symbol is a word of its own in the raw text: 'and the cell' is not the A-centred
                 # setting 'An' followed by 'd', and '...Pnma' inside a reference is not a symbol
-                r0, r1 = back[i], back[i + len(k) - 1] + 1
+                r0, r1 = back[i], back[i + len(k_) - 1] + 1
                 if not (r0 > 0 and seg[r0 - 1].isalpha()) and not (r1 < len(seg) and seg[r1].isalpha()) and seg[r0].isupper():
                     break                                # and the lattice letter is a capital: 'an inversion twin' is not the setting An
-                i = flat.find(k, i + 1)
+                i = flat.find(k_, i + 1)
             if i < 0:
                 continue
-            if best is None or i < best[1] or (i == best[1] and len(k) > len(best[0])):
-                best = (k, i)
+            if best is None or i < best[1] or (i == best[1] and len(k_) > len(best[2])):
+                best = (k, i, k_)
         if best and best[1] <= 24:                       # the symbol stands near the phrase, not a page away
             return key_for(best[0]) or best[0], text[m.start():m.end() + window][:120]
     return None, ''
+
+
+_LOOKALIKE = str.maketrans({'С': 'C', 'Р': 'P', 'В': 'B', 'А': 'A', 'Н': 'H', 'Ι': 'I', 'Ρ': 'P', '¯': '-', '\u0304': '-', '\u0305': '-', '‾': '-'})
+
+def find_all_in_text(text, window=90):
+    """Every space-group symbol the text states after a 'space group' phrase, distinct, the most
+    often stated first — a paper names its relatives' groups too (75959: Im3̄m for a related mineral
+    once, its own I213 twice), and which is its own is for the structure to decide."""
+    counts = {}
+    if not text:
+        return []
+    for m in _NEAR.finditer(text):
+        sym, _ph = find_in_text(text[m.start():m.end() + window], window)
+        if sym:
+            counts[sym] = counts.get(sym, 0) + 1
+    return [k for k, _v in sorted(counts.items(), key=lambda kv: -kv[1])]
 
 
 def _flat(seg):
     """The segment normalised as `normalize` does — spaces out, upper case, subscripts and dashes
     folded, parenthesised notes dropped — with, for each character kept, the index it came from."""
     flat = []; back = []; depth = 0
+    seg = seg.translate(_LOOKALIKE)                    # a Cyrillic С in 'Сmcm', a macron '¯' for the overbar: the text layer's look-alikes
     for i, ch in enumerate(seg):
         if ch == '(':
             depth += 1; continue

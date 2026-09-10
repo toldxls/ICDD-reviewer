@@ -80,6 +80,20 @@ def gauntlet_lines(papers, base=None, limit=8):
     a3 = sum(1 for n in S if all_agree(n, ('epma', 'bv.params', 'optics.n')))
     a4 = sum(1 for n in S if all_agree(n, ('epma', 'bv.table', 'coords', 'gd')))
     out.append('  composite: table + bond-valence set + n all agree %d/%d; table + bond-valence table + coordinates + compatibility all agree %d/%d' % (a3, len(S), a4, len(S)))
+    # the whole corpus, reader by reader: each over the papers whose text prints ITS thing (the
+    # scan's 'has' again) — the wider denominator the 2026-09-10 round works on, S being the
+    # intersection of all five
+    out.append('  WHOLE CORPUS, per reader over the papers that print its thing:')
+    for fld, feat in (('epma', 'epma'), ('formula', 'epma'), ('bv.table', 'bv'), ('bv.params', 'bv'), ('coords', 'coords'), ('gd', 'gd'), ('optics.n', 'optics')):
+        T = [n for n, r in papers.items() if (r.get('has') or {}).get(feat)]
+        if not T:
+            continue
+        c = {}
+        for n in T:
+            s = stat(n, fld); c[s] = c.get(s, 0) + 1
+        a = c.get('agrees', 0)
+        others = ', '.join('%s %d' % (k, c[k]) for k in ('disagrees', 'unverified', 'nooracle', 'none') if c.get(k))
+        out.append('  %-12s %3d of %4d %3.0f %%  %s' % (fld, a, len(T), 100.0 * a / len(T), others))
     if base is not None:
         bS = {n: base[n] for n in S if n in base}
         if not bS:
@@ -137,7 +151,9 @@ def _jobs(pdf_dirs, only=None, subset=None, limit=None):
             seen.add(key)
             if limit and len(seen) > limit:
                 break
-            cif = next((c for c in glob.glob(os.path.join(os.path.dirname(pdf), '*.cif')) if any(i in os.path.basename(c) for i in ids)), None) if ids else None
+            first = re.findall(r'I\d{6}', base)                            # a two-mineral paper (6710_I002291-I002292): the FIRST entry's .cif is the paper's own mineral
+            cifs = sorted(glob.glob(os.path.join(os.path.dirname(pdf), '*.cif')))
+            cif = (next((c for i in first for c in cifs if i in os.path.basename(c)), None) or next((c for c in cifs if any(i in os.path.basename(c) for i in ids)), None)) if ids else None   # sorted: the same pairing every run
             jobs.append((pdf, cif, base))
     return jobs
 
@@ -167,8 +183,10 @@ def _run_one(job):
         has = {}
     try:
         record = paper_record(r, ex, cif, PE.text_of(pdf), has)
+        failures = PE.failure_records(r, pdf, cif, has)                    # what did not verify, with what it read: paper_checks_failures<tag>.jsonl
     except Exception as e:
         record = {'fields': {}, 'composition': None, 'error': str(e)[:100], 'has': has}
+        failures = []
     if ex['epma']:
         bump('table'); summary.append('table %d' % len(ex['epma']['rows']))
     c = r['composition']
@@ -204,7 +222,7 @@ def _run_one(job):
     lines.append('==== %-40s %s' % (base, ' | '.join(summary) or 'nothing read'))
     for ln in r['lines']:
         lines.append('     ' + ln[:220])
-    return {'base': base, 'record': record, 'readers': readers, 'stats': st, 'lines': lines, 'rows': rows}
+    return {'base': base, 'record': record, 'readers': readers, 'stats': st, 'lines': lines, 'rows': rows, 'failures': failures}
 
 
 def _kill(pool):
@@ -266,7 +284,7 @@ def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None,
     reads, the paper's formula re-derived from its own table and basis, its bond-valence table vs
     the .cif. The verdicts are the tool's, for the owner to check one by one."""
     stats = {'pdfs': 0, 'table': 0, 'formula': 0, 'comp_checked': 0, 'comp_ok': 0, 'comp_flag': 0, 'comp_unverified': 0, 'bv_checked': 0, 'bv_clean': 0, 'basis': 0, 'n': 0, 'D': 0, 'bvset': 0, 'pxrd': 0}
-    lines = []; rows = []; papers = {}
+    lines = []; rows = []; papers = {}; failures = []
     readers = {}                                                          # field -> {status: count}: the per-reader verified rate, the standing metric
     for pay in _map_ordered(_jobs(pdf_dirs, only, subset, limit), n_jobs):
         if 'fail' in pay:
@@ -276,6 +294,7 @@ def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None,
         for fld, status in pay['readers']:
             readers.setdefault(fld, {}); readers[fld][status] = readers[fld].get(status, 0) + 1
         papers[pay['base']] = pay['record']                               # insertion order is the .json's order, and breaks ties in the powder list below
+        failures.extend(pay.get('failures') or [])
         lines += pay['lines']; rows += pay['rows']
     lines.append(''); lines.append('STATS %s' % stats)
     # the powder table against the cell, corpus-wide (what tools/corpus_cell_survey.py used to report):
@@ -311,6 +330,9 @@ def main(roots, pdf_dirs, out_dir, tag='', baseline=None, limit=None, only=None,
         csv.writer(f).writerows(table)
     with open(os.path.join(out_dir, 'paper_checks_papers%s.json' % tag), 'w', encoding='utf-8') as f:
         json.dump(papers, f, indent=0, ensure_ascii=False)
+    with open(os.path.join(out_dir, 'paper_checks_failures%s.jsonl' % tag), 'w', encoding='utf-8') as f:   # one line per reader that did not verify: tools/failure_classes.py groups them
+        for rec in failures:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + '\n')
     open(os.path.join(out_dir, 'paper_checks_report%s.txt' % tag), 'w', encoding='utf-8').write(
         'Paper self-checks (pxrd-review 0.5.5+): the composition re-derived from the paper\'s own table, basis and method\n'
         'against its own empirical formula; its bond-valence table (read from the pdf) against the .cif. Rerun:\n'

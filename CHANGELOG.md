@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.7.0](#070--2026-09-10) | 10 Sep | The gauntlet on the whole 1,130-paper corpus: bond-valence tables 51 → 69 % verified (52 reds → 6), parameter sets 31 → 60 %, coordinates 55 → 59 %, optics 60 → 66 %; a reader failure log; a 50× faster neighbour search |
 | [0.6.0](#060--2026-09-09) | 9 Sep | The gauntlet: paper readers driven to 91/83/86/52 % on the papers that print everything; ICDD's Part 2 review corrects five entry rules; another reviewer's triage report reads back into the GUI |
 | [0.5.6](#056--2026-09-07) | 7 Sep | Every reading says which oracle vouched for it; recall measured by seeding faults; corpus runs in parallel; seven issues fixed |
 | [0.5.5](#055--2026-09-05) | 5 Sep | The powder table checked against the cell — every calculated d recomputed from its own indices |
@@ -18,7 +19,163 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
-## [Unreleased]
+## [0.7.0] — 2026-09-10
+
+The paper readers run against the WHOLE corpus (1,130 papers), reader by reader over the papers whose
+crude scan says they print the thing, with a failure log to work from. Every iteration's classes,
+mechanisms and numbers are in `review_out/gauntlet_log.md` (round 4, it27–it66).
+
+### Added
+- **A reader failure log.** `pxrd paper X.pdf --check --log-failures [FILE]` appends one JSON line per
+  reader that did not verify — field, status, detail, page, the sentence it read from, `silent` when the
+  paper prints the thing and the reader has nothing, and a per-reader context (the table rows read, the
+  build's index, closure, bonds and misses, the bond-valence lines, the optics dict) — to
+  `review_out/reader_failures.jsonl`. The corpus tool writes `paper_checks_failures<tag>.jsonl` on every
+  run; `tools/failure_classes.py FILE [--field --status --silent --paper --show N]` groups the records
+  into classes and prints one class in full. Its first use found a misread the same minute.
+- **The valence-state convention** (`_swap_valence`): a cation column, or a site's sum, that reproduces
+  under the element's other common oxidation state (Fe2+ against the .cif's Fe3+, Cu+, Mn, V, U …) is
+  the valence the paper computed with — noted, not counted. A site-keyed `ox_override` now beats the
+  .cif's own statement; the element-keyed `--ox` still yields to it.
+- **The corpus tool's GAUNTLET section** ends with a WHOLE CORPUS block: each reader over the papers that
+  print its thing, S being the intersection.
+
+### Changed — the readers, each a class found on the corpus and re-run on all of it
+- **Bond-valence tables (52 reds → 6, 51 → 69 % verified).** A proportional cell tolerance (0.015 + 2.5 %;
+  mixed sites and bonds to S, Se, Cl, I wider); a single value equal to one bond of a multi-bond cell
+  (the ×n mark not read), any value of a multi-value cell, the bond distance printed beside its valence,
+  a Σ or a distance read into the grid ('O8–As 4.742': not a bond valence, noted); a bond the paper's
+  own bond table did not print is the READ's gap, not the paper's; a column printed as one species'
+  share of a mixed site; the per-column parameter excuse per site first, then pooled per element, with
+  a proportional bound; a site whose element is the paper's own prose assignment and in which no cell
+  agrees; a sulfide S, Se or Te in an oxysalt (no O within reach) is the anion, not S6+; no anion sums
+  against a structure the paper prints; a table read short, or naming a strong bond the .cif lacks,
+  is a doubt where it would otherwise be red; no verdict under eight cells; a bond-distance oracle
+  off by a whole valence unit may agree but never convict. The grid finder: a species header
+  ('(Zn0.699Fe3+0.301)'), a tourmaline's X Y Z T B letters onto 'AlZ', 'LiY/AlY', a lone '(Cu)', a
+  site name set as two words ('T' '1A' — welded at word level, so the coordinates reader gets it too),
+  a single renamed site's alias, an esd grid the caption calls bond valence, prose beside a cation
+  label rejected as a grid, and the loose header readings kept out of the finder (three of them
+  silently broke real tables on two-column pages before the corpus run caught them).
+- **Parameter-set citations (31 → 60 %).** 'Gagn´e' with the accent as its own glyph, 'AL- TERMATT',
+  a table's notes over 400 characters, BVS / 'BV parameters' keywords, a reference-list fallback when
+  exactly one set is there (never a red on its own), either U6+ reading of an unqualified citation.
+- **Optics (60 → 66 %).** ε before ω, no equals sign ('α 1.745(5)'), np/nm/ng, a Symbol-font a/b/c,
+  ω delivered as x, parenthesised values, 'β = γ', two of three indices, nmin/nmax, an open-e for ε,
+  the computed-index sentences, a lone isotropic index (never the oil's, never 'reported by'); 'could not
+  be measured' is a `nooracle` with the reason; a comparison table's row is rejected by its loose
+  indices; indices only (never 'Δα = 0.005').
+- **Coordinates (55 → 59 %).** A table whose sites are all crystallographic names (an amphibole's T1,
+  M(1), A2) is judged by its printed bonds; a .cif in another setting falls back to the bonds; a
+  structure that passes index and closure and reproduces every bond it can compare agrees; the bonds
+  oracle reaches the longest printed bond; the index leaves a lone site off by ≥ 1 vu out (a misread
+  row) and says so; every symbol the paper states is tried, the bonds deciding (a relative's Im3̄m
+  before the paper's own I213); the overbar lost to the font ('Fd3m'), a macron glyph, a Cyrillic С;
+  crystal-data rows and displacement labels ('Cell', 'Ueq', 'U11') are no sites; closure ignores a
+  minor substituent the table's labels do not name; a two-mineral paper's bond table nearest the
+  coordinates table is that structure's, and a bond table's column head may carry the bonds' dash
+  ('Pb1–': the sartorite homologues' tables, unread before).
+- **Cells and densities.** 'a 5.600(2) ˚A, b 7.450(3) ˚A' (the ångström as a ring accent), 'a …, b …, and
+  c … Å', the unit after each axis, α and γ beside β; a printed volume that lost its last digit in the
+  text layer (off by exactly ten); a monoclinic cell read without its β takes it back from V·sin β
+  among the βs the text prints; two integer axes are a cell picked out of prose unless the volume
+  follows; the cell the .cif's axes vouch for ranks first in a multi-mineral paper; a density off by a
+  factor is the Z — another Z that reproduces it to 1.5 % stands, said (D_calc +19 on the corpus).
+- **Composition.** 'REEΣ1.99' is the group's count and folds the table's lanthanides; an 'N' row that
+  is the number of analyses is not nitrogen; a formula may begin with integer-count elements
+  ('Th2F6.7(OH)1.3·3H2O' had lost its Th); a side-by-side analysis table keeps its first block.
+- **The mineral's name.** A new-mineral title names it whatever the suffix ('A New Mineral
+  Ferrisanidine'), taken when Mindat knows the name or it is an -ite.
+
+### Fixed
+- **A full corpus run took 11 minutes on one worker**: `bv_check.Structure.neighbours` scanned a box of
+  125 lattice translations for every atom pair (185 million distances on a 700-atom sulfosalt cell).
+  An exact per-axis prune (|Δx + i| · perpendicular width ≤ cutoff) leaves ~8; 345 s → 7 s, byte-identical
+  on all 224 corpus .cif files. Two papers crashed the analysis-table reader on a constituent row with
+  no number. The corpus tool pairs a two-mineral paper's .cif deterministically (the first entry's).
+
+### Also since 0.6.0 (gauntlet it19–26, 2026-09-09 night)
+
+### Fixed
+- **The paper readers' cell list had exploded** (a 0.6.0 regression, from the Part 2 rule that reads a
+  powder table's 'Unit-cell parameters' row): the row finder matched the prose 'Unit-cell parameters
+  refined from the powder data …' and then read every `h k l` triple of the table below it as a cell —
+  188 cells on one paper — so the coordinates builder's budget never reached the true cell and 17 of
+  the gauntlet's verified structures fell to `unverified`. The finder now takes a table ROW only (the
+  label heads the line, decimals in the lengths), and a cell of three integers is never a cell.
+- **A sideways table under a figure was read as upright**: the word list numbers text blocks only, the
+  layout numbers every block, so below an image every word took another line's direction
+  (`_line_dirs`; naalasite's rotated coordinates table, now read).
+- **Two-column prose ending in an element symbol** ('Attempts to analyse N (NH4)2O* 7.03 …') became the
+  row's constituent; the constituent beside the numbers is the row's.
+- **The apfu block below a Total** ('SO4 3.808', 'UO2 8.192', 'H2O 26.0' under sejkoraite's Total) was
+  read as three more wt% rows (a 141 % table): once a row below the Total can only be apfu, every row
+  after it is.
+- **A row with a value in the Normalised column alone** (relianceite's structural C2O3 and H2O) was given
+  that value as its mean.
+- **A DOI in the page's running foot** ('mgm.2021.99') was read as the stated compatibility index; the
+  Σ of a group whose parts include oxygen ('(O1.09F0.92)Σ2.01') was taken for a multiplier (F doubled);
+  a footnote letter after a welded qualifier ('H2Ocalcb') hid a constituent.
+
+### Changed — the bond-valence table's conventions (gauntlet it24)
+- **The grid reader**: a column takes the header word nearest to it, a site label winning only within
+  8 pt ('donated' 4 pt off no longer loses to 'S2' 27 pt off); a column of negative values is the
+  hydrogen-bond donor column whatever stands over it, and the checker knows 'donated'/'accepted'
+  headers; a bare line of values between two rows belongs to the row ABOVE unless the label below comes
+  with no values of its own (a rotated table), decided line by line; anion rows under a symmetry code
+  ('O1iii', "O1'") or a coordination number ('[3]O5') are the base anion's row; a grid whose cells carry
+  esds is a displacement table, not valences; a header grid its own Σ shows to be short of columns
+  yields to the caption route's fuller grid on the same page (strict superset of labels only — the
+  finder order stands, and the caption route is not otherwise consulted).
+- **The bond reader** accepts a symmetry code on the anion of a welded bond ('Z–O8′' — the tourmaline's
+  Z sum was two thirds of the paper's for want of it).
+- **Per-cation conventions, noted and not counted**: a cation column that another of the tool's sets
+  reproduces, or that sits ≤ 0.08 vu off in one direction over two cells or more, or ≤ 0.08 vu either
+  way over three or more (a different R0 AND b), follows a parameter set of its own (S6+ from Brese &
+  O'Keeffe under a Gagné & Hawthorne table; Pb2+, Ce3+, Sb3+ from sets the tool does not have); a
+  contact of ≤ 0.05 vu the paper lists beyond the tool's cutoff, or that the tool has and the paper
+  omits, is a cutoff, not a difference; a split site's sum may be one species' share of it (the K part of
+  a K/H2O site); the structure builder writes a mixed-valence element (Fe2+ AND Fe3+ in the formula) bare,
+  so the per-site valence fit the .cif path already had applies to the paper's own structure too; a
+  site half occupied or less is not compared in a BVS column either; a partly occupied site's column may
+  be printed unweighted when the structure is the paper's own bond table; the ammonium N column is
+  skipped like H; a table of fewer than four cells with a difference is a doubt, not a finding; the set
+  the paper cites is judged by the same excuse as the winner. A 'Bond | valence' header of two words
+  places its column under the pair; a digit-suffixed header label ('U1') maps onto a bond table's bare
+  site ('U'); a column whose printed Σ is under half the computed sum is a site the paper weighted by an
+  occupancy the table does not print (not compared); a header line holding a distance with its esd is a
+  bond-table line, never a grid header; a paper citing several parameter sources, one per cation, has
+  cited no one set (bv.params `unverified`, said so). Measured on the gauntlet subset — see
+  `review_out/gauntlet_log.md` (it24–26).
+
+### Added
+- **Import triage** button in the GUI's top bar (beside Export) — the browser's own file chooser; the
+  same merge as `pxrd gui <folder> --import-triage <report>`, which was not discoverable. `/api/triage/import`
+  takes the upload (`report`) as well as a `{path}` for scripts.
+- **Gladstone–Dale from the paper's own columns**: a table's Normalised / Ideal / Theor. / Calculated
+  column is offered as a K_C set of its own (`_column_sets`; the header read over the table's own
+  x-span, `head_span`, so the other page column's prose cannot hide a header line); a paper that prints
+  no density is checked on the density its anchored cell, Z and formula give (`cell_consistency`
+  `D_formula`; bimbowrieite); a paper that COMPUTED its n from the compatibility relation is checked
+  against an index of zero (`gd_statement` `derived_n`; wortupaite).
+- **Constituents the paper says it calculated** ('C2O3, H2O and (NH4)2O were calculated based upon the
+  structure determination') leave the composition comparison as calculated by the authors, whatever the
+  Mean column holds for them (thebaite-(NH4): a false red retired).
+- **A bond-valence table's cells on a site under half occupied** are not compared (noted): how a paper
+  weights a 17 %-Na split site is its own choice; the same rule already kept such sites out of the
+  structure builder's index.
+- **Three more shapes of bond-valence table found**: a BVS column whose rows begin with the other page
+  column's prose ('… ther- A(1) ½ 0 0 0.0176(7) 1.150' — the site token nearest the header's label
+  column is the row's; a 'Table 4' inside that prose no longer ends the table; a row's continuation
+  lines, a second mineral's coordinates under the same site, are neither rows nor misses); valences
+  printed beside the distances with the multiplicity between ('Ca–F 2.3029(4) ×2 0.58', and seven
+  values over five pairs is a table); and rare-earth group site labels ('REE1', 'Ln2') in the
+  coordinates reader. A multi-value cell may hold each distance's own ×n total ('0.50 0.38' for two
+  ×2 bonds). A BVS column found with the paper's own site labels but no structure to check it against
+  is `nooracle` with the reason, never a silent `none`. The coordinates builder's inferred elements
+  (M(1) → the formula's dominant cation) travel with the structure (`st.inferred`) and stay out of the
+  sums comparison, as the bond-distance structure's always did — badalovite's M sites carry Fe3+ from
+  a site-population table the reader does not have.
 
 ## [0.6.0] — 2026-09-09
 
@@ -38,7 +195,8 @@ package version in `pyproject.toml`.
   for (issue #10); the Gladstone–Dale constants of Mandarino's Table 7.
 - **`pxrd gui <folder> --import-triage <report>`** reads another reviewer's exported triage report back
   in: verdict and note on each finding, decisions on findings no longer raised kept as an entry note,
-  local verdicts never overwritten.
+  local verdicts never overwritten. The GUI has an **Import triage** button for it (beside Export;
+  the browser's own file chooser, so nothing to type) — the flag alone was not discoverable.
 
 ### Changed — from ICDD's own review of Part 2
 - Bragg-Brentano never implies Peak (the processing decides; a Peak on a diffractometer entry is a

@@ -69,3 +69,50 @@ class Idempotent(unittest.TestCase):
         n = 'my own note ‖ triage_report.txt decided on findings this version does not raise: [x] docx 3 dp  vs  pdf 2 dp ‖ triage_report.txt entry note: b'
         self.assertEqual(G._without_import_notes(n, 'triage_report.txt'), 'my own note')
         self.assertEqual(G._without_import_notes('', 'triage_report.txt'), '')
+
+
+class UploadRoute(unittest.TestCase):
+    """The Import triage button uploads the report; the route merges it as the CLI flag does."""
+    def setUp(self):
+        self.saved = {k: G.STATE.get(k) for k in ('docx', 'order', 'triage', 'out_dir')}
+        G.STATE['docx'] = {'suenoite': '/nowhere/suenoite.docx'}
+        G.STATE['order'] = ['suenoite']
+        G.STATE['triage'] = {}
+        self.patched = (G.C.entry_id, G.get_analysis, G._save_triage)
+        G.C.entry_id = lambda p: 'I003638'
+        G.get_analysis = lambda key: {'findings': []}      # truthy: an analysed entry
+        G._entry_rows_orig = G._entry_rows
+        G._entry_rows = lambda d: [('f:int', 'intensity_type', 'the powder pattern intensities were visually estimated'),
+                                   ('cell', 'CELL', 'value match')]
+        G._save_triage = lambda: None
+
+    def tearDown(self):
+        G.C.entry_id, G.get_analysis, G._save_triage = self.patched
+        G._entry_rows = G._entry_rows_orig
+        for k, v in self.saved.items():
+            G.STATE[k] = v
+
+    def test_upload_merges_and_reports(self):
+        import io
+        with G.app.test_client() as c:
+            r = c.post('/api/triage/import', data={'report': (io.BytesIO(REPORT.encode('utf-8')), 'icdd_report.txt')},
+                       content_type='multipart/form-data')
+        j = r.get_json()
+        self.assertTrue(j['ok'], j)
+        self.assertEqual(j['summary']['entries'], 1)               # petersite is not in this folder
+        self.assertEqual(j['summary']['unknown_entries'], ['I002449'])
+        self.assertEqual(j['summary']['matched'], 2)
+        t = G.STATE['triage']['suenoite']
+        self.assertEqual(t['findings']['f:int']['verdict'], 'confirm')
+        self.assertEqual(t['findings']['f:int']['imported'], 'icdd_report.txt')
+        self.assertEqual(t['findings']['cell']['verdict'], 'dismiss')
+        self.assertEqual(t['accept'], 'agree')
+        self.assertTrue(t['reviewed'])
+
+    def test_not_a_report_is_a_400(self):
+        import io
+        with G.app.test_client() as c:
+            r = c.post('/api/triage/import', data={'report': (io.BytesIO(b'hello world'), 'notes.txt')},
+                       content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('not a triage report', r.get_json()['error'])

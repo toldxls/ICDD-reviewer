@@ -70,9 +70,14 @@ def _label_ok(t):
     is a label too — its element comes from the occupancy column, and its coordinates are what map
     the paper's names onto the .cif's."""
     t = t.rstrip(',*†‡§')
+    if t.lower() in ('cell', 'vol', 'volume', 'space', 'total', 'sum', 'table', 'atom', 'site', 'wyckoff', 'occ', 'occupancy', 'density', 'formula') \
+            or re.fullmatch(r'U(?:eq|iso|equiv|11|22|33|12|13|23)|B(?:eq|iso|11|22|33|12|13|23)|Ueq\*?', t):
+        return False                                                      # a crystal-data table's rows ('Cell', 'V', 'Z' — 70910 read them as Th, F, F sites at an instability index of 0.02); a transposed displacement table's ('Ueq', 'U11' … — uranium sites to the eye, 77074)
     if '/' in t:                                                          # 'Fe1/Al1', 'Ca/Mg', 'K/O': a split site, both halves labels
         parts = t.split('/')
         return len(parts) == 2 and all(p and _label_ok(p) for p in parts)
+    if re.fullmatch(r'(?:REE|Ree|Ln|LN|TR)\d{0,2}[a-z]?', t):
+        return True                                                       # 'REE1', 'Ln2': a rare-earth site named for the group (alexkuznetsovite)
     m = LABEL.match(t)
     if not m:
         return False
@@ -278,6 +283,36 @@ def paper_sites(pdf, with_page=False):
     return (best, best_page) if with_page else best
 
 
+def paper_site_tables(pdf, limit=3):
+    """Every coordinates table the paper prints, the best one (with its continuations, as
+    `paper_sites` reads it) first: a two-mineral paper prints one per mineral, labelled alike
+    (U1, Ca1 … in both), and only the structure built from each — judged by its own bonds — says
+    which is which. A second table is another page's headed table of three rows or more that
+    carries labels the best does not (a continuation's labels are all within the best's).
+    -> [(rows, page)], at most `limit`."""
+    best, best_page = paper_sites(pdf, with_page=True)
+    out = [(best, best_page)] if best else []
+    if not best:
+        return out
+    labels = {r[0].upper() for r in best}
+    try:
+        pages = _page_tables(pdf)
+    except Exception:
+        return out
+    for pno, rows, _w, headed, cont in pages:
+        if pno == best_page or not headed or cont or len(rows) < max(3, 0.4 * len(best)):
+            continue
+        labs = {r[0].upper() for r in rows}
+        if labs <= labels or not (labs & labels):
+            continue                                                       # a continuation, or something else than a coordinates table of this kind
+        if any(pg == pno for _r, pg in out):
+            continue
+        out.append((rows, pno))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _continues(prev, rows):
     """A table on the next page that repeats its header is still the same table when its site
     numbering carries on from the page before: O21… after O1…O20, with no label in common."""
@@ -439,6 +474,7 @@ def bond_hits(st, bonds, tol=0.03):
                     return got
         return []
     cache = {}; ok = n = 0; miss = []
+    reach = min(4.6, max([3.6] + [d + 0.1 for _c, _a, d in bonds if d]))   # a paper's long Pb–S or K–O bonds (3.7 Å) must be within reach, or they count as misses of a structure that has them
     for cat, an, d in bonds:
         cats, ans = find(cat), find(an)
         if not cats or not ans or not d:
@@ -447,7 +483,7 @@ def bond_hits(st, bonds, tol=0.03):
         for cs in cats:
             if cs.label not in cache:
                 try:
-                    cache[cs.label] = st.neighbours(cs, 3.6)
+                    cache[cs.label] = st.neighbours(cs, reach)
                 except Exception:
                     cache[cs.label] = []
         an_labels = {a.label for a in ans}
@@ -563,20 +599,23 @@ def closure(st, counts):
     if ref is None or not cell.get(ref):
         return None
     devs = []
+    top = max(want.values())
     for el, v in want.items():
+        if el not in cell and v < 0.2 * top:
+            continue                                                       # a minor substituent (Cd 1.57 beside Cu 9.98) the table's site labels do not name: not a row lost
         mine = cell.get(el, 0.0) / cell[ref] * want[ref]
         devs.append(abs(mine - v) / max(v, 0.05))
-    return sum(devs) / len(devs)
+    return sum(devs) / len(devs) if devs else None
 
 
-def build(pdf, text=None, bonds=None):
+def build(pdf, text=None, bonds=None, rows=None):
     """The structure the paper prints, or None. -> (Structure, info) where info carries 'gii',
     'closure', 'cell', 'sym' and 'sites'; (None, {'why': ...}) when it cannot be built or does not
     pass the instability gate. A paper prints several cells — a powder one, a single-crystal one,
     sometimes another phase's — so each is tried and the one whose valences come out closest is
     kept: the structure judges its own cell."""
     text = PE.text_of(pdf) if text is None else text
-    rows = paper_sites(pdf)
+    rows = paper_sites(pdf) if rows is None else rows                   # `rows`: a second coordinates table of a two-mineral paper (paper_site_tables)
     if len(rows) < 3:
         return None, {'why': 'the paper prints no coordinates table the reader could find'}
     sym, _phrase = SO.find_in_text(text)
@@ -608,8 +647,23 @@ def build(pdf, text=None, bonds=None):
     if twin:
         ops_variants = ops_variants + SO.lookup(twin)
     ops_variants = ops_variants[:6]                      # the standard setting and the commonest alternatives: eighteen settings of C2/c cost minutes and change no verdict
+    variant_syms = [sym] * len(ops_variants)
+    # the OTHER symbols the paper states (a relative's, a parent's — 75959 names Im3̄m for a related
+    # mineral once and its own I213 twice) come after the chosen one's settings, two settings each,
+    # under the same budget: the bonds oracle, or the index, decides between them
+    try:
+        others = [s2 for s2 in SO.find_all_in_text(text) if s2 != sym and s2 != twin and (not systems or SO.crystal_system(s2) in systems)]
+    except Exception:
+        others = []
+    for s2 in others[:2]:
+        extra = SO.lookup(s2)[:2]
+        ops_variants = list(ops_variants) + extra; variant_syms += [s2] * len(extra)
     name = PE.mineral_name(text)
     charges = element_charges(text, name)
+    try:
+        mixed_els = {el for el, chs in element_charge_sets(text, name).items() if len(chs) > 1}   # Fe2+ AND Fe3+ in the formula: the site's own bonds settle which (see _structure_for_paper)
+    except Exception:
+        mixed_els = set()
     fs = PE._formulas(text, name)
     counts = fs[0][1] if fs else {}
     # A site the paper names crystallographically — M1, A(1), T2 — carries no element in its label
@@ -639,7 +693,7 @@ def build(pdf, text=None, bonds=None):
             el = fallback; inferred.add(lab)                         # M1, A(1): a cation site by convention; the formula's dominant cation not yet placed stands in, for the composition only
         if el:
             ch = charges.get(el)
-            sites.append((lab, '%s%d+' % (el, ch) if ch else el, x, y, z))
+            sites.append((lab, '%s%d+' % (el, ch) if ch and el not in mixed_els else el, x, y, z))   # a mixed-valence element is written bare: the .cif then 'states none' and the paper's per-site fit applies
             occ = _occupancy(tail)
             if occ is not None:
                 occs[lab] = occ
@@ -647,9 +701,9 @@ def build(pdf, text=None, bonds=None):
         return None, {'why': 'no element could be named for the sites read'}
     if not cells:
         return None, {'why': 'no cell in the text'}
-    best = None
+    best = None; best_outlier = None
     tmp = tempfile.mkdtemp(prefix='pxrd_ps_')
-    keep = None
+    keep = None; all_inferred = False
     # Every cell the paper prints is tried with the STANDARD setting before any alternate setting is
     # tried with any cell — the cell is far more often the unknown than the setting — under one budget
     # of builds: a paper that prints nine cells (angle variants restored) and a Cc with eighteen
@@ -679,15 +733,27 @@ def build(pdf, text=None, bonds=None):
                 # inferred element is a guess, and a site a third occupied is a disordered position
                 # whose own sum says nothing about the coordinates being read right
                 judged = [(bvs, exp) for c_, _b, bvs, exp, _m in res if c_.label not in inferred and occs.get(c_.label, 1.0) >= 0.5]
-                if not judged:
+                if not judged and not (bonds and len(bonds) >= 5):
+                    all_inferred = True
                     continue
-                gii = (sum((bvs - exp) ** 2 for bvs, exp in judged) / len(judged)) ** 0.5
+                # an amphibole's table names every site crystallographically (T1, M(1), A2): nothing
+                # is left for the index to judge, but the printed bonds need no element at all
+                # one site whose sum is off by a whole valence unit or more, among many that hold, is a
+                # misread ROW (hyrslite's Pb3 at 21.9 vu, a digit of one coordinate) — an rms lets one
+                # such site sink fifty good ones, so the worst site is left out of the index when it
+                # alone is off by that much; the build then says which
+                outlier = None
+                if len(judged) >= 8:
+                    devs_ = sorted(((abs(bvs - exp), bvs, exp) for bvs, exp in judged), reverse=True)
+                    if devs_[0][0] >= 1.0 and devs_[1][0] < 0.5:
+                        outlier = devs_[0]; judged = [(b_, e_) for b_, e_ in judged if abs(b_ - e_) < devs_[0][0]]
+                gii = (sum((bvs - exp) ** 2 for bvs, exp in judged) / len(judged)) ** 0.5 if judged else 9.0
                 # the printed bond distances are the direct check of the cell and setting: the
                 # candidate that reproduces the most of them wins, the index deciding only ties
                 hits = bond_hits(st, bonds) if bonds and len(bonds) >= 3 else (0, 0, [])
                 score = (-hits[0], gii)
                 if best is None or score < best[5]:
-                    best = (st, gii, cell, sym, len(sites), score, hits); keep = path
+                    best = (st, gii, cell, variant_syms[vi], len(sites), score, hits); keep = path; best_outlier = outlier
                 if (hits[1] and hits[0] >= 0.9 * hits[1]) or (not hits[1] and gii <= GII_GATE):
                     break                                # it holds together: another setting cannot change the verdict
           if (best is not None and ((best[6][1] and best[6][0] >= 0.9 * best[6][1]) or (not best[6][1] and best[1] <= GII_GATE))) or budget < 0:
@@ -702,7 +768,8 @@ def build(pdf, text=None, bonds=None):
                     pass
     if best is None:
         _discard(keep, tmp)
-        return None, {'why': 'no cell and operator set gave a structure'}
+        return None, {'why': ('every site is a crystallographic name (T1, M(1), A2) put to the paper\'s own assignment — nothing the index can judge, and no bond table to judge it by'
+                              if all_inferred else 'no cell and operator set gave a structure (the bond-valence parameters may be missing for these elements)')}
     st, gii, cell, sym, n, _score, hits = best
     try:
         info = {'gii': gii, 'cell': cell, 'sym': sym, 'sites': n, 'closure': closure(st, counts), 'closure_count': closure_count(st, counts),
@@ -711,6 +778,13 @@ def build(pdf, text=None, bonds=None):
         _discard(keep, tmp)                              # the caller sees the exception, not a leaked directory
         raise
     info['bonds_verified'] = bool(hits[1] >= 5 and hits[0] >= max(5, 0.8 * hits[1]) and hits[1] >= 0.6 * len(bonds or []))
+    info['inferred'] = sorted(inferred)
+    if best_outlier:
+        info['outlier'] = 'one site left out of the index: its sum %.1f vu against %.0f expected — a misread row (a digit of a coordinate), the rest holding' % (best_outlier[1], best_outlier[2])
+    try:
+        st.inferred = set(inferred)                      # the sites whose element is a guess (M(1) → the formula's dominant cation): out of the sums
+    except Exception:                                    # comparison, as `paper_bonds` keeps its inferred sites — badalovite's M(1)/M(2) carry Fe3+ the paper
+        pass                                             # weights from a site-population table the reader does not have
     if gii > GII_GATE and not info['bonds_verified']:
         _discard(keep, tmp)
         return None, dict(info, path=None, why='the structure the paper prints does not hold together '
