@@ -143,37 +143,44 @@ def _vocabulary():
     return sorted(keys, key=len, reverse=True)
 
 
-_NEAR = re.compile(r'space[\s-]*group|sp\.?\s*gr\.?|symmetry', re.I)
+_NEAR = re.compile(r'space[\s-]*group|spatial group|sp\.?\s*gr\.?|symmetry', re.I)
+# the symbol set right after the crystal system — 'Smamite is triclinic, P1, a = …', a crystal-data block's
+# 'Monoclinic, C2/m' — for a paper that prints no 'space group' phrase at all: looked at only then, because a
+# relative's 'triclinic, P1' in the introduction outranked puninite's own 'space group C2/c' (70643) when both were one list
+_NEAR_LOOSE = re.compile(r'space[\s-]*group|spatial group|sp\.?\s*gr\.?|symmetry'
+                         r'|(?:triclinic|monoclinic|orthorhombic|tetragonal|trigonal|hexagonal|cubic|rhombohedral),\s*(?=[A-Z][\d\-/])', re.I)
 
 
 def find_in_text(text, window=90):
     """The space group a paper states, matched against the table's vocabulary in the text after a
-    'space group' phrase. -> (symbol as the table keys it, the phrase it was read from) or (None, '')."""
+    'space group' phrase — or, when the paper prints none, after its crystal system ('triclinic,
+    P1, a = …'). -> (symbol as the table keys it, the phrase it was read from) or (None, '')."""
     if not text:
         return None, ''
     vocab = _vocabulary()
     if not vocab:
         return None, ''
-    for m in _NEAR.finditer(text):
-        seg = text[m.end():m.end() + window]
-        flat, back = _flat(seg)
-        best = None
-        cands = [(k, k) for k in vocab] + [(k, k.replace('-', '')) for k in vocab if '-' in k and k.replace('-', '') not in vocab]   # the barred group's unbarred twin ('FD3M' for Fd3̄m, the overbar lost to the font) when that form is no group of its own (P31m is)
-        for k, k_ in cands:
-            i = flat.find(k_)
-            while i >= 0:
-                # the symbol is a word of its own in the raw text: 'and the cell' is not the A-centred
-                # setting 'An' followed by 'd', and '...Pnma' inside a reference is not a symbol
-                r0, r1 = back[i], back[i + len(k_) - 1] + 1
-                if not (r0 > 0 and seg[r0 - 1].isalpha()) and not (r1 < len(seg) and seg[r1].isalpha()) and seg[r0].isupper():
-                    break                                # and the lattice letter is a capital: 'an inversion twin' is not the setting An
-                i = flat.find(k_, i + 1)
-            if i < 0:
-                continue
-            if best is None or i < best[1] or (i == best[1] and len(k_) > len(best[2])):
-                best = (k, i, k_)
-        if best and best[1] <= 24:                       # the symbol stands near the phrase, not a page away
-            return key_for(best[0]) or best[0], text[m.start():m.end() + window][:120]
+    cands = [(k, k) for k in vocab] + [(k, k.replace('-', '')) for k in vocab if '-' in k and k.replace('-', '') not in vocab]   # the barred group's unbarred twin ('FD3M' for Fd3̄m, the overbar lost to the font) when that form is no group of its own (P31m is)
+    for near in (_NEAR, _NEAR_LOOSE):
+        for m in near.finditer(text):
+            seg = text[m.end():m.end() + window]
+            flat, back = _flat(seg)
+            best = None
+            for k, k_ in cands:
+                i = flat.find(k_)
+                while i >= 0:
+                    # the symbol is a word of its own in the raw text: 'and the cell' is not the A-centred
+                    # setting 'An' followed by 'd', and '...Pnma' inside a reference is not a symbol
+                    r0, r1 = back[i], back[i + len(k_) - 1] + 1
+                    if not (r0 > 0 and seg[r0 - 1].isalpha()) and not (r1 < len(seg) and seg[r1].isalpha()) and seg[r0].isupper():
+                        break                                # and the lattice letter is a capital: 'an inversion twin' is not the setting An
+                    i = flat.find(k_, i + 1)
+                if i < 0:
+                    continue
+                if best is None or i < best[1] or (i == best[1] and len(k_) > len(best[2])):
+                    best = (k, i, k_)
+            if best and best[1] <= 24:                       # the symbol stands near the phrase, not a page away
+                return key_for(best[0]) or best[0], text[m.start():m.end() + window][:120]
     return None, ''
 
 
@@ -186,7 +193,7 @@ def find_all_in_text(text, window=90):
     counts = {}
     if not text:
         return []
-    for m in _NEAR.finditer(text):
+    for m in _NEAR_LOOSE.finditer(text):
         sym, _ph = find_in_text(text[m.start():m.end() + window], window)
         if sym:
             counts[sym] = counts.get(sym, 0) + 1

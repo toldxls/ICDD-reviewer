@@ -1618,7 +1618,8 @@ class GauntletRows(unittest.TestCase):
 
     def test_bv_table_without_a_citation(self):
         r = PE.check_paper(self._paper(), None, None); F = r['fields']
-        self.assertEqual(F['bv.params']['status'], 'none', r['lines'])   # the paper names no parameter set: that reading is absent …
+        self.assertEqual(F['bv.params']['status'], 'nooracle', r['lines'])   # the paper names no parameter set: said, with the reason — never a silent blank …
+        self.assertIn('names no parameter set', F['bv.params']['detail'])
         self.assertEqual(F['bv.table']['status'], 'agrees', r['lines'])  # … and the table is checked all the same
         self.assertEqual((F['bv.table']['verified_by'], F['bv.table']['page']), ('bv', 1))
         self.assertIn('bond-valence table ✓ (p1)', r['lines'][0])

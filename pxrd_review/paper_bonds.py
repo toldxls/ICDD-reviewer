@@ -444,6 +444,7 @@ def read_tables(pdf, pages=None):
 
 
 BVS_MARK = re.compile(r'^(?:BVS|BVSs|ΣBVS|BVsum|Σbv)\*{0,2}[:=]?$', re.I)
+BVS_MARK_SITE = re.compile(r'^BVS\(([^)]{1,12})\)\*{0,2}[:=]?$', re.I)     # 'BVS(Ni1)': the mark names its site (moabite)
 
 
 def _bvs_marks(lines, centres, by_col):
@@ -455,11 +456,14 @@ def _bvs_marks(lines, centres, by_col):
     for li, ln in enumerate(lines):
         ws = ln['w']
         for i, w in enumerate(ws):
-            if not BVS_MARK.match(w[4].strip()) or i + 1 >= len(ws):
+            named = BVS_MARK_SITE.match(w[4].strip())
+            if not (BVS_MARK.match(w[4].strip()) or named) or i + 1 >= len(ws):
                 continue
             m = re.fullmatch(r'(\d{1,2}\.\d{1,3})', ws[i + 1][4].strip())
             if not m or not (0.02 <= float(m.group(1)) <= 12.0):
                 continue
+            if named:
+                out.append((named.group(1), float(m.group(1)))); continue
             k = min(range(len(centres)), key=lambda c: abs(centres[c] - w[0]))
             above = [r for r in by_col.get(k) or [] if r.line < li]
             if above:

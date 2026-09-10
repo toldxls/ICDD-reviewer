@@ -21,7 +21,7 @@ bond-valence sums within 0.05 vu. That is note-grade, not flag-grade, and the to
 every line this produces is marked [unverified]. With composition closure required as well, 4
 papers pass and all 13 of their sites are exact — flag-grade, but too few to rely on.
 """
-import os, re, shutil, tempfile
+import os, re, shutil, tempfile, functools
 
 from pxrd_review import bv_check as B
 from pxrd_review import epma as EP
@@ -53,16 +53,51 @@ def _val(t):
         a, b = v.split('/'); return float(a) / float(b) if float(b) else None   # '1/0' is no coordinate (a d/0 in a powder column)
     return float(v)
 
-LABEL = re.compile(r'^([A-Z][a-z]?)([A-Za-z]?\(?\d{0,2}\)?[A-Za-z]?|\d{0,2}\([A-Z][A-Za-z]?\d{0,2}[a-z]?\))$')     # O1, Ow1, O1W, M(2), Na1a — and Cu(M1), Mn(X): the element with its site name
+def _val_scaled(t, scale):
+    """A coordinate printed as an integer under a '(×104)' caption — '876.9(2)', '5000', '0' -> the fraction."""
+    t = re.sub(r'^[\u2212\u2013\u2014\u2012\u2011\u2010]', '-', t.strip()).rstrip(',')
+    m = re.fullmatch(r'(-?\d{1,5}(?:\.\d)?)(?:\(\d+\))?', t)                # at most one decimal digit: '876.9(2)', '5000', '0' — a '0.2345' is a fraction already
+    if not m:
+        return None
+    return float(m.group(1)) * scale
+
+LABEL = re.compile(r"^([A-Z][a-z]?)\*?([A-Za-z]?\(?\d{0,2}[a-z]?\)?[A-Za-z]?(?:_\d)?'?|\d{0,2}\([A-Z][A-Za-z]?\d{0,2}[a-z]?(?:_\d)?\)'?)$")     # O1, Ow1, O1W, M(2), M(2a), Na1a, Fe2_1, O6' — and Cu(M1), Mn(X): the element with its site name     # O1, Ow1, O1W, M(2), Na1a — and Cu(M1), Mn(X): the element with its site name
 _OCC_ELS = re.compile(r'^(?:[A-Z][a-z]?\d*\.\d+(?:\(\d+\))?){1,4}$')            # 'Fe0.84Al0.16(2)': an occupancy written by element
+_OCC_NUMFIRST = re.compile(r'^(?:\d*\.\d+(?:\(\d+\))?[A-Z][a-z]?/?){1,4}$')        # '0.302(9)Sb/0.698Pb': the share before its element
 WYCK = re.compile(r'^\(?\d{1,2}[a-z]\)?$')                                # a Wyckoff token between label and x
 FRACT_MAX = 1.05                                                          # a fractional coordinate, nothing else
 FRACT_HDR = 2.0                                                           # under a known x/y/z header a coordinate may be printed past 1 ('1.06477(6)'); an integer there never is
 
-SITE_PAREN = re.compile(r'^\(([A-Z][A-Za-z]?\d{0,2}[a-z]?)\)[*†‡§]*$')    # '(X)', '(M1)', '(M3a)': the site name printed beside its element
+SITE_PAREN = re.compile(r'^\(([A-Z][A-Za-z]?\d{0,2}[a-z]?(?:_\d)?)\)[*†‡§]*$')    # '(X)', '(M1)', '(M3a)': the site name printed beside its element
 CAPTION = re.compile(r'^(?:TABLE|Table)\s+[A-Z]?\d{1,2}[A-Za-z]?\s*[.:]')                # 'Table 6.' — where the next table begins
 SUBSCRIPT = re.compile(r'^[A-Z]$')                                         # 'XO' 'M': the subscript of a site label, set as a token of its own
 SITE_LETTERS = set('AMTXYZQDEGJLRW')                                       # a crystallographic site name: A1, M2A, T(1), X(3), Q2 — not an element
+
+_SCALED = re.compile(r'(?:coordinates|positions|positional parameters|x,?\s*y,?\s*z)\s*\(\s*[x×χ]?\s?10\s?([45])\s*\)', re.I)   # 'coordinates (×104)': printed as integers — the COORDINATES, never the '(Å2 × 103)' of the displacement parameters beside them
+
+_OCCUPANTS = re.compile(r'^([A-Z][A-Za-z]?[*∗]?\d{0,2}[a-z]?)\(((?:[A-Z][a-z]?,?){1,4})\)$')   # 'T1(Al,Si)': the site and its occupants, dominant first
+
+def _split_occupants(t):
+    """'T1(Al,Si)' -> ('T1', 'Al Si'); any other token -> (token, '')."""
+    m = _OCCUPANTS.match(t.strip().rstrip(','))
+    if m and not re.fullmatch(r'\((?:[A-Z][a-z]?,)+[A-Z][a-z]?\)', t.strip()):
+        return m.group(1), m.group(2).replace(',', ' ')
+    return t, ''
+
+def _clean_label(t):
+    """The label as printed, less what the typesetting welded onto it: a Wyckoff position ('A(16c)',
+    'X(8b)'), the site it stands for ('Pb1(≡A)', and 'O1(≡X' when the ')' became its own token), a
+    prime on a twin's label ('Sb1/Sb1’'), a trailing comma ('X(3),')."""
+    t = t.strip().rstrip(',').replace('∗', '*')
+    t = re.sub(r'\(≡[^)]*\)?$', '', t)
+    t = re.sub(r'^([ABXYZ])\(\d{1,2}[a-z]\)$', r'\1', t)               # a pyrochlore's A(16c), X(8b): the position welded onto a bare site letter — M(2a), O(1a) are site names and stay
+    t = re.sub(r"[′’`]", "'", t)                                        # a prime is part of the label (O6' is another site than O6), as one glyph
+    return t
+
+def _prose_between(ws, i, j):
+    """Two or more running-text words ('noted', 'above,') between tokens i and j of a line: what
+    stands before j is the facing column's sentence, not a row of the table."""
+    return sum(1 for w in ws[i + 1:j] if re.fullmatch(r'[a-z][a-z,.;:-]{1,}', w[4])) >= 2
 
 def _label_ok(t):
     """'O1', 'Si2', 'Na1a' — and 'Ow1'/'OW1', the water oxygen, whose two-letter head is not an
@@ -78,6 +113,8 @@ def _label_ok(t):
         return len(parts) == 2 and all(p and _label_ok(p) for p in parts)
     if re.fullmatch(r'(?:REE|Ree|Ln|LN|TR)\d{0,2}[a-z]?', t):
         return True                                                       # 'REE1', 'Ln2': a rare-earth site named for the group (alexkuznetsovite)
+    if re.fullmatch(r'\((?:[A-Z][a-z]?,)+[A-Z][a-z]?\)\d{0,2}', t):
+        return True                                                       # '(Cu,Hg)', '(Bi,Pb)1': a mixed site named by its occupants (hansblockite)
     m = LABEL.match(t)
     if not m:
         return False
@@ -116,6 +153,15 @@ def _scan(lines):
         tol = max(26.0, min(0.45 * span, 44.0))
         labx = next(((w[0] + w[2]) / 2 for w in ln['w']
                      if re.fullmatch(r'Site|Atom|Label|Ion|Position', w[4].strip('*.'), re.I)), None)
+        # 'Table 4. Refined fractional atomic coordinates (×104)': the coordinates are printed as
+        # integers (876.9(2), 5000), to be read at that scale — said in the caption within eight lines above
+        scale = None
+        for k in range(i - 1, -1, -1):                                   # by distance up the page, not by line count: a two-column page interleaves the other column's lines
+            if ln['y'] - lines[k]['y'] > 90:
+                break
+            m_ = _SCALED.search(' '.join(w[4] for w in lines[k]['w']))
+            if m_:
+                scale = 1e-5 if m_.group(1) == '5' else 1e-4
         rows = []; miss = 0; seen_lab = set()
         for ln2 in lines[i + 1:]:
             ws = ln2['w']
@@ -124,22 +170,29 @@ def _scan(lines):
             if rows and CAPTION.match(' '.join(w[4] for w in ws[:3])):
                 break                                    # the next table's caption: this one has ended
             xcol = cols['x']
-            lab = ws[0][4].strip()
-            if not _label_ok(lab):
-                # a two-column page can leave the neighbouring column's digits at the head of the
-                # line; then the label is the last label-like token still left of the x column
-                cands = [w for w in ws if (w[0] + w[2]) / 2 < xcol - 6 and _label_ok(w[4].strip())]
+            lab = _clean_label(_split_occupants(ws[0][4])[0]); lab_i = 0
+            cands = [q for q, w in enumerate(ws) if (w[0] + w[2]) / 2 < xcol - 6 and _label_ok(_clean_label(_split_occupants(w[4])[0]))]
+            if not _label_ok(lab) or (cands and cands[-1] > 0 and _prose_between(ws, 0, cands[-1])):
+                # a two-column page can leave the neighbouring column's prose at the head of the line
+                # ('As noted above, michalski M3 0.42295(8) …': 'As' is a word there, not arsenic); then
+                # the label is the last label-like token still left of the x column
                 if cands:
-                    lab = cands[-1][4].strip()
-            rest = ws[1:]
+                    lab_i = cands[-1]; lab = _clean_label(_split_occupants(ws[lab_i][4])[0])
+            occupants = _split_occupants(ws[lab_i][4])[1]
+            rest = ws[lab_i + 1:]
             if rest and WYCK.match(rest[0][4]):
                 rest = rest[1:]
+            if re.fullmatch(r'[A-Z][a-z]?', lab) and rest and re.fullmatch(r'\d{1,2}', rest[0][4]) and rest[0][0] - ws[lab_i][2] < 12 \
+                    and (rest[0][0] + rest[0][2]) / 2 < xcol - 20:
+                lab = lab + rest[0][4]; rest = rest[1:]             # 'V 1', 'O 12': the label's number set as a token of its own (sincosite)
             if _label_ok(lab) and rest and (rest[0][0] + rest[0][2]) / 2 < xcol - 6 and (SITE_PAREN.match(rest[0][4].strip()) or (SUBSCRIPT.match(rest[0][4].strip()) and lab.isalpha())):
                 lab = lab + rest[0][4].strip().rstrip('*†‡§,'); rest = rest[1:]   # 'Mn (X)', 'Al1 (M3a)': the site name beside the element; 'XO' 'M': a subscript set as its own token
             got = {}; used = set()
             for w in rest:
-                v = _val(w[4])
-                if v is None or abs(v) > FRACT_HDR or (abs(v) > FRACT_MAX and _ndec(w[4]) < 3):   # Ueq, occupancy and any prose number are not coordinates
+                v = _val_scaled(w[4], scale) if scale else None           # '876.9(2)' under '(×104)' is 0.08769, not a value of 876.9 to be thrown out
+                if v is None:
+                    v = _val(w[4])
+                if v is None or abs(v) > FRACT_HDR or (abs(v) > FRACT_MAX and _ndec(w[4]) < 3 and not scale):   # Ueq, occupancy and any prose number are not coordinates
                     continue
                 xc = (w[0] + w[2]) / 2
                 k = min(cols, key=lambda c: abs(cols[c] - xc))
@@ -151,12 +204,34 @@ def _scan(lines):
                 left = [w[4] for w in rest if id(w) not in used and (w[0] + w[2]) / 2 < xcol - 6 and _occupancy('occ=' + w[4]) is not None]   # never a coordinate already placed
                 if left:
                     tail = 'occ=' + left[-1] + ' ' + tail                              # the occupancy column printed before x
-                named = [w[4] for w in rest if id(w) not in used and (w[0] + w[2]) / 2 < xcol - 6 and _OCC_ELS.search(w[4])]
+                named = [w[4] for w in rest if id(w) not in used and (w[0] + w[2]) / 2 < xcol - 6 and (_OCC_ELS.search(w[4]) or _OCC_NUMFIRST.match(w[4]))]
                 if named:
                     tail = named[-1] + ' ' + tail                                       # 'K0.76N0.24(2)': the occupancy by element, for site_element
-                lab = lab.rstrip('*†‡§,')                                            # 'Mn*', 'M2**': the footnote mark is not the label
+                elif not re.match(r'[A-Z][a-z]?', lab) or re.match(r'[A-Z][a-z]?', lab).group(0) not in EP.ATOMIC_WEIGHTS:
+                    # 'Site, Wyckoff | Atom | s.o.f.': the element in a column of its own beside a site
+                    # named crystallographically ('X(3), 8c Sb1 0.9421 …'; 'M1 4c 0.25 Fe3+ ¼ …'; 'T 8i
+                    # 0.38(1) As5+ 0.12(1) P …' — a charge on the symbol, the share printed before it)
+                    before = [w for w in rest if id(w) not in used and (w[0] + w[2]) / 2 < xcol - 6]
+                    atoms = []
+                    for q_, w in enumerate(before):
+                        m_ = re.fullmatch(r'([A-Z][a-z]?)\d{0,2}(?:\d?[+\-−])?', w[4])
+                        if m_ and m_.group(1) in EP.ATOMIC_WEIGHTS:
+                            share = before[q_ - 1][4] if q_ >= 1 and re.fullmatch(r'0?\.\d+(?:\(\d+\))?|1(?:\.0+)?', before[q_ - 1][4]) else ''
+                            atoms.append(m_.group(1) + re.sub(r'\(\d+\)', '', share))
+                    if atoms:
+                        tail = ' '.join(atoms) + ' ' + tail
+                if occupants:
+                    tail = occupants + ' ' + tail                                       # 'T1(Al,Si)': the occupants named on the label, dominant first
+                lab = lab.rstrip('*†‡§,') if not re.match(r'^[A-Z][a-z]?\*\d', lab) else lab   # 'Mn*', 'M2**': a footnote mark is not the label; 'T*1' is a split site's own name
                 key = lab.upper()
                 if key in seen_lab:
+                    prev = next((r for r in rows if r[0].upper() == key), None)
+                    if prev and all(abs(prev[q] - got[c]) < 1e-6 for q, c in ((1, 'x'), (2, 'y'), (3, 'z'))):
+                        # the same site again at the SAME coordinates: a split site's second occupant on a
+                        # row of its own ('X(3), 8c Sb1 0.9421 …' then 'X(3), 8c As1 0.0578 …', 6994) —
+                        # its element joins the row's tail, and the table goes on
+                        rows[rows.index(prev)] = prev[:4] + (prev[4] + ' ' + tail,); miss = 0
+                        continue
                     break            # the same site again: the scan has walked into the NEXT table —
                                      # anisotropic displacement parameters carry the same labels and
                                      # values in the same range, and would be read as coordinates
@@ -195,8 +270,13 @@ def _scan_by_content(lines):
         if len(nums) < 3:
             cand.append(None); continue
         first_x = min((w[0] + w[2]) / 2 for w, _v in nums)
-        lab = next((w[4].strip() for w in ws
-                    if (w[0] + w[2]) / 2 < first_x and _label_ok(w[4].strip())), None)
+        labs_ = [q for q, w in enumerate(ws) if (w[0] + w[2]) / 2 < first_x and _label_ok(_clean_label(_split_occupants(w[4])[0]))]
+        lab = None
+        if labs_:
+            q = labs_[-1] if (len(labs_) > 1 and _prose_between(ws, labs_[0], labs_[-1])) else labs_[0]
+            lab = _clean_label(_split_occupants(ws[q][4])[0])
+            if _split_occupants(ws[q][4])[1]:
+                occ = (occ + ' ' if occ else '') + _split_occupants(ws[q][4])[1]
         cand.append((lab, nums, occ) if lab else None)
     best = []
     i = 0
@@ -330,6 +410,7 @@ def _continues(prev, rows):
     return all(k[0] in top and k[1] > top[k[0]] for k in cont)
 
 
+@functools.lru_cache(maxsize=4)
 def _page_tables(pdf):
     """Per page, the widest atom-site table -> [(page no, rows, weight, headed, continued)], where
     `headed` says the header-driven read found it, `continued` that the page announces a
@@ -359,16 +440,28 @@ def _page_tables(pdf):
             out.append((pno, best, best_w, headed, cont))
     return out
 
-ELEM = re.compile(r'([A-Z][a-z]?)(\d*\.?\d*)')
+ELEM = re.compile(r'([A-Z][a-z]?)(\d+(?:\.\d+)?|\.\d+)?')
+_OCC_TOKEN = re.compile(r'(?:[A-Z][a-z]?(?:\d*\.\d+|\d{1,2})?/?)+|(?:\d*\.\d+[A-Z][a-z]?/?)+|occ=\S+')   # an occupancy column's token: element-first, share-first, or the reader's own 'occ=' mark          # the share after its element; a bare '.' (a label's full stop) is no number
 
 def site_element(label, tail):
     """The element a site carries. A paper labels sites crystallographically — A1, M2, T3 — and
     names the elements in the site-occupancy column ('Ca0.674(11)Mn0.326(11)'): the dominant one is
     the site's element. Only when that column says nothing does the label have to carry it."""
     best = None
-    for el, num in ELEM.findall(re.sub(r'\(\d+\)', '', tail or '')):
-        if el not in EP.ATOMIC_WEIGHTS:
-            continue
+    # only the tokens an occupancy column prints: 'Ca0.674(11)Mn0.326(11)', 'Se1.00', '0.302(9)Sb/0.698Pb',
+    # a bare 'Fe' — never the facing page column's prose ('Siderite I found in', 'the Y site'), which the
+    # tail of a two-column page's row carries and which reads as Si, Y, Li to a regex
+    toks = [re.sub(r'\(\d+\)', '', w).rstrip('*∗†‡§') for w in (tail or '').split()]
+    toks = [w for w in toks if _OCC_TOKEN.fullmatch(w)]
+    t = ' '.join(toks)
+    pairs = [(el, num) for el, num in ELEM.findall(t) if el in EP.ATOMIC_WEIGHTS]
+    if pairs and not any(num for _el, num in pairs):
+        # the share printed BEFORE its element — '0.302(9)Sb/0.698Pb', '0.92Ni/0.08Co' (hrabákite): read
+        # element-first, both would count 1.0 and the first would win
+        before = [(el, num) for num, el in re.findall(r'(\d*\.\d+)([A-Z][a-z]?)(?![a-z])', t) if el in EP.ATOMIC_WEIGHTS]
+        if before:
+            pairs = before
+    for el, num in pairs:
         v = float(num) if num else 1.0
         if best is None or v > best[1]:
             best = (el, v)
@@ -376,7 +469,7 @@ def site_element(label, tail):
         return best[0]
     if '/' in label:                                                      # 'Fe1/Al1': the paper names the dominant occupant first
         label = label.split('/')[0]
-    m = re.match(r'([A-Z][a-z]?)', label)
+    m = re.match(r'\(?([A-Z][a-z]?)', label)                              # '(Al,Fe)': a mixed site named by its occupants, dominant first
     if m and m.group(1) in EP.ATOMIC_WEIGHTS:
         return m.group(1)
     return (label[:1] if label[:1] in EP.ATOMIC_WEIGHTS else None)
@@ -683,14 +776,27 @@ def build(pdf, text=None, bonds=None, rows=None):
     placed = {site_element(lab, tail) for lab, _x, _y, _z, tail in rows if site_element(lab, tail)}
     cations = sorted(((v, k) for k, v in counts.items() if k not in ('H', 'O', 'F', 'Cl', 'S', 'Se', 'Te', 'Br', 'I') and v > 0), reverse=True)
     fallback = next((k for _v, k in cations if k not in placed), None) or (cations[0][1] if cations else None)
+    def by_letter(lab):
+        """The element a site LETTER stands for, by the convention the letters carry and the formula's
+        elements: T is the tetrahedral site (Si, then P, As, S, B, Be, Al, Ge, V), A and X the large
+        cation (Na, K, Ca, Ba, Sr, Pb, …), M, Y and Z the octahedral one (Fe, Mg, Mn, Al, Ti, …; Al
+        first at Z, a tourmaline's). Before this, T(1) took whatever cation the formula had left —
+        Ca into a silicate's tetrahedron, at an instability index of 218 vu (79066)."""
+        large = ('Na', 'K', 'Ca', 'Ba', 'Sr', 'Pb', 'Rb', 'Cs', 'Tl', 'Bi', 'Y', 'Ce', 'La', 'Nd', 'U', 'Th')
+        octa = ('Fe', 'Mg', 'Mn', 'Al', 'Ti', 'Cu', 'Zn', 'Ni', 'Co', 'Cr', 'V', 'Li', 'Sc', 'Nb', 'Ta', 'Zr', 'Sn', 'Sb', 'Ca', 'Na')
+        pools = {'T': ('Si', 'P', 'As', 'S', 'B', 'Be', 'Al', 'Ge', 'V', 'Zn', 'Se', 'Mo', 'W'), 'A': large, 'X': large,
+                 'M': octa, 'Y': octa, 'Z': ('Al',) + octa}
+        return next((e for e in pools.get(lab[:1], ()) if counts.get(e, 0) > 0), None)
     for lab, x, y, z, tail in rows:
         el = site_element(lab, tail)
         if not el and named:
             el = named.get(_pb_key(lab))
             if el:
                 inferred.add(lab)
-        if not el and fallback and re.match(r'^[AMTXYZQ]', lab) and lab[:1] not in EP.ATOMIC_WEIGHTS:
-            el = fallback; inferred.add(lab)                         # M1, A(1): a cation site by convention; the formula's dominant cation not yet placed stands in, for the composition only
+        if not el and re.match(r'^[AMTXYZQ]', lab) and lab[:1] not in EP.ATOMIC_WEIGHTS:
+            el = by_letter(lab) or fallback                               # M1, A(1), T2: a cation site by convention — the letter's element in the formula, else its dominant cation not yet placed; for the composition only
+            if el:
+                inferred.add(lab)
         if el:
             ch = charges.get(el)
             sites.append((lab, '%s%d+' % (el, ch) if ch and el not in mixed_els else el, x, y, z))   # a mixed-valence element is written bare: the .cif then 'states none' and the paper's per-site fit applies

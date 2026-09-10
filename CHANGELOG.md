@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.7.1](#071--2026-09-10) | 10 Sep | The silent classes: every reader that could not verify now says why (parameter sets, one-site tables, unusable .cif); coordinates 59 → 62 %, parameter sets 60 → 64 %, bond-valence reds 6 → 5; two-mineral papers judged by their own bond table |
 | [0.7.0](#070--2026-09-10) | 10 Sep | The gauntlet on the whole 1,130-paper corpus: bond-valence tables 51 → 69 % verified (52 reds → 6), parameter sets 31 → 60 %, coordinates 55 → 59 %, optics 60 → 66 %; a reader failure log; a 50× faster neighbour search |
 | [0.6.0](#060--2026-09-09) | 9 Sep | The gauntlet: paper readers driven to 91/83/86/52 % on the papers that print everything; ICDD's Part 2 review corrects five entry rules; another reviewer's triage report reads back into the GUI |
 | [0.5.6](#056--2026-09-07) | 7 Sep | Every reading says which oracle vouched for it; recall measured by seeding faults; corpus runs in parallel; seven issues fixed |
@@ -18,6 +19,63 @@ package version in `pyproject.toml`.
 | [0.4.0](#040--2026-08-25) | 25 Aug | `pxrd bv`, `pxrd tables`, `pxrd refs`, and Manuscript mode |
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
+
+## [0.7.1] — 2026-09-10
+
+Round 5 of the gauntlet, resumed from the failure log of 0.7.0 (`failure_classes.py --silent`): the
+readers' silent `none` / `nooracle` on papers that print the thing, class by class, each mechanism
+generic and re-run on the whole corpus (`review_out/gauntlet_log.md`, round 5, it67–it70). Silent
+`none` fell from 38 to 16 (coordinates), 67 to 0 (parameter sets), 38 to 31 (bond-valence tables);
+whole corpus coordinates 59 → 62 %, parameter sets 60 → 64 %, bond-valence tables 69 → 71 % (reds
+6 → 5), optics 66 → 68 %; on the 115 papers that print everything, coordinates 89 → 92 % and the
+composite 76 → 80.
+
+### Changed
+- **The parameter-set record is never a silent blank.** When the paper names no set the tool carries,
+  the record says what it does say — a source the tool does not have ('parameters from Brown (2009)',
+  Hong et al. 2004, Allmann 1975), a program (ECoN21, JANA2006, VESTA), or no citation in any of its
+  bond-valence sentences — as `nooracle` with the reason; the table's own verdict is never written
+  onto it. A set named beside 'parameters' without a bond-valence keyword, a table's notes that run on
+  without a full stop, a reference-list title through hyphenation or truncated, are read. A paper
+  whose parameters come from several sources — a set the tool has for some bonds and one it lacks
+  for others (Tl–S from Biagioni et al. 2014, Te–O from Mills & Christy 2013) — is `mixed`, and a
+  bond-valence table that differs under it is a doubt, never red; Gagné & Hawthorne for the oxide
+  bonds beside Brese & O'Keeffe for the sulfide bonds is the tool's own default, not a mix.
+- **Coordinates tables.** Labels the reader refused: 'Fe2_1' (a pseudo-symmetric refinement's twins),
+  'M(2a)', "O6'" (a prime is a site of its own — the old reader ended the table at it as a repeated
+  label), '(Cu,Hg)', 'T1(Al,Si)' and 'T*1(Al)' (the occupants go to the row's tail), 'A(16c)' and
+  'Pb1(≡A)', 'Sb1/Sb1’', 'V 1' set as two tokens; the label nearest x when the facing column's
+  sentence heads the line ('As noted above, michalski M3 …'); a split site printed as two rows with the
+  same coordinates merges; the Atom column's element with its charge and share ('M1 4c 0.25 Fe3+',
+  'T 8i 0.38(1) As5+ 0.12(1) P'); coordinates printed ×10⁴ under a caption that says so of the
+  COORDINATES; a site letter's conventional element when nothing names it (T tetrahedral — Si, P, As,
+  B —, A/X the large cation, M/Y/Z octahedral; before, T(1) took the formula's leftover cation, Ca in a
+  silicate's tetrahedron at 218 vu); the row tail read for occupancy tokens only (the facing column's
+  prose read as Si, Y, Li); a table of one or two sites is `nooracle` with its count.
+- **Two-mineral papers.** The structure is judged by ITS bond table: when the paper prints two
+  coordinates tables the bond tables are split by repeated cations, the best overlap nearest the
+  table's page is chosen (the n-th in print order for the n-th table), and only the bonds naming that
+  table's own sites count — the union of both minerals' tables had failed a structure that reproduced
+  every one of its own 57 bonds for not covering the other's 78. A one-table paper keeps the union.
+- **Bond-valence tables found:** the BVS printed under each site's block with the site in the mark
+  ('BVS(Ni1) 2.07'), a 'B.V.S.' column head, a sums table set as (site, sum) pairs across each line under
+  its caption ('Tl1 1.25 Sb1 2.31 S1 1.76'), a grid whose multiplicity marks are typeset as tokens of
+  their own between the cells, a BVS column that ends where its labels repeat (three minerals stacked).
+- **Optics and the compatibility index.** 'isotropic, with an index of refraction 1.999(5)', 'the
+  refractive index n is 1.65, which is calculated by N = Kd + 1' (read, and marked computed), the
+  mean-index sentence at its real length, 'the index of refraction is >1.8' as a bound; a constant
+  ('k(UO3) = 0.118 from Mandarino', 'a corrected Kp value of 0.253 for vanadyl') is never the index.
+- **The analytical table.** Soft hyphens are stripped from the text and the page's words (every
+  constituent of a Springer prose analysis began with one); a bracketed note inside a prose run is not
+  part of it; a wt% table set line by line beside a trace-element table is read, not skipped with it.
+- **Space-group phrases.** 'triclinic, P1, a = …', 'Monoclinic, C2/m' (a crystal-data block) and
+  'spatial group' — looked at only when the paper prints no 'space group' phrase, which comes first.
+
+### Fixed
+- The coordinates builder crashed on a label with a full stop ('Pb.' read as an element and the
+  number '.'): three papers never built.
+- A .cif with no cell or no sites made the paper an error; it is checked as one without a .cif for the
+  structure checks, says so, and the cell check keeps the file's cell.
 
 ## [0.7.0] — 2026-09-10
 
