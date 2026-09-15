@@ -154,7 +154,7 @@ def _writable_extras(res):
 # Comment banner reflects the finding's domain so it reads accurately: composition/
 # formula findings say 'Chemistry check'; everything else (cell, indexing, instrument,
 # radiation, lines, symmetry) stays 'PXRD check'.
-_CHEM_CODES = {'analysis', 'ideal_formula', 'name_formula', 'mindat_chem'}
+_CHEM_CODES = {'analysis', 'ideal_formula', 'name_formula', 'mindat_chem', 'formula'}
 def _check_banner(code):
     return 'Chemistry check' if code in _CHEM_CODES else 'PXRD check'
 
@@ -539,6 +539,13 @@ def _anchor_cell(doc, ac_row, anchor):
     if anchor == 'formula':
         return (_find_value(doc, lambda t: t.strip() == 'Empirical')
                 or _find_value(doc, lambda t: t.strip() == 'Chemical'))
+    if anchor and anchor.startswith('formula:'):         # one named formula row: Chemical/General/Analytical/Empirical
+        field = anchor.split(':', 1)[1]
+        return (_find_value(doc, lambda t, f=field: t.strip() == f)
+                or _find_value(doc, lambda t: t.strip() == 'Chemical'))
+    if anchor == 'density':
+        return (_find_field_value(doc, lambda t: t.strip().lower().startswith('xtl dx'))
+                or _find_field_value(doc, lambda t: re.match(r'^dx\s*:', t.strip().lower())))
     if anchor == 'analysis':
         # the 'Analysis' comment cell (where the microprobe wt.% data is given); falls back to
         # the 'Analysis' label cell when empty, and — when the entry has no Analysis row at all

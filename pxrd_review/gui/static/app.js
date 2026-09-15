@@ -767,6 +767,8 @@ function docxAnchorCandidates(anchor) {
   if (anchor === 'ima') return ['ima', 'comments'];
   if (anchor === 'analysis') return ['analysis', 'comments'];
   if (anchor === 'optical') return ['optical', 'comments'];
+  if (anchor === 'formula') return ['formula:Empirical', 'formula:Chemical'];
+  if (anchor.startsWith('formula:')) return [anchor, 'formula:Chemical'];
   return [anchor];
 }
 

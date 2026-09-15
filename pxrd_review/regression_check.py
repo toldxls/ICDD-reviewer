@@ -1086,6 +1086,34 @@ CASES = [
  # --- 16. instrumentation designators (corpus-curated) ---
  ("I003246 no geometry nag (Spacing Instr. already Diffractometer)", lambda: not extras('I003246', 'geometry')),
  ("I003747 no instr_vocab flag (clean)",     lambda: not extras('I003747', 'instr_vocab', 'flag')),
+ # --- 27/28. docx-internal consistency: formula fields vs the analysis, Xtl Dx vs Dx (2026-09-14, corpus-validated) ---
+ ("I003448 valence superscript read as carbon ('Fe3 C1.01'), reported once for both fields",
+  lambda: len(extras('I003448', 'formula', 'flag', substr='came out as carbon')) == 1),
+ ("I003405 CaO listed twice in the analysis (BaO in the paper)",
+  lambda: bool(extras('I003405', 'analysis', 'flag', substr='CaO twice'))),
+ ("I003405 analysis formula missing its opening bracket",
+  lambda: bool(extras('I003405', 'formula', 'flag', substr='unbalanced brackets'))),
+ ("I003637 'Nb205' is a malformed constituent (Nb2O5)",
+  lambda: bool(extras('I003637', 'analysis', 'flag', substr='Nb2O5?'))),
+ ("I003779 Xtl Dx = 1/4 Dx (Z 1, paper Z 4)",
+  lambda: bool(extras('I003779', 'xtl_density', 'flag', substr='1/4×'))),
+ ("I003562 Xtl Dx = 3/4 Dx: the Chemical formula has (PO4) for (PO4)3",
+  lambda: bool(extras('I003562', 'xtl_density', 'flag', substr='3/4×'))),
+ ("I003527 Xtl Dx = 2/3 Dx (Z 1, paper Z 2)",
+  lambda: bool(extras('I003527', 'xtl_density', 'flag', substr='2/3×'))),
+ ("I003416 Optical Data Sign=1 is not a sign",
+  lambda: bool(extras('I003416', 'optical', 'flag', substr='Sign=1'))),
+ ("I003698 strongest-lines sentence names 2.5946, which the reflection list lacks",
+  lambda: bool(extras('I003698', 'strongest_lines', 'flag', substr='2.5946'))),
+ ("I003747 no strongest_lines / reflections flag (clean)",
+  lambda: not extras('I003747', 'strongest_lines', 'flag') and not extras('I003747', 'reflections', 'flag')),
+ ("strongest_lines: a list of the CALCULATED pattern is not the measured list (metaheimite)",
+  lambda: X.check15_strongest_lines(
+     type('S', (), {'refl': [('7.070', '100', '1', '0', '1'), ('3.536', '40', '2', '0', '2'), ('2.861', '30', '2', '1', '1')],
+                    'instr': {'spacing_instr': 'Diffractometer'}}),
+     'The strongest lines of the calculated powder pattern [d, Å (I, %)] are: 6.945(100), 3.472(35), 2.832(28).') == []),
+ ("I003747 no formula / density flag (clean)",
+  lambda: not extras('I003747', 'formula', 'flag') and not extras('I003747', 'xtl_density', 'flag')),
  ("I003698 no instr_vocab flag (clean)",     lambda: not extras('I003698', 'instr_vocab', 'flag')),
  # 'Debye-Scherrer' is a geometry, not an instrument class -> normalize to 'Diffractometer'
  # (reviewers did this 15x; the value never survives review). Diffractometer itself stays clean.
@@ -1095,6 +1123,13 @@ CASES = [
  ("instr_vocab: Diffractometer is clean", lambda: not [
      f for f in X.check16_instr_vocab(type('S', (), {'instr': {'intensity_instr': 'Diffractometer'}})(), None)
      if f.sev == 'flag']),
+ # case alone is not a fault (Kampf's Part 2 review typed 'Monochromator crystal'); a misspelling still is
+ ("instr_vocab: 'Monochromator crystal' (case only) is clean", lambda: not [
+     f for f in X.check16_instr_vocab(type('S', (), {'instr': {'filter': 'Monochromator crystal', 'filtertype': 'Graph'}})(), None)
+     if f.code == 'instr_vocab' and f.anchor == 'instr']),
+ ("instr_vocab: 'Diffractomter' still flags", lambda: any(
+     f.code == 'instr_vocab' and 'Diffractometer' in (f.msg or '')
+     for f in X.check16_instr_vocab(type('S', (), {'instr': {'spacing_instr': 'Diffractomter'}})(), None))),
  # --- 16b. measured-data completeness (blank anode/intensity-type) ---
  ("I003600 blank anode -> derive Sync (synch λ)", lambda: bool(extras('I003600', 'instr_vocab', substr='set the anode to Sync'))),
  ("I003246 no blank-field flag",             lambda: not extras('I003246', 'instr_vocab', substr='blank')),

@@ -23,7 +23,27 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+- **Entry consistency checks that need no .pdf**, from an independent read of the 2028 Part 2 batch against
+  Tony Kampf's review (2026-09-14). Each defect class was listed on the corpus hit by hit before it shipped.
+  - `check27_formula_integrity` (codes `formula`, `analysis`) — the syntax of the formula fields and of the
+    Analysis field's formula: unbalanced brackets, a lost decimal point (`Al042`), a colon for a point, a split
+    symbol (`T B0.01`), a valence superscript read as carbon (`Fe3 C0.20`), a simplified-formula site in the
+    Analytical row; malformed or duplicated wt% constituents (`BAO`, `P205`, CaO twice); an element of the
+    formula absent from the wt% list or the reverse (fluorine missing, SeO2 standing for TeO2); the Analytical
+    row against the Analysis formula; an element in one ideal field only. One finding per fault.
+  - `check28_density_consistency` (code `xtl_density`) — Xtl Dx against Dx: a whole-number factor is a flag (Z or
+    the formula unit is wrong), a 12–25 % gap a note.
+  - `check24_optical_2v` also reads the sign (`Sign=1`), a mistyped esd parenthesis, an index whose esd was typed
+    as a digit (`1.6142`), and a uniaxial sign that contradicts ω and ε.
+  - `check29_reflections_in_paper` (code `reflections`) — a d of a measured reflection list that the .pdf never
+    prints although all but a handful of the other lines are, with the printed value one keystroke away.
+- **The strongest-lines sentence is checked line by line** (`check15_strongest_lines`), not only its I=100 line —
+  a line lost at a table's page break, a transposed d. A sentence about the CALCULATED pattern, and a
+  Calculated / Other spacing, are skipped (the metaheimite flag compared dcalc with the measured list).
+
 ### Fixed
+- **Case alone is no longer an instrument-vocabulary fault** ('Monochromator crystal').
 - **Manuscript mode: '? look' on a calculation finding of a .docx now scrolls the docx view to
   the cell the finding names** — a bond-valence line to its row label or column header in the
   bond-valence table, a composition line to its constituent's row in the analytical table, a

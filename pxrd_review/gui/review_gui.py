@@ -961,6 +961,10 @@ _DOCX_ROWHEAD = [
     (re.compile(r'^analysis$', re.I),           'analysis'),
     (re.compile(r'^mineral$', re.I),            'name'),
     (re.compile(r'^primary$', re.I),            'primary'),
+    (re.compile(r'^chemical$', re.I),           'formula:Chemical'),
+    (re.compile(r'^general$', re.I),            'formula:General'),
+    (re.compile(r'^analytical$', re.I),         'formula:Analytical'),
+    (re.compile(r'^empirical$', re.I),          'formula:Empirical'),
 ]
 _DOCX_INLINE = [
     (re.compile(r'^spacing\s*instr', re.I),   'spacing_instr'),
@@ -968,6 +972,7 @@ _DOCX_INLINE = [
     (re.compile(r'^intensity\s*type', re.I),  'intensity_type'),
     (re.compile(r'^radiation\s*=', re.I),     'radiation'),
     (re.compile(r'^filter\s*:', re.I),        'filter'),
+    (re.compile(r'^xtl\s*dx\s*:', re.I),      'density'),
 ]
 _DOCX_AXES = ['a', 'b', 'c', 'α', 'β', 'γ', 'SG', 'Z']       # Author's Cell columns 1..8
 
