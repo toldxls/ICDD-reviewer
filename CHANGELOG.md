@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.8.0](#080--2026-09-14) | 14 Sep | Entry checks that read the entry against itself and against the paper, from a human review of 2028 Part 2: formula and analysis fields, Xtl Dx vs Dx, the optics field, every strongest line, a reflection d the .pdf never prints — every corpus flag a real defect; case alone no longer a vocabulary fault |
 | [0.7.2](#072--2026-09-10) | 10 Sep | An adversarial audit of the 0.6.0–0.7.1 commits: seven defects fixed — a continued coordinates table walked into another mineral's, a "powder was obtained" sentence silenced the calculated-pattern flag, a β = 90.00 monoclinic cell lost its symbol, an arrowless ×n mark lost its value; nothing changed on the corpus A/B |
 | [0.7.1](#071--2026-09-10) | 10 Sep | The silent classes: every reader that could not verify now says why (parameter sets, one-site tables, unusable .cif); coordinates 59 → 62 %, parameter sets 60 → 64 %, bond-valence reds 6 → 5; two-mineral papers judged by their own bond table |
 | [0.7.0](#070--2026-09-10) | 10 Sep | The gauntlet on the whole 1,130-paper corpus: bond-valence tables 51 → 69 % verified (52 reds → 6), parameter sets 31 → 60 %, coordinates 55 → 59 %, optics 60 → 66 %; a reader failure log; a 50× faster neighbour search |
@@ -21,7 +22,14 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
-## [Unreleased]
+## [0.8.0] — 2026-09-14
+
+Tony Kampf's review of 2028 Part 2 and an independent read of the same 37 entries against their papers
+turned up about seventy defects neither the tool nor the reviewers had caught. The classes a program can
+see became checks, each measured on the 870 new-template entries on disk and every flag read before it
+shipped; then an audit of the day's commits. Corpus A/B over 1,707 docx: only the new codes added, the 26
+case-only vocabulary flags and the metaheimite false positive removed. Regression suite all PASS, unit
+tests OK. Bundled Mindat snapshot refreshed 2026-09-14.
 
 ### Added
 - **Entry consistency checks that need no .pdf**, from an independent read of the 2028 Part 2 batch against
