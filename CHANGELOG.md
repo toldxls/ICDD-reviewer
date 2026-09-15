@@ -32,8 +32,8 @@ package version in `pyproject.toml`.
     Analytical row; malformed or duplicated wt% constituents (`BAO`, `P205`, CaO twice); an element of the
     formula absent from the wt% list or the reverse (fluorine missing, SeO2 standing for TeO2); the Analytical
     row against the Analysis formula; an element in one ideal field only. One finding per fault.
-  - `check28_density_consistency` (code `xtl_density`) — Xtl Dx against Dx: a whole-number factor is a flag (Z or
-    the formula unit is wrong), a 12–25 % gap a note.
+  - `check28_density_consistency` (code `xtl_density`) — Xtl Dx against Dx: a simple ratio (2, 1/2, 3/4 …) is a flag (Z or
+    the formula unit is wrong), any other gap of 30 % or more a flag, 12–30 % a note.
   - `check24_optical_2v` also reads the sign (`Sign=1`), a mistyped esd parenthesis, an index whose esd was typed
     as a digit (`1.6142`), and a uniaxial sign that contradicts ω and ε.
   - `check29_reflections_in_paper` (code `reflections`) — a d of a measured reflection list that the .pdf never

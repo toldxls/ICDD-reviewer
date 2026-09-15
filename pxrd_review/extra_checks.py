@@ -1269,11 +1269,11 @@ def check24_optical_2v(e, text=None):
     v2 = _f(re.search(r'2V\s*=\s*([\d.]+)', od))
     # --- the field's own syntax (2026-09-14, measured on the 160 optics fields of the corpus) ---
     raw_sign = re.search(r'Sign\s*=\s*([^\s,;]+)', od)
-    if raw_sign and raw_sign.group(1)[0] not in '+-−–':
+    if raw_sign and raw_sign.group(1).strip('()')[:1] not in ('+', '-', '−', '–'):
         out.append(Finding('optical', 'flag', "Optical Data gives Sign=%s — the optic sign is + or −."
                            % raw_sign.group(1), od[:120], 'optical'))
     if not re.search(r'R\s*%', od):                  # a reflectance line parks here in some entries
-        bad = re.search(r'\b[ABQ]\s*=\s*\d+\.\d+\(\d+(?!\d*\))', od)
+        bad = re.search(r'\b[ABQ]\s*=\s*\d+\.\d+\(\d+(?!\d*\s*\))', od)
         if bad:
             out.append(Finding('optical', 'flag', "Optical Data writes '%s' — the esd's closing parenthesis is "
                                "missing or mistyped." % _sq(od[bad.start():bad.end() + 2]), od[:120], 'optical'))
@@ -2233,10 +2233,18 @@ def check27_formula_integrity(e, text=None):
             if k not in F:
                 continue
             others = set().union(*[_formula_elements(v) for j, v in F.items() if j != k]) | wt_els | _formula_elements(af)
-            only = sorted(_formula_elements(F[k]) - others - {'O', 'H'})
+            only = sorted(_formula_elements(F[k]) - others - {'O', 'H'} - ({'C'} if valence_c else set()))
             if only:
+                # a bare capital may be a site label the encoder left behind ('Al6 T ( Si , B )6 O18 U ( B O3 )3')
+                # rather than the element — show where it stands and let the reader say which
+                where = []
+                toks = F[k].split()
+                for el in only:
+                    i = next((j for j, t in enumerate(toks) if re.fullmatch(r'%s[\d.]*' % el, t)), None)
+                    where.append("'%s'" % ' '.join(toks[max(0, i - 2):i + 3]) if i is not None else el)
                 out.append(Finding('formula', 'flag', "The %s formula contains %s, found in no other formula field "
-                                   "and not in the analysis: %s" % (k, ', '.join(only), F[k][:100]),
+                                   "and not in the analysis (%s) — a wrong element, or a stray label: %s"
+                                   % (k, ', '.join(only), '; '.join(where), F[k][:100]),
                                    F[k][:120], 'formula:' + k))
     return out
 
@@ -2259,7 +2267,7 @@ def check28_density_consistency(e, text=None):
     """Xtl Dx is computed from the entry's own Chemical formula, cell and Z; Dx is the paper's calculated
     density. A ratio that is a small whole-number fraction (2, 1/2, 4/3 …) means Z or the formula unit is
     inconsistent — on the corpus: Z 1 for 2, 2 for 3, 1 for 4, a doubled formula with Z 4, '(Ca5 Na)6'
-    read as Ca30. A gap of 12–25 % with no such ratio is usually chemistry (a heavily substituted
+    read as Ca30. A gap of 12–30 % with no such ratio is usually chemistry (a heavily substituted
     empirical formula against an ideal one) and stays a note."""
     d = _density_row(e)
     dx, xdx = d.get('Dx'), d.get('Xtl Dx')
@@ -2276,7 +2284,7 @@ def check28_density_consistency(e, text=None):
                 frac = (p, q) if frac is None or abs(r - p / q) < abs(r - frac[0] / frac[1]) else frac
     z = e.cell.get('Z') or '?'
     if frac and dev >= 0.25:
-        return [Finding('xtl_density', 'flag', "Xtl Dx = %.3f is %s× Dx = %.3f — a whole-number factor: Z (%s) or the "
+        return [Finding('xtl_density', 'flag', "Xtl Dx = %.3f is %s× Dx = %.3f — a simple ratio: Z (%s) or the "
                         "formula unit of the Chemical formula does not match the density; verify both."
                         % (xdx, '%d/%d' % frac if frac[1] != 1 else '%d' % frac[0], dx, z), None, 'density')]
     if dev >= 0.30:
@@ -2462,7 +2470,7 @@ def check15_strongest_lines(e, text):
     if not docx_ds:
         return out
     flat = re.sub(r'\s+', ' ', text)
-    calc_list = False
+    calc_list = False                       # a list set aside: calculated, or not this pattern's
     for m in _STRONGEST.finditer(flat):
         lead = flat[m.start():m.start(1) + 30]
         body = re.split(r'\.\s+[A-Z]', m.group(1))[0]
@@ -2474,6 +2482,9 @@ def check15_strongest_lines(e, text):
             continue
         miss = [(d, i) for d, i in items
                 if not any(abs(float(d) - x) <= max(0.002, 0.003 * float(d)) for x in docx_ds)]
+        if len(miss) > max(1, len(items) // 3):
+            calc_list = True                # most of its lines absent: another mineral's pattern, or 2θ — not this list,
+            continue                        # and not a sentence the I=100 fallback below may read either
         if miss:
             near = lambda d: min(docx_ds, key=lambda x: abs(x - float(d)))
             out.append(Finding('strongest_lines', 'flag',
@@ -2566,7 +2577,7 @@ def check29_reflections_in_paper(e, text):
     ds = list(dict.fromkeys(re.sub(r'\s+', '', r[0]) for r in e.refl if _val(r[0])))
     if len(ds) < 8:
         return out
-    toks = set(re.findall(r'\d+\.\d+', text))
+    toks = set(re.findall(r'\d+\.\d+', text)) | {re.sub(r'\s+', '', t) for t in re.findall(r'\d+\.\s+\d+', text)}
     miss = [d for d in ds if not (_d_forms(d) & toks)]
     if not miss or len(miss) > max(2, 0.05 * len(ds)):
         return out
@@ -2582,11 +2593,11 @@ def check29_reflections_in_paper(e, text):
         cand = sorted((t for t in printed if len(t.split('.')[1]) >= len(sig.split('.')[1]) and _one_keystroke(sig, t)),
                       key=lambda t: abs(float(t) - _val(d)))[:3]
         hkl = ' '.join(x for x in r[2:5] if x)
-        parts.append('%s (I %s%s)%s' % (d, _num(r[1]), ', hkl ' + hkl if hkl else '',
-                                        '; the .pdf prints %s one keystroke away' % ' / '.join(cand) if cand else ''))
+        parts.append('d = %s (I %s%s%s)' % (d, _num(r[1]), ', hkl ' + hkl if hkl else '',
+                                           ' — the .pdf prints %s, one keystroke away' % ' or '.join(cand) if cand else ''))
     out.append(Finding('reflections', 'flag',
-               "Reflection %s: this d is not printed anywhere in the .pdf, although the other %d lines of the list "
-               "are — one of the two is mistyped (a hkl assigned to the wrong d would hide it)."
+               "Reflection list %s: not printed anywhere in the .pdf, although the other %d lines of the list "
+               "are — the entry or the .pdf is mistyped (a hkl assigned to the wrong d would hide it)."
                % ('; '.join(parts), len(ds) - len(miss)),
                ', '.join(miss), 'refl'))
     return out

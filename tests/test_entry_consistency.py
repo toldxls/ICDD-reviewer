@@ -205,5 +205,39 @@ class ReflectionsAgainstPaper(unittest.TestCase):
         self.assertEqual(X.check15_strongest_lines(powder(rows), text), [])
 
 
+class AuditEdges(unittest.TestCase):
+    """The edges an audit of the first commit found (2026-09-14)."""
+
+    def test_valence_carbon_is_not_also_a_one_field_element(self):
+        e = entry({'Chemical': 'Pb Ga3 ( As O4 )2 ( O H )6', 'Empirical': 'As2 Ga3 H6 O14 Pb',
+                   'General': 'Pb ( Ga , Ge , Fe3 C , Al ) [ ( As , S , W ) O4 ]2 ( O H )6',
+                   'Analytical': 'Pb0.98 ( Ga2.1 Ge0.4 Fe0.3 Al0.2 ) [ ( As1.6 S0.3 W0.1 ) O4 ]2 ( O H )6'})
+        m = msgs(X.check27_formula_integrity(e))
+        self.assertEqual(len(m), 1, m)
+        self.assertIn('came out as carbon', m[0])
+
+    def test_stray_site_label_is_shown_where_it_stands(self):
+        e = entry({'Chemical': 'Na Li1.5 Al7.5 ( Si6 O18 ) ( B O3 )3 ( O H )4',
+                   'General': '( Na , $XS ) ( Al , Li )3 Al6 T ( Si , B )6 O18 U ( B O3 )3 ( O H )3',
+                   'Empirical': 'Al9 B3 H4 Li1.5 Na O31 Si6',
+                   'Analytical': 'Na0.8 ( Al1.4 Li1.3 )3 Al6 ( Si6 O18 ) ( B O3 )3 ( O H )3.4'})
+        m = msgs(X.check27_formula_integrity(e))
+        self.assertTrue(any("O18 U (" in x and 'stray label' in x for x in m), m)
+
+    def test_strongest_lines_of_another_mineral_are_not_this_list(self):
+        rows = [('3.144', '100', '1', '2', '1'), ('6.683', '65', '0', '2', '0'), ('3.355', '44', '1', '0', '3')]
+        text = 'The strongest lines of the related mineral foo are: 7.12(100), 5.01(40), 4.12(30), 3.020(25), 2.88(20).'
+        self.assertEqual(X.check15_strongest_lines(powder(rows), text), [])
+
+    def test_a_d_broken_over_a_line_of_the_pdf_text_is_printed(self):
+        rows = ReflectionsAgainstPaper.ROWS
+        text = ' '.join(r[0] for r in rows if r[0] != '3.2200') + ' 3.\n22 '
+        self.assertEqual(X.check29_reflections_in_paper(powder(rows), text), [])
+
+    def test_bracketed_sign_and_spaced_esd_are_well_formed(self):
+        e = entry(optical='A=1.613(4), B=1.626(3 ), Q=1.633(5), Sign=(-), 2V=72(3)°')
+        self.assertEqual(msgs(X.check24_optical_2v(e)), [])
+
+
 if __name__ == '__main__':
     unittest.main()
