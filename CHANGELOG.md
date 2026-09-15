@@ -21,6 +21,20 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
+## [Unreleased]
+
+### Fixed
+- **Manuscript mode: '? look' on a calculation finding of a .docx now scrolls the docx view to
+  the cell the finding names** — a bond-valence line to its row label or column header in the
+  bond-valence table, a composition line to its constituent's row in the analytical table, a
+  powder line to its d value, a section head to the table's caption, the Gladstone–Dale and cell
+  lines to the sentence that states them (`review_gui._ms_docx_anchors`). Before, every such
+  finding on a .docx said there was nowhere to jump to, which on a manuscript is nearly every flag.
+- **A clean bond-valence table no longer comes up as a flag**: 'N cells compared, 0 disagree' was
+  matched by the flag regex looking for '0 disagree' after the word (agujaite2). A blank cell for a
+  bond under 0.10 vu — a contact below the cutoff tables print, which the checker itself does not
+  count — is information, not a flag (`_calc_kind`).
+
 ## [0.7.2] — 2026-09-10
 
 An adversarial audit of the 2026-09-09/10 commits (0.6.0–0.7.1), read diff by diff and probed against

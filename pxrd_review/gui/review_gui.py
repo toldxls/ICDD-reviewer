@@ -2273,7 +2273,143 @@ def ms_analysis(key):
             MS['cache'][key] = {'fp': fp, 'data': data}
     return data
 
-_CALC_FLAG = re.compile(r' vs |but the \.cif|blank but|not in the wt|does not|do not|disagree(?!.*0 disagree)|could not|paper \d|not follow|FAILED|is not a|listed twice|no space|zero written|not reconciled', re.I)
+# 'N cells compared, 0 disagree' is the count line of a table that AGREES: never a flag. (The
+# earlier `disagree(?!.*0 disagree)` looked for '0 disagree' AFTER the word and so flagged it —
+# agujaite's clean table came up red with '0 disagree' in its text, 2026-09-10.)
+_CALC_FLAG = re.compile(r' vs |but the \.cif|blank but|not in the wt|does not|do not|(?<!\b0 )disagree|could not|paper \d|not follow|FAILED|is not a|listed twice|no space|zero written|not reconciled', re.I)
+
+_ANCHOR_CAPTION = {'composition': r'wt|analy|composition|microprobe|epma|chemical',
+                   'bond': r'bond[- ]?valence|\bbvs\b|valence',
+                   'powder': r'powder|x-ray|d\s*obs|diffraction'}
+# the sections read from the prose, not a table: the paragraph that states the thing
+_ANCHOR_PROSE = {'gladstone': r'compatibility|gladstone', 'density': r'density', 'species': r'mindat|\bIMA\b'}
+
+
+_BLANK_CELL = re.compile(r'is blank but the \.cif has that bond \(([\d., ]+) vu\)')
+
+def _calc_kind(s, head=False):
+    """'calc' (a red finding) or 'calcinfo' (what was re-done and how) for one line of the paper
+    checks. A section head, a doubt ('[unverified]'), and a line naming no difference are
+    information; so is a blank cell for a bond under 0.10 vu — a contact below the cutoff most
+    tables print, which the checker itself does not count as a disagreement (agujaite's O8–Na2
+    at 0.03 vu came up red under a table that agreed in every cell, 2026-09-10)."""
+    if head or not _CALC_FLAG.search(s) or '[unverified]' in s or s.startswith('not verifiable'):
+        return 'calcinfo'
+    m = _BLANK_CELL.search(s)
+    if m:
+        try:
+            if max(float(x) for x in re.findall(r'\d+\.\d+', m.group(1))) < 0.10:
+                return 'calcinfo'
+        except ValueError:
+            pass
+    return 'calc'
+
+
+def _ms_docx_anchors(path, findings):
+    """Paragraph anchors for the calculation findings of a .docx manuscript, so '? look' scrolls the
+    docx view to the cell a finding names instead of saying there is nowhere to go: a bond-valence
+    line to its row label or column header in the bond-valence table ('O8–Na2 is blank' -> the O8
+    row), a composition line to its constituent's cell in the analytical table ('Si: paper 2.99'
+    -> SiO2), a powder line to its d value; a section's head, and a line naming no cell, to the
+    table's caption (the paragraph above it) or its first cell. The section's table is the one
+    whose caption says what it is and whose cells hold most of the section's terms (a coordinates
+    table holds every site label too — the caption tells them apart). Paragraphs are numbered as
+    the docx view numbers them (refs_check.load_docx). Best effort: a finding nothing places keeps
+    para None, and the view says so."""
+    try:
+        doc, paras = RC.load_docx(path)
+    except Exception:
+        return
+    W = RC.W
+    tbls = list(doc.element.body.iter(W + 'tbl'))
+    def table_of(elem):
+        top = None; e = elem.getparent()
+        while e is not None:
+            if e.tag == W + 'tbl':
+                top = e                                          # the OUTERMOST table: a nested one belongs to it
+            e = e.getparent()
+        if top is None:
+            return None
+        return next((i for i, t in enumerate(tbls) if t is top), None)
+    cells = {}; first = {}                                       # table -> [(para idx, cell text)], first para of each
+    for pa in paras:
+        if pa.elem is None:
+            continue
+        k = table_of(pa.elem)
+        if k is None:
+            continue
+        cells.setdefault(k, []).append((pa.idx, ' '.join(pa.text.split()))); first.setdefault(k, pa.idx)
+    if not cells:
+        return
+    caption = {}
+    for k, i0 in first.items():
+        j = next((j for j in range(i0 - 1, max(-1, i0 - 4), -1)
+                  if paras[j].text.strip() and (paras[j].elem is None or table_of(paras[j].elem) is None)), None)
+        caption[k] = j if j is not None else i0
+    norm = lambda s: re.sub(r'[\s*†‡§]+$', '', s.strip())
+    def hit(k, term):
+        """The cell of table k that IS the term, else the one that begins with it, else the one holding it as a word."""
+        t = norm(term)
+        if not t or k is None:
+            return None
+        cs = cells.get(k) or []
+        for i, c in cs:
+            if norm(c) == t:
+                return i
+        for i, c in cs:
+            if re.match(re.escape(t) + r'(?![A-Za-z0-9])', c):
+                return i
+        for i, c in cs:
+            if re.search(r'(?<![A-Za-z0-9])' + re.escape(t) + r'(?![A-Za-z0-9])', c):
+                return i
+        return None
+    def section_of(f):
+        lab = (f.get('label') or '').lower()
+        return 'bond' if lab.startswith('bond') else 'composition' if lab.startswith('composition') else 'powder' if lab.startswith('powder') else None
+    table_for = {}
+    for sec in ('composition', 'bond', 'powder'):
+        terms = {t for f in findings if section_of(f) == sec for t in (f.get('find') or '').split('|') if t}
+        pat = re.compile(_ANCHOR_CAPTION[sec], re.I)
+        scored = []
+        for k in cells:
+            n = sum(1 for t in terms if hit(k, t) is not None)
+            cap = bool(pat.search(paras[caption[k]].text))
+            if n or cap:
+                scored.append(((cap, n, -k), k))
+        if scored:
+            table_for[sec] = max(scored)[1]
+    def prose(pat):
+        """The first body paragraph (outside every table) that matches, else the first anywhere."""
+        rx = re.compile(pat, re.I)
+        return next((pa.idx for pa in paras if pa.elem is not None and rx.search(pa.text) and table_of(pa.elem) is None),
+                    next((pa.idx for pa in paras if rx.search(pa.text)), None))
+    for f in findings:
+        sec = section_of(f)
+        if f.get('para') is not None:
+            continue
+        if sec is None:
+            lab = (f.get('label') or '').lower(); msg = f.get('msg') or ''
+            key = next((k for k in _ANCHOR_PROSE if lab.startswith(k)), None)
+            if key:
+                f['para'] = prose(_ANCHOR_PROSE[key])            # 'Gladstone–Dale: …', 'the paper states +0.011': the compatibility sentence
+            elif lab == 'cell':
+                m = re.search(r'\ba=(\d+\.\d+)', msg)          # 'cell: a=16.2184, …': the paragraph (or the crystal-data cell) that prints that a
+                if m:
+                    v = m.group(1)
+                    f['para'] = prose(re.escape(v)) if prose(re.escape(v)) is not None else prose(re.escape(v[:v.index('.') + 4]))
+            continue
+        k = table_for.get(sec)
+        para = None
+        for t in [t for t in (f.get('find') or '').split('|') if t]:
+            para = hit(k, t)
+            if para is None:                                     # not in the section's table: any other table's cell
+                para = next((p for k2 in sorted(cells) if k2 != k for p in [hit(k2, t)] if p is not None), None)
+            if para is not None:
+                break
+        if para is None and k is not None:
+            para = caption[k]
+        if para is not None:
+            f['para'] = para
 
 def _ms_cif_for(key, name=''):
     """The .cif of the same mineral in the folder: the same stem, the mineral's name, or the only one."""
@@ -2324,7 +2460,7 @@ def _ms_paper_findings(key, path):
             page = int(m.group(1)) if m else (epma_page if section.startswith('composition') else None)
             if section == 'readers':
                 page = None                                                       # 'readers: table ✓ (p6) · powder ✓ (p9)': a line on every reader, anchored to none
-        kind = 'calcinfo' if head or not _CALC_FLAG.search(s) or '[unverified]' in s or s.startswith('not verifiable') else 'calc'
+        kind = _calc_kind(s, head)
         fkey = 'calc:' + hashlib.sha1(s.encode('utf-8')).hexdigest()[:12]
         # what '? look' highlights on the page: the bond's two labels, or the constituents of a composition line
         find = None
@@ -2339,6 +2475,8 @@ def _ms_paper_findings(key, path):
             find = '|'.join(constituents_of(m.group(1))[:3]) or None if m else None
         out.append({'kind': kind, 'fkey': fkey, 'label': section or 'paper', 'msg': s, 'para': None, 'start': None, 'end': None, 'text': '',
                     'page': page if pdf_name else None, 'pdf': pdf_name, 'find': find})
+    if path.lower().endswith('.docx'):
+        _ms_docx_anchors(path, out)                                  # '? look' lands on the cell in the docx view (a pdf's findings show the page instead)
     return out
 
 @app.route('/api/ms/pdf/<key>/page/<int:n>.png')
