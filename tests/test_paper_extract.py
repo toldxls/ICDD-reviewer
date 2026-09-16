@@ -1940,3 +1940,45 @@ class ValenceSwap(unittest.TestCase):
         # no .cif: the swap reading is not attempted and the lines pass through unchanged
         out, bad = PE._swap_valence(lines, 2, type('S', (), {'sites': []})(), None, {}, '', None, [{'kind': 'grid'}], [], None, 'gh', None)
         self.assertEqual((out, bad), (lines, 2))
+
+
+class PageTextCache(unittest.TestCase):
+    """The page-text cache (paper_extract.set_page_cache): what the readers get from a cached pdf is
+    exactly what they get from MuPDF, a second read comes from the file alone, and the key follows
+    the pdf's content."""
+
+    def setUp(self):
+        import tempfile, shutil
+        self.tmp = tempfile.mkdtemp(prefix='pagecache_'); self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(PE.set_page_cache, None)
+        import pymupdf
+        self.pdf = os.path.join(self.tmp, 'paper.pdf')
+        doc = pymupdf.open()
+        pg = doc.new_page(); pg.insert_text((72, 72), 'Testite, a new mineral. SiO2 40.12 Na2O 10.05 Total 99.9')
+        pg.insert_text((72, 100), 'The empirical formula is Na1.00Si2.00O5.')
+        doc.new_page().insert_text((72, 72), 'Table 2. Powder data. 4.123 100 1 1 0')
+        doc.save(self.pdf); doc.close()
+
+    def test_cached_read_is_the_live_read(self):
+        PE.set_page_cache(None)
+        live_pages, live_text = PE._pages(self.pdf), PE.text_of(self.pdf)
+        cache = os.path.join(self.tmp, 'pages')
+        PE.set_page_cache(cache)                                        # cold: read from MuPDF, written to the cache
+        self.assertEqual((PE._pages(self.pdf), PE.text_of(self.pdf)), (live_pages, live_text))
+        files = os.listdir(cache); self.assertEqual(len(files), 1)
+        PE.set_page_cache(cache)                                        # warm: the memory caches cleared, the file is the source
+        import pymupdf
+        real_open = pymupdf.open
+        pymupdf.open = lambda *a, **k: (_ for _ in ()).throw(AssertionError('the pdf was opened'))
+        try:
+            self.assertEqual((PE._pages(self.pdf), PE.text_of(self.pdf)), (live_pages, live_text))
+        finally:
+            pymupdf.open = real_open
+        # the key is the content: a copy under another name is the same file; an edit is another
+        import shutil
+        copy = os.path.join(self.tmp, 'copy.pdf'); shutil.copy(self.pdf, copy)
+        self.assertEqual(PE._page_cache_file(copy), PE._page_cache_file(self.pdf))
+        with open(copy, 'ab') as f:
+            f.write(b'\n%edited')
+        self.assertNotEqual(PE._page_cache_file(copy), PE._page_cache_file(self.pdf))
+        self.assertTrue(PE._page_texts(self.pdf)[0].text.startswith('Testite'))

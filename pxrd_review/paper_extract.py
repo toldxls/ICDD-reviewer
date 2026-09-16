@@ -18,7 +18,8 @@ filled from the paper and its own calculations re-done its own way:
 Everything is best effort and every value carries the line or sentence it was read from, so the
 reviewer can see why. Nothing here decides — the EPMA / GD / PXRD tools take these as inputs.
 """
-import os, re, sys, json, math, argparse, functools
+import os, re, sys, json, math, argparse, functools, gzip, pickle, hashlib, inspect
+from collections import namedtuple
 from collections import OrderedDict
 
 from pxrd_review import epma as EP
@@ -35,12 +36,13 @@ def page_lines(page, x_lo=None, x_hi=None):
     and grouping its words by y would group a COLUMN, not a row. Such words are turned into their
     own reading frame — the direction of reading becomes +x — and appended after the upright lines,
     marked `rot` and shifted ROT_X to the right so nothing downstream can mix the two frames."""
-    words = page.get_text('words')
+    live = not isinstance(page, PageText)                                # a pymupdf page, or what the cache kept of one
+    words = page.get_text('words') if live else page.words
     words = [w for w in words if (x_lo is None or w[0] >= x_lo) and (x_hi is None or w[2] <= x_hi)]
     words = [w[:4] + (w[4].replace('\xad', ''),) + tuple(w[5:]) for w in words if w[4].replace('\xad', '')]   # soft hyphens are not characters
     upright, turned = [], []
-    dirs = _line_dirs(page) if words else {}
-    W, H = float(page.rect.width), float(page.rect.height)
+    dirs = (_line_dirs(page) if live else page.dirs) if words else {}
+    W, H = (float(page.rect.width), float(page.rect.height)) if live else (page.w, page.h)
     for w in words:
         d = dirs.get((w[5], w[6]), (1.0, 0.0)) if len(w) > 6 else (1.0, 0.0)
         if abs(d[1]) < 0.7:
@@ -242,11 +244,85 @@ def set_pages_reader(fn, mode='fallback'):
     global _pages_reader, _pages_mode
     _pages_reader = fn; _pages_mode = mode
 
+# ----------------------------------------------------------------------------- the page-text cache
+# What MuPDF gives of one page and nothing of the tool's: the plain text, the word boxes, the
+# layout's line directions and the page size. Every reader works from these (page_lines takes a
+# PageText in place of a live page), so a pdf read once need never be laid out again — and since
+# no reader code is in it, no reader edit invalidates it. That is the point: a corpus A/B re-runs
+# every check on every paper by design, but a third of its CPU was MuPDF extracting the same text
+# it extracted the run before.
+PageText = namedtuple('PageText', 'text words dirs w h')
+
+def _page_text(page):
+    return PageText(page.get_text(), page.get_text('words'), _line_dirs(page), float(page.rect.width), float(page.rect.height))
+
+_page_cache_dir = os.environ.get('PXRD_PAGE_CACHE') or None           # the env: a spawned corpus worker imports this module afresh
+try:
+    _DIRS_CODE = hashlib.sha1(inspect.getsource(_line_dirs).encode('utf-8')).hexdigest()[:10]
+except Exception:                                                     # no source (a frozen build): key on the version alone
+    _DIRS_CODE = '0'
+
+def set_page_cache(path):
+    """Keep every pdf's page text on disk under `path` (None: off, the default). Off for the shipped
+    tool — a reviewer reads each paper once — and on for the corpus runs (tools/corpus_paper_extract.py
+    sets it, `--no-cache` for the reference path). $PXRD_PAGE_CACHE does the same for a whole process
+    tree. A file is keyed on the pdf's CONTENT (a copy under another name is the same paper), the
+    PyMuPDF version (its extraction is what is kept) and the source of `_line_dirs` (the one piece of
+    this module inside it); an edited pdf or an upgraded PyMuPDF is simply read again."""
+    global _page_cache_dir
+    _page_cache_dir = os.path.abspath(path) if path else None
+    _page_texts_cached.cache_clear(); _pages_of_pdf.cache_clear(); _text_of.cache_clear()
+
+def _page_cache_file(path):
+    import pymupdf
+    h = hashlib.sha1()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    h.update(('|%s|%s' % (getattr(pymupdf, '__version__', '?'), _DIRS_CODE)).encode('utf-8'))
+    return os.path.join(_page_cache_dir, h.hexdigest()[:24] + '.pkl.gz')
+
+@functools.lru_cache(maxsize=3)
+def _page_texts_cached(path, _stamp):
+    import pymupdf
+    f = None
+    if _page_cache_dir:
+        try:
+            f = _page_cache_file(path)
+            with gzip.open(f, 'rb') as g:
+                pts = pickle.load(g)
+            if isinstance(pts, list) and all(isinstance(p, PageText) for p in pts):
+                return pts
+        except Exception:                                             # no file yet, or an unreadable one: read the pdf
+            pass
+    with pymupdf.open(path) as doc:
+        pts = [_page_text(page) for page in doc]
+    if f:
+        tmp = '%s.%d.tmp' % (f, os.getpid())                          # written whole, then renamed: a worker that reads meanwhile sees the old file or the new, never a half
+        try:
+            os.makedirs(_page_cache_dir, exist_ok=True)
+            with gzip.open(tmp, 'wb', compresslevel=1) as g:
+                pickle.dump(pts, g, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp, f)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    return pts
+
+def _page_texts(path):
+    """[PageText] for every page of a pdf — from memory for the last few documents, from the page
+    cache when one is set, else from MuPDF (and into the cache)."""
+    try:
+        st = os.stat(path); stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    return _page_texts_cached(path, stamp)
+
 @functools.lru_cache(maxsize=3)
 def _pages_of_pdf(path, _stamp):
-    import pymupdf
-    with pymupdf.open(path) as doc:
-        return [page_lines(page) for page in doc]
+    return [page_lines(pt) for pt in _page_texts(path)]
 
 
 def _pages(path):
@@ -290,9 +366,7 @@ def _text_of(pdf, _stamp):
                     cells.append(' '.join(_docx_cell_text(c._tc) for c in row.cells))
         t = ' '.join(parts + cells).replace('þ', '+')                   # prose first: the sentence readers prefer it to a table's footnote
     else:
-        import pymupdf
-        with pymupdf.open(pdf) as doc:
-            t = ' '.join(page.get_text() for page in doc).replace('þ', '+')   # a journal font prints '+' as 'þ'
+        t = ' '.join(pt.text for pt in _page_texts(pdf)).replace('þ', '+')   # a journal font prints '+' as 'þ'
     t = t.replace('\xad', '')                             # a soft hyphen set before every oxide name ('\xadNa2O 3.79', Springer) is not a character
     t = re.sub(r'-\n(?=[a-z])', '', t)                     # de-hyphenate line breaks
     t = re.sub(r'(?<=[A-Za-z\)])\s*¼\s*(?=\d)', ' = ', t)   # a journal font that prints '=' as '¼' ("O ¼ 32")
@@ -4629,9 +4703,7 @@ def _site_map_by_bonds(path, st, known, tol=0.0015):
     if not path.lower().endswith('.pdf'):
         return {}
     try:
-        import pymupdf
-        with pymupdf.open(path) as doc:
-            text = '\n'.join(pg.get_text() for pg in doc)
+        text = '\n'.join(pt.text for pt in _page_texts(path))
     except Exception:
         return {}
     printed = {}

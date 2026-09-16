@@ -16,6 +16,13 @@ The papers are independent, so this is wall-clock only: results are folded in JO
 every output file is byte-identical to a serial run. That equality is the acceptance test for the flag, and it
 matters because these files exist to be diffed against each other.
 
+The page text is cached on disk (`<data home>/.cache/pages/`, see paper_extract.set_page_cache): MuPDF's
+extraction of each pdf is kept keyed on the file's content and the PyMuPDF version, and no reader code is in
+it, so a reader edit never invalidates it and the run after the first reads no pdf at all. `--no-cache` is
+the reference path (the outputs must be byte-identical either way — that is the acceptance test for the
+cache, as serial-vs-parallel is for --jobs). Measured 2026-09-16, 150 papers, 11 workers: 16.4 s uncached,
+16.3 s filling the cache, 11.1 s from it (CPU 142 s -> 103 s); 24 MB on disk for 150 papers.
+
 --baseline diffs this run's per-paper record (paper_checks_papers<tag>.json, written every run) against an
 earlier run's: the readers whose status changed, paper by paper. That is the A/B for a reader change — the
 baseline is the record of the old code, so no worktree or module copy is needed.
@@ -358,7 +365,15 @@ if __name__ == '__main__':
     ap.add_argument('--only', help='only papers whose file name contains this')
     ap.add_argument('--papers', help='a file with one pdf basename per line (or a comma list): only those papers — a subset run')
     ap.add_argument('--jobs', type=int, default=0, help='worker processes: 0 (default) = every core; 1 = serial, in-process')
+    ap.add_argument('--no-cache', action='store_true', help='read every pdf with MuPDF instead of the page-text cache (the reference path)')
     a = ap.parse_args()
+    if a.no_cache:
+        os.environ.pop('PXRD_PAGE_CACHE', None); PE.set_page_cache(None)
+    else:
+        from pxrd_review import paths
+        cache = os.environ.get('PXRD_PAGE_CACHE') or os.path.join(paths.cache_dir(), 'pages')
+        os.environ['PXRD_PAGE_CACHE'] = cache; PE.set_page_cache(cache)   # the env reaches the spawned workers; the call, the serial path
+        sys.stderr.write('page-text cache: %s (%d files)\n' % (cache, len(os.listdir(cache)) if os.path.isdir(cache) else 0))
     subset = None
     if a.papers:
         subset = set(open(a.papers, encoding='utf-8').read().split()) if os.path.exists(a.papers) else set(x.strip() for x in a.papers.split(',') if x.strip())

@@ -47,6 +47,16 @@ package version in `pyproject.toml`.
   the two. No change needed.
 
 ### Changed
+- **A page-text cache for the corpus runs** (`paper_extract.set_page_cache`, `$PXRD_PAGE_CACHE`;
+  `tools/corpus_paper_extract.py` and `tools/seed_faults.py` set it, `--no-cache` is the reference
+  path). What MuPDF gives of each page — the text, the word boxes, the layout's line directions, the
+  size — is kept on disk keyed on the pdf's content, the PyMuPDF version and the one piece of reader
+  code inside it (`_line_dirs`); `page_lines` reads a cached page as it reads a live one. No reader
+  code is in the key, so a reader edit never invalidates it: a corpus A/B re-runs every check on
+  every paper by design, but a third of its CPU was extracting the same text as the run before. Off
+  for the shipped tool, which reads each paper once. Outputs byte-identical cached, cold and
+  uncached (the acceptance test); 150 papers at 11 workers: 16.4 s uncached, 11.1 s from the cache
+  (CPU 142 s → 103 s), filling it costs nothing extra; 24 MB on disk per 150 papers.
 - **Corpus runs, measured.** 150 papers on an 11-core machine: 32 s at 5 workers, 24 s at 8, 20 s at
   11 — the harness's default cap of 8 cost 15 % and is gone (every core). The per-paper CPU (~1.2 s)
   is the cost: a third in MuPDF text extraction, a third in the analytical-table reader, a fifth

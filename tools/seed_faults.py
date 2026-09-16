@@ -344,6 +344,9 @@ if __name__ == '__main__':
     ap.add_argument('--papers', help='a file with one pdf basename per line (or a comma list)')
     ap.add_argument('--jobs', type=int, default=0, help='worker processes: 0 (default) = the cores, capped at 8')
     a = ap.parse_args()
+    from pxrd_review import paths
+    cache = os.environ.get('PXRD_PAGE_CACHE') or os.path.join(paths.cache_dir(), 'pages')   # the corpus tool's page-text cache (paper_extract.set_page_cache)
+    os.environ['PXRD_PAGE_CACHE'] = cache; PE.set_page_cache(cache)
     subset = None
     if a.papers:
         subset = set(open(a.papers, encoding='utf-8').read().split()) if os.path.exists(a.papers) else set(x.strip() for x in a.papers.split(',') if x.strip())
