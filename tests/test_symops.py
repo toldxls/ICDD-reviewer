@@ -164,3 +164,40 @@ class SystematicAbsences(unittest.TestCase):
             self.assertEqual(SO.absent(SO.lookup(sym)[0], hkl), expect, (sym, hkl))
         self.assertEqual(SO.absences('C2/c', [(1, 0, 0), (1, 1, 0), (0, 0, 3), (2, 0, 0)]), [(1, 0, 0), (0, 0, 3)])
         self.assertEqual(SO.absences('Xyz', [(1, 0, 0)]), [])
+
+
+class SettingVariants(unittest.TestCase):
+    """`setting_variants` keeps the operator lists of the setting a symbol NAMES (audit
+    2026-09-16 pm): the table keys every setting of a group under one symbol, and a condition
+    intersected over all of them forbade nothing in P21/c and only h00/0k0/00l in C2/c."""
+
+    def test_the_setting_the_symbol_names(self):
+        from pxrd_review import symops as SO
+        self.assertEqual(len(SO.setting_variants('P21/c')), 1); self.assertEqual(len(SO.lookup('P21/c')), 9)
+        self.assertEqual(SO.absences('P21/c', [(0, 1, 0), (1, 0, 1), (1, 0, 0), (0, 0, 1), (1, 1, 1)]), [(0, 1, 0), (1, 0, 1), (0, 0, 1)])   # 0k0 k odd, h0l l odd (00l among them)
+        self.assertEqual(SO.absences('P21/n', [(1, 0, 1), (1, 0, 2), (0, 1, 0)]), [(1, 0, 2), (0, 1, 0)])
+        self.assertEqual(SO.absences('C2/c', [(1, 0, 1), (2, 0, 1), (1, 1, 0), (0, 1, 0), (2, 0, 2)]), [(1, 0, 1), (2, 0, 1), (0, 1, 0)])
+        self.assertEqual(SO.absences('I2/a', [(1, 0, 1), (1, 0, 0), (1, 1, 1)]), [(1, 0, 1), (1, 0, 0), (1, 1, 1)])
+        self.assertEqual(SO.absences('C2/m', [(1, 0, 0), (2, 1, 0), (1, 1, 0)]), [(1, 0, 0), (2, 1, 0)])
+        self.assertEqual(SO.absences('P21', [(0, 1, 0), (0, 2, 0), (1, 0, 0)]), [(0, 1, 0)])
+        # 'P21/b' names unique axis a OR c: both readings stay, and only what both forbid is reported
+        self.assertEqual(len(SO.setting_variants('P21/b')), 2)
+        self.assertEqual(SO.absences('P21/b', [(0, 1, 0), (0, 0, 1), (1, 0, 0)]), [(0, 1, 0)])
+        # a symbol with one setting, or one this does not read, is untouched
+        self.assertEqual(SO.setting_variants('Pnma'), SO.lookup('Pnma'))
+        self.assertEqual(len(SO.setting_variants('Fd-3m')), len(SO.lookup('Fd-3m')))
+        self.assertEqual(SO.setting_variants('Xyz'), [])
+
+    def test_the_abstract_names_its_own_symbol_not_a_relatives(self):
+        from pxrd_review import symops as SO
+        own = SO.find_own_in_text
+        self.assertEqual(own("Xenophyllite is triclinic, P1 or P-1, a 9.643(6), b 10.1, c 12.2 Å.", 'Xenophyllite')[0], 'P1')
+        self.assertEqual(own("The mineral is trigonal, R3m, with a = 10.7527(7), c = 4.5 Å.", 'Anything')[0], 'R3M')
+        self.assertEqual(own("Testite, ideally NaCaPO4, is monoclinic, space group P21/c, a = 5.1, b = 6.2, c = 7.3 Å.", 'Testite')[0], 'P21/C')
+        # the mineral named beside a RELATIVE's symbol is not the subject of that symbol
+        self.assertIsNone(own("Testite is a member of the alluaudite group, whose members are monoclinic, C2/c, a = 12.0, b = 12.5, c = 6.4 Å. "
+                              "Its structure was solved in space group P-1 with a = 9.643(6), b = 10.1, c = 12.2 Å.", 'Testite')[0])
+        self.assertIsNone(own("Testite, a new mineral, is related to sarcopside (space group P21/c, a 10.4, b 4.7, c 6.0). "
+                              "Testite is triclinic, space group P-1, a 9.643(6), b 10.1, c 12.2.", 'Testite')[0])
+        self.assertIsNone(own("The hydroxyl analogue of tobermorite (space group B11m, a 6.7, b 7.4, c 22.7). "
+                              "Hydroxylgugiaite is orthorhombic, space group Pnma, a 5.1, b 6.2, c 7.3.", 'Hydroxylgugiaite')[0])

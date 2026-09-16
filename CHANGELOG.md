@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.9.0](#090--2026-09-16) | 16 Sep | Three entry checks from the operators and the lattice: a reflection the space group forbids (`symops.absent`, the condition derived from the operators of the setting the symbol names), the same lattice in another setting is no discrepancy (Niggli reduction, `lattice.py`), the entry's own indices against the .pdf and its own Gladstone–Dale; gauntlet rounds 7–8; the recall inversion; a third adversarial audit — five defects fixed, one of them a half-read coordinates table verified at flag grade |
 | [0.8.2](#082--2026-09-16) | 16 Sep | Recall re-measured (unchanged since 0.6.0); coordinates round 6 on the whole corpus — displacement tables no longer read as sites, a bond table's name for a split site found; the composition reds hand-checked against the papers: three of thirteen were the tool's, fixed, the other nine now say which oxide form the arithmetic used; '? look' lands on the paper for every finding; corpus runs a third cheaper |
 | [0.8.1](#081--2026-09-16) | 16 Sep | A second adversarial audit, of the 0.7.2 fixes and the 0.8.0 checks, over the whole corpus: eight defects and fifteen edge classes fixed — a biaxial (−) entry flagged as uniaxial, a bond table lost to its page's font, the manuscript '? look' landing in the wrong table, two findings for one fault |
 | [0.8.0](#080--2026-09-14) | 14 Sep | Entry checks that read the entry against itself and against the paper, from a human review of 2028 Part 2: formula and analysis fields, Xtl Dx vs Dx, the optics field, every strongest line, a reflection d the .pdf never prints — every corpus flag a real defect; case alone no longer a vocabulary fault |
@@ -24,7 +25,14 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
-## [Unreleased]
+## [0.9.0] — 2026-09-16
+
+The evening of 0.8.2. Three checks that need no table of conditions: the reflection conditions of a space
+group derived from its operators, a lattice reduced to the one cell it has whatever setting a source chose,
+and the entry's optics against the paper and its own Gladstone–Dale. Then the day's commits audited a third
+time by three auditors with crafted inputs — five defects fixed the same evening, measured against a baseline
+snapshotted before any edit. Unit suite 421, entries regression 336 PASS, corpus A/B 1,130 papers: five
+records moved, every one a false 'agrees' removed.
 
 ### Added
 - **Reflections the space group forbids** (`check30_extinctions`, `symops.absent`/`absences`): the
@@ -46,6 +54,43 @@ package version in `pyproject.toml`.
   agreeing (the density or a wt%, or the paper's constants), or 'poor' where the paper states nothing.
 
 ### Fixed
+- **A third adversarial audit (2026-09-16 pm), of the 0.8.1 and 0.8.2 commits and the checks above**, three
+  auditors with crafted inputs; five defects fixed, each with a unit test, measured against a baseline snapshotted
+  before any edit (`review_out/paper_checks_papers{aud3base,aud3fix}.json`, 1,130 papers): five records moved, every
+  one a false 'agrees' the first fix removes (three coordinates tables read in part or shared with a second
+  polytype, and the two bond-valence checks that hung on them); no other reader status changed. Unit suite 421,
+  entries regression 336 PASS.
+  - **A coordinates table read in PART could be verified 'by bonds' against the sites it never held**, and hand its
+    half structure to the bond-valence check at FLAG grade. `paper_structure._loose_keys` gave a numbered bond label
+    ('O1') the bare element as a last name, so it reached every O site — a bond table naming O1–O5 scored 5 of 5
+    against a table holding only O10–O12; on a corpus paper with every second anion site removed the gate went from
+    False to True with all 20 bonds to the missing sites 'reproduced'. The bare key is now the SITE's only (a bond
+    table's bare 'Al' still finds Al2); a numbered query that names no site is not compared.
+  - **The extinction check was blind for P21/c, C2/m, P21 and most of C2/c.** `symops.absences` intersected the
+    condition over every operator list the table keys under a symbol — and the table keys every SETTING of a group
+    under it (the P21/n and unique-axis-a operators of .cif files labelled P21/c; the A- and I-centred settings under
+    C2/c), so nothing was forbidden in P21/c and only h00/0k0/00l in C2/c. `symops.setting_variants` keeps the
+    lists that ARE the setting the symbol names — the pure translations of its lattice letter, and for a short
+    monoclinic symbol a two-fold along the unique axis with the screw component written and a mirror across it with
+    the glide translation written, origin-free properties of the operators; a genuinely ambiguous short symbol
+    ('P21/b': unique axis a or c) keeps both readings and reports what both forbid. Still 0 findings on the 657
+    corpus entries with a space group and an indexed list; on the 87 fixture entries with P21/c substituted for
+    their symbol the old rule caught none, the new rule 56 (28 flags, 28 notes).
+  - **A wrong optic sign drew two flags, the second blaming the indices.** `_entry_mean_n` picked ω by the sign;
+    ICDD writes the first index as ω and Q as ε (65 of 66 corpus uniaxial fields), so a wrong sign moved the
+    entry's mean by (ε − ω)/3 and check31 called it a mistranscribed index. ω is the first index written; a sign
+    that contradicts the order is check24's finding and check31 says nothing.
+  - **The abstract's own symbol could be a relative's.** `symops.find_own_in_text` took any sentence naming the
+    mineral and a cell: 'Testite is a member of the alluaudite group, whose members are monoclinic, C2/c, a = …'
+    and 'is related to sarcopside (space group P21/c, a 10.4 …)' returned the relative's symbol, overriding the
+    first-phrase choice that had it right. The mineral must be the subject: named before the symbol, within a
+    clause, with no relation word between (member, group, related, analogue, isostructural, similar, cf …).
+  - **The reduced-cell compare could not see Mindat's cell in another setting.** `check22` passed the docx
+    symbol's centring letter for Mindat's cell (Mindat's symbol is an id the tool has no table for) and read
+    Mindat's γ = 0 as 90°, so an I- against a C-setting and a hexagonal against a rhombohedral cell always fell
+    back to the old discrepancy note. Mindat's cell is now tried under every centring its metric allows, its lost
+    γ is 120° when the entry's symbol is hexagonal or trigonal, its c is a for a cubic cell, and an R symbol on a
+    cell already on rhombohedral axes is read as primitive on either side.
 - The coordinates reader and the bond reader, rounds 7 and 8 of the gauntlet, and the recall inversion
   (see `review_out/gauntlet_log.md`): coords 356 → 368 of 554 verified on the corpus; a 20 % wt% fault
   caught 23 → 35 % of the time.

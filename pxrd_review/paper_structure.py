@@ -769,8 +769,8 @@ def _loose_keys(label, query=False):
         out.append(kind + m.group(1) + m.group(2).lstrip('0'))                # 'A1' answers to "A1'" — its own family only
         if not query or m.group(1) == 'Me':
             out.append(kind + m.group(2).lstrip('0'))                        # and, as a site of the coordinates table, to the element-numbered 'Bi18' of the bond table; never the other way (a bond table's 'A1' is not the coordinates' M1 — 77072) — except 'Me4', the generic metal, which names the cation numbered 4 whatever its element (jasrouxite)
-    if bare:
-        out.append(bare)
+    if bare and not query:
+        out.append(bare)                                                   # the site's key only: a numbered QUERY ('O1') must not reach every O site — read in part, a coordinates table then verified 'by bonds' against the sites it never held (audit 2026-09-16 pm)
     return out
 
 

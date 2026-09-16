@@ -563,9 +563,11 @@ class ExtinctionsAndEntryOptics(unittest.TestCase):
 
     def test_the_mean_index_of_the_entry(self):
         self.assertAlmostEqual(X._entry_mean_n('A=1.610(3), B=1.620(3), Q=1.644(3), Sign=+, 2V(calc)66.5°'), (1.610 + 1.620 + 1.644) / 3)
-        self.assertAlmostEqual(X._entry_mean_n('B=1.668(5), Q=1.716(5), Sign=-'), (2 * 1.716 + 1.668) / 3)   # uniaxial (−): ω is the larger
+        self.assertAlmostEqual(X._entry_mean_n('B=1.716(5), Q=1.668(5), Sign=-'), (2 * 1.716 + 1.668) / 3)   # uniaxial (−): B is ω, the larger
+        self.assertIsNone(X._entry_mean_n('B=1.668(5), Q=1.716(5), Sign=-'))                                # the sign contradicts B=ω < Q=ε: check24's finding, not an index
         self.assertAlmostEqual(X._entry_mean_n('A=1.640(3), Q=1.662(3), Sign=+'), (2 * 1.640 + 1.662) / 3)
-        self.assertAlmostEqual(X._entry_mean_n('A=1.640(3), Q=1.662(3).'), (1.640 + 1.662) / 2)             # no sign: the plain mean
+        self.assertAlmostEqual(X._entry_mean_n('A=1.640(3), Q=1.662(3).'), (2 * 1.640 + 1.662) / 3)         # no sign: the first index is still ω
+        self.assertAlmostEqual(X._entry_mean_n('A=1.640(3), B=1.662(3).'), (1.640 + 1.662) / 2)             # no ε at all: the plain mean
         self.assertIsNone(X._entry_mean_n('Sign=+')); self.assertIsNone(X._entry_mean_n(''))
 
     def test_indices_against_the_paper(self):
@@ -577,3 +579,47 @@ class ExtinctionsAndEntryOptics(unittest.TestCase):
         self.assertEqual([x.sev for x in f], ['flag']); self.assertIn('mistranscribed', f[0].msg)
         two = other + ' The associated mineral is biaxial (−), α = 1.700, β = 1.710, γ = 1.720.'
         self.assertEqual([x for x in X.check31_gd_entry(e, two) if x.sev == 'flag'], [])           # two sets of indices in the paper: not compared
+
+
+class EntryOpticsAndSettingsAfterTheAudit(unittest.TestCase):
+    """Audit 2026-09-16 pm: a wrong sign is one finding (check24's), the extinction check sees
+    P21/c, and check22 recognises Mindat's cell in another setting."""
+
+    def test_a_wrong_sign_is_not_also_a_mistranscribed_index(self):
+        e = entry(optical='B=1.600(3), Q=1.660(3), Sign=-')
+        text = 'Optically the mineral is uniaxial (+), ω = 1.600(3), ε = 1.660(3). Sample.'
+        self.assertEqual(len(msgs(X.check24_optical_2v(e, text))), 1)
+        self.assertEqual(msgs(X.check31_gd_entry(e, text)), [])
+        e = entry(optical='B=1.660(3), Q=1.600(3), Sign=-')                       # right sign, an index off: the flag stands
+        f = msgs(X.check31_gd_entry(e, 'Optically the mineral is uniaxial (−), ω = 1.700(3), ε = 1.640(3). Sample.'))
+        self.assertEqual(len(f), 1); self.assertIn('mistranscribed', f[0])
+
+    def test_a_glide_absence_in_p21_c(self):
+        allowed = [('4.0', '100', '1', '1', '0'), ('3.0', '50', '0', '0', '2'), ('2.5', '40', '2', '0', '0'), ('2.0', '30', '1', '1', '2'), ('1.8', '20', '0', '2', '0'), ('1.5', '10', '1', '0', '2')]
+        e = entry(); e.space_group = 'P21/c'; e.refl = allowed; e.cell['SG'] = 'P21/c'
+        self.assertEqual(X.check30_extinctions(e), [])
+        e.refl = allowed + [('3.3', '15', '0', '1', '0'), ('2.9', '15', '1', '0', '1')]     # 0k0 k odd, h0l l odd
+        f = X.check30_extinctions(e)
+        self.assertEqual([x.sev for x in f], ['flag']); self.assertIn('0 1 0', f[0].msg); self.assertIn('1 0 1', f[0].msg)
+
+    def test_mindat_in_another_setting_is_the_same_lattice(self):
+        from unittest import mock
+        e = type('E', (), {'name': 'testite', 'primary': '', 'subfiles': [], 'space_group': 'C2/c', 'formulas': {}, 'comments': {}, 'instr': {}, 'refl': [],
+                           'cell': {'a': '12.0', 'b': '5.0', 'c': '9.0', 'α': '90', 'β': '100', 'γ': '90', 'SG': 'C2/c'}})()
+        cif = {'cell': {'a': '12.0', 'b': '5.0', 'c': '9.0', 'α': '90', 'β': '100', 'γ': '90', 'SG': 'C2/c'}}
+        # the I-setting of the same lattice (a_I = a_C + c_C), Mindat's symbol an id and its angles as it stores them
+        same = {'a': 13.69, 'b': 5.0, 'c': 9.0, 'al': 90.0, 'be': 120.3, 'ga': 90.0, 'sg': 15}
+        with mock.patch.object(X, 'mindat_struct', lambda n, exact=False: None if exact else same):
+            f = [x for x in X.check22_cross_sources(e, cif, None) if x.code == 'mindat_fix']
+        self.assertEqual(len(f), 1); self.assertIn('another setting', f[0].msg)
+        other = {'a': 13.69, 'b': 5.0, 'c': 9.6, 'al': 90.0, 'be': 120.3, 'ga': 90.0, 'sg': 15}
+        with mock.patch.object(X, 'mindat_struct', lambda n, exact=False: None if exact else other):
+            f = [x for x in X.check22_cross_sources(e, cif, None) if x.code == 'mindat_fix']
+        self.assertEqual(len(f), 1); self.assertIn('verify which is correct', f[0].msg)
+        # a hexagonal cell Mindat stores with b = 0 and γ = 0, against the same lattice on rhombohedral axes in the docx
+        e.cell = {'a': '6.36', 'b': '6.36', 'c': '6.36', 'α': '46.3', 'β': '46.3', 'γ': '46.3', 'SG': 'R-3m'}; e.space_group = 'R-3m'
+        cif = {'cell': dict(e.cell)}
+        hexa = {'a': 5.0, 'b': 0.0, 'c': 17.0, 'al': 0.0, 'be': 0.0, 'ga': 0.0, 'sg': 166}
+        with mock.patch.object(X, 'mindat_struct', lambda n, exact=False: None if exact else hexa):
+            f = [x for x in X.check22_cross_sources(e, cif, None) if x.code == 'mindat_fix']
+        self.assertEqual([('another setting' in x.msg) for x in f], [True])

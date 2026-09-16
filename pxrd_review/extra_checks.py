@@ -3271,22 +3271,42 @@ def check22_cross_sources(e, cif_data, dft_data):
     # exchanged. Before either side is called wrong, the reduced cells are compared (`lattice`,
     # 2026-09-16): one lattice is a note on the setting, never a discrepancy.
     from pxrd_review import lattice as LAT
-    def _six(cell, letter_from=None):
+    def _six(cell):
         vals = [(_val(cell.get(k)) if not isinstance(cell.get(k), (int, float)) else float(cell.get(k)) or None) for k in ('a', 'b', 'c', 'α', 'β', 'γ')]
-        if vals[0] and vals[2]:
-            vals[1] = vals[1] or vals[0]
+        if vals[0]:
+            vals[1] = vals[1] or vals[0]; vals[2] = vals[2] or vals[1]          # Mindat writes b = 0 for a = b, c = 0 for a cubic cell
             for i in (3, 4, 5):
                 vals[i] = vals[i] or 90.0
             return tuple(vals)
         return None
     docx6 = _six(e.cell); sg_docx = (e.space_group or (e.cell or {}).get('SG') or '')
     cif6 = _six((cif_data or {}).get('cell', {})) if cif_data else None; sg_cif = ((cif_data or {}).get('cell') or {}).get('SG') or (cif_data or {}).get('SG') or sg_docx
-    mind6 = _six({'a': M['a'], 'b': M['b'], 'c': M['c'], 'α': M.get('al'), 'β': M.get('be'), 'γ': M.get('ga')}) if M else None
-    def _same(c1, c2, s1, s2):
-        return bool(c1 and c2 and LAT.same_lattice(c1, c2, LAT.centring_of(s1), LAT.centring_of(s2), tol=SAME))
+    # Mindat stores γ = 0 for a uniaxial cell: the symbol's crystal system says which 0 that is
+    from pxrd_review import symops as SO
+    uniaxial = SO.crystal_system(sg_docx) in ('hexagonal', 'trigonal') if sg_docx else (docx6 is not None and abs(docx6[5] - 120) < 0.5)
+    m_ga = (M.get('ga') or (120.0 if uniaxial and (not M['b'] or abs(M['a'] - M['b']) < 1e-6) else None)) if M else None
+    mind6 = _six({'a': M['a'], 'b': M['b'], 'c': M['c'], 'α': M.get('al'), 'β': M.get('be'), 'γ': m_ga}) if M else None
+    def _letter(sym, c6):
+        """The centring the reduction must undo: an R symbol on a cell already on rhombohedral axes
+        (a = b = c, α = β = γ ≠ 90) is primitive as written."""
+        L = LAT.centring_of(sym)
+        if L == 'R' and c6 and max(c6[:3]) - min(c6[:3]) <= 1e-3 * c6[0] and max(c6[3:]) - min(c6[3:]) < 0.05 and abs(c6[3] - 90) > 0.5:
+            return 'P'
+        return L
+    def _same(c1, c2, s1, s2=None):
+        """One lattice: `s2` None = the other source names no symbol the tool can read (Mindat's is an
+        id), so its cell is tried under every centring a cell of its metric may carry."""
+        if not (c1 and c2):
+            return False
+        if s2:
+            letters = [_letter(s2, c2)]
+        else:
+            hexagonal = abs(c2[0] - c2[1]) <= 1e-6 * c2[0] and abs(c2[5] - 120) < 0.5
+            letters = list('PABCIF') + (['R'] if hexagonal else [])
+        return any(LAT.same_lattice(c1, c2, _letter(s1, c1), L, tol=SAME) for L in letters)
     if docx and cif and mind and _len_maxdiff(docx, cif) < SAME \
             and _len_maxdiff(docx, mind) >= SAME and not _len_rational(docx, mind):
-        if _same(docx6, mind6, sg_docx, sg_docx):
+        if _same(docx6, mind6, sg_docx):
             out.append(Finding('mindat_fix', 'note',
                        "Mindat lists the cell in another setting (a,b,c %s against the docx %s): the same lattice — no discrepancy."
                        % (fmt(mind), fmt(docx)), None))
@@ -3671,7 +3691,7 @@ def check30_extinctions(e, text=None):
     if not sg or not e.refl:
         return out
     from pxrd_review import symops as SO
-    variants = SO.lookup(sg)
+    variants = SO.setting_variants(sg)                   # the setting the symbol names, not every setting of its group
     if not variants:
         return out
     indexed = 0; bad = []
@@ -3701,8 +3721,10 @@ def check30_extinctions(e, text=None):
 # ----------------------------------------------------------------------------- 31. Gladstone–Dale on the entry's own fields
 def _entry_mean_n(od):
     """The mean refractive index of an Optical Data field: (A+B+Q)/3 for a biaxial entry;
-    (2ω+ε)/3 for a uniaxial one written with two indices, ω the one the sign puts it at
-    (positive: ε > ω); their plain mean when the sign is not given."""
+    (2ω+ε)/3 for a uniaxial one written with two indices — ω is the FIRST index written and
+    ε is Q (ICDD's convention, B=ω / Q=ε, which 65 of 66 corpus fields keep) — and None when
+    the sign written contradicts that order (uniaxial (+) needs ε > ω): that is a sign or a
+    swap, check24's finding, and read as an index it drew a second flag (audit 2026-09-16 pm)."""
     QUAL = r'(?:\([^)]*\))?'
     idx = {}
     for k, v in re.findall(r'\b([ABQ])' + QUAL + r'\s*=\s*(\d+\.\d+)', od or ''):
@@ -3712,14 +3734,16 @@ def _entry_mean_n(od):
             pass
     if all(k in idx for k in 'ABQ'):
         return (idx['A'] + idx['B'] + idx['Q']) / 3.0
-    two = [idx[k] for k in 'ABQ' if k in idx]
+    two = [k for k in 'ABQ' if k in idx]
     if len(two) != 2:
         return None
+    if 'Q' not in idx:
+        return (idx['A'] + idx['B']) / 2.0                     # no ε written: the plain mean
+    w, e = idx[two[0]], idx['Q']
     ms = re.search(r'Sign\s*=\s*([+\-−–—])', od)
-    if not ms:
-        return sum(two) / 2.0
-    lo, hi = sorted(two)
-    return (2 * lo + hi) / 3.0 if ms.group(1) == '+' else (2 * hi + lo) / 3.0
+    if ms and (ms.group(1) == '+') != (e > w):
+        return None
+    return (2 * w + e) / 3.0
 
 
 def check31_gd_entry(e, text=None):
@@ -3755,7 +3779,7 @@ def check31_gd_entry(e, text=None):
     if n_paper and not (opt or {}).get('n_calc') and one_set:
         QUAL = r'(?:\([^)]*\))?'
         n_idx = len(re.findall(r'\b([ABQ])' + QUAL + r'\s*=\s*\d+\.\d+', od))
-        tol = 0.006 if (n_idx == 3 or re.search(r'Sign\s*=', od)) else 0.02      # two indices and no sign: ω is not known, the plain mean may be off by (ε−ω)/6
+        tol = 0.006 if n_idx == 3 or 'Q' in re.findall(r'\b([ABQ])' + QUAL + r'\s*=', od) else 0.02   # A and B without Q: no ε, the plain mean may be off by (ε−ω)/6
         n_agrees = abs(n - n_paper) <= tol
         if not n_agrees and abs(n - n_paper) > 2 * tol:
             out.append(Finding('optical', 'flag',

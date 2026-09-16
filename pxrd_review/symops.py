@@ -225,6 +225,8 @@ def find_all_in_text(text, window=90):
 _OWN = re.compile(r'\b(?:the|this) (?:new )?mineral (?:is|was)\b', re.I)
 _CELL_STMT = re.compile(r'\ba\s*[=:]?\s*\d{1,2}\.\d')
 _SENT_END = re.compile(r'\.\s+(?=[A-Z])')
+_RELATED = re.compile(r'\b(?:related|group|members?|analog(?:ue)?s?|isostructural|isotypic|similar|like|family|series|supergroup|'
+                      r'dimorph(?:ous)?|polymorph(?:ous)?|polytype|structure of|compared?|cf|such as|including|other|associated)\b', re.I)
 
 
 def find_own_in_text(text, mineral, window=90):
@@ -254,7 +256,28 @@ def find_own_in_text(text, mineral, window=90):
         stop = _SENT_END.search(text, m.end())
         s0, s1 = max(text.rfind('. ', 0, m.start()), 0), (stop.start() + 1 if stop else len(text))
         sent = text[s0:s1]
-        named = (root and root in re.sub(r'[^a-z]', '', sent.lower())) or _OWN.search(sent)
+        # the mineral is the sentence's SUBJECT: named before the symbol, within a clause, with no
+        # relation word between — 'Testite is a member of the alluaudite group, whose members are
+        # monoclinic, C2/c' and 'is related to sarcopside (space group P21/c' name a relative's
+        # symbol beside the mineral's name (audit 2026-09-16 pm)
+        head = text[s0:m.start()]
+        flat_head = re.sub(r'[^a-z]', '', head.lower())
+        at = None
+        if root and root in flat_head:
+            # the span after the LAST mention, in the raw text: walk the letters back to it
+            n_letters = flat_head.rfind(root) + len(root)
+            cnt = 0
+            for j, ch in enumerate(head):
+                if ch.isalpha():
+                    cnt += 1
+                    if cnt == n_letters:
+                        at = j + 1
+                        break
+        own = list(_OWN.finditer(head))
+        if own and (at is None or own[-1].end() > at):
+            at = own[-1].end()
+        span = head[at:] if at is not None else None
+        named = span is not None and len(span) <= 120 and not _RELATED.search(span)
         if named and _CELL_STMT.search(text[m.start():min(s1, m.start() + 200)]):
             return sym, phrase
         return None, ''                     # only the first symbol statement of the text may be the abstract's
@@ -306,12 +329,84 @@ def absent(ops, hkl):
     return False
 
 
-def absences(symbol, hkls):
-    """[hkl, …] of the given indices that the space group forbids — under EVERY setting the
-    symbol has in the table (a nonstandard setting the writer meant is not a mis-index), so an
-    index is reported only when no known setting of the symbol allows it. [] when the symbol is
-    unknown, or the indices are all allowed."""
+_IDENT = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+_CENTRING_T = {'P': set(), 'A': {(0, 0.5, 0.5)}, 'B': {(0.5, 0, 0.5)}, 'C': {(0.5, 0.5, 0)}, 'I': {(0.5, 0.5, 0.5)},
+               'F': {(0, 0.5, 0.5), (0.5, 0, 0.5), (0.5, 0.5, 0)}, 'R': {(2 / 3, 1 / 3, 1 / 3), (1 / 3, 2 / 3, 2 / 3)}}
+_MONO = re.compile(r'^([PABCIF])(2|21)?/?([MABCN])?$')
+
+
+def _r3(x):
+    return round(x % 1.0, 3) % 1.0
+
+
+def setting_variants(symbol):
+    """The operator lists of `lookup(symbol)` that are the SETTING the symbol names — the table
+    keys every setting of a group under one symbol (a .cif labelled P21/c whose operators are
+    P21/n's; 'C2/c' holding the A- and I-centred settings too), which is right for reading a
+    paper's symbol but wrong for a reflection condition: a condition intersected over every
+    setting forbade nothing in P21/c and only h00/0k0/00l in C2/c (audit 2026-09-16). A variant
+    is kept when its pure translations are the lattice letter's, and, for a short monoclinic
+    symbol (unique axis b, the standard), when a two-fold axis lies along b with the screw
+    component written ('21': ½), and a mirror perpendicular to b carries the glide translation
+    written ('c': (0, ½), 'n': (½, ½), 'm': none) — origin-free properties of the operators.
+    Every variant when none passes (a symbol shape this does not read), so the check is never
+    worse than the every-setting rule."""
     variants = lookup(symbol)
+    if len(variants) <= 1:
+        return variants
+    n = normalize(symbol)
+    letter = n[:1] if n[:1] in _CENTRING_T else None
+    if not letter:
+        return variants
+    want_t = {tuple(_r3(x) for x in t) for t in _CENTRING_T[letter]}
+    out = []
+    for ops in variants:
+        pure = {tuple(_r3(x) for x in t) for rot, t in ops if [list(r) for r in rot] == _IDENT and any(_r3(x) for x in t)}
+        if pure != want_t:
+            continue
+        m = _MONO.match(n)
+        if m and (m.group(2) or m.group(3)) and not _mono_setting_ok(ops, m.group(2), m.group(3)):
+            continue
+        out.append(ops)
+    return out or variants
+
+
+def _mono_setting_ok(ops, axis, glide):
+    """Whether a monoclinic operator list is the setting a short symbol names: a two-fold along
+    the unique axis with the screw component written ('21': ½), a mirror perpendicular to it
+    with the glide translation written — ½ along the axis the letter names ('a', 'b', 'c'), both
+    in-plane axes for 'n', none for 'm'. The unique axis is b unless the glide letter is 'b'
+    (then c, else a: 'P21/b' is P 1 1 21/b); each is an origin-free property of the operators."""
+    for u in ((1, 2, 0) if glide == 'B' else (1,)):
+        rot2 = [[(1 if i == j else 0) * (1 if i == u else -1) for j in range(3)] for i in range(3)]
+        rotm = [[(1 if i == j else 0) * (-1 if i == u else 1) for j in range(3)] for i in range(3)]
+        twofold = [t for rot, t in ops if [list(r) for r in rot] == rot2]
+        mirrors = [t for rot, t in ops if [list(r) for r in rot] == rotm]
+        if axis and not any(_r3(t[u]) == (0.5 if axis == '21' else 0.0) for t in twofold):
+            continue
+        if glide:
+            inplane = [i for i in range(3) if i != u]
+            if glide == 'M':
+                want = (0.0, 0.0)
+            elif glide == 'N':
+                want = (0.5, 0.5)
+            else:
+                ax = 'ABC'.index(glide)
+                if ax == u:
+                    continue
+                want = tuple(0.5 if i == ax else 0.0 for i in inplane)
+            if not any(tuple(_r3(t[i]) for i in inplane) == want for t in mirrors):
+                continue
+        return True
+    return False
+
+
+def absences(symbol, hkls):
+    """[hkl, …] of the given indices that the space group forbids — under every variant of the
+    SETTING the symbol names (`setting_variants`: a nonstandard setting the writer meant, written
+    as its own symbol, is not a mis-index), so an index is reported only when no operator list of
+    that setting allows it. [] when the symbol is unknown, or the indices are all allowed."""
+    variants = setting_variants(symbol)
     if not variants:
         return []
     out = []

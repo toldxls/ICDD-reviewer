@@ -583,3 +583,24 @@ class MultiPageTables(unittest.TestCase):
                 y += 13
         doc.save(path); doc.close()
         self.assertEqual([r[0] for r in PS.paper_sites(path)], ['Pb1', 'Pb2', 'Sb1', 'Sb2', 'S1', 'S2', 'S3', 'S4', 'S5'])
+
+
+class LooseKeysAreTheSites(unittest.TestCase):
+    """A numbered bond label reaches a site by its loose names — never every site of its element:
+    a coordinates table read in PART was verified 'by bonds' against sites it never held (audit
+    2026-09-16 pm)."""
+
+    def test_a_numbered_query_does_not_reach_every_site_of_its_element(self):
+        self.assertNotIn('O', PS._loose_keys('O1', query=True))
+        self.assertIn('O', PS._loose_keys('O10'))                                # the site's own key, for a bare 'O' query
+        class Site:
+            def __init__(self, label, el): self.label = label; self.element = el
+        si, o10, o11, o12 = Site('Si1', 'Si'), Site('O10', 'O'), Site('O11', 'O'), Site('O12', 'O')
+        class St:
+            sites = [si, o10, o11, o12]
+            def neighbours(self, s, r): return [(o10, 1.61, None), (o11, 1.63, None), (o12, 1.60, None)] if s is si else []
+        ok, n, miss = PS.bond_hits(St(), [('Si1', 'O1', 1.63), ('Si1', 'O2', 1.61), ('Si1', 'O3', 1.60)])
+        self.assertEqual((ok, n), (0, 0))                                        # O1–O3 are not in the table: not compared
+        ok, n, miss = PS.bond_hits(St(), [('Si1', 'O10', 1.61), ('Si1', 'O11', 1.63), ('Si1', 'O12', 1.60)])
+        self.assertEqual((ok, n), (3, 3))
+        self.assertEqual(PS.bond_hits(St(), [('Si', 'O10', 1.61)])[:2], (1, 1))    # a bare 'Si' still finds Si1 (a table naming no Si1 beside it)
