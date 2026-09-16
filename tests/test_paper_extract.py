@@ -1982,3 +1982,42 @@ class PageTextCache(unittest.TestCase):
             f.write(b'\n%edited')
         self.assertNotEqual(PE._page_cache_file(copy), PE._page_cache_file(self.pdf))
         self.assertTrue(PE._page_texts(self.pdf)[0].text.startswith('Testite'))
+
+
+class TwiceprintedElement(unittest.TestCase):
+    """An element the table prints in two forms (the hand-check of 2026-09-16: 79057, 79074) and a
+    coefficient that follows from the other oxide form of its wt% (1987, 77006)."""
+
+    def _rows(self, pairs):
+        return [{'constituent': c, 'mean': v, 'range': None, 'sd': None, 'standard': None} for c, v in pairs]
+
+    def test_the_printed_total_arbitrates(self):
+        # zoisite-(Pb): Fe2O3(tot) and Fe2O3(calc) are one cell read twice; MnO(tot) 0.59 beside its
+        # Mn2O3/MnO split — the total (100.75) is reached without the Mn2O3 row
+        e = {'rows': self._rows([('SiO2', 30.11), ('Al2O3', 24.57), ('Fe2O3', 1.32), ('Fe2O3', 1.32), ('CaO', 10.25), ('MnO', 0.59), ('Mn2O3', 0.50), ('BaO', 0.05), ('PbO', 32.23), ('Na2O', 0.07), ('H2O', 1.5)]), 'total': 100.75}
+        got = PE._drop_recalculated(e)
+        self.assertEqual([r['constituent'] for r in got['rows']], ['SiO2', 'Al2O3', 'Fe2O3', 'CaO', 'MnO', 'BaO', 'PbO', 'Na2O', 'H2O'])
+        self.assertIn('Mn2O3 0.5 left out', got['dropped'])
+        # two forms both analysed add to the total: untouched
+        e2 = {'rows': self._rows([('SiO2', 40.0), ('FeO', 10.0), ('Fe2O3', 5.0), ('MgO', 45.0)]), 'total': 100.0}
+        self.assertEqual(len(PE._drop_recalculated(e2)['rows']), 4)
+        # no total read: nothing is dropped here (the reduction decides, via _overshoot_drops)
+        e3 = dict(e, total=13.81)
+        self.assertEqual(len(PE._drop_recalculated(e3)['rows']), 10)
+
+    def test_an_over_full_table_without_a_total(self):
+        wt = {'SiO2': 2.02, 'TiO2': 5.54, 'Ti2O3': 4.48, 'Al2O3': 44.14, 'FeO': 0.35, 'MgO': 1.22, 'CaO': 13.58, 'Na2O': 0.04, 'V2O3': 31.6, 'Sc2O3': 0.7}
+        drops = PE._overshoot_drops(wt, {'total': 13.81})
+        self.assertEqual([c for c, _n in drops], ['Ti2O3'])                 # TiO2's removal lands at 98.1, outside the window
+        self.assertEqual(PE._overshoot_drops(wt, {'total': 99.19}), [])      # a total read: _drop_recalculated's job
+        self.assertEqual(PE._overshoot_drops({'SiO2': 40.0, 'FeO': 10.0, 'Fe2O3': 5.0, 'MgO': 45.0}, {}), [])
+
+    def test_the_other_oxide_form_is_named(self):
+        e = {'rows': self._rows([('CuO', 45.2), ('SO4', 14.58)])}
+        wt = {'CuO': 45.2, 'SO3': 12.152}                                    # the tool carried SO4 over to SO3 per cation
+        note = PE._other_form(e, wt, 'S', 1.96, 1.704)
+        self.assertIn('read as SO3', note); self.assertIn("table's SO4", note)
+        e = {'rows': self._rows([('CaO', 6.93), ('Mn2O3', 4.09)])}
+        self.assertIn('read as MnO (0.949)', PE._other_form(e, {'CaO': 6.93, 'Mn2O3': 4.09}, 'Mn', 0.95, 0.853))
+        self.assertEqual(PE._other_form(e, {'CaO': 6.93, 'Mn2O3': 4.09}, 'Mn', 0.86, 0.853), '')   # agrees already: nothing to say
+        self.assertEqual(PE._other_form(e, {'CaO': 6.93, 'Mn2O3': 4.09}, 'Mn', 0.60, 0.853), '')   # no form explains it

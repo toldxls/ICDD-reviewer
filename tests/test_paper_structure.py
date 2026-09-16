@@ -428,3 +428,52 @@ class LabelsAndContinuations(unittest.TestCase):
         self.assertEqual((ok, n, miss), (5, 5, []))
         ok, n, miss = PS.bond_hits(St(), [('Mn(X)', 'O5', 2.128)])            # the other Mn site's bond is not this site's
         self.assertEqual((ok, n), (0, 1))
+
+
+class NotACoordinatesTable(unittest.TestCase):
+    """Tables printed to a coordinates table's decimals that are not one (2026-09-16: four corpus
+    papers had them read as sites, one at a .cif compare, three built into a structure)."""
+
+    def test_a_displacement_table_under_its_own_header(self):
+        rows = [('Cu', '0.00524(18)', '0.0056(2)', '0.0046(3)', '-0.00222(18)'), ('Pb', '0.00420(14)', '0.00420(14)', '0.0051(2)', '0'),
+                ('O', '0.0025(2)', '0.0025(2)', '0.0006(1)', '0.0001(1)'), ('O2', '0.0031(2)', '0.0021(2)', '0.0016(1)', '0.0002(1)')]
+        self.assertEqual(PS.paper_sites(ReaderFonts._pdf(self, rows, header=('Atom', 'U11', 'U22', 'U33', 'U12'))), [])
+        self.assertEqual(PS.paper_sites(ReaderFonts._pdf(self, rows, header=('Atom', 'x', 'y', 'z', 'Ueq'))), [])       # even under a header the reader trusts: nothing stands away from 0
+
+    def test_a_refinement_block_is_not_three_sites(self):
+        rows = [('Final', '0.0266', '0.0461', '0.0253', '0.0239'), ('R1', '0.0313', '0.0685', '0.0282', '0.0261'), ('Peak', '-0.62', '-0.79', '-0.61', '-0.55')]
+        self.assertEqual(PS.paper_sites(ReaderFonts._pdf(self, rows, header=('', '', '', '', ''))), [])
+        for word in ('Final', 'Peak', 'Wat'):
+            self.assertFalse(PS._label_ok(word), word)
+        for lab in ('Mn(X)', 'OW', 'Ow1', 'OH8', 'REE1', 'Pb', 'TeA', 'BiI'):              # a split site's capital ('TeA'/'TeB', hitachiite) and a Roman numeral are labels
+            self.assertTrue(PS._label_ok(lab), lab)
+
+    def test_a_real_table_still_reads(self):
+        rows = [('K1', '0.12345(2)', '0.25000(3)', '0.50000(2)', '0.010(1)'), ('O1', '0.62345(2)', '0.75000(3)', '0.00000(2)', '0.011(1)'), ('O2', '0.03333(4)', '0.06667(4)', '0.02500(4)', '0.009(1)')]
+        self.assertEqual([r[0] for r in PS.paper_sites(ReaderFonts._pdf(self, rows))], ['K1', 'O1', 'O2'])
+
+
+class BondLabelsLoosely(unittest.TestCase):
+    """The bond table's name for a site the coordinates table prints otherwise (2026-09-16)."""
+
+    def test_loose_keys(self):
+        self.assertEqual(PS._loose_keys('Sb9a'), ['SB9'])
+        self.assertEqual(PS._loose_keys('O11b'), ['O11'])
+        self.assertEqual(PS._loose_keys('OH8'), ['O8'])
+        self.assertEqual(PS._loose_keys('Ow3'), ['O3'])
+        self.assertEqual(PS._loose_keys('O8'), [])                          # exact names yield nothing loosely: a table with both O8 and OH8 is matched exactly
+        self.assertEqual(PS._loose_keys('O01'), ['O1'])                     # padded numbers (70669): 'O1' of the bond table is O01, not OH1
+
+    def test_a_merged_split_site_answers_to_either_occupant(self):
+        # bv_check merges two rows at one position into one site labelled 'Ba/Ca' (3294, 69289): the
+        # bond table's 'Ba–O9' must still find it, as must 'Sb9' the pair 'Sb9a'/'Pb9b' and 'O8' the hydroxyl 'OH8'
+        class Site:
+            def __init__(self, label): self.label = label
+        sites = [Site('Ba/Ca'), Site('Sb9a'), Site('Pb9b'), Site('OH8'), Site('O11'), Site('O9'), Site('O01'), Site('OH1')]
+        class St:
+            def neighbours(self, s, r):
+                return {'Ba/Ca': [(sites[5], 2.744, None)], 'Sb9a': [(sites[3], 2.45, None), (sites[6], 1.65, None)], 'Pb9b': [(sites[3], 2.91, None)]}.get(s.label, [])
+        St.sites = sites
+        ok, n, miss = PS.bond_hits(St(), [('Ba', 'O9', 2.744), ('Ca', 'O9', 2.744), ('Sb9', 'O8', 2.45), ('Pb9', 'O8', 2.91), ('Sb9', 'O11a', 2.0), ('Sb9', 'O1', 1.65)])
+        self.assertEqual((ok, n), (5, 6))                                    # 'O11a' is compared (it finds O11) and missed; 'O1' finds the padded O01 beside OH1 and hits
+        self.assertEqual(PS.bond_hits(St(), [('Ag10', 'O8', 2.5)])[1], 0)     # a site neither table holds is not compared

@@ -66,6 +66,7 @@ _OCC_ELS = re.compile(r'^(?:[A-Z][a-z]?\d*\.\d+(?:\(\d+\))?){1,4}$')            
 _OCC_NUMFIRST = re.compile(r'^(?:\d*\.\d+(?:\(\d+\))?[A-Z][a-z]?/?){1,4}$')        # '0.302(9)Sb/0.698Pb': the share before its element
 WYCK = re.compile(r'^\(?\d{1,2}[a-z]\)?$')                                # a Wyckoff token between label and x
 FRACT_MAX = 1.05                                                          # a fractional coordinate, nothing else
+ADP_MAX = 0.1                                                             # a table whose every value is under this is displacement parameters, not coordinates (2026-09-16: three corpus papers read a U11/U22/U33 or an R-index block as sites)
 FRACT_HDR = 2.0                                                           # under a known x/y/z header a coordinate may be printed past 1 ('1.06477(6)'); an integer there never is
 
 SITE_PAREN = re.compile(r'^\(([A-Z][A-Za-z]?\d{0,2}[a-z]?(?:_\d)?)\)[*†‡§]*$')    # '(X)', '(M1)', '(M3a)': the site name printed beside its element
@@ -118,6 +119,8 @@ def _label_ok(t):
     m = LABEL.match(t)
     if not m:
         return False
+    if not re.search(r'\d', t) and re.search(r'[a-z]{2}', t[1:]):
+        return False                                                      # a word ('Final', 'Peak': a refinement block read as three sites, 6997) — a label runs to one lowercase letter after its first ('Ow', 'Mn(X)', 'TeA', 'BiI')
     if m.group(1) in EP.ATOMIC_WEIGHTS or m.group(1)[:1] in EP.ATOMIC_WEIGHTS:
         return True
     return len(m.group(1)) == 1 and (m.group(1) in SITE_LETTERS and bool(re.search(r'\d', m.group(2))) or (m.group(1) in 'XYZTMA' and not m.group(2))   # 'X', 'Y', 'Z', 'T': a tourmaline's sites, bare
@@ -413,6 +416,16 @@ def _continues(prev, rows):
     return all(k[0] in top and k[1] > top[k[0]] for k in cont)
 
 
+def _no_adp(rows):
+    """A displacement-parameter table (U11 U22 U33 …, 0.00524(18)), read by either path, is
+    printed to the decimals of a coordinates table and under a header the reader may take for
+    one: nothing in it stands away from 0 the way a coordinate of a third site must. 2026-09-16:
+    three corpus papers had a U table, and one an R-index block, read as sites."""
+    if rows and max(abs(v) for r in rows for v in r[1:4]) < ADP_MAX:
+        return []
+    return rows
+
+
 def _page_tables(pdf):
     """Per page, the widest atom-site table -> [(page no, rows, weight, headed, continued)], where
     `headed` says the header-driven read found it, `continued` that the page announces a
@@ -444,6 +457,7 @@ def _page_tables_cached(pdf, _stamp):
             # three fractions, and an occupancy column before x fools it — so a header read of a
             # real table (three rows) is preferred unless the content read found twice as much
             head = _scan(view); body = _scan_by_content(view)
+            head, body = _no_adp(head), _no_adp(body)
             for r, weight, h in ((head, 2.0 if len(head) >= 3 else 1.0, True), (body, 1.0, False)):
                 if len(r) * weight > len(best) * best_w:
                     best = r; best_w = weight; headed = h
@@ -563,21 +577,39 @@ def bond_hits(st, bonds, tol=0.03):
     matched as printed on both tables (parentheses and case aside). This is the paper's own check
     of its coordinates, cell and space group together — the one that needs no element, charge or
     formula to be read right first."""
-    index = [{}, {}, {}]                                    # by the whole label, by the site name, by the element head
+    index = [{}, {}, {}, {}]                                # by the whole label, by the site name, by the element head, by the loose name
     for s_ in st.sites:
-        for level, k in enumerate(_label_keys(s_.label)):
-            if k:
-                index[level].setdefault(k, []).append(s_)
+        # a split site the structure merged into one ('Ba/Ca', two rows at one position) answers to
+        # either occupant's label: the bond table names the one it means
+        for part in ([s_.label] if '/' not in s_.label else [s_.label] + s_.label.split('/')):
+            for level, k in enumerate(_label_keys(part)):
+                if k:
+                    index[level].setdefault(k, []).append(s_)
+            for k in _loose_keys(part):
+                index[3].setdefault(k, []).append(s_)
     def find(label):
         # the whole label first ('Mn(X)' on both tables); then the site name the paper prints beside
         # the element — its own name for the site, kept when the numbering differs between tables
         # ('Al2 (M3a)' in the bond table, 'Al1 (M3a)' in the coordinates); then the element head,
         # which two sites may share ('Mn' twice): then every one of them is a candidate
-        for k in _label_keys(label):
+        exact = [k for k in _label_keys(label) if k]
+        for k in exact:
             for level in range(3):
-                got = index[level].get(k) if k else None
+                got = index[level].get(k)
                 if got:
                     return got
+        # last, the loose name, either way round: the bond table writes 'Sb9' for the coordinates'
+        # split pair 'Sb9a'/'Pb9b' and 'O8' for the hydroxyl site 'OH8' (boscardinite, 2026-09-16),
+        # or names the split member 'O11a' where the coordinates print 'O11'
+        loose = _loose_keys(label)
+        for k in exact + loose:
+            got = index[3].get(k)
+            if got:
+                return got
+        for k in loose:
+            got = index[0].get(k)
+            if got:
+                return got
         return []
     cache = {}; ok = n = 0; miss = []
     reach = min(4.6, max([3.6] + [d + 0.1 for _c, _a, d in bonds if d]))   # a paper's long Pb–S or K–O bonds (3.7 Å) must be within reach, or they count as misses of a structure that has them
@@ -600,6 +632,25 @@ def bond_hits(st, bonds, tol=0.03):
             near = sorted((dd for cs in cats for o, dd, _c in cache[cs.label] if o.label in an_labels), key=lambda x: abs(x - d))
             miss.append('%s–%s %.3f printed, %s in the structure' % (cat, an, d, ('%.3f' % near[0]) if near else 'no such neighbour'))
     return ok, n, miss
+
+
+def _loose_keys(label):
+    """The names a label answers to when nothing exact does: its stem without the letter a split
+    site carries ('Sb9a' -> 'SB9', 'O11b' -> 'O11'), its number unpadded ('O01' -> 'O1'), and a hydroxyl or water site by its oxygen
+    number ('OH8', 'OW3', 'Ow3' -> 'O8', 'O3') — only for a label that has one, so 'O8' itself
+    yields nothing here and a table that prints both O8 and OH8 is matched exactly, never loosely."""
+    t = re.sub(r'[()\s]', '', label or '').rstrip('*†‡§,')
+    out = []
+    stem = re.sub(r'(\d)[a-z]$', r'\1', t)
+    if stem != t:
+        out.append(stem.upper())
+    plain = re.sub(r'([A-Za-z])0+(\d)', r'\1\2', t)                        # 'O01' is the O1 of the bond table (70669 pads its oxygen numbers)
+    if plain != t:
+        out.append(plain.upper())
+    m = re.match(r'^O[HhWw](\d+)[a-z]?$', t)
+    if m:
+        out.append('O' + m.group(1))
+    return out
 
 
 def _label_keys(label):

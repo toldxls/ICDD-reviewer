@@ -629,6 +629,105 @@ _PROSE_SEP_R = r'(?:[,;]|\band\b)\s*(?:and\s+)?'
 _PROSE_ITEM_R = re.compile(_PROSE_CORE_R)
 _PROSE_RUN_R = re.compile('(?:' + _PROSE_CORE_R + _PROSE_SEP_R + '){2,}' + _PROSE_CORE_R)
 
+def _other_form(e, wt, el, v, t):
+    """When one coefficient does not follow from the table but WOULD from the same printed wt%
+    under the element's other oxide form, say so: 1987 prints 'SO4 14.58' and its S 1.96 follows
+    from 14.58 read as SO3; 77006 prints 'Mn2O3 4.09' with an Mn3+ formula and its Mn 0.95
+    follows from 4.09 read as MnO. A diagnosis for the reader, not an adoption: the label and
+    the arithmetic disagree, and which is wrong is the paper's to say. -> ' — …' or ''."""
+    if t is None or not v or v <= 0 or abs(t - v) <= 0.06 * v:
+        return ''
+    used = [c for c in wt if _parses(c) and EP.parse_constituent(c).element == el]
+    printed = [r for r in ((e or {}).get('rows') or []) if _parses(r.get('constituent') or '') and EP.parse_constituent(r['constituent']).element == el and r.get('mean')]
+    if len(used) != 1 or len(printed) != 1:
+        return ''
+    ku = EP.parse_constituent(used[0]); cp, w = printed[0]['constituent'], printed[0]['mean']
+    if ku.kind != 'oxide' or not ku.n_cat or not wt.get(used[0]):
+        return ''
+    moles_used = wt[used[0]] / ku.mw * ku.n_cat
+    forms = {oxide_for(el, q) for q in _MULTI.get(el, ())} | ({'SO3', 'SO4'} if el == 'S' else set()) | {cp}
+    for alt in sorted(f for f in forms if f):
+        try:
+            a = EP.parse_constituent(alt)
+        except ValueError:
+            continue
+        if not a.n_cat or a.kind != 'oxide':
+            continue
+        moles_alt = w / a.mw * a.n_cat
+        if abs(moles_alt - moles_used) < 1e-9:
+            continue                                                  # the reading the tool made
+        t_alt = t * moles_alt / moles_used
+        if abs(t_alt - v) <= 0.06 * v:
+            return ' — the coefficient would follow from the printed %g wt%% read as %s (%.3f): the table\'s %s and the formula\'s arithmetic disagree' % (w, alt, t_alt, cp)
+    return ''
+
+
+def _drop_recalculated(e):
+    """A table that prints one element twice — TiO2 5.54 as analysed and Ti2O3 4.48 recalculated
+    (79074), MnO(tot) beside the Mn2O3/MnO split it was apportioned into (79057) — was read as
+    both, and the element came out double. First a row read twice from one cell ('Fe2O3(tot)' and
+    'Fe2O3(calc)', both 1.32) is one row. Then the printed Total arbitrates: when the rows add to
+    more than it by over 0.3 wt% and leaving out ONE row of a twice-printed element lands on it
+    (within 0.15), that row is the recalculated one and is left out, with a note in `e['dropped']`.
+    Two forms that were both analysed (FeO and Fe2O3 by Mössbauer) add to the total and are
+    untouched. A table whose total was not read is handled by `_overshoot_drops` instead, which
+    adopts a drop only when the reduction then reproduces the formula."""
+    if not e or not e.get('rows'):
+        return e
+    rows = []; seen = set()
+    for r in e['rows']:
+        key = (r.get('constituent'), r.get('mean'))
+        if key in seen and r.get('mean'):
+            continue
+        seen.add(key); rows.append(r)
+    if len(rows) != len(e['rows']):
+        e = dict(e, rows=rows, n=len(rows))
+    if not (e.get('total') or 0) >= 50:
+        return e
+    tot = e['total']
+    vals = [(r.get('mean') or 0.0) for r in rows]
+    excess = sum(vals) - tot
+    if excess <= 0.3:
+        return e
+    by_el = {}
+    for k, r in enumerate(rows):
+        if _parses(r.get('constituent') or ''):
+            by_el.setdefault(EP.parse_constituent(r['constituent']).element, []).append(k)
+    cands = [k for ks in by_el.values() if len(ks) >= 2 for k in ks if abs(excess - vals[k]) <= 0.15]
+    if len(cands) != 1:
+        return e
+    k = cands[0]; r = rows[k]
+    e = dict(e, rows=[x for q, x in enumerate(rows) if q != k], n=len(rows) - 1)
+    e['dropped'] = '%s %g left out of the analysis: the table\'s total (%g) is reached without it — a recalculated form of the %s row, not a second constituent' % (
+        r['constituent'], r.get('mean'), tot, ', '.join(rows[q]['constituent'] for q in by_el[EP.parse_constituent(r['constituent']).element] if q != k))
+    return e
+
+
+def _overshoot_drops(wt, e):
+    """The constituents whose removal would bring an over-full analysis back to 100: a table whose
+    total the reader did not get (79074's came out as 13.81) but whose rows add to 103.7 because an
+    element is printed in two forms. -> [(constituent, note)], for `_resolve` to try — a drop is
+    adopted only when the reduction then reproduces the formula, never on the sum alone."""
+    if (e or {}).get('total') and e['total'] >= 50:
+        return []
+    total = sum(v for v in wt.values() if v)
+    if total <= 101.5:
+        return []
+    by_el = {}
+    for c in wt:
+        if _parses(c):
+            by_el.setdefault(EP.parse_constituent(c).element, []).append(c)
+    out = []
+    for el, cs in by_el.items():
+        if len(cs) < 2:
+            continue
+        for c in cs:
+            if 98.5 <= total - (wt[c] or 0) <= 101.5:
+                out.append((c, '%s %g left out of the analysis: the rows add to %.1f with it and %.1f without, and the formula follows without it — a recalculated form of the %s row, not a second constituent'
+                            % (c, wt[c], total, total - wt[c], ', '.join(x for x in cs if x != c))))
+    return out
+
+
 def prose_table(text):
     """A composition given in the running text ('MnO 14.78, Ce2O3 34.19, P2O5 29.57, and H2O 21.46,
     total 100.00'): the longest run of at least four constituent–value pairs, as a table candidate."""
@@ -808,13 +907,13 @@ def epma_table(pdf, name=''):
                 n_oxide = sum(1 for c, k, v, _ in block if k == 'constituent' and re.search(r'[A-Za-z]\d*O\d*$', c) and c != 'O' and not c.startswith('H2O'))
                 oxide_els = {m_.group(0) for m_ in (re.match(r'[A-Z][a-z]?', c) for c, k, v, _ in block if k == 'constituent' and re.search(r'O\d*$', c)) if m_}
                 # the column the means sit in: under a 'Mean' / 'Average' header token when there is one
-                mean_like = [(0 if re.match(r'^(mean|aver(?:age)?\.?|avg\.?)$', w[4], re.I) else 1, (w[0] + w[2]) / 2) for w in head_ws
-                             if re.match(r'^(mean|aver(?:age)?\.?|avg\.?|wt\.?%?)$', w[4], re.I)] if head_ws else []
+                mean_like = [(0 if re.match(r'^(mean|aver(?:age)?\.?|avg\.?|av\.?)$', w[4], re.I) else 1, (w[0] + w[2]) / 2) for w in head_ws
+                             if re.match(r'^(mean|aver(?:age)?\.?|avg\.?|av\.?|wt\.?%?)$', w[4], re.I)] if head_ws else []   # 'Av.' (13077: fourteen analyses, then 'Av. St.dev.' — the first analysis was read as the mean)
                 mean_x = min(mean_like)[1] if mean_like else None                   # 'Mean' outranks a 'wt.%' over another column; leftmost among equals
                 head_low = [h.lower() for h in head]; first_is_mean = False
                 if mean_x is not None and any(h in ('constituent', 'constituents', 'oxide', 'element', 'component') for h in head_low):
                     k0 = max(i_ for i_, h in enumerate(head_low) if h in ('constituent', 'constituents', 'oxide', 'element', 'component'))
-                    if k0 + 1 < len(head_low) and re.match(r'^(mean|aver(?:age)?\.?|avg\.?|wt\.?%?)$', head_low[k0 + 1]):
+                    if k0 + 1 < len(head_low) and re.match(r'^(mean|aver(?:age)?\.?|avg\.?|av\.?|wt\.?%?)$', head_low[k0 + 1]):
                         mean_x = None; first_is_mean = True                    # Mean is the first column: the first number is it
                 ints = [int(t) for t in head if re.fullmatch(r'\d{1,2}', t)]
                 point_cols = len(ints) >= 4 and mean_x is None and not first_is_mean and not merged_above and ints == sorted(ints) and len(set(ints)) == len(ints)   # points 1…n as columns
@@ -979,7 +1078,7 @@ def epma_table(pdf, name=''):
         if cut is not None and cut >= 3 and all((r_.get('constituent') in seen) for r_ in rows_[cut:]):
             best = dict(best, rows=rows_[:cut], n=cut)
             best['second_block'] = len(rows_) - cut
-    return best
+    return _drop_recalculated(best)
 
 # ----------------------------------------------------------------------------- the paper's method
 
@@ -2660,6 +2759,13 @@ def _check_formula(ex, text, fcand):
             wt2 = _convert(wt_, old, new); r2 = _best(wt2)
             if r2 is not None and (r_ is None or r2['score'] < r_['score'] - 0.005):
                 r_ = r2; wt_ = wt2; notes.append('%s in the table taken as %s for the reduction (%s)' % (old, new, why_))
+        # an element printed in two forms in an over-full table (TiO2 as analysed, Ti2O3 recalculated):
+        # the recalculated row is left out when the formula then follows and did not before
+        if r_ is None or r_['diffs']:
+            for c_drop, why_ in _overshoot_drops(wt_, e_):
+                wt2 = {k: v for k, v in wt_.items() if k != c_drop}; r2 = _best(wt2)
+                if r2 is not None and not r2['diffs'] and (r_ is None or r2['score'] < r_['score'] - 0.01):
+                    r_ = r2; wt_ = wt2; notes.append(why_); break
         return r_, wt_, e_, notes, cn
 
     def _clean(r_):
@@ -2691,6 +2797,8 @@ def _check_formula(ex, text, fcand):
         elif _clean(r):
             notes_used = ['the column headed by %s does not reproduce the formula; the mean column does and is used' % why] + notes_used
     wt = wt_used; e = e_used; converted += notes_used
+    if e.get('dropped'):
+        converted.append(e['dropped'])                        # a recalculated row left out (the table's own total says so)
     basis_equiv = bool(r and r.get('basis') and equiv.get(tuple(r['basis']) if isinstance(r['basis'], list) else r['basis']))
     if basis_equiv:
         converted.append(equiv[tuple(r['basis']) if isinstance(r['basis'], list) else r['basis']])
@@ -2861,7 +2969,7 @@ def _check_formula(ex, text, fcand):
         lines.append('  ' + column_note)
     lines += species_lines(species, set(EP.parse_constituent(c).element for c in wt if _parses(c)), set(counts), ox_paper)
     for el, v, t, note in r['diffs']:
-        lines.append('  %s: paper %.3f, from the paper\'s own wt%% %s (%s)%s' % (el, v, ('%.3f' % t) if t is not None else '—', note, '' if verified else ' [unverified]'))
+        lines.append('  %s: paper %.3f, from the paper\'s own wt%% %s (%s)%s%s' % (el, v, ('%.3f' % t) if t is not None else '—', note, _other_form(e, wt, el, v, t), '' if verified else ' [unverified]'))
     if calc_els:
         r['unanalysed'] = sorted(set(r.get('unanalysed') or []) | calc_els)   # what the paper said it calculated
     if r['unanalysed']:
