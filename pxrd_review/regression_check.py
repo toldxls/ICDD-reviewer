@@ -861,7 +861,7 @@ CASES = [
  ("a tool-authored tracked change does not count as a reviewer edit", lambda:
      not A._has_tracked_changes(_docx_with_tracked_change(A.AUTHOR))),
  ("a human tracked change DOES count as a reviewer edit", lambda:
-     A._has_tracked_changes(_docx_with_tracked_change('Tony Kampf'))),
+     A._has_tracked_changes(_docx_with_tracked_change('A. Reviewer'))),
  # The writer sweeps a cell's runs into ONE <w:del>. Across several paragraphs that would restore
  # the words but not the paragraph BREAK when the reviewer hits Reject — so it declines instead
  # and stays a comment. (No reference cell in the corpus is laid out that way; refusing is free.)
@@ -886,7 +886,7 @@ CASES = [
      A._apply_tracked_fix(_ref_cell('<w:p><w:r><w:t>Primary Reference</w:t></w:r></w:p>'),
                           'Desorite, a new phosphate mineral. Kampf, A. R.') is False),
  ("_cell_text sees text nested in a tracked change (cell.text does not)", lambda:
-     A._cell_text(_ref_cell('<w:p><w:ins w:id="9" w:author="Tony" w:date="2026-01-01T00:00:00">'
+     A._cell_text(_ref_cell('<w:p><w:ins w:id="9" w:author="A. Reviewer" w:date="2026-01-01T00:00:00">'
                             '<w:r><w:t>hidden</w:t></w:r></w:ins></w:p>')) == 'hidden'),
  # the rewrite is case-only, so it is sliced back onto the EXISTING runs — italic title, bold year
  # and plain authors all survive. Collapsing them into one run turned the whole citation italic.
@@ -906,7 +906,7 @@ CASES = [
  # so whatever survives is a person's (or a tool insertion a person has since edited)
  ("applied fix: a cell with a tracked change is left to the reviewer", lambda:
      A._cell_has_revisions(_ref_cell(
-         '<w:p><w:ins w:id="9" w:author="Tony" w:date="2026-01-01T00:00:00">'
+         '<w:p><w:ins w:id="9" w:author="A. Reviewer" w:date="2026-01-01T00:00:00">'
          '<w:r><w:t>Desorite, a New Phosphate Mineral.</w:t></w:r></w:ins></w:p>')) is True),
  # --- the three bugs the hand-check of all 26 fires caught (all would corrupt a title) ------
  # 1. An ordinary word INSIDE a multi-word place name must survive: 'New Mexico' is not
@@ -1123,7 +1123,7 @@ CASES = [
  ("instr_vocab: Diffractometer is clean", lambda: not [
      f for f in X.check16_instr_vocab(type('S', (), {'instr': {'intensity_instr': 'Diffractometer'}})(), None)
      if f.sev == 'flag']),
- # case alone is not a fault (Kampf's Part 2 review typed 'Monochromator crystal'); a misspelling still is
+ # case alone is not a fault (the Part 2 human review typed 'Monochromator crystal'); a misspelling still is
  ("instr_vocab: 'Monochromator crystal' (case only) is clean", lambda: not [
      f for f in X.check16_instr_vocab(type('S', (), {'instr': {'filter': 'Monochromator crystal', 'filtertype': 'Graph'}})(), None)
      if f.code == 'instr_vocab' and f.anchor == 'instr']),

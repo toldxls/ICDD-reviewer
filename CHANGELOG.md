@@ -24,7 +24,7 @@ package version in `pyproject.toml`.
 
 ## [0.8.0] — 2026-09-14
 
-Tony Kampf's review of 2028 Part 2 and an independent read of the same 37 entries against their papers
+A human review of the 2028 Part 2 batch and an independent read of the same 37 entries against their papers
 turned up about seventy defects neither the tool nor the reviewers had caught. The classes a program can
 see became checks, each measured on the 870 new-template entries on disk and every flag read before it
 shipped; then an audit of the day's commits. Corpus A/B over 1,707 docx: only the new codes added, the 26
@@ -33,7 +33,7 @@ tests OK. Bundled Mindat snapshot refreshed 2026-09-14.
 
 ### Added
 - **Entry consistency checks that need no .pdf**, from an independent read of the 2028 Part 2 batch against
-  Tony Kampf's review (2026-09-14). Each defect class was listed on the corpus hit by hit before it shipped.
+  the human review of that batch (2026-09-14). Each defect class was listed on the corpus hit by hit before it shipped.
   - `check27_formula_integrity` (codes `formula`, `analysis`) — the syntax of the formula fields and of the
     Analysis field's formula: unbalanced brackets, a lost decimal point (`Al042`), a colon for a point, a split
     symbol (`T B0.01`), a valence superscript read as carbon (`Fe3 C0.20`), a simplified-formula site in the
