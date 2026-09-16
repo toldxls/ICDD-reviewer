@@ -3266,18 +3266,46 @@ def check22_cross_sources(e, cif_data, dft_data):
     M = None if is_syn else mindat_struct(e.name or e.primary or '')
     mind = _cell_lengths({'a': M['a'], 'b': M['b'], 'c': M['c']}) if M else None
     fmt = lambda l: '/'.join('%.3f' % x for x in l)
+    # Sorted axes cannot tell another SETTING of the same lattice from a discrepancy: the I-cell of
+    # a C-centred lattice, a rhombohedral against a hexagonal cell, a monoclinic cell with a and c
+    # exchanged. Before either side is called wrong, the reduced cells are compared (`lattice`,
+    # 2026-09-16): one lattice is a note on the setting, never a discrepancy.
+    from pxrd_review import lattice as LAT
+    def _six(cell, letter_from=None):
+        vals = [(_val(cell.get(k)) if not isinstance(cell.get(k), (int, float)) else float(cell.get(k)) or None) for k in ('a', 'b', 'c', 'α', 'β', 'γ')]
+        if vals[0] and vals[2]:
+            vals[1] = vals[1] or vals[0]
+            for i in (3, 4, 5):
+                vals[i] = vals[i] or 90.0
+            return tuple(vals)
+        return None
+    docx6 = _six(e.cell); sg_docx = (e.space_group or (e.cell or {}).get('SG') or '')
+    cif6 = _six((cif_data or {}).get('cell', {})) if cif_data else None; sg_cif = ((cif_data or {}).get('cell') or {}).get('SG') or (cif_data or {}).get('SG') or sg_docx
+    mind6 = _six({'a': M['a'], 'b': M['b'], 'c': M['c'], 'α': M.get('al'), 'β': M.get('be'), 'γ': M.get('ga')}) if M else None
+    def _same(c1, c2, s1, s2):
+        return bool(c1 and c2 and LAT.same_lattice(c1, c2, LAT.centring_of(s1), LAT.centring_of(s2), tol=SAME))
     if docx and cif and mind and _len_maxdiff(docx, cif) < SAME \
             and _len_maxdiff(docx, mind) >= SAME and not _len_rational(docx, mind):
-        out.append(Finding('mindat_fix', 'note',
-                   "docx and .cif agree on the cell (a,b,c≈%s) but Mindat lists %s (off %.0f%%) "
-                   "— verify which is correct and follow up (either side may be the one to fix)."
-                   % (fmt(docx), fmt(mind), _len_maxdiff(docx, mind) * 100), None))
+        if _same(docx6, mind6, sg_docx, sg_docx):
+            out.append(Finding('mindat_fix', 'note',
+                       "Mindat lists the cell in another setting (a,b,c %s against the docx %s): the same lattice — no discrepancy."
+                       % (fmt(mind), fmt(docx)), None))
+        else:
+            out.append(Finding('mindat_fix', 'note',
+                       "docx and .cif agree on the cell (a,b,c≈%s) but Mindat lists %s (off %.0f%%) "
+                       "— verify which is correct and follow up (either side may be the one to fix)."
+                       % (fmt(docx), fmt(mind), _len_maxdiff(docx, mind) * 100), None))
     if docx and cif and _len_maxdiff(docx, cif) > 0.05 and not _len_rational(docx, cif) \
             and (mind is None or _len_maxdiff(cif, mind) < SAME):
-        out.append(Finding('cell_cif', 'flag',
-                   "Powder cell differs substantially from the .cif single-crystal structure "
-                   "(docx a,b,c=%s vs .cif %s, %.0f%%) — verify." % (fmt(docx), fmt(cif), _len_maxdiff(docx, cif) * 100),
-                   None, 'cell:a'))
+        if _same(docx6, cif6, sg_docx, sg_cif):
+            out.append(Finding('cell_cif', 'note',
+                       "The .cif gives the cell in another setting (docx a,b,c=%s vs .cif %s): the same lattice, reduced — not a different cell; the entry's setting should be the paper's."
+                       % (fmt(docx), fmt(cif)), None, 'cell:a'))
+        else:
+            out.append(Finding('cell_cif', 'flag',
+                       "Powder cell differs substantially from the .cif single-crystal structure "
+                       "(docx a,b,c=%s vs .cif %s, %.0f%%) — verify." % (fmt(docx), fmt(cif), _len_maxdiff(docx, cif) * 100),
+                       None, 'cell:a'))
     # axis-swap: same cell magnitudes but the axes are in a DIFFERENT ORDER than the
     # .cif — a likely transcription error (axis permutations shouldn't normally occur
     # for the same phase). Only when the axes are distinct enough for a swap to mean
@@ -3628,6 +3656,160 @@ def check26_reference_title_case(e, text=None):
                                      suggested),
             title[:120], 'reference', fixed_ref)]
 
+# ----------------------------------------------------------------------------- 30. reflections the space group forbids
+def check30_extinctions(e, text=None):
+    """An indexed reflection the entry's own space group forbids — systematically absent under
+    every setting the symbol has (a centring, a glide, a screw axis: `symops.absent` derives the
+    condition from the operators, so no table of conditions is transcribed). One or two such
+    lines among many are a mis-index or a typo in the indices — a flag on those lines. Many are
+    the space group, or its setting, disagreeing with the indexing as a whole — a note, since
+    which side is wrong is the reviewer's to say. A row whose indices are glued ('10 01 44' for two
+    overlapped lines) is read every way `_candidate_hkls` allows, and only a row forbidden under
+    EVERY reading counts. Docx-internal (no .pdf)."""
+    out = []
+    sg = (e.space_group or (e.cell or {}).get('SG') or '').strip()
+    if not sg or not e.refl:
+        return out
+    from pxrd_review import symops as SO
+    variants = SO.lookup(sg)
+    if not variants:
+        return out
+    indexed = 0; bad = []
+    for d, I, h, k, l in e.refl:
+        cands = [t for t in _candidate_hkls(h, k, l) if t != (0, 0, 0)]
+        if not cands:
+            continue
+        indexed += 1
+        if all(all(SO.absent(ops, t) for ops in variants) for t in cands):
+            bad.append((d, h, k, l))
+    if not bad or indexed < 5:
+        return out
+    shown = ', '.join('%s %s %s (d=%s)' % (h, k, l, d) for d, h, k, l in bad[:6])
+    if len(bad) <= max(2, 0.1 * indexed):
+        out.append(Finding('extinction', 'flag',
+                           "Reflection%s indexed as %s — forbidden by the space group %s (systematically absent "
+                           "under every setting of it): a mis-index or a typo in the indices; verify against the .pdf."
+                           % ('s' if len(bad) > 1 else '', shown, sg), None, 'refl'))
+    else:
+        out.append(Finding('extinction', 'note',
+                           "%d of %d indexed reflections are forbidden by the space group %s (%s%s) — the space group, "
+                           "its setting, or the indexing as a whole is off; verify which."
+                           % (len(bad), indexed, sg, shown, ', …' if len(bad) > 6 else ''), None, 'refl'))
+    return out
+
+
+# ----------------------------------------------------------------------------- 31. Gladstone–Dale on the entry's own fields
+def _entry_mean_n(od):
+    """The mean refractive index of an Optical Data field: (A+B+Q)/3 for a biaxial entry;
+    (2ω+ε)/3 for a uniaxial one written with two indices, ω the one the sign puts it at
+    (positive: ε > ω); their plain mean when the sign is not given."""
+    QUAL = r'(?:\([^)]*\))?'
+    idx = {}
+    for k, v in re.findall(r'\b([ABQ])' + QUAL + r'\s*=\s*(\d+\.\d+)', od or ''):
+        try:
+            idx[k] = float(v)
+        except ValueError:
+            pass
+    if all(k in idx for k in 'ABQ'):
+        return (idx['A'] + idx['B'] + idx['Q']) / 3.0
+    two = [idx[k] for k in 'ABQ' if k in idx]
+    if len(two) != 2:
+        return None
+    ms = re.search(r'Sign\s*=\s*([+\-−–—])', od)
+    if not ms:
+        return sum(two) / 2.0
+    lo, hi = sorted(two)
+    return (2 * lo + hi) / 3.0 if ms.group(1) == '+' else (2 * hi + lo) / 3.0
+
+
+def check31_gd_entry(e, text=None):
+    """The entry's optical indices against the .pdf's, and the Gladstone–Dale compatibility of the
+    ENTRY's own fields — its Optical Data, its Dx/Dm and its Analysis wt%. Two findings:
+      * the mean index of the entry's A/B/Q differs from the mean of the paper's α/β/γ (or ω/ε)
+        by more than 0.006 — an index mistranscribed: a flag (no other check reads the indices
+        against the paper; check10 reads the sign, check24 the sign against the indices);
+      * the entry's own 1 − K_P/K_C comes out two Mandarino categories worse than the paper states
+        while its n agrees with the paper's — the density or a wt% is the suspect, or the paper's
+        constants differ from the tool's: a note (the constants alone move an index a category,
+        measured on 273 corpus entries: 25 of them two categories off with every field right);
+        and a note when it is 'poor' and the paper states no index."""
+    od = e.comments.get('Optical Data') or ''
+    n = _entry_mean_n(od)
+    if not n or not 1.3 <= n <= 3.5:
+        return []
+    out = []
+    from pxrd_review import epma as EP, gd as GD
+    opt = None
+    if text:
+        try:
+            from pxrd_review import paper_extract as PE
+            opt = PE.optics(text)
+        except Exception:
+            opt = None
+    n_paper = (opt or {}).get('n')
+    n_agrees = None
+    # a paper that describes several minerals prints several sets of indices, and the reader
+    # returns one of them (hanahanite's entry against the other mineral's α/β/γ): the comparison
+    # is made only when the .pdf prints ONE set
+    one_set = bool(text) and len(re.findall(r'(?<![a-z])[αω]\s*[=:]', text.replace('−', '-'))) <= 1
+    if n_paper and not (opt or {}).get('n_calc') and one_set:
+        QUAL = r'(?:\([^)]*\))?'
+        n_idx = len(re.findall(r'\b([ABQ])' + QUAL + r'\s*=\s*\d+\.\d+', od))
+        tol = 0.006 if (n_idx == 3 or re.search(r'Sign\s*=', od)) else 0.02      # two indices and no sign: ω is not known, the plain mean may be off by (ε−ω)/6
+        n_agrees = abs(n - n_paper) <= tol
+        if not n_agrees and abs(n - n_paper) > 2 * tol:
+            out.append(Finding('optical', 'flag',
+                               "Optical Data: the entry's indices give a mean n of %.4f, the .pdf's %.4f (%s) — an index is mistranscribed; verify A/B/Q against the .pdf."
+                               % (n, n_paper, (opt.get('n_from') or '')[:80]), od[:120], 'optical'))
+            return out
+    dens = _density_row(e)
+    analysis = (e.comments.get('Analysis') or '').strip()
+    wt = None
+    if analysis:
+        try:
+            wt, _f, _n, _issues = EP.parse_icdd_analysis(analysis)
+        except Exception:
+            wt = None
+    if not wt or sum(wt.values()) < 90 or sum(wt.values()) > 110:
+        return out                                            # no analysis to form K_C from
+    KC, rows = GD.kc(wt)
+    if not KC or any(r[2] is None for r in rows if r[1] >= 0.5):
+        return out                                            # a constituent over 0.5 wt% has no constant: no oracle
+    res = {}
+    for key in ('Dm', 'Dx'):
+        D = dens.get(key)
+        if D and 1.0 < D < 25.0:
+            res[key] = 1 - ((n - 1) / D) / KC
+    if not res:
+        return out
+    best_key = min(res, key=lambda k: abs(res[k]))
+    ci = res[best_key]; cat = GD.category(ci)
+    stated = None
+    if text:
+        try:
+            from pxrd_review import paper_extract as PE
+            stated = PE.gd_statement(text)
+        except Exception:
+            stated = None
+    cats = ['superior', 'excellent', 'good', 'fair', 'poor']
+    s_cat = None
+    if stated and stated.get('ci') is not None:
+        s_cat = GD.category(stated['ci'])
+    elif stated and stated.get('category') in cats:
+        s_cat = stated['category']
+    how = "n=%.4f from the Optical Data, K_C=%.4f from the Analysis wt%%, %s=%.3f" % (n, KC, best_key, dens[best_key])
+    if s_cat and cats.index(cat) - cats.index(s_cat) >= 2 and n_agrees is not False:
+        out.append(Finding('gd_entry', 'note',
+                           "Gladstone–Dale from the entry's own fields gives 1 − K_P/K_C = %+.3f (%s; %s) while the .pdf states %s%s — "
+                           "the density or a wt%% may be mistranscribed, or the paper's constants differ; the indices agree with the .pdf."
+                           % (ci, cat, how, s_cat, (' (%+.3f)' % stated['ci']) if stated.get('ci') is not None else ''), od[:120], 'optical'))
+    elif not s_cat and cat == 'poor':
+        out.append(Finding('gd_entry', 'note',
+                           "Gladstone–Dale from the entry's own fields gives 1 − K_P/K_C = %+.3f (poor; %s) and the .pdf states no index — "
+                           "worth a look at the Optical Data, the density and the Analysis." % (ci, how), od[:120], 'optical'))
+    return out
+
+
 CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check4_calculated, check5_wavelength,
           check7_synthetic, check8_precision_symmetry, check9_indexing,
@@ -3637,7 +3819,7 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check19_intensity_detector, check20_calc_wavelength, check21_primary_name,
           check23_sg_system, check24_optical_2v, check25_reflection_geometry,
           check26_reference_title_case, check27_formula_integrity, check28_density_consistency,
-          check29_reflections_in_paper]
+          check29_reflections_in_paper, check30_extinctions, check31_gd_entry]
 
 # An errored check must file under the CODE its findings normally carry (regression /
 # sweep lookups filter by code, and the raw function name would hide it from them).

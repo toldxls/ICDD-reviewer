@@ -185,8 +185,10 @@ class SingleOutlier(unittest.TestCase):
         self.assertFalse(c['verified'])
         self.assertTrue(any('has no Na' in d for d in c['doubts']), c['doubts'])
 
-    def test_fewer_than_four_cations_says_nothing(self):
-        self.assertIsNone(PE._single_outlier({'Si': 3.0, 'Al': 1.0, 'Mg': 2.0}, {'Si': 3.3, 'Al': 0.91, 'Mg': 1.82}))
+    def test_fewer_than_three_cations_says_nothing(self):
+        # three: two agreeing on one factor and one standing out is evidence (2026-09-16: recall +4 points, no new red); two is not
+        self.assertEqual(PE._single_outlier({'Si': 3.0, 'Al': 1.0, 'Mg': 2.0}, {'Si': 3.3, 'Al': 0.91, 'Mg': 1.82}), 'Si')
+        self.assertIsNone(PE._single_outlier({'Si': 3.0, 'Al': 1.0}, {'Si': 3.3, 'Al': 0.91}))
 
     def test_an_element_in_two_valence_states_is_not_an_outlier(self):
         """A formula printing one element twice ('S6+ 1.02 S2- 1.02') reduces to one summed
@@ -2021,3 +2023,24 @@ class TwiceprintedElement(unittest.TestCase):
         self.assertIn('read as MnO (0.949)', PE._other_form(e, {'CaO': 6.93, 'Mn2O3': 4.09}, 'Mn', 0.95, 0.853))
         self.assertEqual(PE._other_form(e, {'CaO': 6.93, 'Mn2O3': 4.09}, 'Mn', 0.86, 0.853), '')   # agrees already: nothing to say
         self.assertEqual(PE._other_form(e, {'CaO': 6.93, 'Mn2O3': 4.09}, 'Mn', 0.60, 0.853), '')   # no form explains it
+
+
+class SingleOutlierRounding(unittest.TestCase):
+    """The common-factor rule (2026-09-16): a small coefficient printed to two decimals may not share
+    the factor to the last digit, and must not hide the one element that stands out."""
+
+    def test_a_small_rounded_coefficient_does_not_break_the_common_factor(self):
+        counts = {'Na': 0.71, 'Al': 7.77, 'Li': 1.16, 'Mn': 0.06, 'Si': 5.94, 'B': 3.06, 'O': 30.77, 'H': 3.48}
+        apfu = {'Na': 0.661, 'Al': 8.673, 'Li': 1.074, 'Mn': 0.054, 'Si': 5.520, 'B': 2.849}   # Al2O3 seeded +20 %: every other element diluted by 0.93, Mn to 0.054 for a printed 0.06
+        self.assertEqual(PE._single_outlier(counts, apfu), 'Al')
+        apfu2 = dict(apfu, Si=5.1)                                                              # two elements off their own way: no single outlier
+        self.assertIsNone(PE._single_outlier(counts, apfu2))
+
+
+class LostAnionSubscript(unittest.TestCase):
+    def test_co_sio_so_are_their_oxides(self):
+        # I001361's table printed 'CO 30.86' (the 2 a lost subscript): carbon monoxide is never a constituent
+        self.assertEqual(PE._constituent_ok('CO'), ('CO2', 'constituent'))
+        self.assertEqual(PE._constituent_ok('SiO'), ('SiO2', 'constituent'))
+        self.assertEqual(PE._constituent_ok('SO'), ('SO3', 'constituent'))
+        self.assertEqual(PE._constituent_ok('CoO'), ('CoO', 'constituent'))                    # cobalt oxide is one

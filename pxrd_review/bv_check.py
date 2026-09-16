@@ -1751,6 +1751,16 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
                         if re.search(r'(?<![\d.])0\d\d(?![\d.])', row[ci]):
                             L.append('table %d: %s–%s "%s" — a missing decimal point?' % (ti + 1, an, cat, row[ci].strip()))
                             nbad += 1; row_flagged = True; continue
+                        # a sparse grid under a two-line header of seventeen cations (boscardinite): a
+                        # value that fits the NEIGHBOURING column's bond is a cell mapped one column
+                        # off, not a difference — noted, and the caller holds the table to a doubt
+                        nbr = [col_cat[cj] for cj in (ci - 1, ci + 1, ci - 2, ci + 2) if cj in col_cat and col_cat[cj] not in h_cols and col_cat[cj] != cat
+                               and (cj >= len(row) or not _bv_cell(row[cj]))]   # a neighbour the row leaves BLANK: a value the paper set one column over; a neighbour that has its own value is not where this one belongs
+                        fit = next((c2 for c2 in nbr if cells.get((an, c2)) and len(nums) == 1
+                                    and any(abs(nums[0] - s2) <= tolv(s2) or abs(nums[0] - sum(s3 * n3 for s3, n3, _ in cells[(an, c2)])) <= tolv(s2) for s2, _, _ in cells[(an, c2)])), None)
+                        if fit:
+                            L.append('table %d: %s–%s %s in the table fits the neighbouring %s column instead — a cell mapped one column off under the header, not compared'
+                                     % (ti + 1, an, cat, row[ci].strip(), fit)); ncell -= 1; continue
                         hint = ''
                         if len(cv) > 1:
                             hint = ' (per bond: %s; total %.2f)' % (', '.join('%.2f' % v for v in cv), sum(s * n for s, n, _ in calc))

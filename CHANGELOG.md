@@ -24,6 +24,32 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
+## [Unreleased]
+
+### Added
+- **Reflections the space group forbids** (`check30_extinctions`, `symops.absent`/`absences`): the
+  condition is derived from the operators themselves (h·R = h with a non-integer h·t covers centrings,
+  glides and screw axes), under every setting the symbol has, for every reading of a glued index row.
+  One or two forbidden lines among many are a flag (a mis-index or a typo); many are a note (the space
+  group, its setting or the indexing as a whole). Fires on none of the 657 corpus entries that carry a
+  space group and an indexed list — and on 31 of the 64 fixtures when a wrong symbol is substituted.
+- **Reduced cells** (`pxrd_review/lattice.py`: Niggli reduction after Křivý & Gruber, centred cells
+  made primitive, `same_lattice`): the cross-source cell check (`check22`) no longer calls another
+  SETTING of the same lattice a discrepancy — an I-cell against a C-cell, a rhombohedral against a
+  hexagonal cell, a monoclinic cell with a and c exchanged or β and its supplement — the Mindat and
+  the .cif comparisons say 'the same lattice in another setting' instead.
+- **The entry's indices against the .pdf, and its own Gladstone–Dale** (`check31_gd_entry`): the mean
+  of the entry's A/B/Q (ω and ε weighted by the sign) against the mean of the paper's indices — a flag
+  when they differ by over 0.012 and the paper prints one set of indices (2 of 105 corpus entries, both
+  genuinely different numbers); and 1 − K_P/K_C from the entry's own Optical Data, Dx/Dm and Analysis
+  wt%, a note when it comes out two Mandarino categories worse than the paper states with the indices
+  agreeing (the density or a wt%, or the paper's constants), or 'poor' where the paper states nothing.
+
+### Fixed
+- The coordinates reader and the bond reader, rounds 7 and 8 of the gauntlet, and the recall inversion
+  (see `review_out/gauntlet_log.md`): coords 356 → 368 of 554 verified on the corpus; a 20 % wt% fault
+  caught 23 → 35 % of the time.
+
 ## [0.8.2] — 2026-09-16
 
 The afternoon after 0.8.1. Recall re-measured first (`tools/seed_faults.py`, 1,131 papers): identical

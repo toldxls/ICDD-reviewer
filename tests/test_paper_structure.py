@@ -457,12 +457,21 @@ class BondLabelsLoosely(unittest.TestCase):
     """The bond table's name for a site the coordinates table prints otherwise (2026-09-16)."""
 
     def test_loose_keys(self):
-        self.assertEqual(PS._loose_keys('Sb9a'), ['SB9'])
-        self.assertEqual(PS._loose_keys('O11b'), ['O11'])
-        self.assertEqual(PS._loose_keys('OH8'), ['O8'])
-        self.assertEqual(PS._loose_keys('Ow3'), ['O3'])
-        self.assertEqual(PS._loose_keys('O8'), [])                          # exact names yield nothing loosely: a table with both O8 and OH8 is matched exactly
-        self.assertEqual(PS._loose_keys('O01'), ['O1'])                     # padded numbers (70669): 'O1' of the bond table is O01, not OH1
+        self.assertEqual(PS._loose_keys('Sb9a')[0], 'SB9')
+        self.assertEqual(PS._loose_keys('O11b')[0], 'O11')
+        self.assertIn('O8', PS._loose_keys('OH8'))
+        self.assertIn('O3', PS._loose_keys('Ow3'))
+        self.assertEqual(PS._loose_keys('O01')[0], 'O1')                    # padded numbers (70669): 'O1' of the bond table is O01, not OH1
+        self.assertEqual(PS._loose_keys('(Bi,Pb)2'), ['BI2', 'PB2'])         # a mixed site answers to either occupant (69286)
+        self.assertEqual(PS._loose_keys('M18'), ['#cM18', '#c18'])          # a site by letter and number answers to the element-numbered name of the other table (AM94_1312: 'Bi18')
+        self.assertEqual(PS._loose_keys('X3'), ['#aX3', '#a3'])
+        self.assertEqual(PS._loose_keys('A1', query=True), ['#cA1'])         # a bond table's 'A1' asks for "A1'", never for M1 (77072)
+        self.assertEqual(PS._loose_keys('Me4', query=True), ['#cMe4', '#c4'])  # 'Me4' is the cation numbered 4, whatever its element
+        self.assertEqual(PS._loose_keys("A1'"), ['#cA1', '#c1'])
+        self.assertEqual(PS._loose_keys('Bi18'), ['#c18', 'BI'])            # the number first, the bare element last
+        self.assertEqual(PS._loose_keys('S3'), ['#a3', 'S'])
+        self.assertEqual(PS._loose_keys('Al(2)'), ['#c2', 'AL'])             # 'Al–O1' in the bond table finds Al(2) (77014)
+        self.assertEqual(PS._loose_keys('Ba'), [])
 
     def test_a_merged_split_site_answers_to_either_occupant(self):
         # bv_check merges two rows at one position into one site labelled 'Ba/Ca' (3294, 69289): the
@@ -475,5 +484,102 @@ class BondLabelsLoosely(unittest.TestCase):
                 return {'Ba/Ca': [(sites[5], 2.744, None)], 'Sb9a': [(sites[3], 2.45, None), (sites[6], 1.65, None)], 'Pb9b': [(sites[3], 2.91, None)]}.get(s.label, [])
         St.sites = sites
         ok, n, miss = PS.bond_hits(St(), [('Ba', 'O9', 2.744), ('Ca', 'O9', 2.744), ('Sb9', 'O8', 2.45), ('Pb9', 'O8', 2.91), ('Sb9', 'O11a', 2.0), ('Sb9', 'O1', 1.65)])
-        self.assertEqual((ok, n), (5, 6))                                    # 'O11a' is compared (it finds O11) and missed; 'O1' finds the padded O01 beside OH1 and hits
+        self.assertEqual((ok, n), (5, 5))                                    # 'O1' finds the padded O01 beside OH1 and hits; 'Sb9–O11a' finds O11 and misses, but Sb9 is a split site ('Sb9a'), so the miss is excused, not counted
+        self.assertIn('(1 bond at split or mixed sites not compared)', miss)
         self.assertEqual(PS.bond_hits(St(), [('Ag10', 'O8', 2.5)])[1], 0)     # a site neither table holds is not compared
+
+
+class SplitRowsAndFacingColumns(unittest.TestCase):
+    """Rows the page breaks up, and rows a facing column's text heads (2026-09-16 pm)."""
+
+    def _pdf(self, placed):
+        import pymupdf
+        tmp = tempfile.mkdtemp(prefix='ps_'); path = os.path.join(tmp, 'p.pdf'); self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
+        for x, y, t in placed:
+            page.insert_text((x, y), t, fontsize=9)
+        doc.save(path); doc.close()
+        return path
+
+    def test_an_occupancy_cell_on_two_lines_keeps_its_row(self):
+        # diaphorite: 'M1 0.516(5) Ag' / the coordinates on a baseline of their own / '0.484(5) Pb'
+        rows = [(40, 60, 'Atom'), (90, 60, 'Occupancy'), (170, 60, 'x/a'), (240, 60, 'y/b'), (310, 60, 'z/c'), (380, 60, 'Uiso'),
+                (40, 73, 'Pb1'), (90, 73, '1'), (170, 73, '0.18973(2)'), (240, 73, '-0.31003(7)'), (310, 73, '0.54127(3)'), (380, 73, '0.02062(12)'),
+                (40, 84, 'M1'), (90, 84, '0.516(5)'), (120, 84, 'Ag'),
+                (170, 89, '0.06451(4)'), (240, 89, '0.19426(11)'), (310, 89, '0.34402(4)'), (380, 89, '0.0274(2)'),
+                (90, 95, '0.484(5)'), (120, 95, 'Pb'),
+                (40, 108, 'Sb1'), (90, 108, '1'), (170, 108, '0.31616(4)'), (240, 108, '0.21030(11)'), (310, 108, '0.46489(5)'), (380, 108, '0.01691(15)'),
+                (40, 121, 'S1'), (90, 121, '1'), (170, 121, '0.21050(18)'), (240, 121, '0.1518(4)'), (310, 121, '0.5268(2)'), (380, 121, '0.0258(6)')]
+        got = PS.paper_sites(self._pdf(rows))
+        self.assertEqual([(r[0], round(r[1], 5)) for r in got], [('Pb1', 0.18973), ('M1', 0.06451), ('Sb1', 0.31616), ('S1', 0.2105)])
+
+    def test_a_facing_tables_row_does_not_name_the_site(self):
+        # cabvinite: the crystal-data table's 'V (Å3) 829.47(2)' and 'Z 4' share the lines of the sites table's F2 and F3
+        X = (250, 280, 315, 355, 420, 485, 545)                                                  # the sites table's columns, wide enough apart for 9-pt numbers
+        rows = [(X[0], 60, 'Atom'), (X[1], 60, 'Wyckoff'), (X[2], 60, 'Occ.'), (X[3], 60, 'x'), (X[4], 60, 'y'), (X[5], 60, 'z'), (X[6], 60, 'Ueq'),
+                (40, 73, 'Cell'), (65, 73, 'setting'), (X[0], 73, 'Th'), (X[1], 73, '8h'), (X[2], 73, 'Th1.00'), (X[3], 73, '0.14040(3)'), (X[4], 73, '0.35220(3)'), (X[5], 73, '0'), (X[6], 73, '0.0065(1)'),
+                (40, 86, 'V'), (55, 86, '(Å3)'), (170, 86, '829.47(2)'), (X[0], 86, 'F2'), (X[1], 86, '16i'), (X[2], 86, 'F1.00'), (X[3], 86, '-0.0015(6)'), (X[4], 86, '0.3112(3)'), (X[5], 86, '0.2508(6)'), (X[6], 86, '0.022(1)'),
+                (40, 99, 'Z'), (170, 99, '4'), (X[0], 99, 'F3'), (X[1], 99, '8f'), (X[2], 99, 'F1.00'), (X[3], 99, '0.2500'), (X[4], 99, '0.2500'), (X[5], 99, '0.2500'), (X[6], 99, '0.034(2)'),
+                (40, 112, 'Radiation,'), (85, 112, 'wavelength'), (170, 112, '0.71073'), (X[0], 112, 'Ow5'), (X[1], 112, '8h'), (X[2], 112, 'H2O'), (X[3], 112, '0.3630(2)'), (X[4], 112, '0.4000(5)'), (X[5], 112, '0'), (X[6], 112, '0.064(2)')]
+        got = PS.paper_sites(self._pdf(rows))
+        self.assertEqual([r[0] for r in got], ['Th', 'F2', 'F3', 'Ow5'])
+
+
+class TwoMineralBondTables(unittest.TestCase):
+    """The first whole-corpus run of round 7 (it87) lost two verified papers to a bond table that
+    lists two minerals: the loose names must not carry one mineral's bonds onto the other's sites."""
+
+    def _st(self, labels, elements):
+        class Site:
+            def __init__(self, label, el): self.label = label; self.element = el
+        class St:
+            sites = [Site(l, e) for l, e in zip(labels, elements)]
+            def neighbours(self, s, r): return []
+        return St()
+
+    def test_a_bare_element_beside_a_numbered_one_is_another_site(self):
+        st = self._st(['U1', 'O1', 'O7'], ['U', 'O', 'O'])
+        ok, n, miss = PS.bond_hits(st, [('U1', 'O7', 2.498), ('U', 'O1', 1.750)])
+        self.assertEqual(n, 1)                                               # 'U' is not U1 written bare when the table also writes 'U1'
+        ok, n, miss = PS.bond_hits(st, [('U', 'O1', 1.750), ('U', 'O7', 2.498)])
+        self.assertEqual(n, 2)                                               # a table that never numbers uranium: 'U' is the lone U1
+
+    def test_the_number_key_is_off_when_the_table_names_sites_by_letter(self):
+        st = self._st(['M1', 'M2', 'O1'], ['Ni', 'Fe', 'O'])
+        ok, n, miss = PS.bond_hits(st, [('M1', 'O1', 2.0), ('Ni1', 'O1', 2.014)])
+        self.assertEqual(n, 1)                                               # 'Ni1' beside 'M1': niasite's site, not M1 (77072)
+        ok, n, miss = PS.bond_hits(st, [('Ni1', 'O1', 2.014), ('Fe2', 'O1', 2.1), ('Bi2', 'O1', 2.3)])
+        self.assertEqual(n, 2)                                               # element-numbered only: Ni1 is M1 (nickel to the builder), Fe2 is M2, Bi2 is nobody
+
+
+class MultiPageTables(unittest.TestCase):
+    """A coordinates table over several pages, each part under its own header (2026-09-16 night:
+    70649's Pb…As page then S7…S60; bindi2010's four pages; 75867's O(3)…O(13) between Te(1)…O(1)
+    and O(14)…OW(5); AM88's two parts with a figure page between)."""
+
+    def test_continues_by_numbering_or_a_new_element_block(self):
+        prev = [('Pb1', 0, 0, 0, ''), ('Sb1', 0, 0, 0, ''), ('As14', 0, 0, 0, ''), ('S6', 0, 0, 0, '')]
+        self.assertTrue(PS._continues(prev, [('S7', 0, 0, 0, ''), ('S8', 0, 0, 0, ''), ('S9', 0, 0, 0, '')]))
+        prev2 = [('Pb18', 0, 0, 0, ''), ('Sb6', 0, 0, 0, ''), ('As14', 0, 0, 0, '')]
+        self.assertTrue(PS._continues(prev2, [('S7', 0, 0, 0, ''), ('S8', 0, 0, 0, ''), ('S9', 0, 0, 0, '')]))          # a block of a new element, rising, and not from 1
+        self.assertFalse(PS._continues(prev2, [('S1', 0, 0, 0, ''), ('S2', 0, 0, 0, ''), ('S3', 0, 0, 0, '')]))         # from 1 and continuing nothing: a table's start
+        self.assertFalse(PS._continues(prev2, [('S9', 0, 0, 0, ''), ('S8', 0, 0, 0, ''), ('S7', 0, 0, 0, '')]))         # running backwards: not a continuation
+        self.assertFalse(PS._continues(prev2, [('Pb1', 0, 0, 0, ''), ('Pb2', 0, 0, 0, ''), ('S1', 0, 0, 0, '')]))       # a label in common: another table
+        self.assertTrue(PS._continues([('Te(1)', 0, 0, 0, ''), ('O(1)', 0, 0, 0, '')], [('O(3)', 0, 0, 0, ''), ('O(4)', 0, 0, 0, '')]))   # parenthesised numbers
+
+    def test_parts_join_across_headed_pages_and_a_figure_page(self):
+        import pymupdf
+        tmp = tempfile.mkdtemp(prefix='ps_'); path = os.path.join(tmp, 'p.pdf'); self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        doc = pymupdf.open()
+        parts = [[('Atom', 'x', 'y', 'z', 'Ueq'), ('Pb1', '0.12345(2)', '0.25000(3)', '0.50000(2)', '0.010(1)'), ('Pb2', '0.22345(2)', '0.35000(3)', '0.60000(2)', '0.010(1)'), ('Sb1', '0.32345(2)', '0.45000(3)', '0.70000(2)', '0.010(1)')],
+                 [('Figure 3. The structure seen down c.',)],
+                 [('Atom', 'x', 'y', 'z', 'Ueq'), ('Sb2', '0.42345(2)', '0.35000(3)', '0.40000(2)', '0.010(1)'), ('S1', '0.52345(2)', '0.45000(3)', '0.30000(2)', '0.011(1)'), ('S2', '0.62345(2)', '0.55000(3)', '0.20000(2)', '0.011(1)')],
+                 [('Atom', 'x', 'y', 'z', 'Ueq'), ('S3', '0.72345(2)', '0.65000(3)', '0.10000(2)', '0.010(1)'), ('S4', '0.82345(2)', '0.75000(3)', '0.90000(2)', '0.011(1)'), ('S5', '0.92345(2)', '0.85000(3)', '0.80000(2)', '0.011(1)')]]   # each part carries the numbering on (Sb2 after Sb1, S3 after S2); a part whose every block starts at 1 would be another mineral's table
+        for rows in parts:
+            page = doc.new_page(width=595, height=842); y = 60
+            for cells in rows:
+                for x, t in zip((40, 90, 150, 210, 270), cells):
+                    page.insert_text((x, y), t, fontsize=9)
+                y += 13
+        doc.save(path); doc.close()
+        self.assertEqual([r[0] for r in PS.paper_sites(path)], ['Pb1', 'Pb2', 'Sb1', 'Sb2', 'S1', 'S2', 'S3', 'S4', 'S5'])

@@ -425,6 +425,8 @@ def _constituent_ok(tok):
     m3 = re.fullmatch(r'(Na|K|Li|Rb|Cs|Tl|Ag)O', c)
     if m3:
         c = m3.group(1) + '2O'                              # the 2 was a lost subscript
+    if c in ('CO', 'SiO', 'SO'):
+        c = {'CO': 'CO2', 'SiO': 'SiO2', 'SO': 'SO3'}[c]    # the same lost subscript on the anion: no analysis reports carbon monoxide (I001361's 'CO 30.86' read C at 7.3 apfu against 5.93)
     try:
         EP.parse_constituent('N2H8O' if c == '(NH4)2O' else c.rstrip('+-'))
     except ValueError:
@@ -2587,8 +2589,8 @@ def _single_outlier(counts, apfu, ox_paper=None, tol=0.025, gap=0.04):
     paper (northstarite's 'S6+ 1.02 S2- 1.02')."""
     els = [e for e in counts
            if e not in ('H', 'O') and (counts[e] or 0) >= 0.05 and (apfu or {}).get(e)]
-    if len(els) < 4:
-        return None
+    if len(els) < 3:
+        return None                    # three: two agreeing on one factor, one standing out (an experiment of 2026-09-16 night, measured by seed_faults + the precision subset)
     rat = {e: apfu[e] / counts[e] for e in els}
     best = best_dev = None
     for o in els:
@@ -2598,9 +2600,11 @@ def _single_outlier(counts, apfu, ox_paper=None, tol=0.025, gap=0.04):
         c = rest[len(rest) // 2] if len(rest) % 2 else 0.5 * (rest[len(rest) // 2 - 1] + rest[len(rest) // 2])
         if not c:
             continue
-        spread = max(abs(x / c - 1) for x in rest)
+        # a small coefficient is printed to two decimals: 'Mn0.06' may be 0.055 or 0.065, a 9 %
+        # spread of its own that says nothing about the common factor (I003512, seeded 2026-09-16)
+        spread = max(abs(rat[e] / c - 1) - 0.005 / counts[e] for e in els if e != o)
         dev = abs(rat[o] / c - 1)
-        if spread <= tol and dev >= max(gap, 3 * spread) and (best_dev is None or dev > best_dev):
+        if spread <= tol and dev >= max(gap, 3 * max(spread, 0.0)) and (best_dev is None or dev > best_dev):
             best, best_dev = o, dev
     return best
 
@@ -2859,7 +2863,19 @@ def _check_formula(ex, text, fcand):
         doubt('%s reads %g but that row\'s own range is %g-%g — the column mapping is off, so the values used are not the paper\'s means'
               % (outside[0]['constituent'], outside[0]['mean'], min(outside[0]['range']), max(outside[0]['range'])), reading=True, strict=True)   # yields only when every coefficient reproduces: then the range column, not the mean, was mis-mapped
     if r['score'] > 0.06 and len([d for d in r['diffs'] if d[2] is not None and d[1] >= 0.1]) >= 2:
-        doubt('the cations deviate %.0f%% overall — a basis or table-reading problem rather than one slip' % (100 * r['score']), reading=True)
+        # A formula of two or three cations reduced on a cation-sum basis cannot show one slip as one:
+        # a wrong P2O5 moves P up and Mn down together (12413), and the 'deviate overall' doubt read
+        # that as a misread table — measured by seeding faults 2026-09-16, a 20 % wt% fault was caught
+        # less often than a 10 % one on 71 papers for this reason alone. The paper's own STATED basis
+        # is the arbiter: on P = 1 the same fault leaves one element standing, and the rest agree.
+        r_s = _rep(wt, [stated]) if stated and r.get('basis') != stated else None
+        solo_s = [d for d in (r_s or {}).get('diffs') or [] if d[2] is not None] if r_s else []
+        if r_s is not None and len(solo_s) == 1 and not r_s.get('factor'):
+            r = r_s
+            notes.append('on the basis the paper states, %s, every coefficient but %s follows — one slip, seen through the normalisation of the cation-sum basis the fit had chosen' % (EP._basis_label(stated), solo_s[0][0]))
+        elif len([k for k, v in counts.items() if k not in ('H', 'O') and (v or 0) >= 0.05 and any(_parses(c) and EP.parse_constituent(c).element == k for c in wt)]) >= 3:
+            doubt('the cations deviate %.0f%% overall — a basis or table-reading problem rather than one slip' % (100 * r['score']), reading=True)
+        # (two cations only: one slip moves both, on any basis — the two deviations stand as the finding)
     def _factor(ratio):
         return any(abs(ratio - f_) <= 0.08 * f_ for f_ in (0.1, 0.2, 0.25, 0.333, 0.5, 2.0, 3.0, 4.0, 5.0, 10.0)) or not 0.4 <= ratio <= 2.5
     factor_like = [d for d in r['diffs'] if d[0] != 'H' and d[2] is not None and ((d[1] >= 0.1 and not 0.6 <= d[2] / d[1] <= 1.6 and _factor(d[2] / d[1])) or (d[1] < 0.1 and d[2] > 5 * max(d[1], 0.02)))]
@@ -2949,7 +2965,7 @@ def _check_formula(ex, text, fcand):
     outlier = solo[0][0] if len(solo) == 1 else (
         _single_outlier(counts, r.get('apfu') or {}, ox_paper) if r['diffs'] else None)   # nothing deviates (the apfu column already vouched): there is no one cell to name
     proven = (outlier and not strict_doubts) or not r['diffs']       # one cell off with the rest agreeing — or nothing off at all
-    if proven and len(compared) >= 4 and reading_doubts and all(d in reading_doubts for d in doubts):
+    if proven and len(compared) >= 3 and reading_doubts and all(d in reading_doubts for d in doubts):
         notes.append(('every coefficient of the formula but %s follows from the table read, so the doubts about that '
                       'reading do not carry to it — check the one cell' % outlier) if r['diffs'] else
                      'every coefficient of the formula follows from the table read, so the doubts about that reading do not carry')
@@ -4145,6 +4161,8 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None, coords=None):
                 s_ = 'agrees' if b_k <= max(1, 0.1 * n_k) else 'unverified' if n_k < 8 else 'disagrees'   # a table of seven cells or fewer with two off is too thin for a verdict either way
                 d_ = '%d of %d cells reproduce with %s%s%s' % (n_k - b_k, n_k, bv.get('params'), " from the paper's own bond distances" if bv.get('from_bonds') else " from the structure the paper prints, verified by its bond distances" if bv.get('from_verified_coords') else '',
                                                               ' — too few cells for a verdict' if s_ == 'unverified' else '')
+                if s_ == 'disagrees' and any('mapped one column off' in l for l in (bv.get('lines') or [])):
+                    s_ = 'unverified'; d_ += ' — a cell fits the neighbouring column: the header may be mis-mapped, so the differences are not a finding'
                 if s_ == 'disagrees' and ((ex.get('bv') or {}).get('mixed') or (ex.get('bv') or {}).get('foreign')):
                     # the paper's parameters come from several sources, or from one the tool does not carry
                     # (biagioniite's Tl–S from Biagioni et al. 2014): a table that differs is not a finding

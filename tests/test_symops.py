@@ -148,3 +148,19 @@ class Fallback(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SystematicAbsences(unittest.TestCase):
+    """`absent` derives the reflection conditions from the operators themselves (2026-09-16)."""
+
+    def test_textbook_conditions(self):
+        from pxrd_review import symops as SO
+        cases = [('C2/c', (1, 0, 0), True), ('C2/c', (1, 1, 0), False), ('C2/c', (0, 0, 1), True), ('C2/c', (0, 0, 2), False),
+                 ('P21/c', (1, 0, 1), True), ('P21/c', (1, 0, 2), False), ('P21/c', (0, 1, 0), True), ('P21/c', (0, 2, 0), False), ('P21/c', (1, 1, 1), False),
+                 ('Fd-3m', (1, 0, 0), True), ('Fd-3m', (1, 1, 1), False), ('Fd-3m', (2, 0, 0), True), ('Fd-3m', (2, 2, 0), False),
+                 ('Pnma', (1, 0, 0), True), ('Pnma', (2, 0, 0), False), ('Pnma', (0, 1, 0), True), ('Pnma', (0, 1, 1), False), ('Pnma', (1, 0, 1), False),
+                 ('P1', (1, 2, 3), False), ('I4/m', (1, 0, 0), True), ('I4/m', (1, 1, 0), False), ('R-3m', (1, 0, 0), True), ('R-3m', (1, 0, 1), False)]
+        for sym, hkl, expect in cases:
+            self.assertEqual(SO.absent(SO.lookup(sym)[0], hkl), expect, (sym, hkl))
+        self.assertEqual(SO.absences('C2/c', [(1, 0, 0), (1, 1, 0), (0, 0, 3), (2, 0, 0)]), [(1, 0, 0), (0, 0, 3)])
+        self.assertEqual(SO.absences('Xyz', [(1, 0, 0)]), [])

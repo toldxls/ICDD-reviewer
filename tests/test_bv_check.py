@@ -514,3 +514,31 @@ class WeightedColumns(unittest.TestCase):
         self.assertEqual(len(blank), 1, lines)
         self.assertIn('blank but the .cif has that bond (0.30 vu)', blank[0]); self.assertNotIn('not a difference', blank[0])
         self.assertLess(B.BLANK_INFO, 0.30)
+
+
+class ColumnMappedOff(unittest.TestCase):
+    """A sparse grid under a wide header (boscardinite's seventeen cation columns on two lines): a
+    cell that fits the NEIGHBOURING column's bond is a cell mapped one column off, a doubt about
+    the read — noted in its own words, not counted as a difference."""
+
+    def test_a_cell_that_fits_the_next_column_is_not_a_difference(self):
+        tmp = tempfile.mkdtemp(prefix='bv_'); self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cif = os.path.join(tmp, 'h.cif'); open(cif, 'w').write(HYDRATE + "Mg1 Mg 0.52 0.12 0\n")   # 1.96 Å from O1, which Ca1 bonds too
+        st = B.Structure(cif); P = B.Params(prefer='gh', u6='burns')
+        res, an, cells, hb = B.compute(st, P, None, 'oo')
+        ca = {a: sorted(s for s, _, _ in v)[0] for (a, c), v in cells.items() if c == 'Ca1'}
+        mg = {a: sorted(s for s, _, _ in v)[0] for (a, c), v in cells.items() if c == 'Mg1'}
+        both = sorted(set(ca) & set(mg))
+        self.assertTrue(both, (ca, mg))
+        anions = sorted(set(ca) | set(mg), key=lambda a: (a not in both, a))
+        rows = [['Atom', 'Ca1', 'Mg1', 'Σ']] + [[a, ('%.2f' % ca[a]) if a in ca else '', ('%.2f' % mg[a]) if a in mg else '', ''] for a in anions]
+        rows[1][2] = '%.2f' % ca[both[0]]                                                       # the Ca1 value printed under Mg1, and nothing under Ca1
+        rows[1][1] = ''
+        rows.append([both[0] + 'x', '%.2f' % (ca[both[0]] + 0.3), '', ''])                       # a row of no anion: ignored
+        lines = B.check_bvs_table(st, res, cells, an, [rows], 'GH')
+        self.assertTrue(any('mapped one column off' in ln and 'Ca1' in ln for ln in lines), lines)
+        self.assertTrue(any('0 disagree' in ln for ln in lines), lines)
+        rows[1][1] = '%.2f' % (ca[both[0]] + 0.3)                                               # the neighbour has its own value: the cell is a difference
+        lines = B.check_bvs_table(st, res, cells, an, [rows], 'GH')
+        self.assertFalse(any('mapped one column off' in ln for ln in lines), lines)
+        self.assertTrue(any('2 disagree' in ln for ln in lines), lines)

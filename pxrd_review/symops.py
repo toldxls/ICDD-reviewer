@@ -281,3 +281,45 @@ def _flat(seg):
         for c in ch:
             flat.append(c); back.append(i)
     return ''.join(flat), back
+
+
+# ----------------------------------------------------------------------------- reflection conditions
+def absent(ops, hkl):
+    """Whether a reflection is systematically absent under an operator list: it is when some
+    operator (R, t) maps h onto itself (h·R = h) and shifts its phase by a non-integer h·t —
+    which covers the lattice centrings (R = 1, t = the centring vector), glide planes and screw
+    axes at once, with no table of conditions to transcribe. Operators as `lookup` returns them:
+    rotation rows and a translation in [0, 1). h, k, l are integers; (0 0 0) is never absent."""
+    h, k, l = hkl
+    if h == k == l == 0:
+        return False
+    for rot, tr in ops:
+        # h·R (h a row vector on the left): h'_j = Σ_i h_i R_ij
+        hr = (h * rot[0][0] + k * rot[1][0] + l * rot[2][0],
+              h * rot[0][1] + k * rot[1][1] + l * rot[2][1],
+              h * rot[0][2] + k * rot[1][2] + l * rot[2][2])
+        if hr != (h, k, l):
+            continue
+        phase = h * tr[0] + k * tr[1] + l * tr[2]
+        if abs(phase - round(phase)) > 1e-6:
+            return True
+    return False
+
+
+def absences(symbol, hkls):
+    """[hkl, …] of the given indices that the space group forbids — under EVERY setting the
+    symbol has in the table (a nonstandard setting the writer meant is not a mis-index), so an
+    index is reported only when no known setting of the symbol allows it. [] when the symbol is
+    unknown, or the indices are all allowed."""
+    variants = lookup(symbol)
+    if not variants:
+        return []
+    out = []
+    for hkl in hkls:
+        try:
+            t = tuple(int(v) for v in hkl)
+        except (TypeError, ValueError):
+            continue
+        if all(absent(ops, t) for ops in variants):
+            out.append(t)
+    return out

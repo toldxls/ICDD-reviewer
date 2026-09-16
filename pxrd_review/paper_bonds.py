@@ -31,7 +31,7 @@ from pxrd_review import epma as EP
 # one row of a bond-distance table: 'Pb1 – S7 2.814(14)', 'X –O(2) 2.503(4) × 3'
 Row = namedtuple('Row', 'cation anion dist esd count page line col site', defaults=(None,))   # site: the name printed beside the element, 'Mn (X)' -> 'X'
 
-DIST = re.compile(r'^(\d\.\d{2,4})(?:\((\d{1,3})\))?$')
+DIST = re.compile(r'^(\d\.\d{2,5})(?:\((\d{1,3})\))?$')                  # to five decimals: '2.28319(13)' (77445)
 DASH = '–—−‐-'
 # a site label, with the dash a continuation row carries: '–S15', 'O(2)', 'Ow1', 'OH2', 'O10H'.
 # A trailing lowercase group is the symmetry code the paper superscripts onto the anion ('O1vi')
@@ -40,9 +40,11 @@ DASH = '–—−‐-'
 # A letter INSIDE the brackets is part of the label, not a symmetry code: 'M(2a)' and 'M(2b)' are
 # the two halves of a split site and have to stay apart. Outside them the same letter is left to
 # the symmetry-code rule below, where 'O1vi' must still read as O1.
-LAB = re.compile(r"^[%s]?\s*([A-Z][A-Za-z]?)(?:\((\d{1,2}[a-z]?)\)|(\d{1,2}))?([A-Z]?)([a-z]{0,4}['′*†‡#]{0,2})$" % DASH)
-PAIR = re.compile(r"^([A-Z][A-Za-z]?(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[%s]"
-                  r"([A-Z][A-Za-z]?(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[a-z]{0,4}['′″*†‡#]{0,2}$" % DASH)   # 'Z–O8′': the same anion under a symmetry code, a second bond
+HEAD = r"(?:\((?:[A-Z][a-z]?,)+[A-Z][a-z]?\)|(?:[A-Z][a-z]?,)+[A-Z][a-z]?|[A-Z][A-Za-z]?)"   # 'Pb', 'Ow', a mixed site '(S,Se)' / 'Na,Ca' (mumme2013, 2496)
+LAB = re.compile(r"^[%s]?\s*(%s)(?:\((\d{1,2}[a-z]?)\)|(\d{1,2}))?([A-Z]?)([a-z]{0,4}['′*†‡#]{0,2})$" % (DASH, HEAD))
+PAIR = re.compile(r"^(%s(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[%s]"
+                  r"(%s(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[a-z]{0,4}['′″*†‡#]{0,2}$" % (HEAD, DASH, HEAD))   # 'Z–O8′': the same anion under a symmetry code, a second bond
+CAT_DASH = re.compile(r"^(%s(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[%s]$" % (HEAD, DASH))   # 'Pd1–' as its own token, the anion next (78708)
 BARE_DASH = re.compile(r'^[%s]+$' % DASH)
 MULT_SIGNS = ('×', 'x', 'X', '·', '∙', '*')
 # several corpus journals set the multiplication sign in a font whose '×' reaches the text as a 3
@@ -312,13 +314,38 @@ def _cation_left(ws, dash):
     return None, False
 
 
+_ESD_TAIL = re.compile(r'^\d{1,3}\)$')
+_DIST_OPEN = re.compile(r'^\d\.\d{2,5}\($')
+_DIST_MULT = re.compile(r'^(\d\.\d{2,5}(?:\(\d{1,3}\))?)([×xX·∙*]\d{1,2})$')
+
+
+def _mend_tokens(ws):
+    """The words of a line as the parser wants them: an esd split from its distance ('2.861(' '3)',
+    jasrouxite) is one token again, and a count welded onto the distance ('2.923(5)x2', kobellite)
+    is the distance and its own count token. Positions are kept: the mended token takes the first
+    word's left edge and the last word's right edge."""
+    out = []; i = 0
+    while i < len(ws):
+        w = ws[i]; t = w[4].strip()
+        if _DIST_OPEN.match(t) and i + 1 < len(ws) and _ESD_TAIL.match(ws[i + 1][4].strip()):
+            n = ws[i + 1]
+            out.append((w[0], w[1], n[2], n[3], t + n[4].strip()) + tuple(w[5:])); i += 2; continue
+        m = _DIST_MULT.match(t)
+        if m:
+            cut = w[0] + (w[2] - w[0]) * len(m.group(1)) / len(t)
+            out.append((w[0], w[1], cut, w[3], m.group(1)) + tuple(w[5:]))
+            out.append((cut, w[1], w[2], w[3], m.group(2)) + tuple(w[5:])); i += 1; continue
+        out.append(w); i += 1
+    return out
+
+
 def _cells(line, relaxed=False, mangled=False):
     """The bond cells of one typeset line: [(x where the cell starts, cation token or None, anion,
     d, esd, count)]. A line of a multi-column table holds one cell per column. `relaxed` reads the
     journals that print no dash at all ('Mn (X) O1 2.196(3)', and the continuation rows 'O5
     2.334(2)' under it) — see `_bond_caption`, which is what admits a page to that pass; `mangled`
     says the page is set in the font of `_mangled`."""
-    ws = line['w']
+    ws = _mend_tokens(line['w'])
     out = []
     for i, w in enumerate(ws):
         m = DIST.match(w[4].strip())
@@ -344,6 +371,8 @@ def _cells(line, relaxed=False, mangled=False):
         if not dashed:                              # 'Pb1 - S7 2.814': the dash is its own token
             if j >= 1 and BARE_DASH.match(ws[j - 1][4].strip()):
                 dash = j - 1
+            elif j >= 1 and CAT_DASH.match(ws[j - 1][4].strip()):
+                cat = _label(CAT_DASH.match(ws[j - 1][4].strip()).group(1))[0]   # 'Pd1– Ge5 2.57(2)': the dash on the cation's own token; the cell still starts at the anion, where its continuation rows start ('K– O4 2.867' / 'O3 3.267', 67536)
             elif relaxed and m.group(2) and (re.match(r'^([A-Z][a-z]?)', an).group(1) in ANION_HEADS
                                              or WATER_LABEL.match(an)):
                 pass                                # no dash anywhere: the anion and the esd stand for it

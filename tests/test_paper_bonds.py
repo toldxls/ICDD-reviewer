@@ -437,3 +437,27 @@ class SiteNames(unittest.TestCase):
         c = PB._cells(line(100, (40, 'Pb1'), (60, '–'), (70, 'S7'), (100, '2.814(14)')))
         self.assertEqual(c[0][6], None)
         self.assertEqual(PB.Row('Mn', 'O1', 2.196, 3, 1, 1, 0, 0).site, None)
+
+
+class CellsTheCorpusPrints(unittest.TestCase):
+    """Layouts found on 2026-09-16 pm among the papers whose bond table the reader had missed."""
+
+    def test_a_distance_to_five_decimals(self):
+        cells = PB._cells(line(100, (40, 'Pb–O1'), (100, '2.28319(13)'), (150, '×2')))
+        self.assertEqual([(c[1], c[2], c[3], c[5]) for c in cells], [('Pb', 'O1', 2.28319, 2)])
+
+    def test_an_esd_split_from_its_distance_and_a_count_welded_onto_it(self):
+        cells = PB._cells(line(100, (40, 'Pb1–S7'), (100, '2.861('), (140, '3)')))
+        self.assertEqual([(c[1], c[2], c[3], c[4]) for c in cells], [('Pb1', 'S7', 2.861, 3)])
+        cells = PB._cells(line(100, (40, 'M1-(S,Se)18'), (120, '2.923(5)x2')))
+        self.assertEqual([(c[1], c[2], c[3], c[5]) for c in cells], [('M1', '(S,Se)18', 2.923, 2)])
+
+    def test_a_mixed_site_label(self):
+        cells = PB._cells(line(100, (40, 'Na,Ca–O1'), (110, '2.349(16)'), (160, '×'), (170, '3')))
+        self.assertEqual([(c[1], c[2], c[3], c[5]) for c in cells], [('Na,Ca', 'O1', 2.349, 3)])
+        cells = PB._cells(line(100, (40, '-(S,Se)2'), (100, '3.190(7)')))
+        self.assertEqual([(c[1], c[2], c[3]) for c in cells], [(None, '(S,Se)2', 3.19)])
+
+    def test_the_dash_on_the_cations_own_token(self):
+        cells = PB._cells(line(100, (35, 'Pd1–'), (61, 'Ge5'), (97, '2.57(2)')))
+        self.assertEqual([(c[1], c[2], c[3]) for c in cells], [('Pd1', 'Ge5', 2.57)])

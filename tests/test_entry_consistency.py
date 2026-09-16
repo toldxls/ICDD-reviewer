@@ -538,3 +538,42 @@ class AuditEdges2(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ExtinctionsAndEntryOptics(unittest.TestCase):
+    """Checks 30 and 31 (2026-09-16): a reflection the space group forbids, and the entry's own
+    indices and Gladstone–Dale arithmetic against the .pdf."""
+
+    def _e(self, sg, refl, optical='', analysis='', density=None):
+        e = entry(analysis=analysis, optical=optical, density=density)
+        e.space_group = sg; e.refl = refl; e.cell['SG'] = sg
+        return e
+
+    def test_a_forbidden_reflection_is_a_flag_and_many_are_a_note(self):
+        allowed = [('4.0', '100', '1', '1', '0'), ('3.0', '50', '0', '0', '2'), ('2.5', '40', '2', '0', '0'), ('2.0', '30', '1', '1', '2'), ('1.8', '20', '2', '2', '0'), ('1.5', '10', '3', '1', '0')]
+        self.assertEqual(X.check30_extinctions(self._e('C2/c', allowed)), [])
+        one_bad = allowed + [('3.5', '15', '1', '0', '0')]                      # h+k odd: absent in a C lattice
+        f = X.check30_extinctions(self._e('C2/c', one_bad))
+        self.assertEqual([x.sev for x in f], ['flag']); self.assertIn('1 0 0', f[0].msg)
+        many_bad = allowed + [('3.5', '15', '1', '0', '0'), ('3.3', '15', '0', '1', '0'), ('3.1', '15', '2', '1', '0'), ('2.9', '15', '0', '0', '1')]
+        f = X.check30_extinctions(self._e('C2/c', many_bad))
+        self.assertEqual([x.sev for x in f], ['note'])
+        self.assertEqual(X.check30_extinctions(self._e('Xyz', one_bad)), [])       # an unknown symbol says nothing
+        self.assertEqual(X.check30_extinctions(self._e('P1', one_bad)), [])        # nothing is forbidden in P1
+
+    def test_the_mean_index_of_the_entry(self):
+        self.assertAlmostEqual(X._entry_mean_n('A=1.610(3), B=1.620(3), Q=1.644(3), Sign=+, 2V(calc)66.5°'), (1.610 + 1.620 + 1.644) / 3)
+        self.assertAlmostEqual(X._entry_mean_n('B=1.668(5), Q=1.716(5), Sign=-'), (2 * 1.716 + 1.668) / 3)   # uniaxial (−): ω is the larger
+        self.assertAlmostEqual(X._entry_mean_n('A=1.640(3), Q=1.662(3), Sign=+'), (2 * 1.640 + 1.662) / 3)
+        self.assertAlmostEqual(X._entry_mean_n('A=1.640(3), Q=1.662(3).'), (1.640 + 1.662) / 2)             # no sign: the plain mean
+        self.assertIsNone(X._entry_mean_n('Sign=+')); self.assertIsNone(X._entry_mean_n(''))
+
+    def test_indices_against_the_paper(self):
+        e = self._e('P1', [], optical='A=1.610(3), B=1.620(3), Q=1.644(3), Sign=+')
+        same = 'Optically the mineral is biaxial (+), α = 1.610(3), β = 1.620(3), γ = 1.644(3).'
+        self.assertEqual([x for x in X.check31_gd_entry(e, same) if x.sev == 'flag'], [])
+        other = 'Optically the mineral is biaxial (+), α = 1.588(3), β = 1.600(3), γ = 1.607(3).'
+        f = X.check31_gd_entry(e, other)
+        self.assertEqual([x.sev for x in f], ['flag']); self.assertIn('mistranscribed', f[0].msg)
+        two = other + ' The associated mineral is biaxial (−), α = 1.700, β = 1.710, γ = 1.720.'
+        self.assertEqual([x for x in X.check31_gd_entry(e, two) if x.sev == 'flag'], [])           # two sets of indices in the paper: not compared

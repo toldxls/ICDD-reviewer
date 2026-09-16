@@ -126,6 +126,43 @@ def _label_ok(t):
     return len(m.group(1)) == 1 and (m.group(1) in SITE_LETTERS and bool(re.search(r'\d', m.group(2))) or (m.group(1) in 'XYZTMA' and not m.group(2))   # 'X', 'Y', 'Z', 'T': a tourmaline's sites, bare
                                      or (m.group(1) in SITE_LETTERS and re.fullmatch(r'[A-Z]', m.group(2)) is not None))   # 'MH', 'AP', 'XO': a site named by two letters
 
+def _column_apart(ws, i, j):
+    """Token j stands a column away from token i (over 100 px of page between them): what stands
+    at i is the facing column's — a crystal-data row's 'V', 'Z' — not this row's label."""
+    return ws[j][0] - ws[i][2] > 100
+
+
+def _fuse_split_rows(lines):
+    """A row whose occupancy cell runs to two lines ('M1 0.516(5) Ag' / '0.484(5) Pb', diaphorite)
+    is typeset with its coordinates on a baseline of their own between the two: three lines, none
+    of them a row. The coordinates line — numbers only, three or more, one of them to four
+    decimals, touching the line above — is fused onto the label line above it, and the reader
+    sees one row (its words put back in x order). A split site's second member on the line below
+    ('Ba1 Ba 0.645(8)' / the coordinates / 'K1 K 0.355(8)', 10514) takes the same coordinates:
+    the structure builder merges the two rows into one site, as it does a pair the table prints
+    at one position."""
+    out = []; fused_nums = None; fused_y = None
+    for ln in lines:
+        ws = ln.get('w') or []
+        nums = [w for w in ws if _val(w[4]) is not None]
+        if out and ws and _val(ws[0][4]) is not None and len(nums) >= 3 and any(_ndec(w[4]) >= 4 for w in nums) \
+                and not any(_label_ok(_clean_label(_split_occupants(w[4])[0])) for w in ws):
+            prev = out[-1]; pws = prev.get('w') or []
+            if pws and _label_ok(_clean_label(_split_occupants(pws[0][4])[0])) and not any(_ndec(w[4]) >= 4 for w in pws) \
+                    and 0 <= ln['y'] - prev['y'] <= 7:
+                out[-1] = dict(prev, w=sorted(list(pws) + list(ws), key=lambda w: w[0]), bot=max(prev.get('bot', prev['y']), ln.get('bot', ln['y'])))
+                fused_nums = list(ws); fused_y = ln['y']
+                continue
+        if fused_nums is not None and ws and 0 <= ln['y'] - fused_y <= 8 and _label_ok(_clean_label(_split_occupants(ws[0][4])[0])) \
+                and not any(_ndec(w[4]) >= 4 for w in ws) and len(nums) <= 1:
+            out.append(dict(ln, w=sorted(list(ws) + list(fused_nums), key=lambda w: w[0])))   # the second member of the split site
+            fused_nums = None
+            continue
+        fused_nums = None
+        out.append(ln)
+    return out
+
+
 def _view(lines, lo, hi):
     """The page restricted to one text column: page_lines merges both columns of a two-column page
     into one line, so filtering the words by x is exactly what reading that column gives."""
@@ -175,12 +212,15 @@ def _scan(lines):
             xcol = cols['x']
             lab = _clean_label(_split_occupants(ws[0][4])[0]); lab_i = 0
             cands = [q for q, w in enumerate(ws) if (w[0] + w[2]) / 2 < xcol - 6 and _label_ok(_clean_label(_split_occupants(w[4])[0]))]
-            if not _label_ok(lab) or (cands and cands[-1] > 0 and _prose_between(ws, 0, cands[-1])):
+            if not _label_ok(lab) or (cands and cands[-1] > 0 and (_prose_between(ws, 0, cands[-1]) or _column_apart(ws, 0, cands[-1]))):
                 # a two-column page can leave the neighbouring column's prose at the head of the line
-                # ('As noted above, michalski M3 0.42295(8) …': 'As' is a word there, not arsenic); then
-                # the label is the last label-like token still left of the x column
+                # ('As noted above, michalski M3 0.42295(8) …': 'As' is a word there, not arsenic), or
+                # a facing table's own row ('V (Å3) 829.47(2) F2 16i F1.00 –0.0015(6) …', the crystal
+                # data beside cabvinite's sites); then the label is the last label-like token still
+                # left of the x column
                 if cands:
-                    lab_i = cands[-1]; lab = _clean_label(_split_occupants(ws[lab_i][4])[0])
+                    wyck = [q for q in cands if q + 1 < len(ws) and WYCK.match(ws[q + 1][4])]   # the label is what the Wyckoff column follows ('Ow5 8h H2O 0.363(2)': H2O is the occupancy)
+                    lab_i = wyck[0] if wyck else cands[-1]; lab = _clean_label(_split_occupants(ws[lab_i][4])[0])
             occupants = _split_occupants(ws[lab_i][4])[1]
             rest = ws[lab_i + 1:]
             if rest and WYCK.match(rest[0][4]):
@@ -276,7 +316,7 @@ def _scan_by_content(lines):
         labs_ = [q for q, w in enumerate(ws) if (w[0] + w[2]) / 2 < first_x and _label_ok(_clean_label(_split_occupants(w[4])[0]))]
         lab = None
         if labs_:
-            q = labs_[-1] if (len(labs_) > 1 and _prose_between(ws, labs_[0], labs_[-1])) else labs_[0]
+            q = labs_[-1] if (len(labs_) > 1 and (_prose_between(ws, labs_[0], labs_[-1]) or _column_apart(ws, labs_[0], labs_[-1]))) else labs_[0]
             lab = _clean_label(_split_occupants(ws[q][4])[0])
             if _split_occupants(ws[q][4])[1]:
                 occ = (occ + ' ' if occ else '') + _split_occupants(ws[q][4])[1]
@@ -342,6 +382,8 @@ def paper_sites(pdf, with_page=False):
         by_page = {p: (rows, headed, cont) for p, rows, _w, headed, cont in pages}
         labels = {r[0].upper() for r in best}
         p = best_page + 1
+        if p not in by_page and p + 1 in by_page:
+            p += 1                                       # a figure page between two parts of one table
         while p in by_page:
             rows, headed, cont = by_page[p]
             dup = next((i for i, r in enumerate(rows) if r[0].upper() in labels), None)
@@ -357,7 +399,9 @@ def paper_sites(pdf, with_page=False):
         # header and the first sites, is on the page before
         _rows0, headed0, cont0 = by_page[best_page]
         p = best_page - 1
-        while p in by_page and (cont0 or not headed0):
+        if p not in by_page and p - 1 in by_page:
+            p -= 1
+        while p in by_page and (cont0 or not headed0 or _continues(by_page[p][0], best[:len(by_page[best_page][0])])):
             rows, headed, cont = by_page[p]
             if len(rows) < 2 or not headed or any(r[0].upper() in labels for r in rows):
                 break
@@ -401,9 +445,12 @@ def paper_site_tables(pdf, limit=3):
 
 def _continues(prev, rows):
     """A table on the next page that repeats its header is still the same table when its site
-    numbering carries on from the page before: O21… after O1…O20, with no label in common."""
+    numbering carries on from the page before: O21… after O1…O20, with no label in common. A block
+    of a NEW element counts too — the anion pages after the cation pages of a sulfosalt's four-page
+    table (70649: Pb1…As14, then S7…S60; bindi2010: Sb14…As33, then As34…S39) — as long as its own
+    numbering rises and nothing repeats. 'O(3)' numbers like 'O3'."""
     def num(lab):
-        m = re.match(r'^([A-Za-z]+)(\d+)', lab)
+        m = re.match(r'^([A-Za-z]+)\(?(\d+)', lab)
         return (m.group(1).upper(), int(m.group(2))) if m else None
     top = {}
     for r in prev:
@@ -413,7 +460,19 @@ def _continues(prev, rows):
     cont = [num(r[0]) for r in rows]; cont = [k for k in cont if k]
     if len(cont) < 2 or len(cont) < 0.5 * len(rows):
         return False
-    return all(k[0] in top and k[1] > top[k[0]] for k in cont)
+    prev_keys = {num(r[0]) for r in prev}
+    if any(k in prev_keys for k in cont):
+        return False                                     # a label in common: another table, or the same one read twice
+    by_el = {}
+    for k in cont:
+        by_el.setdefault(k[0], []).append(k[1])
+    if any(any(b < a for a, b in zip(v, v[1:])) for v in by_el.values()):
+        return False                                     # a block that runs backwards is not a continuation
+    ok = sum(1 for k in cont if (k[0] in top and k[1] > top[k[0]]) or k[0] not in top)
+    # a part whose every block starts at 1 and continues nothing is a table's START — another
+    # mineral's table under the same header (the audit of 2026-09-10), never a continuation
+    carries = any(k[0] in top and k[1] > top[k[0]] for k in cont) or cont[0][1] != 1
+    return carries and ok >= max(2, 0.8 * len(cont))
 
 
 def _no_adp(rows):
@@ -445,7 +504,7 @@ def _page_tables_cached(pdf, _stamp):
     for pno, page in enumerate(PE._pages(pdf), 1):
         best = []; best_w = 1.0; headed = False
         views = []
-        for lines in ([l for l in page if not l.get('rot')], [l for l in page if l.get('rot')]):   # the upright text, and a table typeset sideways
+        for lines in (_fuse_split_rows([l for l in page if not l.get('rot')]), [l for l in page if l.get('rot')]):   # the upright text, and a table typeset sideways
             xs = [w[0] for ln in lines for w in ln['w']] + [w[2] for ln in lines for w in ln['w']]
             if not xs:
                 continue
@@ -587,6 +646,23 @@ def bond_hits(st, bonds, tol=0.03):
                     index[level].setdefault(k, []).append(s_)
             for k in _loose_keys(part):
                 index[3].setdefault(k, []).append(s_)
+    # a bond table that names sites by letter itself ('M1–O1', 'A1–O5') is not one that writes the
+    # coordinates' M1 as 'Ni1': its element-numbered labels are another mineral's (niasite's Ni1
+    # beside the first mineral's M1 in 77072's two-part table), so the number key is off for them
+    lettered = any(_SITE_NUM.match(re.sub(r'[()\s]', '', c or '')) for c, _a, _d in bonds)
+    # a bare element label ('U–O1') stands for the coordinates' lone U1 only in a bond table that
+    # never numbers that element: one that writes 'U1–O7' as well is naming two sites — the
+    # second mineral's uranyl beside the first's (76671)
+    numbered = {m.group(1) for c, a, _d in bonds for m in [re.match(r'^([A-Z][a-z]?)\d', re.sub(r'[()\s]', '', c or ''))] if m}
+    def by_number(label, got):
+        # 'Bi18' answers to the coordinates' M18 only when M18 IS bismuth to the builder
+        t = re.sub(r'[()\s]', '', label or '')
+        m = re.match(r'^([A-Z][a-z]?)\d', t)
+        if not m or m.group(1) not in EP.ATOMIC_WEIGHTS or _SITE_NUM.match(t):
+            return got
+        if lettered:
+            return []
+        return [s_ for s_ in got if getattr(s_, 'element', None) == m.group(1)]
     def find(label):
         # the whole label first ('Mn(X)' on both tables); then the site name the paper prints beside
         # the element — its own name for the site, kept when the numbering differs between tables
@@ -601,9 +677,14 @@ def bond_hits(st, bonds, tol=0.03):
         # last, the loose name, either way round: the bond table writes 'Sb9' for the coordinates'
         # split pair 'Sb9a'/'Pb9b' and 'O8' for the hydroxyl site 'OH8' (boscardinite, 2026-09-16),
         # or names the split member 'O11a' where the coordinates print 'O11'
-        loose = _loose_keys(label)
+        loose = _loose_keys(label, query=True)
+        bare = re.sub(r'[()\s]', '', label or '')
         for k in exact + loose:
             got = index[3].get(k)
+            if got and k.startswith('#'):
+                got = by_number(label, got)
+            if got and k == bare.upper() and bare in EP.ATOMIC_WEIGHTS and bare in numbered:
+                got = None                                                # 'U' beside 'U1' in the same table: another site, not U1 written bare
             if got:
                 return got
         for k in loose:
@@ -611,7 +692,7 @@ def bond_hits(st, bonds, tol=0.03):
             if got:
                 return got
         return []
-    cache = {}; ok = n = 0; miss = []
+    cache = {}; ok = n = 0; miss = []; excused = 0
     reach = min(4.6, max([3.6] + [d + 0.1 for _c, _a, d in bonds if d]))   # a paper's long Pb–S or K–O bonds (3.7 Å) must be within reach, or they count as misses of a structure that has them
     for cat, an, d in bonds:
         cats, ans = find(cat), find(an)
@@ -628,19 +709,46 @@ def bond_hits(st, bonds, tol=0.03):
         hit = any(o.label in an_labels and abs(dd - d) <= tol for cs in cats for o, dd, _c in cache[cs.label])
         if hit:
             ok += 1
+        elif any(_split_site(x.label) for x in list(cats) + list(ans)):
+            # a bond to a SPLIT or mixed site ('As2b', '(As,Sb)4', 'Pb1/Sb1'): the printed distance
+            # may be the other member's, or the average the paper computed over both — a miss there
+            # says nothing about the row being read right, so it is not counted either way
+            n -= 1; excused += 1
         elif len(miss) < 6:
             near = sorted((dd for cs in cats for o, dd, _c in cache[cs.label] if o.label in an_labels), key=lambda x: abs(x - d))
             miss.append('%s–%s %.3f printed, %s in the structure' % (cat, an, d, ('%.3f' % near[0]) if near else 'no such neighbour'))
+    if excused:
+        miss.append('(%d bond%s at split or mixed sites not compared)' % (excused, '' if excused == 1 else 's'))
     return ok, n, miss
 
 
-def _loose_keys(label):
+def _split_site(label):
+    """'As2b', 'M2a', '(As,Sb)4', 'Pb1/Sb1', 'Tl/Pb': a site the coordinates table prints as one
+    member of a split pair, or as a mixture — a printed bond to it may be the other member's."""
+    t = re.sub(r'\s', '', label or '')
+    return bool(re.search(r'\d[a-b]$', t) or '/' in t or re.match(r'^\(?[A-Z][a-z]?,', t))
+
+
+_ANION_EL = {'O', 'S', 'Se', 'Te', 'F', 'Cl', 'Br', 'I', 'N'}                # the elements an anion site carries; As and Sb are cations here (a sulfosalt's As2 is a cation site)
+_SITE_NUM = re.compile(r"^([AMTXYZ]|Me)(\d{1,2})[a-z]?'?$")               # a crystallographic site by letter and number: M18, X3, Me4, A1'
+
+def _loose_keys(label, query=False):
     """The names a label answers to when nothing exact does: its stem without the letter a split
-    site carries ('Sb9a' -> 'SB9', 'O11b' -> 'O11'), its number unpadded ('O01' -> 'O1'), and a hydroxyl or water site by its oxygen
-    number ('OH8', 'OW3', 'Ow3' -> 'O8', 'O3') — only for a label that has one, so 'O8' itself
-    yields nothing here and a table that prints both O8 and OH8 is matched exactly, never loosely."""
-    t = re.sub(r'[()\s]', '', label or '').rstrip('*†‡§,')
+    site carries ('Sb9a' -> 'SB9', 'O11b' -> 'O11'), its number unpadded ('O01' -> 'O1'), a
+    hydroxyl or water site by its oxygen number ('OH8', 'OW3', 'Ow3' -> 'O8', 'O3'), a mixed site
+    by each occupant ('(Bi,Pb)2' -> 'BI2', 'PB2'), an element site by its element ('Al(2)', 'Al2'
+    -> 'AL', for a bond table that writes 'Al–O1'), and a site by its NUMBER within its kind when
+    the coordinates table names sites by letter and the bond table by element ('M18' <- 'Bi18',
+    'X3' <- 'S3': '#c18', '#a3' — a cation number never answers to an anion's, and with `query`
+    a letter-site label asks only for its own family, '#cA1'). Only for a label
+    that has one of these; the exact names are always tried first, so a table that prints both O8
+    and OH8 is matched exactly, never loosely."""
+    t = re.sub(r'\s', '', label or '').rstrip('*†‡§,')
     out = []
+    m = re.match(r'^\(((?:[A-Z][a-z]?,)+[A-Z][a-z]?)\)(\d{0,2}[a-z]?)$', t)
+    if m:
+        out += [(el + m.group(2)).upper() for el in m.group(1).split(',')]
+    t = re.sub(r'[()]', '', t)
     stem = re.sub(r'(\d)[a-z]$', r'\1', t)
     if stem != t:
         out.append(stem.upper())
@@ -650,6 +758,19 @@ def _loose_keys(label):
     m = re.match(r'^O[HhWw](\d+)[a-z]?$', t)
     if m:
         out.append('O' + m.group(1))
+    m = re.match(r'^([A-Z][a-z]?)0*(\d{1,2})[a-z]?$', t)
+    bare = None
+    if m and m.group(1) in EP.ATOMIC_WEIGHTS:
+        out.append(('#a' if m.group(1) in _ANION_EL else '#c') + m.group(2))
+        bare = m.group(1).upper()                                          # 'Al2' answers to a bare 'Al' — last, after every more specific name
+    m = _SITE_NUM.match(t)
+    if m:
+        kind = '#a' if m.group(1) == 'X' else '#c'
+        out.append(kind + m.group(1) + m.group(2).lstrip('0'))                # 'A1' answers to "A1'" — its own family only
+        if not query or m.group(1) == 'Me':
+            out.append(kind + m.group(2).lstrip('0'))                        # and, as a site of the coordinates table, to the element-numbered 'Bi18' of the bond table; never the other way (a bond table's 'A1' is not the coordinates' M1 — 77072) — except 'Me4', the generic metal, which names the cation numbered 4 whatever its element (jasrouxite)
+    if bare:
+        out.append(bare)
     return out
 
 
