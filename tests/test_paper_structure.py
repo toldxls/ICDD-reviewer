@@ -280,9 +280,28 @@ class SymbolAndCellAgree(unittest.TestCase):
     def test_the_symbol_a_printed_cell_allows_is_the_papers(self):
         from pxrd_review import symops as SO
         self.assertEqual(SO.crystal_system('P-1'), 'triclinic'); self.assertEqual(SO.crystal_system('I-42d'), 'tetragonal'); self.assertEqual(SO.crystal_system('C2/c'), 'monoclinic')
-        self.assertEqual(SO.cell_system({'a': 11.9, 'b': 12.7, 'c': 6.7, 'α': 90, 'β': 113.3, 'γ': 90}), {'monoclinic'})
-        self.assertEqual(SO.cell_system({'a': 6.8, 'b': 6.8, 'c': 18.6, 'α': 90, 'β': 90, 'γ': 90}), {'tetragonal', 'orthorhombic', 'monoclinic'})
+        self.assertEqual(SO.cell_system({'a': 11.9, 'b': 12.7, 'c': 6.7, 'α': 90, 'β': 113.3, 'γ': 90}), {'monoclinic', 'triclinic'})
+        self.assertEqual(SO.cell_system({'a': 6.8, 'b': 6.8, 'c': 18.6, 'α': 90, 'β': 90, 'γ': 90}), {'tetragonal', 'orthorhombic', 'monoclinic', 'triclinic'})
         self.assertEqual(SO.cell_system({'a': 15.7, 'b': 15.7, 'c': 47.8, 'α': 90, 'β': 90, 'γ': 120}), {'trigonal', 'hexagonal'})
+
+    def test_the_symbol_build_chooses(self):
+        # (audit 2026-09-16) the abstract's own statement first; else the first explicit phrase unless
+        # the cells forbid its system outright; a triclinic symbol is not forbidden by a cell at 90°
+        mono = {'a': 10.554, 'b': 4.748, 'c': 6.054, 'α': 90.0, 'β': 91.09, 'γ': 90.0}
+        tric = {'a': 9.643, 'b': 9.633, 'c': 17.645, 'α': 88.26, 'β': 88.16, 'γ': 64.83}
+        lost = {'a': 23.704, 'b': 8.386, 'c': 23.501, 'α': 90.0, 'β': 90.0, 'γ': 90.0}
+        hexa = {'a': 10.75, 'b': 10.75, 'c': 27.4, 'α': 90.0, 'β': 90.0, 'γ': 120.0}
+        t = ('Xenophyllite is triclinic, P1 or P-1, a 9.643(6), b 9.633(5), c 17.645(11) Å. '
+             'The unit-cell parameters of sarcopside (space group P21/c) are: a 10.554(9), b 4.748(5) Å.')
+        self.assertEqual(PS.choose_symbol(t, [mono, tric], 'xenophyllite'), 'P1')
+        self.assertEqual(PS.choose_symbol(t, [mono, tric], None), 'P21/C')                    # no mineral name: the first explicit phrase
+        t2 = 'The structure was refined in space group P 1, with a = 23.704(8) Å. It is related to a P21/c phase through the matrix R.'
+        self.assertEqual(PS.choose_symbol(t2, [lost], 'bernarlottiite'), 'P1')                # the angles lost: triclinic is not forbidden
+        t3 = 'Two space groups P-1 and R3m were considered; the structure was solved in space group R3m.'
+        self.assertEqual(PS.choose_symbol(t3, [hexa], 'testite'), 'R3M')                      # every cell hexagonal: the first phrase's P-1 is a relative's
+        self.assertEqual(PS.choose_symbol(t3, [mono], 'testite'), 'P-1')                      # a monoclinic cell forbids neither: the first phrase keeps its symbol
+        self.assertEqual(PS.choose_symbol('symmetry. An average of 22 analyses. Space group P212121 (No. 19), a = 6.4690(13) Å.', [lost], 'esdanaite'), 'P212121')
+        self.assertEqual(PS._metric_system(lost), 'orthorhombic'); self.assertEqual(PS._metric_system(mono), 'monoclinic'); self.assertEqual(PS._metric_system(hexa), 'hexagonal')
 
     def test_a_monoclinic_cell_printed_at_ninety_keeps_its_symbol(self):
         # a pseudo-orthorhombic monoclinic cell prints β = 90.00 (or 90.03): the paper's own P21/c

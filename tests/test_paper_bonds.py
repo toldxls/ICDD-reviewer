@@ -321,6 +321,23 @@ class Layouts(unittest.TestCase):
                                          line(60, (40, 'Mn2þ')))))
         self.assertFalse(PB._mangled(page(line(50, (40, 'R1'), (60, '='), (80, '3.96%')))))
 
+    def test_a_welded_count_column_is_the_fonts_own_evidence(self):
+        # the anhydrite-type table of a page that prints no 'þ' or '¼' at all: 'Ca–O1 32 2.332(13)' on
+        # line after line is the '×' delivered as '3' — the column is the evidence (audit 2026-09-16)
+        rows = [line(50 + 12 * i, (40, lab), (90, tok), (120, d)) for i, (lab, tok, d) in enumerate(
+            (('Ca–O1', '32', '2.332(13)'), ('Ca–O2', '32', '2.373(12)'), ('Ca–O2', '32', '2.541(10)'),
+             ('S–O1', '32', '1.474(13)'), ('S–O2', '32', '1.503(11)')))]
+        self.assertTrue(PB._mangled(page(*rows)))
+        # one such line is a number that happens to stand there ('Fe 33 1.518' of a site-population
+        # sentence, 'Table 32 4.690' of a powder row): no column, no licence
+        self.assertFalse(PB._mangled(page(line(50, (40, 'Fe'), (90, '33'), (120, '1.518')), line(62, (40, 'Ca–O1'), (90, '2.332(13)')))))
+        self.assertFalse(PB._mangled(page(rows[0], rows[1])))
+        # and read_tables reads the table with its counts
+        tabs = PB.read_tables('fake.pdf', pages=[rows])
+        self.assertEqual(len(tabs), 1)
+        self.assertEqual([(r.cation, r.anion, r.dist, r.count) for r in tabs[0]["bonds"]],
+                         [('Ca', 'O1', 2.332, 2), ('Ca', 'O2', 2.373, 2), ('Ca', 'O2', 2.541, 2), ('S', 'O1', 1.474, 2), ('S', 'O2', 1.503, 2)])
+
 
 class SitePopulations(unittest.TestCase):
     """'M1', 'T2', 'A' name no element; the paper's own assignment does."""

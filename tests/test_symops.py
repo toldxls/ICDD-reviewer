@@ -76,6 +76,51 @@ class Table(unittest.TestCase):
         self.assertEqual(SO.find_in_text('space group Cc, a = 5.1')[0], 'CC')
         self.assertEqual(SO.find_in_text('space group P\x021, with a = 5.4262(11)')[0], 'P-1')        # the overbar as the font's control code
         self.assertEqual(SO.find_in_text('space group Trigonal, R\x013 Temperature (K) 293')[0], 'R-3')
+
+    def test_a_two_letter_symbol_that_is_a_word_needs_the_space_group_phrase(self):
+        # 'An average of 22 analyses' after 'symmetry.' had read the setting An; so had 'Am', 'Pa', 'Cm'
+        # at a sentence start. A two-letter symbol is taken right after an explicit 'space group'
+        # phrase only, with no sentence end between (audit 2026-09-16)
+        self.assertIsNone(SO.find_in_text('symmetry. An average of 22 analyses gave Na2O 3.65 wt.%')[0])
+        self.assertIsNone(SO.find_in_text('symmetry and crystal morphology. An average of 15 analyses')[0])
+        self.assertIsNone(SO.find_in_text('space group. An average of 22 analyses')[0])
+        self.assertIsNone(SO.find_in_text('symmetry of the Pb atoms')[0])
+        self.assertEqual(SO.find_in_text('space group Cc, a = 5.1')[0], 'CC')                          # the real thing
+        self.assertEqual(SO.find_in_text('monoclinic space group Im (a nonstandard setting of Cm)')[0], 'IM')
+        self.assertEqual(SO.find_in_text('Space group: Cm Unit cell a = 5.1')[0], 'CM')
+        self.assertEqual(SO.find_in_text('sp. gr. Pa, Z = 4')[0], 'PA')
+        self.assertEqual(SO.find_in_text('symmetry. P21/c, a = 5.1')[0], 'P21/C')                        # a symbol with a digit is no word
+        self.assertNotIn('AN', SO.find_all_in_text('space group P212121 (No. 19), with a = 6.4690(13). The symmetry. An average of 22 analyses.'))
+
+    def test_the_abstracts_own_statement(self):
+        # the first symbol statement of the text, naming the mineral (or 'the mineral is') with its cell
+        t = ('Xenophyllite is triclinic, P1 or P-1, a 9.643(6), b 9.633(5), c 17.645(11) Å, Z = 3. ' * 1 +
+             'The unit-cell parameters of sarcopside (space group P21/c) are: a 10.554(9), b 4.748(5) Å.')
+        self.assertEqual(SO.find_own_in_text(t, 'xenophyllite')[0], 'P1')
+        self.assertEqual(SO.find_in_text(t)[0], 'P21/C')                                    # the first explicit phrase is the relative's
+        t2 = 'The mineral is trigonal, R3m, with a = 10.7527(7) Å, c = 27.4002(18) Å. The symmetry should be lowered to monoclinic space group Im.'
+        self.assertEqual(SO.find_own_in_text(t2, 'proshchenkoite-(y)')[0], 'R3M')
+        # not the abstract's: no mineral named, no cell stated, or not the first symbol statement
+        self.assertIsNone(SO.find_own_in_text('The minerals are trigonal, R3m, with similar layered structures. Plavnoite is monoclinic, C2/c, a = 8.6254(16) Å.', 'plavnoite')[0])
+        self.assertIsNone(SO.find_own_in_text('Guettardite differs from sartorite (space group P1) in its Sb content. It is monoclinic, P21/c, a = 8.5 Å.', 'guettardite')[0])
+        self.assertIsNone(SO.find_own_in_text('Sejkoraite-(Y) is triclinic (space group P-1) with the ideal formula Y3[(UO2)8O7OH(SO4)4](OH)2(H2O)24.', 'plavnoite')[0])
+        self.assertIsNone(SO.find_own_in_text('', 'plavnoite')[0])
+
+    def test_cell_system_is_the_downward_closure_of_the_metric(self):
+        # the metric bounds the symmetry from above: a cell at 90° may belong to a monoclinic or a
+        # triclinic crystal (pseudo-orthorhombic, or the angles lost by the text layer and defaulted)
+        self.assertEqual(SO.cell_system({'a': 10.1, 'b': 5.2, 'c': 7.3, 'α': 90, 'β': 90, 'γ': 90}), {'orthorhombic', 'monoclinic', 'triclinic'})
+        self.assertEqual(SO.cell_system({'a': 6.8, 'b': 6.8, 'c': 18.6, 'α': 90, 'β': 90, 'γ': 90}), {'tetragonal', 'orthorhombic', 'monoclinic', 'triclinic'})
+        self.assertEqual(SO.cell_system({'a': 5.4, 'b': 5.4, 'c': 5.4, 'α': 90, 'β': 90, 'γ': 90}), {'cubic', 'tetragonal', 'orthorhombic', 'monoclinic', 'triclinic'})
+        self.assertEqual(SO.cell_system({'a': 11.9, 'b': 12.7, 'c': 6.7, 'α': 90, 'β': 113.3, 'γ': 90}), {'monoclinic', 'triclinic'})
+        self.assertEqual(SO.cell_system({'a': 23.7, 'b': 8.4, 'c': 23.5, 'α': 89.9, 'β': 102.9, 'γ': 89.8}), {'triclinic'})
+        # the hexagonal and rhombohedral metrics are printed by their own systems only
+        self.assertEqual(SO.cell_system({'a': 15.7, 'b': 15.7, 'c': 47.8, 'α': 90, 'β': 90, 'γ': 120}), {'trigonal', 'hexagonal'})
+        self.assertEqual(SO.cell_system({'a': 5.4, 'b': 5.4, 'c': 5.4, 'α': 55.3, 'β': 55.3, 'γ': 55.3}), {'trigonal'})
+        # a cell missing an angle allows every system
+        self.assertEqual(SO.cell_system({'a': 10.1, 'b': 5.2, 'c': 7.3}), set(SO.ALL_SYSTEMS))
+        # the triclinic symbol a paper prints with a cell whose angles the text lost is allowed
+        self.assertIn(SO.crystal_system('P-1'), SO.cell_system({'a': 19.04, 'b': 8.23, 'c': 17.33, 'α': 90.0, 'β': 90.0, 'γ': 90.0}))
         self.assertEqual(SO.normalize('P\x021'), 'P-1')
 
 

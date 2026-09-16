@@ -112,10 +112,14 @@ def _para_pieces(p):
 
 MC_ALT = '{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent'
 
+_TXBX = W + 'txbxContent'
+
 def _in_fallback(p):
-    """Inside a text box (mc:AlternateContent, Choice or Fallback): skipped, so paragraph indexes
-    match the GUI's docx renderer, which does not render text boxes either."""
-    return any(a.tag in (MC_FALLBACK, MC_ALT) for a in p.iterancestors())
+    """Inside a text box (mc:AlternateContent, Choice or Fallback — or the w:txbxContent of a
+    legacy VML box that comes with no mc: wrapper at all): skipped, so paragraph indexes match
+    the GUI's docx renderer, which numbers no text box either (tests.test_gui_ms pins the two
+    numberings against each other)."""
+    return any(a.tag in (MC_FALLBACK, MC_ALT, _TXBX) for a in p.iterancestors())
 
 def load_docx(path):
     """(python-docx Document, [Para]) — body paragraphs (tables included, in document order)

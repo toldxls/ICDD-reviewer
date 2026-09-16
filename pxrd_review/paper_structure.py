@@ -714,6 +714,36 @@ def closure(st, counts):
     return sum(devs) / len(devs) if devs else None
 
 
+_SYSTEM_RANK = {name: i for i, (_top, name) in enumerate(SO.SYSTEMS)}
+
+
+def _metric_system(cell):
+    """The highest-symmetry system a cell's metric allows — what the cell looks like."""
+    return max(SO.cell_system(cell), key=lambda s: _SYSTEM_RANK[s])
+
+
+def choose_symbol(text, cells, mineral=None):
+    """The space-group symbol the paper's coordinates belong to. A paper states several symbols —
+    its own, and its relatives' in the discussion. The abstract's own statement (mineral, symbol,
+    cell in one sentence: `symops.find_own_in_text`) is taken first; else the first explicit
+    'space group' phrase keeps its symbol unless the printed cells forbid its system outright —
+    `cell_system` is the downward closure of each cell's metric, so a cell at 90° forbids nothing
+    below orthorhombic (a triclinic mineral whose angles the text lost was disowned for a relative's
+    P21/c before, audit 2026-09-16); a P1̄ read from "space groups P1̄ and C2/c" is still not the
+    paper's when every cell printed is hexagonal. -> symbol or None."""
+    systems = set().union(*(SO.cell_system(c) for c in cells)) if cells else set()
+    own, _ph = SO.find_own_in_text(text, mineral)
+    if own and (not systems or SO.crystal_system(own) in systems):
+        return own
+    sym, _phrase = SO.find_in_text(text)
+    if systems and (not sym or SO.crystal_system(sym) not in systems):
+        for m_ in SO._NEAR.finditer(text):
+            s2, _p2 = SO.find_in_text(text[m_.start():m_.start() + 130])
+            if s2 and SO.crystal_system(s2) in systems:
+                sym = s2; break
+    return sym
+
+
 def build(pdf, text=None, bonds=None, rows=None):
     """The structure the paper prints, or None. -> (Structure, info) where info carries 'gii',
     'closure', 'cell', 'sym' and 'sites'; (None, {'why': ...}) when it cannot be built or does not
@@ -724,27 +754,18 @@ def build(pdf, text=None, bonds=None, rows=None):
     rows = paper_sites(pdf) if rows is None else rows                   # `rows`: a second coordinates table of a two-mineral paper (paper_site_tables)
     if len(rows) < 3:
         return None, {'why': 'the paper prints no coordinates table the reader could find'}
-    sym, _phrase = SO.find_in_text(text)
     # the cell a coordinates table belongs to is the single-crystal one: those first, the powder
     # cells last (a powder cell's angle variants would otherwise fill the budget before the true cell)
     rank = {'single': 0, 'unknown': 1, 'stated': 2, 'powder': 3}
     cells = [c for _ctx, c in sorted(PE._paper_cells(text), key=lambda xc: rank.get(xc[0], 2))][:8]
-    # A paper states several symbols — its own, and its relatives' in the discussion. The one whose
-    # crystal system a printed cell allows is the paper's: a P1̄ read from "space groups P1̄ and C2/c"
-    # is not, when every cell printed is monoclinic. And a cell the symbol's system forbids (a
-    # monoclinic cell under I-42d: another mineral's) is not tried.
+    sym = choose_symbol(text, cells, PE.mineral_name(text))
+    # the systems the printed cells allow — `others` below is filtered by them (an undefined name
+    # here was swallowed by that try/except and cost five papers their verified coordinates, 0.8.1)
     systems = set().union(*(SO.cell_system(c) for c in cells)) if cells else set()
-    if systems and (not sym or SO.crystal_system(sym) not in systems):
-        for m_ in SO._NEAR.finditer(text):
-            s2, _p2 = SO.find_in_text(text[m_.start():m_.start() + 130])
-            if s2 and SO.crystal_system(s2) in systems:
-                sym = s2; break
     ops_variants = SO.lookup(sym) if sym else []
     if not ops_variants:
         return None, {'why': 'no space group in the text that the operator table knows'}
     want = SO.crystal_system(sym)
-    if want and cells:
-        cells = [c for c in cells if want in SO.cell_system(c)] or cells
     # The overbar of P1̄, R3̄, Fm3̄m is often a drawn stroke the text layer does not carry, so the
     # symbol arrives unbarred. The barred twin is tried as well and the structure judges: sites
     # given for P1̄ built in P1 are half a structure and their sums come out half, so the twin wins;
@@ -764,6 +785,16 @@ def build(pdf, text=None, bonds=None, rows=None):
     for s2 in others[:2]:
         extra = SO.lookup(s2)[:2]
         ops_variants = list(ops_variants) + extra; variant_syms += [s2] * len(extra)
+    if want and cells:
+        # the cells the tried symbols' systems allow — the chosen symbol's AND the other symbols' the
+        # paper states, since every variant is tried with every cell and a two-mineral paper's
+        # coordinates table may belong to the OTHER phase (hexathioplumbite's abstract names P63,
+        # the table its bonds verify is the cubic Pa3̄ phase's, 0.8.1) — those whose metric IS the
+        # chosen system first: with the closure (`cell_system`) a triclinic symbol allows every cell,
+        # and a relative's monoclinic cell must not fill the budget before the paper's own triclinic one
+        allowed = {want} | {SO.crystal_system(s2) for s2 in others[:2]}
+        cells = [c for c in cells if allowed & SO.cell_system(c)] or cells
+        cells = sorted(cells, key=lambda c: 0 if _metric_system(c) == want else 1)
     name = PE.mineral_name(text)
     charges = element_charges(text, name)
     try:

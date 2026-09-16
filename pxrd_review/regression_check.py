@@ -380,6 +380,21 @@ CASES = [
  ("calculated: 'PXRD data were collected' still settles a measured pattern", lambda: X.check4_calculated(
      _stub(name='testite', primary='Testite'),
      'PXRD data were collected with a Rigaku R-AXIS Rapid II. The intensities were calculated from the crystal structure of testite with VESTA.') == []),
+ # audit 2026-09-16: the guard had lost the PLURAL ('powder patterns were collected', 'diffractograms were
+ # recorded' — 12 corpus papers), and a SIMULATED pattern that 'was obtained' counted as a measured one
+ ("calculated: 'the powder patterns were collected' settles a measured pattern (plural)", lambda: X.check4_calculated(
+     _stub(name='testite', primary='Testite'),
+     'The powder patterns were collected using Bragg-Brentano geometry. The intensities were calculated from the crystal structure of testite with VESTA.') == []),
+ ("calculated: 'powder diffractograms were recorded' settles a measured pattern (plural)", lambda: X.check4_calculated(
+     _stub(name='testite', primary='Testite'),
+     'Powder diffractograms were recorded on a Bruker D8. The intensities were calculated from the crystal structure of testite with VESTA.') == []),
+ ("calculated: 'a simulated powder pattern was obtained' is not a measured one", lambda: bool(X.check4_calculated(
+     _stub(instr={'spacing_instr': 'Diffractometer'}, name='testite', primary='Testite'),
+     'A simulated powder diffraction pattern of testite was obtained using RIETAN-FP from the single-crystal structure analysis.'))),
+ ("calculated: 'the powder pattern was collected … compared with the calculated one' still settles", lambda: X.check4_calculated(
+     _stub(name='testite', primary='Testite'),
+     'The powder pattern was collected with a Gandolfi camera and compared with the one calculated from the structure of testite. '
+     'The intensities were calculated from the crystal structure of testite with VESTA.') == []),
  # anningite-(Ce) (ICDD Part 2 review 2026-09, 'Z should be 4; Z = 2 gives a 115 % density error'): the
  # CIF's formula sum is written for TWO substituted units — the O count (4 x 4 = 2 x 8) reconciles Z.
  ("cif Z: a CIF formula written for two substituted units reconciles on the oxygen count", lambda: X.check_cif(
@@ -1112,8 +1127,50 @@ CASES = [
      type('S', (), {'refl': [('7.070', '100', '1', '0', '1'), ('3.536', '40', '2', '0', '2'), ('2.861', '30', '2', '1', '1')],
                     'instr': {'spacing_instr': 'Diffractometer'}}),
      'The strongest lines of the calculated powder pattern [d, Å (I, %)] are: 6.945(100), 3.472(35), 2.832(28).') == []),
+ # 2026-09-16 audit: an A or 2V the readers did not take ('A=n.d.', '2V(calc)=') is still a biaxial field,
+ # not a uniaxial one — 21 corpus fields write '2V(calc)='
+ ("optical_2v: 'A=n.d. … 2V=n.d.' is not a uniaxial field", lambda: [f for f in X.check24_optical_2v(
+     _stub(comments={'Optical Data': 'A=n.d., B=1.700(2), Q=1.720(2), Sign=-, 2V=n.d.'})) if f.sev == 'flag'] == []),
+ ("optical_2v: 'A(est)=' and '2V(calc)=' are read for the biaxial computation", lambda: any(
+     'optically positive' in f.msg for f in X.check24_optical_2v(
+         _stub(comments={'Optical Data': 'A(est)=1.500, B(calc)=1.510, Q(calc)=1.540, Sign=-, 2V(calc)=40'}))
+     if f.sev == 'flag')),
+ # 2026-09-16 audit: below 20 lines the allowance is ONE unprinted line — an abstract naming the eight
+ # strongest lines of a ten-line list is not a misprint; the one line of ten still is
+ ("reflections: 2 of 10 lines absent from an abstract of 8 says nothing", lambda: X.check29_reflections_in_paper(
+     _stub(refl=[('%s' % d, '10', '1', '0', '0') for d in
+                 ('7.123', '5.432', '4.321', '3.987', '3.220', '2.988', '2.654', '2.311', '1.987', '1.654')],
+           instr={'spacing_instr': 'Diffractometer'}),
+     'The strongest lines are: 7.123(100), 5.432(90), 4.321(80), 3.987(70), 3.220(60), 2.988(50), 2.654(40), 2.311(30)') == []),
+ ("reflections: 1 of 10 lines unprinted still flags", lambda: any(
+     f.sev == 'flag' and '1.654' in f.msg for f in X.check29_reflections_in_paper(
+         _stub(refl=[('%s' % d, '10', '1', '0', '0') for d in
+                     ('7.123', '5.432', '4.321', '3.987', '3.220', '2.988', '2.654', '2.311', '1.987', '1.654')],
+               instr={'spacing_instr': 'Diffractometer'}),
+         'Table 3. 7.123 5.432 4.321 3.987 3.220 2.988 2.654 2.311 1.987'))),
  ("I003747 no formula / density flag (clean)",
   lambda: not extras('I003747', 'formula', 'flag') and not extras('I003747', 'xtl_density', 'flag')),
+ # the second audit (2026-09-16): one finding per fault, a list of ranges is not a wt% list, the density
+ # ratios that tile the 25-30 % band are notes
+ ("I003559 selenolaurite: 'Ir 3.28-5.50' is a range, not a wt% list — no 'no constituent' flag",
+  lambda: not extras('I003559', 'formula', 'flag', substr='no constituent')),
+ ("formula: a split symbol ('N B0.05') is ONE finding, not also a coefficient disagreement (ferroinnelite)",
+  lambda: [('Nb0.05?' in f.msg) for f in X.check27_formula_integrity(_stub(
+     formulas={'Analytical': '( Na1.95 Fe0.64 +2 Mg0.21 ) ( Ti2.91 N B0.05 Al0.02 ) Si4.02 S0.94 P0.89 O25.89',
+               'Chemical': 'Ba4 Ti2 Na ( Na Fe +2 ) Ti ( Si2 O7 )2 [ ( S O4 ) ( P O4 ) ] O2'},
+     comments={'Analysis': 'Microprobe analysis (wt.%): SO3 5.47, Nb2O5 0.45, P2O5 4.59, TiO2 16.91, SiO2 17.55, '
+                           'Al2O3 0.06, FeO 3.34, MgO 0.64, Na2O 4.47: ( Na1.95 Fe0.64 +2 Mg0.21 )S2.80 ( Ti2.91 '
+                           'Nb0.05 Al0.02 )S2.98 Si4.02 S0.94 P0.89 O25.89.'}), None)] == [True]),
+ ("analysis: a duplicated CaO standing for the BaO the formula needs is ONE finding (airdite)",
+  lambda: [('probably BaO' in f.msg) for f in X.check27_formula_integrity(_stub(
+     formulas={'Analytical': '( Sr0.46 Ca0.25 Ba0.23 ) ( V1.94 +4 Fe0.03 +3 Cu0.02 ) ( P2.02 O4 ) O10 H8.13',
+               'Chemical': 'Sr ( V +4 O )2 ( P O4 )2 !4 H2 O'},
+     comments={'Analysis': 'Microprobe analysis, average of 10 (wt.%): SrO 9.78, CaO 2.89, CaO 7.17, VO2 32.81, '
+                           'Fe2O3 0.42, CuO 0.39, P2O5 29.13, H2O(calc) 14.91: ( Sr0.46 Ca0.25 Ba0.23 )S0.94 '
+                           '( V1.94 +4 Fe0.03 +3 Cu0.02 )S1.99 ( P2.02 O4 ) O10 H8.13'}), None)] == [True]),
+ ("xtl_density: 3.00 vs 3.75 is a 20 % gap (note), not '5/4×'",
+  lambda: [f.sev for f in X.check28_density_consistency(_stub(
+     raw_rows=[['Dx :', '3.750', 'Dm :', '', 'Xtl Dx :', '3.000', '']], cell={'Z': '4'}), None)] == ['note']),
  ("I003698 no instr_vocab flag (clean)",     lambda: not extras('I003698', 'instr_vocab', 'flag')),
  # 'Debye-Scherrer' is a geometry, not an instrument class -> normalize to 'Diffractometer'
  # (reviewers did this 15x; the value never survives review). Diffractometer itself stays clean.

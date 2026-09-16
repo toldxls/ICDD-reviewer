@@ -371,12 +371,35 @@ _BOND_CAPTION = re.compile(r'(?:TABLE|Table)\s+[A-Za-z]?\d+[A-Za-z]?\s*[.:]?[^\n
                            r'(?:bond|inter-?atomic|interatomic|coordination)[^\n]{0,20}?(?:length|distance)', re.I)
 
 
+WELDED_COUNT = re.compile(r'^3[2-9]$')          # '×2' … '×9' as the font delivers them: one token, the sign as a '3'
+WELDED_COLUMN = 3                               # lines of 'label 3N distance' that make the form a column
+
+
+def _welded_column(lines):
+    """Whether a page prints the welded count as a COLUMN — 'Ca–O1 32 2.332(13)', 'Ca–O2 32
+    2.373(12)', 'S–O1 32 1.474(13)' … — a bare '3N' between a bond label and a distance on at least
+    `WELDED_COLUMN` lines. One such line is a number that happens to stand there ('Fe 33 1.518' of
+    a site-population sentence, 'Table 32 4.690' of a powder row): the column is the evidence."""
+    n = 0
+    for ln in lines:
+        ws = ln['w']
+        if any(WELDED_COUNT.match(w[4].strip()) and 1 <= i < len(ws) - 1 and DIST.match(ws[i + 1][4].strip())
+               and (_label(ws[i - 1][4])[0] or _pair_token(ws[i - 1][4])[1]) for i, w in enumerate(ws)):
+            n += 1
+            if n >= WELDED_COLUMN:
+                return True
+    return False
+
+
 def _mangled(lines):
     """Whether a page is set in the font several journals use whose symbols reach the text as other
     characters: '+' as 'þ' ('Mn2þ'), '=' as '¼' ('R1 ¼ 3.96%'), '×' as '3'. The first two identify
-    it — no English page prints them otherwise — and they are what licenses reading the third."""
+    it — no English page prints them otherwise — and they are what licenses reading the third; so
+    does the third itself when the page prints it as a column of a bond table (`_welded_column`):
+    the anhydrite-type table of a page that prints no 'þ' or '¼' at all was lost to the page's
+    marks alone (audit 2026-09-16)."""
     txt = '\n'.join(' '.join(w[4] for w in ln['w']) for ln in lines)
-    return txt.count('þ') + txt.count('¼') >= 2
+    return txt.count('þ') + txt.count('¼') >= 2 or _welded_column(lines)
 
 
 def _bond_caption(lines):

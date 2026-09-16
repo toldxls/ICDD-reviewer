@@ -491,3 +491,26 @@ class WeightedColumns(unittest.TestCase):
         rows[1][1] = '%.2f' % (vals[rows[1][0]] * 0.5 + 0.2)                                   # one of two cells off: the column can no longer be called weighted (two matches are needed), so both cells are findings — conservative
         lines = B.check_bvs_table(st, res, cells, an, [rows], 'GH')
         self.assertTrue(any('2 disagree' in ln for ln in lines), lines)
+
+    def test_a_blank_cell_is_a_difference_only_for_a_bond_a_table_would_print(self):
+        """A blank cell where the .cif has a bond: a finding when the bond is one a table prints, and
+        information — said so in the line's own wording, 'not a difference' — when it is a contact
+        under BLANK_INFO (agujaite's O8–Na2 at 0.03 vu). The checker decides, once; the GUI's
+        red/grey rule and the record layer read the wording, so neither re-parses the number."""
+        tmp = tempfile.mkdtemp(prefix='bv_'); self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cif = os.path.join(tmp, 'h.cif'); open(cif, 'w').write(HYDRATE)
+        st = B.Structure(cif); P = B.Params(prefer='gh', u6='burns')
+        res, an, cells, hb = B.compute(st, P, None, 'oo')
+        self.assertIn(('OW1', 'Ca1'), cells)
+        rows = [['Atom', 'Ca1'], ['O1', '%.2f' % sorted(s for s, _, _ in cells[('O1', 'Ca1')])[0]], ['OW1', '']]
+        weak = dict(cells); weak[('OW1', 'Ca1')] = [(0.03, 1, 1)]                          # the bond is a 0.03 vu contact
+        lines = B.check_bvs_table(st, res, weak, an, [rows], 'GH')
+        blank = [ln for ln in lines if 'OW1–Ca1 is blank' in ln]
+        self.assertEqual(len(blank), 1, lines)
+        self.assertIn('not a difference', blank[0]); self.assertNotIn('blank but', blank[0])
+        self.assertTrue(any(', 0 disagree' in ln for ln in lines), lines)
+        lines = B.check_bvs_table(st, res, cells, an, [rows], 'GH')                         # the real bond, 0.30 vu: a missing cell
+        blank = [ln for ln in lines if 'OW1–Ca1 is blank' in ln]
+        self.assertEqual(len(blank), 1, lines)
+        self.assertIn('blank but the .cif has that bond (0.30 vu)', blank[0]); self.assertNotIn('not a difference', blank[0])
+        self.assertLess(B.BLANK_INFO, 0.30)

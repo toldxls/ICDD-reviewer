@@ -78,10 +78,195 @@ class CalculationFindingAnchors(unittest.TestCase):
         self.assertIsNotNone(G._CALC_FLAG.search('bond-valence table 1: 35 cells compared, 3 disagree (computed with Gagné & Hawthorne 2015)'))
         self.assertIsNotNone(G._CALC_FLAG.search('bond-valence table 1: 35 cells compared, 10 disagree'))
         self.assertEqual(G._calc_kind('bond-valence table 1: 35 cells compared, 0 disagree (computed with Gagné & Hawthorne 2015)'), 'calcinfo')
-        self.assertEqual(G._calc_kind('table 1: O8–Na2 is blank but the .cif has that bond (0.03 vu)'), 'calcinfo')      # a contact under the cutoff tables print
+        # a blank cell: the CHECKER's wording says whether it is a difference (bv_check.BLANK_INFO); the GUI re-reads no number
+        self.assertEqual(G._calc_kind('table 1: O8–Na2 is blank — the .cif has that bond at 0.03 vu, under the cutoff most tables print (not a difference)'), 'calcinfo')
         self.assertEqual(G._calc_kind('table 1: O8–Na2 is blank but the .cif has that bond (0.21 vu)'), 'calc')          # a bond a table prints: a missing cell
         self.assertEqual(G._calc_kind('table 1: Σ for As2/S2 5.48 vs 5.31 from the .cif (parameters: Gagné & Hawthorne 2015)'), 'calc')
         self.assertEqual(G._calc_kind('bond valence: the table vs the .cif — agrees best with X', head=True), 'calcinfo')
+        self.assertFalse(hasattr(G, '_BLANK_CELL'))                                                                       # the severity rule lives in bv_check, not here
+
+    def _build(self, name, build):
+        from docx import Document
+        d = Document(); build(d); p = os.path.join(self.tmp, name); d.save(p)
+        return p
+
+    @staticmethod
+    def _table(d, rows):
+        t = d.add_table(rows=len(rows), cols=len(rows[0]))
+        for r, row in enumerate(rows):
+            for c, v in enumerate(row):
+                t.cell(r, c).text = v
+        return t
+
+    @staticmethod
+    def _paras(path):
+        from pxrd_review import refs_check as RC
+        _doc, paras = RC.load_docx(path)
+        return {p.idx: p.text.strip() for p in paras}
+
+    def test_superscript_footnote_mark_on_a_constituent_cell(self):
+        """The reader (paper_extract._docx_cell_text) drops a one- or two-character superscript, so its
+        term is 'SiO2' while load_docx reads 'SiO2a' / 'H2O[1]': the anchor must normalise the cell as
+        the reader did, and a term missing from the analytical table must NOT fall through to a foreign
+        table (the Gladstone–Dale constants list SiO2 too)."""
+        from pxrd_review.gui import review_gui as G
+        def build(d):
+            d.add_paragraph('Table 1. Analytical data (wt%) for testite.')
+            t = self._table(d, [['Const.', 'Mean'], ['SiO2', '40.1'], ['FeO', '10.0'], ['H2O', '5.0']])
+            for cell, mark in ((t.cell(1, 0), 'a'), (t.cell(3, 0), '1')):
+                r = cell.paragraphs[0].add_run(mark); r.font.superscript = True
+            d.add_paragraph('Table 6. Gladstone-Dale constants used.')
+            self._table(d, [['Oxide', 'k'], ['SiO2', '0.207'], ['FeO', '0.187'], ['H2O', '0.34'], ['MgO', '0.20']])
+        p = self._build('sup.docx', build); m = self._paras(p)
+        fs = [{'kind': 'calc', 'label': 'composition', 'msg': 'Si: paper 2.99, from the wt% 3.20', 'para': None, 'find': 'SiO2'},
+              {'kind': 'calc', 'label': 'composition', 'msg': 'H: paper 2.0, from the wt% 2.2', 'para': None, 'find': 'H2O'},
+              {'kind': 'calc', 'label': 'composition', 'msg': 'Mg: paper 0.1, from the wt% 0.0', 'para': None, 'find': 'MgO'}]
+        G._ms_docx_anchors(p, fs)
+        self.assertEqual(m[fs[0]['para']], 'SiO2a')                    # the analytical table's cell, not the Gladstone–Dale table's 'SiO2'
+        self.assertEqual(m[fs[1]['para']], 'H2O[1]')
+        self.assertEqual(m[fs[2]['para']], 'Table 1. Analytical data (wt%) for testite.')   # MgO is only in the foreign table: the caption, never that table
+
+    def test_competing_captions_prefer_the_grid_whose_cells_are_the_labels(self):
+        """'Selected bond distances (Å) and bond valences (vu)' comes first and names every site in its
+        'Na1–O8' cells; the bond-valence grid after it has the sites as whole cells. 'O8–Na2 0.13 vs
+        0.25' is the grid's O8 row, not the distance table's Na1–O8 (a different bond)."""
+        from pxrd_review.gui import review_gui as G
+        def build(d):
+            d.add_paragraph('Table 4. Selected bond distances (Å) and bond valences (vu) for testite.')
+            self._table(d, [['Bond', 'd', 'vu'], ['Na1–O1', '2.40', '0.20'], ['Na1–O8', '2.50', '0.15'], ['Na2–O8', '2.30', '0.13']])
+            d.add_paragraph('Table 5. Bond-valence sums for testite.')
+            self._table(d, [['', 'Na1', 'Na2', 'Σ'], ['O1', '0.20', '0.59', '1.9'], ['O8', '0.15', '0.13', '2.0'], ['Σ', '1.02', '1.10', '']])
+        p = self._build('captions.docx', build); m = self._paras(p)
+        fs = [{'kind': 'calcinfo', 'label': 'bond-valence table 1 vs the .cif', 'msg': 'bond-valence table 1: 4 cells compared, 1 disagree', 'para': None, 'find': None},
+              {'kind': 'calc', 'label': 'bond-valence table 1 vs the .cif', 'msg': 'table 1: Σ for Na1 1.02 vs 1.20', 'para': None, 'find': 'Na1'},
+              {'kind': 'calc', 'label': 'bond-valence table 1 vs the .cif', 'msg': 'table 1: O8–Na2 0.13 vs 0.25', 'para': None, 'find': 'O8|Na2'}]
+        G._ms_docx_anchors(p, fs)
+        self.assertEqual(m[fs[0]['para']], 'Table 5. Bond-valence sums for testite.')
+        self.assertEqual(m[fs[1]['para']], 'Na1'); self.assertEqual(m[fs[2]['para']], 'O8')
+        self.assertGreater(fs[2]['para'], fs[0]['para'])               # in the grid (after its caption), not in the distance table
+
+    def test_table_n_picks_the_nth_grid_of_two_minerals(self):
+        from pxrd_review.gui import review_gui as G
+        def build(d):
+            d.add_paragraph('Table 5. Bond-valence analysis for testite.')
+            self._table(d, [['', 'Na1', 'Na2'], ['O1', '0.20', '0.59'], ['O8', '0.15', '0.13']])
+            d.add_paragraph('Table 6. Bond-valence analysis for otherite.')
+            self._table(d, [['', 'Na1', 'Na2'], ['O1', '0.21', '0.58'], ['O8', '0.16', '0.12']])
+        p = self._build('two.docx', build); m = self._paras(p)
+        fs = [{'kind': 'calc', 'label': 'bond valence', 'msg': 'table 2: O8–Na2 0.12 vs 0.25', 'para': None, 'find': 'O8|Na2'},
+              {'kind': 'calc', 'label': 'bond valence', 'msg': 'table 1: O8–Na2 0.13 vs 0.25', 'para': None, 'find': 'O8|Na2'}]
+        G._ms_docx_anchors(p, fs)
+        self.assertEqual([m[f['para']] for f in fs], ['O8', 'O8'])
+        self.assertGreater(fs[0]['para'], fs[1]['para'])               # the second grid's O8 row for 'table 2'
+
+    def test_prose_anchors(self):
+        """The species line is 'name: …' (paper_extract.verify); an integer axis ('a=16', %g) still anchors."""
+        from pxrd_review.gui import review_gui as G
+        p = _docx(os.path.join(self.tmp, 'prose.docx'), ['Testite is listed by Mindat as a valid species.', 'Unit cell a = 16, c = 10.1357 Å.'])
+        fs = [{'kind': 'calcinfo', 'label': 'name', 'msg': 'name: Mindat lists testite [unverified]', 'para': None, 'find': None},
+              {'kind': 'calcinfo', 'label': 'cell', 'msg': 'cell: a=16, b=16, c=10.1357 (powder) — nothing printed', 'para': None, 'find': None}]
+        G._ms_docx_anchors(p, fs)
+        self.assertEqual([f['para'] for f in fs], [0, 1])
+
+    def test_anchors_through_a_content_control_around_a_row(self):
+        """A w:sdt around a table row: load_docx numbers its paragraphs and the docx view must too, or
+        every finding after the row lands early."""
+        from docx.oxml.ns import qn
+        from lxml import etree
+        from pxrd_review.gui import review_gui as G
+        def build(d):
+            d.add_paragraph('Table 5. Bond valence analysis for testite.')
+            t = self._table(d, [['', 'Na1', 'Na2'], ['O1', '0.20', '0.59'], ['O8', '0.15', '0.13']])
+            tbl = t._tbl; tr = tbl.findall(qn('w:tr'))[1]
+            sdt = etree.Element(qn('w:sdt')); sc = etree.SubElement(sdt, qn('w:sdtContent')); tbl.replace(tr, sdt); sc.append(tr)
+            d.add_paragraph('Table 1. Analytical data (wt%) for testite.')
+            self._table(d, [['Const.', 'Mean'], ['SiO2', '40.1']])
+        p = self._build('sdt.docx', build); m = self._paras(p)
+        fs = [{'kind': 'calc', 'label': 'bond valence', 'msg': 'table 1: O8–Na2 0.13 vs 0.25', 'para': None, 'find': 'O8|Na2'},
+              {'kind': 'calc', 'label': 'composition', 'msg': 'Si: paper 2.99, from the wt% 3.20', 'para': None, 'find': 'SiO2'}]
+        G._ms_docx_anchors(p, fs)
+        self.assertEqual([m[f['para']] for f in fs], ['O8', 'SiO2'])
+        html_ = G._docx_html(p)
+        rendered = {int(a): re.sub('<[^>]+>', '', b).replace('&nbsp;', '').strip() for a, b in re.findall(r'<p data-p="(\d+)">(.*?)</p>', html_)}
+        self.assertEqual(rendered[fs[0]['para']], 'O8'); self.assertEqual(rendered[fs[1]['para']], 'SiO2')
+
+
+class DocxNumbering(unittest.TestCase):
+    """_docx_html's <p data-p> numbering and refs_check.load_docx's paragraph indexes are the same
+    sequence — the documented invariant every docx anchor rests on — on the shapes that once drifted
+    (a content control around a row or a cell, a legacy VML text box) and the ones that did not."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='ms_number_')
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    @staticmethod
+    def _numbering(path):
+        from pxrd_review import refs_check as RC
+        from pxrd_review.gui import review_gui as G
+        _d, paras = RC.load_docx(path)
+        ld = [(p.idx, p.text.strip()[:25]) for p in paras if p.elem is not None]
+        h = G._docx_html(path)
+        hp = [(int(a), re.sub('<[^>]+>', '', b).replace('&nbsp;', '').strip()[:25]) for a, b in re.findall(r'<p data-p="(\d+)">(.*?)</p>', h)]
+        return ld, hp
+
+    def _shapes(self):
+        from docx.oxml.ns import qn
+        from lxml import etree
+        V = 'urn:schemas-microsoft-com:vml'; MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
+        def table(d, rows):
+            t = d.add_table(rows=len(rows), cols=len(rows[0]))
+            for r, row in enumerate(rows):
+                for c, v in enumerate(row):
+                    t.cell(r, c).text = v
+            return t
+        def plain(d):
+            d.add_paragraph('cap'); table(d, [['A', ''], ['', 'B']]); d.add_paragraph('after')
+        def nested(d):
+            d.add_paragraph('cap'); t = table(d, [['']]); inner = t.cell(0, 0).add_table(rows=2, cols=1)
+            inner.cell(0, 0).text = 'in0'; inner.cell(1, 0).text = 'in1'; d.add_paragraph('after')
+        def merged(d):
+            d.add_paragraph('cap'); t = table(d, [['r%dc%d' % (r, c) for c in range(3)] for r in range(3)])
+            t.cell(0, 0).merge(t.cell(0, 2)); t.cell(1, 1).merge(t.cell(2, 1)); d.add_paragraph('after')
+        def sdt_row(d):
+            d.add_paragraph('cap'); t = table(d, [['h0', 'h1'], ['v0', 'v1']]); tbl = t._tbl; tr = tbl.findall(qn('w:tr'))[1]
+            sdt = etree.Element(qn('w:sdt')); sc = etree.SubElement(sdt, qn('w:sdtContent')); tbl.replace(tr, sdt); sc.append(tr)
+            d.add_paragraph('after')
+        def sdt_cell(d):
+            d.add_paragraph('cap'); t = table(d, [['c0', 'c1']]); tr = t._tbl.find(qn('w:tr')); tc = tr.findall(qn('w:tc'))[1]
+            sdt = etree.Element(qn('w:sdt')); sc = etree.SubElement(sdt, qn('w:sdtContent')); tr.replace(tc, sdt); sc.append(tc)
+            d.add_paragraph('after')
+        def sdt_table(d):
+            d.add_paragraph('cap'); t = table(d, [['c']]); body = d.element.body
+            sdt = etree.Element(qn('w:sdt')); sc = etree.SubElement(sdt, qn('w:sdtContent')); body.replace(t._tbl, sdt); sc.append(t._tbl)
+            d.add_paragraph('after')
+        def box_p(host):
+            txc = etree.SubElement(host, qn('w:txbxContent')); bp = etree.SubElement(txc, qn('w:p'))
+            bt = etree.SubElement(etree.SubElement(bp, qn('w:r')), qn('w:t')); bt.text = 'IN THE BOX'
+        def vml_box(d):
+            r = d.add_paragraph('before box').add_run()
+            pict = etree.SubElement(r._r, qn('w:pict')); shape = etree.SubElement(pict, '{%s}shape' % V)
+            box_p(etree.SubElement(shape, '{%s}textbox' % V)); d.add_paragraph('after box'); table(d, [['cell']])
+        def mc_box(d):
+            r = d.add_paragraph('before box').add_run()
+            ac = etree.SubElement(r._r, '{%s}AlternateContent' % MC)
+            box_p(etree.SubElement(ac, '{%s}Choice' % MC)); box_p(etree.SubElement(ac, '{%s}Fallback' % MC))
+            d.add_paragraph('after box'); table(d, [['cell']])
+        return [('plain table', plain, 6), ('nested table', nested, 6), ('merged cells', merged, 12), ('sdt around a row', sdt_row, 6),
+                ('sdt around a cell', sdt_cell, 4), ('sdt around a table', sdt_table, 3), ('legacy VML text box', vml_box, 3), ('mc:AlternateContent box', mc_box, 3)]
+
+    def test_same_numbering_on_every_shape(self):
+        from docx import Document
+        for name, build, n in self._shapes():
+            with self.subTest(shape=name):
+                d = Document(); build(d); p = os.path.join(self.tmp, name.replace(' ', '_').replace(':', '') + '.docx'); d.save(p)
+                ld, hp = self._numbering(p)
+                self.assertEqual(ld, hp)
+                self.assertEqual(len(ld), n)                   # and the count is what the shape holds: a text box's paragraph is numbered by neither side
 
 
 class ManuscriptMode(unittest.TestCase):

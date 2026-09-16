@@ -58,29 +58,40 @@ def crystal_system(symbol):
     return next(name for top, name in SYSTEMS if n <= top)
 
 
+ALL_SYSTEMS = frozenset(name for _top, name in SYSTEMS)
+
+
 def cell_system(cell, tol=0.002):
-    """The lattice system a cell's metric allows — {'a','b','c','α','β','γ'} in Å and degrees — as
-    the LOWEST-symmetry reading that fits: a cell with a = b and γ = 120 is hexagonal or trigonal,
-    a = b = c with 90° angles cubic (or a rhombohedral cell at 90°), all 90° orthorhombic (which a
-    tetragonal cell with a = b also is), one angle off monoclinic, else triclinic. A cell with every
-    angle at 90° is allowed the monoclinic reading too: a pseudo-orthorhombic monoclinic cell prints
-    β = 90.00 within the 0.05° this asks, and the symbol's system, not the metric, has the say —
-    without it a P21/c read from the paper was disowned for a relative's orthorhombic symbol."""
-    a, b, c = cell['a'], cell['b'], cell['c']; al, be, ga = cell.get('α', 90), cell.get('β', 90), cell.get('γ', 90)
+    """The crystal systems a cell's metric allows — {'a','b','c','α','β','γ'} in Å and degrees —
+    as the DOWNWARD closure of the metric's highest symmetry: the metric only bounds the symmetry
+    from above, since a crystal of lower symmetry may print a cell of higher metric symmetry
+    (a pseudo-orthorhombic monoclinic cell prints β = 90.00; a cell whose angles the text layer lost
+    arrives at 90° by default), and the symbol's system, not the metric, has the say. So a cell at
+    90° allows orthorhombic, monoclinic and triclinic — tetragonal too with two axes equal, cubic
+    with three — and one angle off allows monoclinic and triclinic. The hexagonal metric (a = b,
+    γ = 120) allows hexagonal and trigonal only, the rhombohedral one trigonal: no lower-symmetry
+    crystal prints its cell in those axes. A cell missing an angle allows every system. Without the
+    closure, three triclinic minerals whose angles the text lost were disowned for a relative's
+    monoclinic symbol (audit 2026-09-16)."""
+    a, b, c = cell['a'], cell['b'], cell['c']
+    if any(k not in cell for k in ('α', 'β', 'γ')):
+        return set(ALL_SYSTEMS)
+    al, be, ga = cell['α'], cell['β'], cell['γ']
     eq = lambda x, y: abs(x - y) <= tol * max(x, y)
     right = [abs(x - 90) < 0.05 for x in (al, be, ga)]
     if all(right):
-        if eq(a, b) and eq(b, c):
-            return {'cubic', 'tetragonal', 'orthorhombic', 'monoclinic'}
+        out = {'orthorhombic', 'monoclinic', 'triclinic'}
         if eq(a, b) or eq(b, c) or eq(a, c):
-            return {'tetragonal', 'orthorhombic', 'monoclinic'}
-        return {'orthorhombic', 'monoclinic'}
+            out.add('tetragonal')
+        if eq(a, b) and eq(b, c):
+            out.add('cubic')
+        return out
     if eq(a, b) and abs(ga - 120) < 0.05 and right[0] and right[1]:
         return {'hexagonal', 'trigonal'}
     if eq(a, b) and eq(b, c) and abs(al - be) < 0.05 and abs(be - ga) < 0.05:
         return {'trigonal'}                                 # rhombohedral axes
     if sum(right) == 2:
-        return {'monoclinic'}
+        return {'monoclinic', 'triclinic'}
     return {'triclinic'}
 
 
@@ -152,6 +163,12 @@ _NEAR = re.compile(r'space[\s-]*group|spatial group|sp\.?\s*gr\.?|symmetry', re.
 # relative's 'triclinic, P1' in the introduction outranked puninite's own 'space group C2/c' (70643) when both were one list
 _NEAR_LOOSE = re.compile(r'space[\s-]*group|spatial group|sp\.?\s*gr\.?|symmetry'
                          r'|(?:triclinic|monoclinic|orthorhombic|tetragonal|trigonal|hexagonal|cubic|rhombohedral),\s*(?=[A-Z][\d\-/])', re.I)
+# the phrases that NAME the space group, as against 'symmetry' and the crystal-system comma: a
+# two-letter symbol with no digit or bar (An, Am, Pa, Pm, Cm, Cc, Im, Ia, Pb …) is an English word
+# or an element as often as a setting, and is taken only right after one of these, with no sentence
+# end between — 'symmetry. An average of 22 analyses' had read the setting An (audit 2026-09-16)
+_EXPLICIT = re.compile(r'space[\s-]*group|spatial group|sp\.?\s*gr\.?', re.I)
+_WORDLIKE = re.compile(r'^[A-Z][A-Z]$')
 
 
 def find_in_text(text, window=90):
@@ -168,6 +185,7 @@ def find_in_text(text, window=90):
         for m in near.finditer(text):
             seg = text[m.end():m.end() + window]
             flat, back = _flat(seg)
+            explicit = _EXPLICIT.match(m.group(0)) is not None
             best = None
             for k, k_ in cands:
                 i = flat.find(k_)
@@ -175,7 +193,8 @@ def find_in_text(text, window=90):
                     # the symbol is a word of its own in the raw text: 'and the cell' is not the A-centred
                     # setting 'An' followed by 'd', and '...Pnma' inside a reference is not a symbol
                     r0, r1 = back[i], back[i + len(k_) - 1] + 1
-                    if not (r0 > 0 and seg[r0 - 1].isalpha()) and not (r1 < len(seg) and seg[r1].isalpha()) and seg[r0].isupper():
+                    if not (r0 > 0 and seg[r0 - 1].isalpha()) and not (r1 < len(seg) and seg[r1].isalpha()) and seg[r0].isupper() \
+                            and (not _WORDLIKE.match(k_) or (explicit and '.' not in seg[:r0])):
                         break                                # and the lattice letter is a capital: 'an inversion twin' is not the setting An
                     i = flat.find(k_, i + 1)
                 if i < 0:
@@ -201,6 +220,45 @@ def find_all_in_text(text, window=90):
         if sym:
             counts[sym] = counts.get(sym, 0) + 1
     return [k for k, _v in sorted(counts.items(), key=lambda kv: -kv[1])]
+
+
+_OWN = re.compile(r'\b(?:the|this) (?:new )?mineral (?:is|was)\b', re.I)
+_CELL_STMT = re.compile(r'\ba\s*[=:]?\s*\d{1,2}\.\d')
+_SENT_END = re.compile(r'\.\s+(?=[A-Z])')
+
+
+def find_own_in_text(text, mineral, window=90):
+    """The symbol the paper states as ITS OWN in the abstract's crystallographic sentence —
+    'Xenophyllite is triclinic, P1 or P-1, a 9.643(6) …', 'The mineral is trigonal, R3m, with
+    a = 10.7527(7) …' — read only when that is the FIRST symbol statement of the text and its
+    sentence names the mineral (or says 'the mineral is') and states the cell. A paper's first
+    explicit 'space group' phrase is otherwise its own symbol, but it may be a relative's ('the
+    unit-cell parameters of sarcopside (space group P21/c) are …', a hypothetical 'the symmetry
+    should be lowered to monoclinic space group Im') — and the abstract, when it states the symbol
+    with the mineral and the cell, is the one place that cannot be. -> (symbol, phrase) or (None, '').
+    Twelve corpus papers move against the first-phrase choice, every one to its own symbol or a
+    setting/twin of it (audit 2026-09-16)."""
+    if not text:
+        return None, ''
+    root = re.sub(r'[^a-z]', '', (mineral or '').lower())[:6]
+    hits = list(_NEAR_LOOSE.finditer(text))
+    for i, m in enumerate(hits):
+        # the segment ends where the next phrase begins: read from THIS phrase, not from an explicit
+        # 'space group' phrase further along the window that `find_in_text` would prefer
+        end = min(m.start() + window + 40, hits[i + 1].start() if i + 1 < len(hits) else len(text))
+        sym, phrase = find_in_text(text[m.start():end], window)
+        if not sym:
+            continue
+        # the sentence: from the last sentence end before the phrase to the first after it — a
+        # period followed by space and a capital, so 'a 9.643(6)' does not end it
+        stop = _SENT_END.search(text, m.end())
+        s0, s1 = max(text.rfind('. ', 0, m.start()), 0), (stop.start() + 1 if stop else len(text))
+        sent = text[s0:s1]
+        named = (root and root in re.sub(r'[^a-z]', '', sent.lower())) or _OWN.search(sent)
+        if named and _CELL_STMT.search(text[m.start():min(s1, m.start() + 200)]):
+            return sym, phrase
+        return None, ''                     # only the first symbol statement of the text may be the abstract's
+    return None, ''
 
 
 def _flat(seg):

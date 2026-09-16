@@ -32,7 +32,7 @@ startup — no raw paths from the page, so no path traversal. A per-launch auth 
 a shared machine out; Host-allowlist + Origin checks handle DNS rebinding and CSRF.
 No data leaves the machine.
 """
-import sys, os, re, io, json, html, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time, secrets
+import sys, os, re, io, bisect, json, html, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time, secrets
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
@@ -1078,6 +1078,17 @@ def _docx_html(path):
                                   # uses (tables and content controls included, text boxes excluded), so
                                   # a manuscript finding's paragraph index lands on the right <p data-p>
     _CONTAINERS = ('sdt', 'sdtContent', 'customXml', 'smartTag')
+    def kids(node, tag):
+        """The node's children of one tag, looked for through a content control / custom-XML wrapper:
+        a w:sdt around a table row or a cell holds w:tr / w:tc that load_docx numbers like any other,
+        so the view must number them too (four paragraphs of six went unnumbered before, and every
+        finding after the row landed early)."""
+        for ch in node:
+            t = _ln(ch.tag)
+            if t == tag:
+                yield ch
+            elif t in _CONTAINERS:
+                yield from kids(ch, tag)
     def block(node):
         t = _ln(node.tag)
         if t == 'p':
@@ -1087,10 +1098,8 @@ def _docx_html(path):
             return ''.join(block(x) for x in node if _ln(x.tag) in ('p', 'tbl') + _CONTAINERS)
         if t == 'tbl':
             rows = []
-            for tr in node:
-                if _ln(tr.tag) != 'tr':
-                    continue
-                tcs = [tc for tc in tr if _ln(tc.tag) == 'tc']
+            for tr in kids(node, 'tr'):
+                tcs = list(kids(tr, 'tc'))
                 texts = [' '.join(''.join(x.text or '' for x in tc.iter(q('t'))).split())
                          for tc in tcs]
                 # Tag the cell each finding ANCHOR points at, so '? look' lands exactly where the
@@ -2286,29 +2295,27 @@ _CALC_FLAG = re.compile(r' vs |but the \.cif|blank but|not in the wt|does not|do
 _ANCHOR_CAPTION = {'composition': r'wt|analy|composition|microprobe|epma|chemical',
                    'bond': r'bond[- ]?valence|\bbvs\b|valence',
                    'powder': r'powder|x-ray|d\s*obs|diffraction'}
-# the sections read from the prose, not a table: the paragraph that states the thing
-_ANCHOR_PROSE = {'gladstone': r'compatibility|gladstone', 'density': r'density', 'species': r'mindat|\bIMA\b'}
+# the stronger caption of a section, where two captions both match: a bond-valence SUM / ANALYSIS
+# table over a distance table that also 'lists bond valences (vu)' in its heading
+_ANCHOR_STRONG = {'bond': r'bond[- ]?valence[- ]?(?:sums?|analys[ie]s|tables?|calculations?)|\bbvs\b'}
+# the sections read from the prose, not a table: the paragraph that states the thing ('name:' is
+# the species line, paper_extract.verify)
+_ANCHOR_PROSE = {'gladstone': r'compatibility|gladstone', 'density': r'density', 'name': r'mindat|\bIMA\b'}
 
-
-_BLANK_CELL = re.compile(r'is blank but the \.cif has that bond \(([\d., ]+) vu\)')
 
 def _calc_kind(s, head=False):
     """'calc' (a red finding) or 'calcinfo' (what was re-done and how) for one line of the paper
     checks. A section head, a doubt ('[unverified]'), and a line naming no difference are
-    information; so is a blank cell for a bond under 0.10 vu — a contact below the cutoff most
-    tables print, which the checker itself does not count as a disagreement (agujaite's O8–Na2
-    at 0.03 vu came up red under a table that agreed in every cell, 2026-09-10)."""
+    information. The line's own wording decides — the checker says what is a difference and what
+    is not (a blank cell for a contact under bv_check.BLANK_INFO is 'not a difference' in its
+    text), so no number is re-read here and the CLI and the GUI cannot disagree."""
     if head or not _CALC_FLAG.search(s) or '[unverified]' in s or s.startswith('not verifiable'):
         return 'calcinfo'
-    m = _BLANK_CELL.search(s)
-    if m:
-        try:
-            if max(float(x) for x in re.findall(r'\d+\.\d+', m.group(1))) < 0.10:
-                return 'calcinfo'
-        except ValueError:
-            pass
     return 'calc'
 
+
+_ANCHOR_SEP = '\x1f'                                                 # between the cells of one table's joined text
+_ALNUM = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789')   # a term's word boundary (the [A-Za-z0-9] class)
 
 def _ms_docx_anchors(path, findings):
     """Paragraph anchors for the calculation findings of a .docx manuscript, so '? look' scrolls the
@@ -2316,73 +2323,134 @@ def _ms_docx_anchors(path, findings):
     line to its row label or column header in the bond-valence table ('O8–Na2 is blank' -> the O8
     row), a composition line to its constituent's cell in the analytical table ('Si: paper 2.99'
     -> SiO2), a powder line to its d value; a section's head, and a line naming no cell, to the
-    table's caption (the paragraph above it) or its first cell. The section's table is the one
-    whose caption says what it is and whose cells hold most of the section's terms (a coordinates
-    table holds every site label too — the caption tells them apart). Paragraphs are numbered as
-    the docx view numbers them (refs_check.load_docx). Best effort: a finding nothing places keeps
-    para None, and the view says so."""
+    table's caption (the paragraph above it) or its first cell. Paragraphs are numbered as the
+    docx view numbers them (refs_check.load_docx).
+
+    A cell's text is normalised the way the READER normalised it (paper_extract._docx_cell_text:
+    a footnote mark in superscript dropped), since the finding's terms come from that reading —
+    'SiO2ᵃ' is the SiO2 cell. Each table is indexed once (whole-cell text -> paragraph, plus one
+    joined string for the begins-with / word passes) and the terms are looked up, so a table that
+    differs throughout (a line per cell) costs its cells, not findings × cells.
+
+    The section's table: the caption says what it is and its cells ARE the section's terms —
+    whole-cell hits, so a grid whose row and column labels are the sites outranks a distance table
+    that merely mentions them in 'Na1–O8'; a two-label find prefers a table holding both as
+    cells; a stronger caption (_ANCHOR_STRONG) breaks a tie, and for the bond-valence section the
+    later table (the grid follows the distances). A finding's own 'table N' is honoured: the N-th
+    table of the section's kind in document order (two minerals, two grids). A term missing from
+    that table is looked for only in the other tables of the same kind — never in a foreign one
+    (a Gladstone–Dale table lists SiO2 too). Best effort: a finding nothing places keeps para
+    None, and the view says so."""
     try:
         doc, paras = RC.load_docx(path)
     except Exception:
         return
+    from pxrd_review import paper_extract as PE
     W = RC.W
     tbls = list(doc.element.body.iter(W + 'tbl'))
+    tidx = {id(t): i for i, t in enumerate(tbls)}                     # tbls keeps the proxies alive, so identity holds
     def table_of(elem):
         top = None; e = elem.getparent()
         while e is not None:
             if e.tag == W + 'tbl':
                 top = e                                          # the OUTERMOST table: a nested one belongs to it
             e = e.getparent()
-        if top is None:
-            return None
-        return next((i for i, t in enumerate(tbls) if t is top), None)
-    cells = {}; first = {}                                       # table -> [(para idx, cell text)], first para of each
+        return tidx.get(id(top)) if top is not None else None
+    def norm(s):
+        s = re.sub(r'(?:\s|[*†‡§]|\[\d+\])+$', '', s.strip())          # a trailing footnote mark, or the '[1]' load_docx wraps a numeric superscript in
+        return re.sub(r'\((\d{1,2}[a-z]?)\)', r'\1', s)                # 'O(8)' is the O8 row; 'Na(2)' the Na2 column
+    tabs = {}                                                       # table -> {'exact': {cell text: first para}, 'cells': [(para, text)], 'first': para}
     for pa in paras:
         if pa.elem is None:
             continue
         k = table_of(pa.elem)
         if k is None:
             continue
-        cells.setdefault(k, []).append((pa.idx, ' '.join(pa.text.split()))); first.setdefault(k, pa.idx)
-    if not cells:
-        return
+        tab = tabs.setdefault(k, {'exact': {}, 'cells': [], 'first': pa.idx})
+        try:
+            c = norm(PE._docx_cell_text(pa.elem))
+        except Exception:
+            c = norm(' '.join(pa.text.split()))
+        if c:
+            tab['exact'].setdefault(c, pa.idx); tab['cells'].append((pa.idx, c))
+    def index(tab):
+        """The joined string of the table's cells and each cell's offset in it, for the begins-with / word passes."""
+        starts = []; pos = 0
+        for i, c in tab['cells']:
+            starts.append(pos); pos += len(c) + 1
+        tab['joined'] = _ANCHOR_SEP.join(c for _, c in tab['cells']); tab['starts'] = starts
+        return tab
+    for tab in tabs.values():
+        index(tab)
     caption = {}
-    for k, i0 in first.items():
+    for k, tab in tabs.items():
+        i0 = tab['first']
         j = next((j for j in range(i0 - 1, max(-1, i0 - 4), -1)
                   if paras[j].text.strip() and (paras[j].elem is None or table_of(paras[j].elem) is None)), None)
         caption[k] = j if j is not None else i0
-    norm = lambda s: re.sub(r'[\s*†‡§]+$', '', s.strip())
-    def hit(k, term):
-        """The cell of table k that IS the term, else the one that begins with it, else the one holding it as a word."""
+    def find_word(s, t, begins):
+        """Where t occurs in the joined string as a whole word (not inside 'Na12' or 'SiO2a'), at a
+        cell's start when `begins`; -1 if nowhere. str.find, not a regex: a lookbehind before the
+        literal costs a regex its fast scan (0.7 ms per search over a 60-table docx, ×2 per term)."""
+        i = s.find(t)
+        while i >= 0:
+            before = i == 0 or (s[i - 1] == _ANCHOR_SEP if begins else s[i - 1] not in _ALNUM)
+            after = i + len(t) >= len(s) or s[i + len(t)] not in _ALNUM
+            if before and after:
+                return i
+            i = s.find(t, i + 1)
+        return -1
+    def hit(tab, term, exact=False):
+        """The cell of the indexed table that IS the term, else (unless exact) the one that begins with it, else the one holding it as a word."""
         t = norm(term)
-        if not t or k is None:
+        if not t or tab is None:
             return None
-        cs = cells.get(k) or []
-        for i, c in cs:
-            if norm(c) == t:
-                return i
-        for i, c in cs:
-            if re.match(re.escape(t) + r'(?![A-Za-z0-9])', c):
-                return i
-        for i, c in cs:
-            if re.search(r'(?<![A-Za-z0-9])' + re.escape(t) + r'(?![A-Za-z0-9])', c):
-                return i
+        i = tab['exact'].get(t)
+        if i is not None or exact:
+            return i
+        for begins in (True, False):
+            pos = find_word(tab['joined'], t, begins)
+            if pos >= 0:
+                return tab['cells'][bisect.bisect_right(tab['starts'], pos) - 1][0]
         return None
     def section_of(f):
         lab = (f.get('label') or '').lower()
         return 'bond' if lab.startswith('bond') else 'composition' if lab.startswith('composition') else 'powder' if lab.startswith('powder') else None
-    table_for = {}
+    def terms_of(f):
+        return [t for t in (f.get('find') or '').split('|') if t]
+    strength = {}
+    def cap_strength(sec, k):
+        """0: the caption says nothing of the section; 1: it matches; 2: it matches the stronger pattern."""
+        key = (sec, k)
+        if key not in strength:
+            text = paras[caption[k]].text
+            strength[key] = 2 if sec in _ANCHOR_STRONG and re.search(_ANCHOR_STRONG[sec], text, re.I) else \
+                1 if re.search(_ANCHOR_CAPTION[sec], text, re.I) else 0
+        return strength[key]
+    table_for = {}; kind = {}; union = {}
     for sec in ('composition', 'bond', 'powder'):
-        terms = {t for f in findings if section_of(f) == sec for t in (f.get('find') or '').split('|') if t}
-        pat = re.compile(_ANCHOR_CAPTION[sec], re.I)
-        scored = []
-        for k in cells:
-            n = sum(1 for t in terms if hit(k, t) is not None)
-            cap = bool(pat.search(paras[caption[k]].text))
-            if n or cap:
-                scored.append(((cap, n, -k), k))
+        secf = [f for f in findings if section_of(f) == sec]
+        if not secf:
+            continue
+        terms = {t for f in secf for t in terms_of(f)}
+        pairs = [ts for ts in (terms_of(f) for f in secf) if len(ts) > 1]
+        words = sorted({norm(t) for t in terms if norm(t)}, key=len, reverse=True)
+        word_rx = re.compile(r'(?<![A-Za-z0-9])(?:' + '|'.join(re.escape(w) for w in words) + r')(?![A-Za-z0-9])') if words else None
+        scored = []; exact_n = {}
+        for k, tab in tabs.items():
+            n_exact = sum(1 for t in terms if hit(tab, t, exact=True) is not None)
+            n_pairs = sum(1 for ts in pairs if all(hit(tab, t, exact=True) is not None for t in ts))
+            n_any = len(set(word_rx.findall(tab['joined']))) if word_rx else 0          # one pass over the table for every term
+            cap = cap_strength(sec, k); exact_n[k] = n_exact
+            if n_any or cap:
+                scored.append(((bool(cap), n_exact, n_pairs, n_any, cap, k if sec == 'bond' else -k), k))
         if scored:
             table_for[sec] = max(scored)[1]
+            ks = [k for k in sorted(tabs) if cap_strength(sec, k)]
+            kind[sec] = [k for k in ks if exact_n[k]] or ks                # the section's tables in document order: 'table N' is the N-th
+            union[sec] = index({'exact': {}, 'cells': [c for k in ks for c in tabs[k]['cells']]})   # every table of the kind, as one index: the fallback is one lookup, not one per table
+            for i, c in union[sec]['cells']:
+                union[sec]['exact'].setdefault(c, i)
     def prose(pat):
         """The first body paragraph (outside every table) that matches, else the first anywhere."""
         rx = re.compile(pat, re.I)
@@ -2392,23 +2460,28 @@ def _ms_docx_anchors(path, findings):
         sec = section_of(f)
         if f.get('para') is not None:
             continue
+        lab = (f.get('label') or '').lower(); msg = f.get('msg') or ''
         if sec is None:
-            lab = (f.get('label') or '').lower(); msg = f.get('msg') or ''
             key = next((k for k in _ANCHOR_PROSE if lab.startswith(k)), None)
             if key:
                 f['para'] = prose(_ANCHOR_PROSE[key])            # 'Gladstone–Dale: …', 'the paper states +0.011': the compatibility sentence
             elif lab == 'cell':
-                m = re.search(r'\ba=(\d+\.\d+)', msg)          # 'cell: a=16.2184, …': the paragraph (or the crystal-data cell) that prints that a
+                m = re.search(r'\ba=(\d+(?:\.\d+)?)', msg)      # 'cell: a=16.2184, …' (or 'a=16': %g prints no decimals): the paragraph (or the crystal-data cell) that prints that a
                 if m:
-                    v = m.group(1)
-                    f['para'] = prose(re.escape(v)) if prose(re.escape(v)) is not None else prose(re.escape(v[:v.index('.') + 4]))
+                    v = m.group(1); para = prose(re.escape(v))
+                    if para is None and '.' in v:
+                        para = prose(re.escape(v[:v.index('.') + 4]))
+                    f['para'] = para
             continue
         k = table_for.get(sec)
+        m = re.search(r'\btable (\d+)', msg)
+        if m and kind.get(sec) and 1 <= int(m.group(1)) <= len(kind[sec]):
+            k = kind[sec][int(m.group(1)) - 1]
         para = None
-        for t in [t for t in (f.get('find') or '').split('|') if t]:
-            para = hit(k, t)
-            if para is None:                                     # not in the section's table: any other table's cell
-                para = next((p for k2 in sorted(cells) if k2 != k for p in [hit(k2, t)] if p is not None), None)
+        for t in terms_of(f):
+            para = hit(tabs.get(k), t)
+            if para is None:                                     # not in the section's table: another table of the same kind, never a foreign one
+                para = hit(union.get(sec), t)
             if para is not None:
                 break
         if para is None and k is not None:

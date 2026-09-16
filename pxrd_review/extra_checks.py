@@ -764,13 +764,24 @@ def check4_calculated(e, text):
         # entry, or names no other species.
         # The thing measured must be the PATTERN, the DATA or the DIFFRACTION — 'Powder for the
         # microprobe mounts was obtained by crushing a crystal' is the sample, and read as the
-        # pattern it silenced a genuine calculated-pattern flag (audit 2026-09-10).
+        # pattern it silenced a genuine calculated-pattern flag (audit 2026-09-10). Plural too —
+        # 'the powder patterns were collected' (audit 2026-09-16) — and a pattern the sentence calls
+        # simulated / calculated / theoretical / generated BEFORE the verb was not measured, however
+        # it 'was obtained' ('A simulated powder diffraction pattern … was obtained using RIETAN-FP').
         _mc = re.compile(
-            r'(?:powder[^.]{0,40}?\b(?:pattern|data|diffraction|diffractogram)\b|\bpxrd\b(?:\s+(?:pattern|data))?)'
-            r'[^.]{0,60}\b(?:was|were)\s+(?:measured|collected|recorded|obtained|acquired)'
-            r'|(?:collected|recorded|measured)\s+(?:the\s+)?(?:x-ray\s+)?powder[^.]{0,30}\b(?:pattern|data|diffraction)', re.I)
+            r'(?:powder[^.]{0,40}?\b(?:patterns?|data|diffraction|diffractograms?)\b|\bpxrd\b(?:\s+(?:patterns?|data))?)'
+            r'[^.]{0,60}\b(?P<v1>was|were)\s+(?:measured|collected|recorded|obtained|acquired)'
+            r'|(?P<v2>collected|recorded|measured)\s+(?:the\s+)?(?:x-ray\s+)?powder[^.]{0,30}\b(?:patterns?|data|diffraction)', re.I)
+        _mc_not = re.compile(r'simulat|calculat|theoretical|generated', re.I)
+
+        def _measured(s):
+            m = _mc.search(s)
+            if not m:
+                return False
+            verb = m.start('v1') if m.group('v1') else m.start('v2')
+            return not _mc_not.search(s[:verb])
         measured_stated = any(
-            _mc.search(s) and (_mentions_entry(s) or not _names_other_species(s, nm))
+            _measured(s) and (_mentions_entry(s) or not _names_other_species(s, nm))
             for s in _sentences(text))
         if measured_stated and not not_collected:
             sents = []
@@ -1261,23 +1272,32 @@ def check24_optical_2v(e, text=None):
             return float(m.group(1).rstrip('.')) if m else None
         except ValueError:
             return None
-    a = _f(re.search(r'\bA\s*=\s*([\d.]+)', od))
-    b = _f(re.search(r'\bB\s*=\s*([\d.]+)', od))
-    g = _f(re.search(r'\bQ\s*=\s*([\d.]+)', od))
-    ms = re.search(r'Sign\s*=\s*([+-])', od)
-    sign = ms.group(1) if ms else None
-    v2 = _f(re.search(r'2V\s*=\s*([\d.]+)', od))
+    # an index or 2V may carry a qualifier: 'A(est)=1.600', 'B(calc)=', '2V(calc)=82.7', '2V(calc) 80.9°', '2Vz=60'
+    QUAL = r'(?:\([^)]*\))?'
+    a = _f(re.search(r'\bA' + QUAL + r'\s*=\s*([\d.]+)', od))
+    b = _f(re.search(r'\bB' + QUAL + r'\s*=\s*([\d.]+)', od))
+    g = _f(re.search(r'\bQ' + QUAL + r'\s*=\s*([\d.]+)', od))
+    ms = re.search(r'Sign\s*=\s*([+\-−–—])', od)      # an em dash is Word's autocorrect of '--'
+    sign = ('+' if ms.group(1) == '+' else '-') if ms else None
+    v2 = _f(re.search(r'2V[xz]?' + QUAL + r'\s*=?\s*(\d+(?:\.\d+)?)', od))   # an angle: a stray '-' is not read
     # --- the field's own syntax (2026-09-14, measured on the 160 optics fields of the corpus) ---
     raw_sign = re.search(r'Sign\s*=\s*([^\s,;]+)', od)
-    if raw_sign and raw_sign.group(1).strip('()')[:1] not in ('+', '-', '−', '–'):
-        out.append(Finding('optical', 'flag', "Optical Data gives Sign=%s — the optic sign is + or −."
-                           % raw_sign.group(1), od[:120], 'optical'))
+    if raw_sign:
+        head = raw_sign.group(1).strip('()')[:1]
+        if head == '±':
+            out.append(Finding('optical', 'note', "Optical Data gives Sign=%s — an undetermined sign; confirm "
+                               "the .pdf gives none." % raw_sign.group(1), od[:120], 'optical'))
+        elif head not in ('+', '-', '−', '–', '—'):
+            out.append(Finding('optical', 'flag', "Optical Data gives Sign=%s — the optic sign is + or −."
+                               % raw_sign.group(1), od[:120], 'optical'))
     if not re.search(r'R\s*%', od):                  # a reflectance line parks here in some entries
-        bad = re.search(r'\b[ABQ]\s*=\s*\d+\.\d+\(\d+(?!\d*\s*\))', od)
+        bad = re.search(r'\b[ABQ]' + QUAL + r'\s*=\s*\d+\.\d+\(\d+(?!\d*\s*\))', od)
         if bad:
             out.append(Finding('optical', 'flag', "Optical Data writes '%s' — the esd's closing parenthesis is "
                                "missing or mistyped." % _sq(od[bad.start():bad.end() + 2]), od[:120], 'optical'))
-    idx = {k: (v, esd) for k, v, esd in re.findall(r'\b([ABQ])\s*=\s*(\d+\.\d+)(\(\d+\))?', od)}
+    # an esd is '(2)' or '±0.0005' — the latter is an esd too, not a collapsed one
+    idx = {k: (v, esd.replace(' ', '')) for k, v, esd in
+           re.findall(r'\b([ABQ])' + QUAL + r'\s*=\s*(\d+\.\d+)(\(\d+\)|\s*±\s*[\d.]+)?', od)}
     for k, (v, esd) in idx.items():
         sib = [(w, s) for j, (w, s) in idx.items() if j != k]
         dp = len(v.split('.')[1])
@@ -1288,11 +1308,14 @@ def check24_optical_2v(e, text=None):
                                "collapsed into the last digit (%s(%s)?)."
                                % (k, v, ', '.join('%s=%s%s' % (j, w, s) for j, (w, s) in idx.items() if j != k),
                                   v[:-1], v[-1]), od[:120], 'optical'))
-    if b and g and not a and sign:
+    if b and g and not a:
         if v2 is not None:
             out.append(Finding('optical', 'note', "Optical Data gives 2V=%g° but only two indices (B, Q) — a biaxial "
                                "mineral needs A as well; confirm." % v2, od[:120], 'optical'))
-        elif abs(g - b) >= 0.004 and ('+' if g > b else '-') != sign:
+        # uniaxial only when the field carries NO A and NO 2V at all: 'A=n.d.', '2V=n.d.' (or a form the
+        # readers above did not take) describe a biaxial mineral whose values are simply not given
+        elif sign and abs(g - b) >= 0.004 and ('+' if g > b else '-') != sign \
+                and not re.search(r'\bA\b', od) and '2V' not in od:
             out.append(Finding('optical', 'flag', "Uniaxial Optical Data B(ω)=%g, Q(ε)=%g makes the mineral optically "
                                "%s, but Sign=%s — the sign, or ω and ε swapped, needs checking."
                                % (b, g, 'positive' if g > b else 'negative', sign), od[:120], 'optical'))
@@ -1988,6 +2011,12 @@ _FORMULA_FIELDS = ('Chemical', 'General', 'Analytical', 'Empirical')
 # determined), B, Li, Be, N (light, frequently not measured). Their absence from the wt% list says nothing.
 _LIGHT = frozenset(('O', 'H', 'C', 'B', 'Li', 'Be', 'N'))
 _REE = frozenset(('Y', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu', 'Sc'))
+# the periodic families a constituent is mistyped within ('SeO2' for TeO2, 'P2O5' for As2O5, 'CaO' for BaO): used
+# only to name WHICH missing element a stray constituent stands for
+_FAMILIES = (frozenset(('S', 'Se', 'Te')), frozenset(('P', 'As', 'Sb', 'Bi', 'V')), frozenset(('Mg', 'Ca', 'Sr', 'Ba')),
+             frozenset(('Li', 'Na', 'K', 'Rb', 'Cs')), frozenset(('F', 'Cl', 'Br', 'I')), frozenset(('Si', 'Ge', 'Sn', 'Pb')),
+             frozenset(('Ti', 'Zr', 'Hf')), frozenset(('Nb', 'Ta')), frozenset(('Cr', 'Mo', 'W')), frozenset(('Cu', 'Ag', 'Au')),
+             frozenset(('Zn', 'Cd', 'Hg')), frozenset(('Al', 'Ga', 'In')), frozenset(('Fe', 'Mn', 'Co', 'Ni')))
 # a valence that ICDD's encoder wrote as '<El><n> C<coef>' — the superscript '+' came out as 'C'
 _VALENCE_AS_C = re.compile(r'(?<![A-Za-z])(Fe|Mn|Cr|V|Ti|Co|Ni|Cu|Ce|Eu|U|Sb|As|Te|Se|Mo|W|Nb|Sn|Pb|Tl|Au|Pt|Pd|Ir|Os|Ru)'
                            r'\s*([2-6])\s+C(?:\s*(\d*\.\d+)|\s*(?=[,)\]]))')
@@ -2005,10 +2034,16 @@ def _strip_sums(f):
     f = re.sub(r'([\]}])S(?=\d*\.\d)', r'\1 ', f)            # ']S2.000' — a bare S glued to a bracket
     def repl(m):
         grp, raw = m.group(1), m.group(2)
-        tot = sum(float(x) for x in re.findall(r'(?:[A-Z][a-z]?|\?|\$[A-Z]+)\s*(\d*\.\d+)', grp))
+        # an integer coefficient inside the group ('( Pb4 Zn0.36 Fe0.13 )S4.49') is part of its sum
+        tot = sum(float(x) for x in re.findall(r'(?:[A-Z][a-z]?|\?|\$[A-Z]+)\s*(\d+(?:\.\d+)?)', grp))
         tol = 0.015 if len(raw.split('.')[1]) >= 2 else 0.065   # a Σ printed '1.9' for 1.96
         return grp + ' ' if tot and abs(tot - float(raw)) <= tol else m.group(0)
     return re.sub(r'(\([^()]*\))\s*S\s*(\d+\.\d+)', repl, f)
+
+def _glued_sigma(f):
+    """A ')S1.05' that survived _strip_sums: a Σ its group does not sum to (rounding, or a typo), or
+    sulfur — the coefficient comparison cannot tell, so it leaves S alone."""
+    return re.search(r'[)\]]\s*S\s*\d+\.\d+', _strip_sums(f) or '')
 
 def _formula_elements(f):
     f = _clean_formula(_strip_sums(f))
@@ -2027,16 +2062,31 @@ def _split_analysis(analysis):
     …, H2O(calc) 16.13: (Cu1.77Mg0.33)…'. The formula starts at the first colon after a number."""
     m = re.search(r'(?:wt|at)\.?\s*%\s*\)?\s*:?', analysis or '')
     body = analysis[m.end():] if m else (analysis or '')
-    # a colon after a number or a bracket, a colon before a bracket, or a formula glued to the last value
-    parts = re.split(r'(?<=[\d)])\s*:\s*(?=[\[({A-Z$?]|$)|\s*:\s*(?=[\[({])|(?<=\d)(?=\s*[\[(](?:\s*[\[(])?\s*[A-Z][a-z]?\s*\d*\.\d)',
-                     body, maxsplit=1)
+    # a colon after a number or a bracket, a colon before a bracket, or a formula glued to the last value:
+    # a bracket group opening 'El d.dd' that CLOSES and goes on as a formula (its Σ, another group, an element)
+    # — '(Li 0.77 by ICP-OES), P2O5 …' is an aside inside the list, not the formula
+    glued = (r'(?<=\d)(?=\s*[\[(](?:\s*[\[(])?\s*[A-Z][a-z]?\s*\d*\.\d[^()\[\]]*[)\]]'
+             r'\s*(?:(?:Sigma|Σ|\$?\s*S\s*\$?\s*I|\$\s*G\s*S|S)?\s*\d+(?:\.\d+)?)?'
+             r'\s*(?:[\[(]|[A-Z][a-z]?\s*\d|!|\.?\s*$))')
+    parts = re.split(r'(?<=[\d)])\s*:\s*(?=[\[({A-Z$?]|$)|\s*:\s*(?=[\[({])|' + glued, body, maxsplit=1)
     if len(parts) != 2:
         return body, ''
-    # a field that carries two formulas ('….: Na2.98 Ca2.79 …') — the first is the one the Analytical row copies
-    return parts[0], re.split(r'\.?\s*:\s*(?=[\[({A-Z])', parts[1].strip(), maxsplit=1)[0]
+    # a field that carries two formulas ('….: Na2.98 Ca2.79 …') — the first is the one the Analytical row copies;
+    # a sentence after the formula ('…H2 O. F 5.1 wt% by ion chromatography.') is not part of it — when it states
+    # a constituent, it belongs to the wt% list
+    wl, af = parts[0], re.split(r'\.?\s*:\s*(?=[\[({A-Z])', parts[1].strip(), maxsplit=1)[0]
+    af, *tail = re.split(r'\.\s+(?=[A-Z])', af, maxsplit=1)
+    if tail and re.match(r'[A-Z][a-z]?[A-Za-z0-9]*\s*(?:\([^()]{0,30}\))?\s*\d+\.\d+', tail[0]):
+        wl += ', ' + tail[0]
+    return wl, af
 
-_WT_ITEM = re.compile(r'(\((?:\s*[A-Z][a-z]?\s*,?)+\)\s*\d*\s*O\d*|(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9]*)'
-                      r'\s*(?:\([^()]{0,30}\))?\s*\+?\s*,?\s*(\d+(?:\.\d+)?)(?!\s*[-–]\s*\d)')
+_WT_ITEM = re.compile(r'(\((?:\s*[A-Z][a-z]?\s*,?)+\)\s*\d*\s*O\d*|(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9]*)\*?'
+                      r'\s*(?:\([^()]{0,30}\))?\s*\+?\s*,?\s*(\d+(?:\.\d+)?)(?![\d.]*\s*[-–]\s*\d)')
+# 'H2Ocalc', 'FeOtot', 'FeOtotal', 'FeOT', 'Fe2O3t': a tag typed onto the constituent (the '(calc)' / '(tot)' of the
+# bracketed form) — stripped before the token is read as a formula
+_WT_SUFFIX = re.compile(r'(?:calc|calcd|meas|total|tot)$|(?<=O)[Tt]$|(?<=O\d)[Tt]$')
+# the rare-earth shorthands: a group of elements, not a symbol ('RE' is not rhenium, 'TR' terres rares)
+_REE_SHORTHAND = re.compile(r'^(?:REE|RE|TR|Ln)(?=[\dO(]|$)')
 def _wt_items(wl):
     """[(species, elements, wt%)] of the wt% list; species that do not parse as a formula keep an empty element list."""
     out = []
@@ -2044,9 +2094,10 @@ def _wt_items(wl):
         sp, v = m.group(1).strip(), float(m.group(2))
         if sp in ('of', 'n', 'Total', 'total', 'Sum', 'sum', 'wt', 'calc', 'ca'):   # prose, not constituents ('Ca' is)
             continue
-        syms = re.findall(r'[A-Z][a-z]?', sp)
+        sp = _WT_SUFFIX.sub('', sp)
+        syms = re.findall(r'[A-Z][a-z]?', _REE_SHORTHAND.sub('Ln', sp))
         ok = bool(syms) and not re.search(r'\d{3}', sp) and bool(re.fullmatch(r'(?:\(\s*(?:[A-Z][a-z]?\s*,?\s*)+\)|[A-Z][a-z]?)(?:\d{1,2}|[A-Z][a-z]?\d{0,2}|\s)*', sp)) \
-             and all(s in _PT_ELEMENTS or s in ('Ln', 'REE') for s in syms)
+             and all(s in _PT_ELEMENTS or s == 'Ln' for s in syms)
         out.append((sp, [s for s in syms if s in _PT_ELEMENTS] if ok else [], v))
     return out
 
@@ -2055,6 +2106,10 @@ def _recase_species(sp):
     constituent as element symbols (digits kept), else None. Only tried on tokens that look like a
     formula typed wrong — all capitals, or carrying a digit — so prose ('ca.', 'n') never qualifies."""
     if not (re.search(r'\d', sp) or (sp.isupper() and len(sp) >= 2)) or not re.fullmatch(r'[A-Za-z0-9]{2,9}', sp):
+        return None
+    # a run of three lowercase letters is prose typed onto the constituent ('H2Ocalc'), never a misspelt
+    # symbol; a rare-earth shorthand ('RE2O3', 'TR2O3') is a group of elements, not rhenium
+    if re.search(r'[a-z]{3}', sp) or _REE_SHORTHAND.match(sp):
         return None
     s = re.sub(r'(?<=[A-Za-z]\d)0(?=\d)', 'O', sp)          # P205 -> P2O5
     low = s.lower()
@@ -2097,16 +2152,21 @@ def check27_formula_integrity(e, text=None):
             wt_els |= set(re.findall(r'[A-Z][a-z]?', _recase_species(sp)))
     texts = [('formula:' + k, k + ' formula', v) for k, v in F.items()]
     af_faulty = valence_c = False
+    bad_els = set()                                         # elements a syntax fault below leaves unreadable
     if af:
         texts.append(('analysis', 'formula in the Analysis field', af))
 
     # --- syntax: brackets, malformed numbers, a split symbol, a valence read as carbon. The Analysis formula is
     # usually the Analytical row copied, so one slip shows in both: report each slip ONCE, naming every field.
+    # One finding per fault: the elements a split symbol or a lost decimal point garbles ('N B0.05' for Nb) are
+    # kept out of the coefficient comparison and the element-set checks, which would otherwise report the same
+    # keystroke again as 'B 0.05 vs absent; Nb absent vs 0.05' and 'Nb2O5 absent from the formula'.
     faults = {}                                             # (kind, token) -> [message template, [labels], anchor]
-    def fault(kind, token, template, label, anchor):
+    def fault(kind, token, template, label, anchor, els=()):
         rec = faults.setdefault((kind, token), [template, [], anchor])
         if label not in rec[1]:
             rec[1].append(label)
+        bad_els.update(els)
     for anchor, label, v in texts:
         shown = v
         v = _strip_sums(v) if anchor == 'analysis' else v     # a Σ marker '$S I1.51' is not a split Si
@@ -2120,18 +2180,19 @@ def check27_formula_integrity(e, text=None):
         for m in re.finditer(r'(?<![A-Za-z\d.])([A-Z][a-z]?)(0\d+)(?![\d.])', v):
             if m.group(1) in _PT_ELEMENTS:
                 fault('decimal', m.group(0), "%%s write%%s '%s' — a coefficient with its decimal point lost (%s%s.%s?)."
-                      % (m.group(0), m.group(1), m.group(2)[0], m.group(2)[1:]), label, anchor)
+                      % (m.group(0), m.group(1), m.group(2)[0], m.group(2)[1:]), label, anchor, (m.group(1),))
         for m in re.finditer(r'([A-Z][a-z]?)\s*(\d+:\d+)', v):
             fault('colon', m.group(0), "%%s write%%s '%s' — a colon in a coefficient (%s%s?)."
-                  % (m.group(0), m.group(1), m.group(2).replace(':', '.')), label, anchor)
+                  % (m.group(0), m.group(1), m.group(2).replace(':', '.')), label, anchor, (m.group(1),))
         for m in re.finditer(r'(?<![A-Za-z])([A-Z])\s+([A-Z])(\d*\.\d+)', v):
             joined = m.group(1) + m.group(2).lower()
             if joined in _PT_ELEMENTS and (m.group(1) not in _PT_ELEMENTS or joined in wt_els):
                 fault('split', m.group(0), "%%s read%%s '%s' — the symbol %s split in two (%s%s?)."
-                      % (m.group(0), joined, joined, m.group(3)), label, anchor)
+                      % (m.group(0), joined, joined, m.group(3)), label, anchor, (m.group(1), m.group(2), joined))
         for m in list(re.finditer(r'(?<![A-Za-z])([A-Z][a-z]?)\s*(\d+\s+\.\d+|\d+\.\d\s\d(?![\d.]))', v))[:1]:
             if m.group(1) in _PT_ELEMENTS:
-                fault('space', m.group(0), "%%s write%%s '%s' — a space inside a coefficient." % m.group(0), label, anchor)
+                fault('space', m.group(0), "%%s write%%s '%s' — a space inside a coefficient." % m.group(0), label, anchor,
+                      (m.group(1),))
                 if anchor == 'analysis':
                     af_faulty = True
         vc = [m for m in _VALENCE_AS_C.finditer(v)]
@@ -2158,6 +2219,7 @@ def check27_formula_integrity(e, text=None):
             break
 
     # --- the wt% list against the formula it reduces to
+    dup = None                                              # one repeated constituent, reported after the element sets
     if wt:
         for sp, els, v in wt:
             if not els:
@@ -2172,26 +2234,48 @@ def check27_formula_integrity(e, text=None):
         dups = {sp: vs for sp, vs in vals.items() if len(vs) > 1}
         # one repeated constituent is a typo; several are a field holding more than one analysis
         if len(dups) == 1:
-            sp, vs = next(iter(dups.items()))
-            out.append(Finding('analysis', 'flag', "Analysis lists %s twice (%s) — a constituent was probably "
-                               "mistyped." % (sp, ' and '.join('%g' % x for x in vs[:3])), sp, 'analysis'))
+            dup = next(iter(dups.items()))
     if an and len([1 for _, els, _ in wt if els]) >= 3:
         coeff = _decimal_coeffs(an)
-        an_els = _formula_elements(an)
-        grouped = any(re.search(r'REE|Ln|\(\s*[A-Z][a-z]?\s*,', sp) for sp, _, _ in wt)
+        an_els = _formula_elements(an) - bad_els
+        grouped = any(_REE_SHORTHAND.match(sp) or re.search(r'REE|Ln|\(\s*[A-Z][a-z]?\s*,', sp) for sp, _, _ in wt)
         miss = sorted(el for el in an_els - wt_els - _LIGHT
                       if coeff.get(el, 1.0) >= 0.05 and not (grouped and el in _REE))
         extra = []                                          # wt% constituents (>= 1 wt%) the formula has no element for
         for sp, els, v in wt:
-            absent = [x for x in els if x not in ('O', 'H') and x not in an_els]
+            absent = [x for x in els if x not in ('O', 'H') and x not in an_els and x not in bad_els]
             if els and absent and len(absent) == len([x for x in els if x not in ('O', 'H')]) and v >= 1.0:
                 extra.append((sp, v, absent))
+        if dup and miss:
+            # the repeated constituent IS the missing one, mistyped ('CaO 7.17' for BaO, 'P2O5 0.34' for As2O5):
+            # one keystroke, one finding — only for an element of the same family; 'Na2O twice' beside a formula
+            # whose F the list lacks is two faults
+            sp, vs = dup
+            cation = next((s for s in re.findall(r'[A-Z][a-z]?', sp) if s != 'O'), None)
+            stand = next((x for x in miss if cation and any({x, cation} <= g for g in _FAMILIES)), None)
+            if stand:
+                out.append(Finding('analysis', 'flag', "Analysis lists %s twice (%s) — the second is probably %s, "
+                                   "which the Analytical formula needs and the list lacks."
+                                   % (sp, ' and '.join('%g' % x for x in vs[:3]), sp.replace(cation, stand, 1)),
+                                   sp, 'analysis'))
+                dup, miss = None, [x for x in miss if x != stand]
         if miss and any(v >= 3.0 for _, v, _ in extra):     # both directions at once: one constituent stands for another
             extra = [x for x in extra if x[1] >= 3.0]
+            # name the one-for-one substitute (the same periodic family, else the largest coefficient) and list
+            # the rest of the missing elements as simply not in the list
+            left = list(miss)
+            pairs = []
+            for sp, v, absent in extra:
+                if not left:
+                    break
+                fam = next((x for x in left if any({x, absent[0]} <= g for g in _FAMILIES)), None)
+                pick = fam or max(left, key=lambda x: coeff.get(x, 0.0))
+                left.remove(pick)
+                pairs.append('the list has %s %g, the formula has %s instead' % (sp, v, pick))
+            rest = '' if not left else '; the formula\'s %s %s no constituent in the list' % (
+                ', '.join(left), 'has' if len(left) == 1 else 'have')
             out.append(Finding('formula', 'flag', "The Analysis wt%% list and the Analytical formula name different "
-                               "elements: the list has %s, the formula has %s instead."
-                               % (', '.join('%s %g' % (sp, v) for sp, v, _ in extra), ', '.join(miss)),
-                               an[:120], 'formula:Analytical'))
+                               "elements: %s%s." % ('; '.join(pairs), rest), an[:120], 'formula:Analytical'))
         else:
             if miss:
                 out.append(Finding('formula', 'flag' if set(miss) - _REE else 'note',
@@ -2202,17 +2286,24 @@ def check27_formula_integrity(e, text=None):
                 out.append(Finding('formula', 'flag' if v >= 3.0 and set(absent) - _REE else 'note',
                                    "Analysis lists %s %g wt%%, but %s is absent from the Analytical formula."
                                    % (sp, v, '/'.join(absent)), sp, 'formula:Analytical'))
+    if dup:
+        sp, vs = dup
+        out.append(Finding('analysis', 'flag', "Analysis lists %s twice (%s) — a constituent was probably "
+                           "mistyped." % (sp, ' and '.join('%g' % x for x in vs[:3])), sp, 'analysis'))
 
     # --- the Analytical row against the formula written in the Analysis field
     if an and af and not af_faulty:
         c1, c2 = _decimal_coeffs(an), _decimal_coeffs(af)
         e1, e2 = _formula_elements(an), _formula_elements(af)
         ideal = set().union(*[_formula_elements(v) for j, v in F.items() if j != 'Analytical']) | wt_els
+        # a ')S1.05' its group does not sum to (rounding in the paper, or a typo) reads as sulfur: S is not compared
+        glued_s = bool(_glued_sigma(af) or _glued_sigma(an))
         if len(c1) >= 2 and len(c2) >= 2:
             diffs = []
             for el in sorted(set(c1) | set(c2)):
                 # O/H are bookkeeping; an S nothing else names is a Σ the parser could not attribute
-                if el in ('O', 'H') or (el == 'S' and 'S' not in ideal) or (el == 'C' and valence_c):
+                if el in ('O', 'H') or (el == 'S' and ('S' not in ideal or glued_s)) or (el == 'C' and valence_c) \
+                        or el in bad_els:
                     continue
                 a, b = c1.get(el), c2.get(el)
                 if a is not None and b is not None:
@@ -2235,6 +2326,21 @@ def check27_formula_integrity(e, text=None):
             others = set().union(*[_formula_elements(v) for j, v in F.items() if j != k]) | wt_els | _formula_elements(af)
             only = sorted(_formula_elements(F[k]) - others - {'O', 'H'} - ({'C'} if valence_c else set()))
             if only:
+                # a General formula names a group's substituents by definition — '( Mg , Fe , Mn )' in a sample
+                # with no Fe or Mn is not a fault; a bare symbol ('S8' for Si8) still is
+                if k == 'General':
+                    listed = set()
+                    for grp in re.findall(r'[(\[]([^()\[\]]*,[^()\[\]]*)[)\]]', _clean_formula(F[k])):
+                        listed |= {t for t in re.findall(r'[A-Z][a-z]?', grp) if t in _PT_ELEMENTS}
+                    if listed & set(only):
+                        out.append(Finding('formula', 'note', "The General formula lists %s among a site's substituents, "
+                                           "found in no other formula field and not in the analysis — the group's "
+                                           "formula may name substituents this sample lacks: %s"
+                                           % (', '.join(x for x in only if x in listed), F[k][:100]),
+                                           F[k][:120], 'formula:' + k))
+                        only = [x for x in only if x not in listed]
+                        if not only:
+                            continue
                 # a bare capital may be a site label the encoder left behind ('Al6 T ( Si , B )6 O18 U ( B O3 )3')
                 # rather than the element — show where it stands and let the reader say which
                 where = []
@@ -2277,11 +2383,16 @@ def check28_density_consistency(e, text=None):
     dev = abs(r - 1)
     if dev < 0.12:
         return []
+    # the structural ratios only (Z doubled, a formula unit halved, 4/3 …): with 5 among the divisors 6/5, 5/4
+    # and 4/3 tile 1.15–1.39 at the 4 % tolerance and every 25–30 % gap read as 'a simple ratio'
     frac = None
-    for q in range(1, 7):
-        for p in range(1, 7):
+    for q in (1, 2, 3, 4, 6, 8):
+        for p in (1, 2, 3, 4, 6, 8):
             if p != q and abs(r - p / q) <= 0.04 * (p / q):
                 frac = (p, q) if frac is None or abs(r - p / q) < abs(r - frac[0] / frac[1]) else frac
+    if frac:
+        g = math.gcd(*frac)
+        frac = (frac[0] // g, frac[1] // g)
     z = e.cell.get('Z') or '?'
     if frac and dev >= 0.25:
         return [Finding('xtl_density', 'flag', "Xtl Dx = %.3f is %s× Dx = %.3f — a simple ratio: Z (%s) or the "
@@ -2446,8 +2557,10 @@ def check14_density(e, text):
     return out
 
 # ----------------------------------------------------------------------------- 15. strongest-lines cross-check (egregious mismatches only)
+# the list is captured by a lookahead so that a second sentence right behind it (an isotypic mineral's)
+# is found too, instead of being swallowed by the first one's 700 characters
 _STRONGEST = re.compile(r'(?:strongest|most intense)\s+(?:\w+\s+){0,2}?(?:lines|reflections|peaks|diffraction lines)'
-                       r'[^.]{0,220}?(?:are|is|:)\s*(.{0,700})', re.I)
+                       r'[^.]{0,220}?(?:are|is|:)\s*(?=(.{0,700}))', re.I)
 
 def _measured(e):
     """A reflection list from a measurement — not a Calculated / Other (single-crystal-derived) pattern."""
@@ -2471,6 +2584,9 @@ def check15_strongest_lines(e, text):
         return out
     flat = re.sub(r'\s+', ' ', text)
     calc_list = False                       # a list set aside: calculated, or not this pattern's
+    # the tolerance follows the PRINTED precision: a paper rounding to two decimals puts 1.5049 at 1.50
+    tol = lambda d: max(0.6 * 10 ** -len(d.split('.')[1]), 0.003 * float(d))
+    scored = []                             # every qualifying sentence: (misses, sentence)
     for m in _STRONGEST.finditer(flat):
         lead = flat[m.start():m.start(1) + 30]
         body = re.split(r'\.\s+[A-Z]', m.group(1))[0]
@@ -2480,11 +2596,15 @@ def check15_strongest_lines(e, text):
         if re.search(r'calculat', lead, re.I):
             calc_list = True
             continue
-        miss = [(d, i) for d, i in items
-                if not any(abs(float(d) - x) <= max(0.002, 0.003 * float(d)) for x in docx_ds)]
+        miss = [(d, i) for d, i in items if not any(abs(float(d) - x) <= tol(d) for x in docx_ds)]
         if len(miss) > max(1, len(items) // 3):
             calc_list = True                # most of its lines absent: another mineral's pattern, or 2θ — not this list,
             continue                        # and not a sentence the I=100 fallback below may read either
+        scored.append((miss, m))
+    if scored:
+        # a paper may list several minerals' strongest lines (an isotypic pair): the sentence that matches
+        # the entry fully is its own, and only when none does is the closest one reported
+        miss, m = min(scored, key=lambda s: len(s[0]))
         if miss:
             near = lambda d: min(docx_ds, key=lambda x: abs(x - float(d)))
             out.append(Finding('strongest_lines', 'flag',
@@ -2492,7 +2612,7 @@ def check15_strongest_lines(e, text):
                        "(nearest: %s) — a line missing or a d mistyped." % (
                            ', '.join('%s (I %s)' % (d, i) for d, i in miss),
                            ', '.join('%.4f' % near(d) for d, _ in miss)),
-                       re.sub(r'\s+', ' ', m.group(0))[:160], 'refl'))
+                       flat[m.start():m.end(1)][:160], 'refl'))
         return out
     if calc_list:
         return out
@@ -2564,42 +2684,64 @@ def _num(x):
     except (TypeError, ValueError):
         return x
 
+def _printed_damaged(d, text):
+    """The paper prints d with a decimal comma ('3,220'). Asked only of the few lines the exact tokens
+    missed. A digit run that merely ENDS in d's digits ('13.220', '1003.220') is deliberately not
+    accepted: the corpus pdfs glue digits only in DOIs and version strings, never inside a powder table,
+    and accepting a suffix would let any longer number ('23.22') silence a real miss."""
+    for form in _d_forms(d):
+        if re.search(r'(?<!\d)' + re.escape(form).replace(r'\.', ',') + r'(?!\d)', text):
+            return True
+    return False
+
 def check29_reflections_in_paper(e, text):
     """Every d of a measured reflection list, looked for among the numbers the .pdf prints. Measured on
     the 207 measured entries with a paired .pdf (2026-09-14) the coverage is bimodal: 155 lists are printed
     (>= 90 %), 52 are mostly absent (taken from a .cif, a supplement or a spreadsheet), none in between;
     three of the 155 lack exactly one line — suenoite's 3.2200 (the paper: 3.322), argentopearceite's 1.482
     (1.4282), popugaevaite's 3.834 (the paper itself misprints 2.834). So a line is reported only when all
-    but a handful of the others ARE printed; a list the paper does not carry says nothing."""
+    but a handful of the others ARE printed (one below 20 lines — an abstract naming the eight strongest
+    lines of a ten-line list is not a misprint — two from 20, 5 % above 40); a list the paper does not
+    carry says nothing."""
     out = []
     if not e.refl or not text or not _measured(e):
         return out
-    ds = list(dict.fromkeys(re.sub(r'\s+', '', r[0]) for r in e.refl if _val(r[0])))
+    # the numeric part of each d is what is looked for — '3.220b' (broad), '3.220(1)' (an esd) as 3.220 —
+    # and the entry's own spelling is what is reported; an integer d cannot be among the decimal tokens
+    num = {}
+    for raw in dict.fromkeys(re.sub(r'\s+', '', r[0]) for r in e.refl if _val(r[0])):
+        m = re.match(r'\d+\.\d+', raw)
+        if m:
+            num.setdefault(m.group(0), raw)
+    ds = list(num)
     if len(ds) < 8:
         return out
-    toks = set(re.findall(r'\d+\.\d+', text)) | {re.sub(r'\s+', '', t) for t in re.findall(r'\d+\.\s+\d+', text)}
-    miss = [d for d in ds if not (_d_forms(d) & toks)]
-    if not miss or len(miss) > max(2, 0.05 * len(ds)):
+    toks = set(re.findall(r'\d+\.\d+', text)) | {re.sub(r'\s+', '', t)
+                                                  for t in re.findall(r'\d+\.\s+\d+|\d+\.\d+\n\d+', text)}
+    miss = [d for d in ds if not (_d_forms(d) & toks) and not _printed_damaged(d, text)]
+    allow = 1 if len(ds) < 20 else max(2, 0.05 * len(ds))
+    if not miss or len(miss) > allow:
         return out
     info = {re.sub(r'\s+', '', r[0]): r for r in e.refl}
     printed = {t for t in toks if 0.5 < float(t) < 50}
     parts = []
     for d in miss:
-        r = info[d]
-        ip, fp = d.split('.', 1)
+        r = info[num[d]]
+        ip, fp = d.split('.', 1) if '.' in d else (d, '')
         sig = ip + '.' + (fp.rstrip('0') or '0')
         # what the paper prints ONE keystroke away (a digit changed, dropped, added or two swapped) — the
         # likely original, or the paper's own misprint (popugaevaite's table has 2.834 where 3.834 belongs)
         cand = sorted((t for t in printed if len(t.split('.')[1]) >= len(sig.split('.')[1]) and _one_keystroke(sig, t)),
                       key=lambda t: abs(float(t) - _val(d)))[:3]
         hkl = ' '.join(x for x in r[2:5] if x)
-        parts.append('d = %s (I %s%s%s)' % (d, _num(r[1]), ', hkl ' + hkl if hkl else '',
+        parts.append('d = %s (I %s%s%s)' % (num[d], _num(r[1]), ', hkl ' + hkl if hkl else '',
                                            ' — the .pdf prints %s, one keystroke away' % ' or '.join(cand) if cand else ''))
     out.append(Finding('reflections', 'flag',
                "Reflection list %s: not printed anywhere in the .pdf, although the other %d lines of the list "
-               "are — the entry or the .pdf is mistyped (a hkl assigned to the wrong d would hide it)."
+               "are — verify against the paper's table (a hkl assigned to the wrong d would hide it); a list "
+               "taken from a fuller source than the .pdf prints is the other possibility."
                % ('; '.join(parts), len(ds) - len(miss)),
-               ', '.join(miss), 'refl'))
+               ', '.join(num[d] for d in miss), 'refl'))
     return out
 
 # ----------------------------------------------------------------------------- driver

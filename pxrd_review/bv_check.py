@@ -521,6 +521,12 @@ PARAM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'b
 # A neighbour within the cutoff counts as a bond only when it contributes at least this much:
 # keeps Pb's long bonds (3.4 Å ≈ 0.03 vu) and drops a 3.2 Å P–O (0.015 vu) that no paper lists.
 MIN_S = 0.025
+# A blank cell of a paper's bond-valence grid where the .cif has a bond is a finding only when that
+# bond is one a table would print: under this much it is a contact below the cutoff most tables
+# use (agujaite's O8–Na2 at 0.03 vu came up as a missing cell under a table that agreed in every
+# cell, 2026-09-10), reported as information — the line's wording is what the record layer and
+# the GUI read, so the decision is made HERE, once.
+BLANK_INFO = 0.10
 PREFER = {'gh': ['bs', 'a', 'b'], 'bo': ['b', 'a', 'bs'], 'ba': ['a', 'b', 'bs']}
 # per-cation preferences that override the set: U6+–O from Burns, Ewing & Hawthorne (1997) — the
 # parameters every uranyl-mineral description uses (--params still applies to everything else)
@@ -1642,8 +1648,12 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
                     segs = _bv_cell(row[ci]); nums, n_down, n_across = _segs_split(segs)
                     if not nums:
                         if (an, cat) in cells and cat not in h_cols:
-                            L.append('table %d: %s–%s is blank but the .cif has that bond (%s vu)'
-                                     % (ti + 1, an, cat, ', '.join('%.2f' % s for s, _, _ in cells[(an, cat)])))
+                            have = ', '.join('%.2f' % s for s, _, _ in cells[(an, cat)])
+                            if max(s for s, _, _ in cells[(an, cat)]) < BLANK_INFO:
+                                L.append('table %d: %s–%s is blank — the .cif has that bond at %s vu, under the cutoff most tables print (not a difference)'
+                                         % (ti + 1, an, cat, have))
+                            else:
+                                L.append('table %d: %s–%s is blank but the .cif has that bond (%s vu)' % (ti + 1, an, cat, have))
                         continue
                     calc = cells.get((an, cat))
                     reading = 'perbond'                            # how this cell is written

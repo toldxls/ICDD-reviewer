@@ -157,6 +157,10 @@ def powder(rows, spacing='Diffractometer'):
     return type('E', (), {'refl': rows, 'instr': {'spacing_instr': spacing}, 'name': 'testite'})()
 
 
+def rows(ds):
+    return [(d, '10', '1', '0', '0') for d in ds]
+
+
 class ReflectionsAgainstPaper(unittest.TestCase):
     ROWS = [('%.4f' % d, '10', '1', '0', '0') for d in (8.123, 6.412, 5.207, 4.388, 3.9021, 3.2200, 2.9714, 2.6532, 2.4105)]
 
@@ -237,6 +241,299 @@ class AuditEdges(unittest.TestCase):
     def test_bracketed_sign_and_spaced_esd_are_well_formed(self):
         e = entry(optical='A=1.613(4), B=1.626(3 ), Q=1.633(5), Sign=(-), 2V=72(3)°')
         self.assertEqual(msgs(X.check24_optical_2v(e)), [])
+
+
+class SecondAudit(unittest.TestCase):
+    """The edges the second audit found (2026-09-16): forms of the Optical Data field the readers did not
+    read, the short-list allowance and the extraction damage of check29, the printed precision and the
+    sentence choice of check15."""
+
+    # --- check24 ---
+    def test_an_unread_A_or_2V_is_not_a_uniaxial_field(self):
+        for od in ('A=n.d., B=1.700(2), Q=1.720(2), Sign=-, 2V=n.d.',
+                   'A=n.d., B=1.700(2), Q=1.720(2), Sign=-, 2Vz=60',
+                   'A(est)=1.600, B=1.615(5), Q=1.635(5), Sign=-, 2V(calc)=82.7'):
+            self.assertEqual(msgs(X.check24_optical_2v(entry(optical=od))), [], od)
+        # the field with neither A nor 2V is still uniaxial
+        e = entry(optical='B=1.656(3), Q=1.662(3), Sign=-')
+        self.assertTrue(any('ω and ε swapped' in x for x in msgs(X.check24_optical_2v(e))))
+
+    def test_qualified_index_and_2v_forms_feed_the_biaxial_computation(self):
+        # A(est)/B(calc)/Q(calc) read: 1.500 / 1.510 / 1.540 make an optically positive crystal (2V≈61°)
+        e = entry(optical='A(est)=1.500, B(calc)=1.510, Q(calc)=1.540, Sign=-, 2V(calc)=40')
+        m = msgs(X.check24_optical_2v(e))
+        self.assertEqual(len(m), 1, m)
+        self.assertIn('optically positive', m[0])
+        # 2Vz= and '2V(calc) 100°' (no '=') read for the gross-gap rule
+        for od in ('A=1.500(2), B=1.510(2), Q=1.540(2), Sign=+, 2Vz=100',
+                   'A=1.500(2), B=1.510(2), Q=1.540(2), Sign=+, 2V(calc) 100°'):
+            m = msgs(X.check24_optical_2v(entry(optical=od)))
+            self.assertEqual(len(m), 1, (od, m))
+            self.assertIn('2V=100°', m[0])
+
+    def test_a_plus_minus_esd_has_not_collapsed(self):
+        e = entry(optical='A=1.695(1), B=1.7012±0.0005, Q=1.712(2), Sign=+, 2V=60')
+        self.assertEqual(msgs(X.check24_optical_2v(e)), [])
+        e = entry(optical='A=1.6942±0.0005, B=1.6952±0.0005, Q=1.700±0.001, Sign=-, 2V=70')
+        self.assertEqual(msgs(X.check24_optical_2v(e)), [])
+
+    def test_em_dash_is_a_minus_and_plus_minus_is_a_note(self):
+        self.assertEqual(X.check24_optical_2v(entry(optical='B=1.720(2), Q=1.700(2), Sign=—')), [])
+        fs = X.check24_optical_2v(entry(optical='B=1.700(2), Q=1.720(2), Sign=±'))
+        self.assertEqual(msgs(fs), [])
+        self.assertTrue(any('Sign=±' in x for x in msgs(fs, 'note')), [f.msg for f in fs])
+
+    # --- check29 ---
+    TEN = ['7.123', '5.432', '4.321', '3.987', '3.220', '2.988', '2.654', '2.311', '1.987', '1.654']
+
+    def test_short_list_allowance_is_one_line(self):
+        ten = self.TEN
+        # the abstract names the 8 strongest lines and the table is in a supplement: 2 of 10 unprinted says nothing
+        abstract = 'The strongest lines are: ' + ', '.join('%s(%d)' % (d, 100 - i) for i, d in enumerate(ten[:8]))
+        self.assertEqual(X.check29_reflections_in_paper(powder(rows(ten)), abstract), [])
+        # one of ten unprinted is the case the check is for
+        m = msgs(X.check29_reflections_in_paper(powder(rows(ten)), 'Table 3. ' + ' '.join(ten[:9])))
+        self.assertEqual(len(m), 1, m)
+        self.assertIn('1.654', m[0])
+        self.assertIn('verify against', m[0])
+        self.assertNotIn('is mistyped', m[0])
+        # from 20 lines the allowance is 2
+        twenty = ten + ['%.3f' % (1.6 - 0.05 * i) for i in range(10)]
+        m = msgs(X.check29_reflections_in_paper(powder(rows(twenty)), 'Table 3. ' + ' '.join(twenty[:18])))
+        self.assertEqual(len(m), 1, m)
+        self.assertEqual(X.check29_reflections_in_paper(powder(rows(twenty)), 'Table 3. ' + ' '.join(twenty[:17])), [])
+
+    def test_a_d_with_a_tail_or_no_decimal_point(self):
+        ten = self.TEN
+        table = 'Table 3. dobs ' + ' '.join(ten)
+        for tail in ('3.220b', '3.220(1)', '3.220 b'):
+            r = rows(ten[:4] + [tail] + ten[5:])
+            self.assertEqual(X.check29_reflections_in_paper(powder(r), table), [], tail)
+        # a tailed d that IS unprinted is reported as the entry wrote it
+        r = rows(ten[:4] + ['3.220b'] + ten[5:])
+        m = msgs(X.check29_reflections_in_paper(powder(r), table.replace('3.220', '3.322')))
+        self.assertEqual(len(m), 1, m)
+        self.assertIn('3.220b', m[0])
+        # an integer d neither raises nor is reported (it cannot be among the decimal tokens)
+        r = rows(['10'] + ten[1:])
+        self.assertEqual(X.check29_reflections_in_paper(powder(r), table), [])
+
+    def test_extraction_damage_on_the_pdf_side_is_printed(self):
+        ten = self.TEN
+        table = 'Table 3. dobs ' + ' '.join(ten)
+        for damaged in ('3,220', '3.2\n20'):
+            text = table.replace('3.220', damaged)
+            self.assertEqual(X.check29_reflections_in_paper(powder(rows(ten)), text), [], damaged)
+        # a digit run that merely ENDS in the entry's digits does not vouch for the line (a longer
+        # number such as a 2θ 23.22 would otherwise silence a real miss; the corpus pdfs glue digits
+        # only in DOIs and version strings, never in a table)
+        for glued in ('1003.220', '13.220'):
+            m = msgs(X.check29_reflections_in_paper(powder(rows(ten)), table.replace('3.220', glued)))
+            self.assertEqual(len(m), 1, (glued, m))
+        # a different number that merely begins with the entry's digits is still unprinted
+        m = msgs(X.check29_reflections_in_paper(powder(rows(ten)), table.replace('3.220', '3.2262')))
+        self.assertEqual(len(m), 1, m)
+        self.assertIn('3.220', m[0])
+
+    # --- check15 ---
+    def test_the_printed_precision_sets_the_tolerance(self):
+        ds = ['3.3612', '2.9871', '2.1204', '1.5049', '1.4312']
+        t = ('The strongest lines in the powder pattern [d, Å (I, %)] are: 3.36(100), 2.99(50), 2.12(40), '
+             '1.50(40), 1.43(30). The')
+        self.assertEqual(X.check15_strongest_lines(powder(rows(ds)), t), [])
+        # at the paper's own precision a transposed d is still a miss
+        t = 'The strongest lines in the powder pattern [d, Å (I, %)] are: 3.361(100), 2.987(50), 2.120(40), 1.549(40). The'
+        self.assertIn('1.549', msgs(X.check15_strongest_lines(powder(rows(ds)), t))[0])
+
+    def test_every_strongest_lines_sentence_is_scored(self):
+        ds = ['3.3612', '2.9871', '2.1204', '1.5049', '1.4312', '1.301']
+        other = ('The strongest lines of the powder pattern of otherite [d, Å (I, %)] are: 3.355(100), 2.980(50), '
+                 '2.118(40), 1.520(40), 1.445(30), 1.300(20). The')
+        own = ('The strongest lines of the powder pattern of testite [d, Å (I, %)] are: 3.361(100), 2.987(50), '
+               '2.120(40), 1.505(40), 1.431(30), 1.301(20). The')
+        # the isotypic mineral's list first: the entry's own sentence matches, so nothing is reported
+        self.assertEqual(X.check15_strongest_lines(powder(rows(ds)), other + ' ' + own), [])
+        # no sentence matches fully: the one with the fewest misses is reported
+        own2 = own.replace('1.505(40)', '1.550(40)')
+        m = msgs(X.check15_strongest_lines(powder(rows(ds)), other + ' ' + own2))
+        self.assertEqual(len(m), 1, m)
+        self.assertIn('1.550', m[0])
+        self.assertNotIn('1.520', m[0])
+
+
+class AuditEdges2(unittest.TestCase):
+    """The second audit (2026-09-16): one finding per fault, prose-suffixed constituents, total-iron
+    spellings, ranges, a parenthetical inside the wt% list, the General formula's substituents, a Σ
+    over integer coefficients, and the density ratios that tile the 25-30 % band."""
+
+    def test_prose_suffixed_constituent_is_not_recased(self):
+        # 1. 'H2Ocalc' is not 'H2OCAlC', 'CO2calc' is not cobalt, 'RE2O3' (rare earths) is not rhenium
+        self.assertIsNone(X._recase_species('H2Ocalc'))
+        self.assertIsNone(X._recase_species('CO2calc'))
+        self.assertIsNone(X._recase_species('RE2O3'))
+        e = entry({}, 'Microprobe analysis (wt.%): CaO 30.1, RE2O3 68.1, CO2calc 0.4, H2Ocalc 0.8')
+        self.assertEqual(msgs(X.check27_formula_integrity(e)), [])
+        # the suffix reads as the '(calc)' tag: the elements are still counted
+        items = {sp: els for sp, els, _ in X._wt_items('CO2calc 0.4, H2Ocalc 0.8, RE2O3 68.1, TR2O3 1.0')}
+        self.assertEqual(items.get('CO2'), ['C', 'O'])
+        self.assertEqual(items.get('H2O'), ['H', 'O'])
+        # a rare-earth shorthand groups the REE: the formula's Ce, Nd need no constituent of their own
+        e = entry({'Analytical': 'Ca0.98 ( Ce0.60 Nd0.40 ) ( C O3 )2 F'},
+                  'Microprobe analysis (wt.%): CaO 30.1, RE2O3 68.1, F 3.2, CO2calc 0.4: Ca0.98 ( Ce0.60 Nd0.40 ) ( C O3 )2 F.')
+        self.assertEqual(msgs(X.check27_formula_integrity(e)), [])
+
+    def test_total_iron_spellings(self):
+        # 2. every spelling of total iron names Fe
+        for sp in ('FeOtot', 'FeOtotal', 'FeOT', 'FeOt', 'FeO*', 'Fe2O3T', 'FeO(tot)'):
+            with self.subTest(sp=sp):
+                items = X._wt_items('MgO 10.2, %s 25.1, SiO2 40.3' % sp)
+                self.assertEqual(len(items), 3, items)
+                self.assertIn('Fe', items[1][1])
+        e = entry({'Analytical': 'Mg0.5 Fe0.5 Si O3'},
+                  'Microprobe analysis (wt.%): MgO 10.2, FeOtot 25.1, SiO2 40.3, CaO 1.0: Mg0.5 Fe0.5 Si O3.')
+        self.assertEqual(msgs(X.check27_formula_integrity(e)), [])
+
+    def test_split_symbol_is_one_finding(self):
+        # 3a. ferroinnelite: 'N B0.05' is the split; the coefficient comparison must not report B and Nb again
+        an = ('( Na1.95 Fe0.64 +2 Mg0.21 Mn0.19 +2 Ca0.02 ) ( Ba3.84 Sr0.13 Na0.03 ) ( Ti2.91 N B0.05 Al0.02 Zr0.01 Mg0.01 ) '
+              'Si4.02 S0.94 P0.89 H1.70 O25.89 F0.11')
+        a = ('Microprobe analysis (wt.%): SO3 5.47, Nb2O5 0.45, P2O5 4.59, ZrO2 0.13, TiO2 16.91, SiO2 17.55, Al2O3 0.06, '
+             'BaO 42.83, SrO 1.01, FeO 3.34, MnO 0.97, CaO 0.09, MgO 0.64, K2O 0.01, Na2O 4.47, H2O(calc) 1.11, F 0.15: '
+             '( Na1.95 Fe 0.64 +2 Mg0.21 Mn0.19 +2 Ca0.02 )S3.01 ( Ba3.84 Sr0.13 Na0.03 )S4.00 ( Ti2.91 Nb0.05 Al0.02 Zr0.01 '
+             'Mg0.01 )S3.00 Si4.02 S0.94 P0.89 H1.70 O25.89 F0.11.')
+        e = entry({'Analytical': an, 'Chemical': 'Ba4 Ti2 Na ( Na Fe +2 ) Ti ( Si2 O7 )2 [ ( S O4 ) ( P O4 ) ] O2 [ O ( O H ) ]'}, a)
+        f = X.check27_formula_integrity(e)
+        self.assertEqual(len(f), 1, [x.msg for x in f])
+        self.assertIn('Nb0.05?', f[0].msg)
+        # alicewilsonite-(YCe): 'D Y0.08' — the split, not also 'Dy2O3 absent' and 'Y 0.75 vs 0.67'
+        an = ('Na2.11 Ca0.11 Sr1.83 Ba0.08 Y0.67 ( Ce0.51 La0.32 Pr0.03 Nd0.09 Sm0.02 Gd0.04 D Y0.08 Ho0.02 Er0.06 Yb0.03 ) '
+              '( C O3 )5.88 ( H2 O )3.00')
+        a = ('Microprobe analysis, average of 6 (wt.%): Na2O 7.42, CaO 0.72, SrO 21.49, BaO 1.41, Y2O3 8.52, La2O3 5.93, '
+             'Ce2O3 9.52, Pr2O3 0.59, Nd2O3 1.75, Sm2O3 0.46, Gd2O3 0.83, Dy2O3 1.65, Ho2O3 0.34, Er2O3 1.21, Yb2O3 0.64, '
+             'CO2 29.33, H2O(calculated) 6.13: Na2.11 Ca0.11 Sr1.83 Ba0.08 Y0.67 ( Ce0.51 La0.32 Pr0.03 Nd0.09 Sm0.02 Gd0.04 '
+             'Dy0.08 Ho0.02 Er0.06 Yb0.03 )$SI1.20 ( C O3 )5.88 ( H2 O )3.00.')
+        f = X.check27_formula_integrity(entry({'Analytical': an, 'Chemical': 'Na2 Sr2 Y Ce ( C O3 )6 !3 H2 O'}, a))
+        self.assertEqual(len(f), 1, [x.msg for x in f])
+        self.assertIn('Dy0.08?', f[0].msg)
+        # a fault elsewhere on the same row is still its own finding (F in both formulas, not in the wt% list)
+        f = X.check27_formula_integrity(entry({'Analytical': an + ' F0.20', 'Chemical': 'Na2 Sr2 Y Ce ( C O3 )6 !3 H2 O'},
+                                              a.replace('( H2 O )3.00.', '( H2 O )3.00 F0.20.')))
+        self.assertEqual(sorted('Dy0.08?' in x.msg or 'contains F' in x.msg for x in f), [True, True], [x.msg for x in f])
+
+    def test_duplicated_constituent_standing_for_a_missing_one_is_one_finding(self):
+        # 3b. airdite: the second CaO is the BaO the formula needs
+        an = '( Sr0.46 Ca0.25 Ba0.23 ) ( V1.94 +4 Fe0.03 +3 Cu0.02 ) ( P2.02 O4 ) O10 H8.13'
+        a = ('Microprobe analysis, average of 10 (wt.%): SrO 9.78, CaO 2.89, CaO 7.17, VO2 32.81, Fe2O3 0.42, CuO 0.39, '
+             'P2O5 29.13, H2O(calc) 14.91: ( Sr0.46 Ca0.25 Ba0.23 )S0.94 ( V1.94 +4 Fe0.03 +3 Cu0.02 )S1.99 ( P2.02 O4 ) O10 H8.13')
+        f = X.check27_formula_integrity(entry({'Analytical': an, 'Chemical': 'Sr ( V +4 O )2 ( P O4 )2 !4 H2 O'}, a))
+        self.assertEqual(len(f), 1, [x.msg for x in f])
+        self.assertIn('CaO twice (2.89 and 7.17)', f[0].msg)
+        self.assertIn('probably BaO', f[0].msg)
+        # mendozavilite-KCa: the second P2O5 is As2O5
+        an = ('[ ( K1.43 Na1.12 Ca0.14 ) ( H2 O )9.02 ( Ca0.94 Cu0.05 +2 Al0.01 ) ( H2 O )6 ] [ Mo8 ( P1.86 As0.06 Si0.01 ) '
+              'Fe3.00 +3 O34.48 ( O H )2.52 ]')
+        a = ('Microprobe analysis (wt.%): Na2O 1.90, K2O 3.67, CaO3.30, CuO 0.22, Fe2O3 13.09, Al2O3 0.04, SiO2 0.03, '
+             'P2O5 7.21, P2O5 0.34, MoO3 62.93, H2O 16.03[ ( K1.43 Na1.12 Ca0.14 )S$I2.69 ( H2 O )9.02 ( Ca0.94 Cu 0.05 +2 '
+             'Al 0.01 )$SI1.00 ( H2 O )6 ][ Mo8 ( P1.86 As0.06 Si0.01 )$SI1.93 Fe3.00 +3 O34.48 ( O H )2.52 ]')
+        f = X.check27_formula_integrity(entry({'Analytical': an}, a))
+        self.assertEqual(len(f), 1, [x.msg for x in f])
+        self.assertIn('P2O5 twice', f[0].msg)
+        self.assertIn('As2O5', f[0].msg)
+        # dacostaite: a duplicated Na2O and a formula whose F the list lacks are TWO faults (F is no Na2O)
+        an = '( K0.56 Ca0.04 Na0.03 ) ( Al1.54 Mg1.38 Cu0.03 Zn0.03 ) [ Mg ( H2 O )6 ]2 [ ( As0.99 P0.01 ) O4 ]2 [ F4.46 ( O H )1.46 O0.08 ] !2 H2 O'
+        a = ('Microprobe analysis, average of 10 (wt.%): P2O5 0.17, As2O5 35.42, Al2O3 12.23, MgO 21.13, CaO 0.36, '
+             'CuO 0.42, ZnO 0.34, Na2O 0.34, Na2O 0.15, K2O 4.13, H2O(calc) 41.40: ' + an + '.')
+        m = msgs(X.check27_formula_integrity(entry({'Analytical': an}, a)))
+        self.assertEqual(len(m), 2, m)
+        self.assertTrue(any('Na2O twice' in x and 'a constituent was probably mistyped' in x for x in m), m)
+        self.assertTrue(any('contains F' in x for x in m), m)
+
+    def test_a_list_of_ranges_is_not_a_wt_list(self):
+        # 4. selenolaurite: 'Ir 3.28-5.50' is a range, not 3.2 wt%
+        wl = 'Ir 3.28-5.50, Te 0.61-1.93, S 0.18'
+        self.assertEqual([(sp, v) for sp, _, v in X._wt_items(wl)], [('S', 0.18)])
+        self.assertEqual(X._wt_items('Ru 45.1–46.3'), [])
+        e = entry({'Analytical': '( Ru0.99 Ir0.05 ) ( Se1.92 Te0.03 S0.01 )', 'Chemical': 'Ru Se2'},
+                  'Microprobe analsysis of selenolaurite (wt.%): Ir 3.28-5.50, Te 0.61-1.93, S 0.18: '
+                  '( Ru0.99 Ir0.05 )S1.04 ( Se1.92 Te0.03 S0.01 )S1.9.')
+        self.assertEqual(msgs(X.check27_formula_integrity(e)), [])
+
+    def test_parenthetical_in_the_list_and_a_sentence_after_the_formula(self):
+        # 5a. a bracketed aside with an element and a decimal does not start the formula
+        f = 'Na0.97 Ca1.01 Fe0.92 +3 Al1.11 ( P O4 )0.97 F4.85 ( O H )1.32 !0.95 H2 O'
+        a = ('Microprobe analysis, average of 12 (wt.%): Na2O 8.32, CaO 15.63, Al2O3 15.59, Fe2O3 20.24, Li2O 1.65 '
+             '(Li 0.77 by ICP-OES), P2O5 18.97, F 5.1, H2O(calc) 7.97: ' + f + '.')
+        wl, af = X._split_analysis(a)
+        self.assertIn('P2O5 18.97', wl)
+        self.assertTrue(af.startswith('Na0.97'), af)
+        self.assertEqual(msgs(X.check27_formula_integrity(entry({'Analytical': f}, a))), [])
+        # the glued formula (no colon) still splits
+        wl, af = X._split_analysis('Microprobe analysis (wt.%): Na2O 1.90, H2O 16.03[ ( K1.43 Na1.12 )S$I2.55 ( H2 O )9 ]')
+        self.assertEqual(wl.strip(), 'Na2O 1.90, H2O 16.03')
+        self.assertTrue(af.startswith('[ ( K1.43'), af)
+        # 5b. a sentence after the formula is not part of it
+        a = ('Microprobe analysis (wt.%): Na2O 8.32, CaO 15.63, Al2O3 15.59, Fe2O3 20.24, P2O5 18.97, H2O(calc) 7.97: '
+             + f + '. F 5.1 wt% by ion chromatography.')
+        wl, af = X._split_analysis(a)
+        self.assertEqual(af.rstrip('.'), f)
+        m = msgs(X.check27_formula_integrity(entry({'Analytical': f}, a)))
+        self.assertEqual(m, [], m)
+
+    def test_general_formula_substituents_are_a_note(self):
+        # 6. a General formula names a group's substituents by definition
+        e = entry({'Chemical': 'Ca Mg Si2 O6', 'General': 'Ca ( Mg , Fe , Mn ) Si2 O6', 'Empirical': 'Ca Mg O6 Si2',
+                   'Analytical': 'Ca1.00 Mg0.99 Si2.01 O6'},
+                  'Microprobe analysis (wt.%): CaO 25.9, MgO 18.6, SiO2 55.5: Ca1.00 Mg0.99 Si2.01 O6.')
+        f = X.check27_formula_integrity(e)
+        self.assertEqual([x.sev for x in f], ['note'], [x.msg for x in f])
+        self.assertIn('Fe, Mn', f[0].msg)
+        # a bare symbol keeps the flag
+        e.formulas['General'] = 'Ca ( Mg , Fe ) Si2 O6 U'
+        self.assertTrue(any('contains U' in x for x in msgs(X.check27_formula_integrity(e))))
+
+    def test_sigma_over_integer_coefficients_and_a_sigma_off_by_rounding(self):
+        # 7. an integer coefficient inside the group is part of its sum
+        self.assertNotIn('S4.49', X._strip_sums('( Pb4 Zn0.36 Fe0.13 )S4.49 ( As1.71 Sb0.26 )S1.97 Ge1.92 S12'))
+        an = '( Pb4 Zn0.36 Fe0.13 ) ( As1.71 Sb0.26 ) Ge1.92 S12'
+        a = ('Microprobe analysis (wt.%): Pb 57.95, S 22.85, Ge 8.29, As 7.60, Sb 1.84, Zn 1.39, Fe 0.44: '
+             '( Pb4 Zn0.36 Fe0.13 )S4.49 ( As1.71 Sb0.26 )S1.97 Ge1.92 S11.9.')
+        m = msgs(X.check27_formula_integrity(entry({'Analytical': an, 'Chemical': 'Pb4 ( As S3 )2 ( Ge2 S6 )'}, a)))
+        self.assertEqual(m, [], m)
+        # a Σ typed 0.03 off is not sulfur: no 'S x vs y' phantom
+        a = ('Microprobe analysis (wt.%): Pb 57.95, S 22.85, Ge 8.29, As 7.60, Sb 1.84, Zn 1.39, Fe 0.44: '
+             '( Pb4.71 Zn0.36 Fe0.13 )S5.23 ( As1.71 Sb0.26 )S1.97 Ge1.92 S12.')
+        an = '( Pb4.71 Zn0.36 Fe0.13 ) ( As1.71 Sb0.26 ) Ge1.92 S12'
+        m = msgs(X.check27_formula_integrity(entry({'Analytical': an, 'Chemical': 'Pb5 ( As S3 )2 ( Ge2 S6 )'}, a)))
+        self.assertEqual(m, [], m)
+        # a real sulfur disagreement in a sulfosalt with no Σ is still reported
+        a = 'Microprobe analysis (wt.%): Pb 57.81, As 3.53, Sb 20.03, S 19.08: Pb10.336 As1.567 Sb6.088 S23.0.'
+        m = msgs(X.check27_formula_integrity(entry({'Analytical': 'Pb10.336 As1.567 Sb6.088 S21.92',
+                                                    'Chemical': 'Pb10 Sb6 As2 S22'}, a)))
+        self.assertTrue(any('S 21.92 vs 23' in x for x in m), m)
+
+    def test_density_ratios_that_tile_the_band_are_notes(self):
+        # 8. 3.00/3.75 is not '5/4×'; 1.25-1.28 is a note; the structural ratios keep their flags
+        f = X.check28_density_consistency(entry(density={'Dx': '3.750', 'Xtl Dx': '3.000'}))
+        self.assertEqual([x.sev for x in f], ['note'], [x.msg for x in f])
+        f = X.check28_density_consistency(entry(density={'Dx': '3.000', 'Xtl Dx': '3.780'}))
+        self.assertEqual([x.sev for x in f], ['note'], [x.msg for x in f])
+        for dx, xdx, want in (('3.814', '1.944', '1/2×'), ('3.460', '2.280', '2/3×'), ('4.570', '3.418', '3/4×'),
+                              ('3.035', '0.771', '1/4×'), ('9.781', '12.901', '4/3×'), ('5.160', '7.910', '3/2×'),
+                              ('4.895', '29.181', '6×'), ('4.120', '8.294', '2×'), ('2.160', '3.681', '70%')):
+            with self.subTest(dx=dx, xdx=xdx):
+                m = msgs(X.check28_density_consistency(entry(density={'Dx': dx, 'Xtl Dx': xdx})))
+                self.assertEqual(len(m), 1, m)
+                self.assertIn(want, m[0])
+
+    def test_substitute_wording_names_one_element(self):
+        # 9. SeO2 stands for Te; F is simply not in the list
+        an = 'Pb0.99 Te3.00 +4 O5 ( O H ) Cl2.65 F0.50 ( H1.95 O1.15 )'
+        a = 'Microprobe analysis, average of 8 (wt.%): PbO 27.68, SeO2 59.92, Cl 11.74, H2O(calc) 3.33: ' + an + '.'
+        m = msgs(X.check27_formula_integrity(entry({'Analytical': an, 'Chemical': 'Pb Te3 +4 O5 ( O H ) Cl3 ( H2 O )'}, a)))
+        self.assertEqual(len(m), 1, m)
+        self.assertIn('the formula has Te instead', m[0])
+        self.assertNotIn('F, Te', m[0])
+        self.assertIn('F', m[0].split('instead')[1])
 
 
 if __name__ == '__main__':

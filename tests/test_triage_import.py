@@ -1,4 +1,5 @@
 """The triage-report importer: another reviewer's triage_report.txt read back into verdicts."""
+import os
 import unittest
 from pxrd_review.gui import review_gui as G
 
@@ -112,13 +113,29 @@ class UploadRoute(unittest.TestCase):
     def test_the_path_form_takes_a_text_file_only(self):
         # the JSON {path} form names a file on the machine hosting the GUI: only a .txt report is
         # opened, so the endpoint cannot be used to probe for other files (audit 2026-09-10)
+        # The assertion pins the GUARD's own message: with the guard gone the parser opens the file
+        # and refuses it with a message that also says '.txt' (audit 2026-09-16).
         with G.app.test_client() as c:
             r = c.post('/api/triage/import', json={'path': '/etc/passwd'})
             self.assertEqual(r.status_code, 400)
-            self.assertIn('.txt', r.get_json()['error'])
+            self.assertIn('a triage report is a .txt file', r.get_json()['error'])
             r = c.post('/api/triage/import', json={'path': '/no/such/dir/triage_report.txt'})
             self.assertEqual(r.status_code, 400)
             self.assertIn('no such file', r.get_json()['error'])
+
+    def test_the_path_form_refuses_a_file_too_large_to_be_a_report(self):
+        # a triage report is a few KB: a .txt over 8 MB is refused before it is opened
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            big = os.path.join(d, 'triage_report.txt')
+            with open(big, 'wb') as fh:
+                fh.seek(8 * 1024 * 1024)                    # 8 MB + 1 byte
+                fh.write(b'\n')
+            self.assertEqual(os.path.getsize(big), 8 * 1024 * 1024 + 1)
+            with G.app.test_client() as c:
+                r = c.post('/api/triage/import', json={'path': big})
+                self.assertEqual(r.status_code, 400)
+                self.assertIn('too large', r.get_json()['error'])
 
     def test_not_a_report_is_a_400(self):
         import io

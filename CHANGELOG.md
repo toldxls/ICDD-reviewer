@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.8.1](#081--2026-09-16) | 16 Sep | A second adversarial audit, of the 0.7.2 fixes and the 0.8.0 checks, over the whole corpus: eight defects and fifteen edge classes fixed — a biaxial (−) entry flagged as uniaxial, a bond table lost to its page's font, the manuscript '? look' landing in the wrong table, two findings for one fault |
 | [0.8.0](#080--2026-09-14) | 14 Sep | Entry checks that read the entry against itself and against the paper, from a human review of 2028 Part 2: formula and analysis fields, Xtl Dx vs Dx, the optics field, every strongest line, a reflection d the .pdf never prints — every corpus flag a real defect; case alone no longer a vocabulary fault |
 | [0.7.2](#072--2026-09-10) | 10 Sep | An adversarial audit of the 0.6.0–0.7.1 commits: seven defects fixed — a continued coordinates table walked into another mineral's, a "powder was obtained" sentence silenced the calculated-pattern flag, a β = 90.00 monoclinic cell lost its symbol, an arrowless ×n mark lost its value; nothing changed on the corpus A/B |
 | [0.7.1](#071--2026-09-10) | 10 Sep | The silent classes: every reader that could not verify now says why (parameter sets, one-site tables, unusable .cif); coordinates 59 → 62 %, parameter sets 60 → 64 %, bond-valence reds 6 → 5; two-mineral papers judged by their own bond table |
@@ -21,6 +22,94 @@ package version in `pyproject.toml`.
 | [0.4.0](#040--2026-08-25) | 25 Aug | `pxrd bv`, `pxrd tables`, `pxrd refs`, and Manuscript mode |
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
+
+## [0.8.1] — 2026-09-16
+
+A second adversarial audit (2026-09-16), of the 0.7.2 fixes and the 0.8.0 commits, run by four
+auditors with crafted inputs and read-only scans of the WHOLE corpus — which is where the 0.7.2
+regressions showed that the 162-paper gauntlet subset could not (a bond table lost, nineteen space-group
+symbols moved). Every finding fixed, each with a unit test and a regression case; the fixes measured
+against baselines snapshotted at 0.8.0 before any edit: entries A/B over 619 docx (only the intended
+findings changed, no cell verdict moved), paper-reader A/B over 1,130 pdf
+(`review_out/paper_checks_papersaudit2{base,fix3}.json`). Unit suite 383, entries regression 336 PASS.
+
+### Fixed
+- **A biaxial (−) entry could be flagged "uniaxial … optically positive"** (`check24_optical_2v`): an A
+  index written `A=n.d.` or `A(est)=1.600`, a `2V(calc)=82.7`, `2V(calc) 80.9°` or `2Vz=60` was not read,
+  so the field looked uniaxial and its sign was judged from ω and ε. The uniaxial reading is taken only
+  when the field carries no A and no 2V at all; the qualified forms are read for the biaxial computation
+  (21 corpus fields write `2V(calc)=`). A `±` esd is no longer "collapsed into the last digit"; `Sign=—`
+  (Word's em dash) is a minus; `Sign=±` is a note.
+- **The welded '×2' count lost a whole bond table** (`paper_bonds`, 0.7.2): read only on a page whose font
+  prints 'þ'/'¼', it dropped the anhydrite-type table of a page that prints neither (I002526: 'Ca–O1 32
+  2.332(13)' on six lines). A column of such counts — three lines of label, bare '3N', distance — is the
+  font's own evidence now (`_welded_column`); the seven single noise lines on plain pages stay dropped. One
+  paper moves corpus-wide, the one lost.
+- **`symops.cell_system` is the downward closure** of the metric's highest symmetry: an all-90° cell
+  allows orthorhombic, monoclinic AND triclinic (tetragonal/cubic with equal axes), a cell missing an angle
+  every system. 0.7.2 had added monoclinic alone, so three triclinic minerals whose angles the text layer
+  lost were disowned for a relative's P21/c, and the English word 'An' at a sentence start read as the
+  setting `An` again. A two-letter symbol with no digit or bar is taken only right after a 'space group'
+  phrase, and `paper_structure.choose_symbol` prefers the abstract's own statement — the first symbol of
+  the text when its sentence names the mineral and states the cell (`symops.find_own_in_text`). Measured
+  against Mindat's crystal system over 1,259 papers: 758 → 768 right; the six wrong choices restored, the
+  eight 0.7.2 helped kept, no build verdict changed.
+- **The check4 measured-pattern guard lost the plural** ('the powder patterns were collected') in 0.7.2 and
+  still took a SIMULATED pattern that 'was obtained' as measured (ferriprehnite). `patterns?` /
+  `diffractograms?`, and a sentence that says simulated / calculated / theoretical / generated before the
+  verb does not vouch. Corpus: the five plural papers regain the guard, six simulated ones lose it, one
+  entry moves (ferriprehnite, now flagged).
+- **Manuscript '? look' landed in the wrong table** (`review_gui._ms_docx_anchors`): a constituent with a
+  superscript footnote (`SiO2ᵃ`) missed its own table (the reader drops the mark, the docx text kept it)
+  and the fallback jumped to the same oxide in a Gladstone–Dale or comparison table; a "bond distances and
+  bond valences" caption tied with the bond-valence grid and the earlier distance table won, so an
+  `O8–Na2` finding scrolled to the `Na1–O8` distance. Cells are normalised as the reader normalises them,
+  a table whose CELLS are the labels outranks one that mentions them, the fallback stays within the
+  section's tables, `table N` in a finding picks the N-th grid (two minerals), the cell anchor accepts
+  `a=16`, the species line anchors, and each table is indexed once (300 findings on a 60-table docx:
+  34 s → 0.4 s).
+- **Paragraph numbering drifted between the rendered docx and `refs_check.load_docx`** on a content
+  control (`w:sdt`) around a row or cell and on a legacy VML text box — every '? look' after it landed
+  N paragraphs early. Both sides now walk through content controls and skip every text box; a unit test
+  pins the two numberings on eight docx shapes.
+- **A blank bond-valence cell under 0.10 vu is classified by `bv_check`**, not by the GUI re-parsing the
+  message (`BLANK_INFO`): the line says "under the cutoff most tables print (not a difference)", and
+  the CLI and the GUI agree on what is red.
+- **One finding per fault, two more shapes** (`check27_formula_integrity`): a split symbol in the
+  Analytical row ('N B0.05') no longer also fires the row-vs-formula disagreement and the element notes
+  (ferroinnelite, alicewilsonite-(YCe): three findings → one); one duplicated constituent standing for a
+  missing one of the same family folds into a single finding ("CaO twice — the second is probably BaO";
+  airdite, mendozavilite-KCa), while two unrelated faults stay two (dacostaite).
+- **A wt% range list is not a wt% list**: the range guard of the constituent regex was defeated by
+  backtracking ('Ir 3.28-5.50' read as 3.2), so selenolaurite's ranges-only field drew a "no constituent"
+  flag. Also: 'H2Ocalc', 'CO2calc' and the rare-earth shorthand 'RE2O3' no longer invent an element
+  ('H2OCAlC?', rhenium); 'FeOtot', 'FeOT', 'FeO*' count for Fe; a parenthetical inside the list
+  ('(Li 0.77 by ICP-OES)') and a sentence after the formula no longer cut the field in the wrong place;
+  a General formula's listed substituents ('( Mg , Fe , Mn )') are a note, not a flag; an integer
+  coefficient inside a bracket group counts toward its Σ, and a Σ that survives as 'S' is kept out of the
+  coefficient comparison; the "formula has X instead" wording pairs each extra constituent with one
+  missing element.
+- **`check28`'s "simple ratio" is a structural ratio**: p, q ∈ {1, 2, 3, 4, 6, 8}; 5/4 and 6/5 tiled
+  the 25–30 % band so every such gap was called a Z error. All thirteen corpus flags stand; kodamaite's
+  '5/3×' is now the plain 70 % flag.
+- **`check29`'s allowance scales**: one unprinted line below 20 lines (an abstract naming eight of a
+  ten-line list is not a misprint), two from 20, 5 % above 40; a d with a tail ('3.220b', '3.220(1)') is
+  looked for by its number and an integer d no longer errors; a decimal comma counts as printed; the
+  message says "verify against the paper's table" rather than asserting a mistype. The three corpus flags
+  stand.
+- **`check15`'s tolerance follows the printed precision** (a 2-decimal '1.50' matches 1.5049), and every
+  strongest-lines sentence is scored — a paper with an isotypic second mineral's list first no longer
+  flags this entry's lines; the fewest-miss sentence is reported only when none matches fully.
+- **The first merge of these fixes had lost `build`'s 'other symbols the paper states' fallback** — the
+  variable that filters them had moved into `choose_symbol`, the NameError was swallowed by the fallback's
+  own try/except, and five papers lost their verified coordinates (hydroxylgugiaite, lesukite,
+  uchucchacuaite …), and the cells were filtered by the chosen symbol's system alone, so a two-mineral
+  paper whose coordinates table belongs to the OTHER phase (hexathioplumbite: the abstract names P63,
+  the table its bonds verify is the cubic phase's) lost its cell before the other symbol was tried. The
+  whole-corpus A/B caught both before release; the variable is back and the cells are filtered by every
+  symbol tried.
+- **`tests/test_triage_import` pins the `.txt` guard by its own message** (the parser's error also
+  contained '.txt', so the test passed with the guard removed) and adds the 8 MB case.
 
 ## [0.8.0] — 2026-09-14
 
