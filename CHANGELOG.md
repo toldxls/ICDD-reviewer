@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.8.2](#082--2026-09-16) | 16 Sep | Recall re-measured (unchanged since 0.6.0); coordinates round 6 on the whole corpus — displacement tables no longer read as sites, a bond table's name for a split site found; the composition reds hand-checked against the papers: three of thirteen were the tool's, fixed, the other nine now say which oxide form the arithmetic used; '? look' lands on the paper for every finding; corpus runs a third cheaper |
 | [0.8.1](#081--2026-09-16) | 16 Sep | A second adversarial audit, of the 0.7.2 fixes and the 0.8.0 checks, over the whole corpus: eight defects and fifteen edge classes fixed — a biaxial (−) entry flagged as uniaxial, a bond table lost to its page's font, the manuscript '? look' landing in the wrong table, two findings for one fault |
 | [0.8.0](#080--2026-09-14) | 14 Sep | Entry checks that read the entry against itself and against the paper, from a human review of 2028 Part 2: formula and analysis fields, Xtl Dx vs Dx, the optics field, every strongest line, a reflection d the .pdf never prints — every corpus flag a real defect; case alone no longer a vocabulary fault |
 | [0.7.2](#072--2026-09-10) | 10 Sep | An adversarial audit of the 0.6.0–0.7.1 commits: seven defects fixed — a continued coordinates table walked into another mineral's, a "powder was obtained" sentence silenced the calculated-pattern flag, a β = 90.00 monoclinic cell lost its symbol, an arrowless ×n mark lost its value; nothing changed on the corpus A/B |
@@ -23,9 +24,53 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
-## [Unreleased]
+## [0.8.2] — 2026-09-16
+
+The afternoon after 0.8.1. Recall re-measured first (`tools/seed_faults.py`, 1,131 papers): identical
+to the 2026-09-09 curves, so nothing since 0.6.0 moved it. Then the coordinates reader driven a round
+further on the whole corpus, from its failure classes, and the thirteen red composition findings read
+one by one against the papers — ten were the papers' (nine distinct), three were the tool's, and each
+of those was a class. Measured against a baseline snapshotted before any edit
+(`review_out/paper_checks_papers{audit2fix3,it76full}.json`, 1,130 papers): only the intended readings
+moved, nothing lost; recall re-run after the composition change, unchanged. Unit suite 393, entries
+regression PASS.
 
 ### Fixed
+- **A displacement-parameter table, or a block of refinement indices, read as the coordinates table.**
+  Printed to a coordinates table's decimals (`0.00524(18)`, `R1 = 0.0266`) and, for one paper, under a
+  header the reader trusts, four corpus papers had one read as sites — two built into a structure and
+  judged (instability 2.5 vu, 'unverified'), two compared to the .cif ('0 of 3 sites fall on a .cif
+  site'). Nothing in such a table stands away from 0 the way a coordinate of a third site must
+  (`paper_structure._no_adp`, both read paths); and an English word ('Final', 'Peak' — the rows of a
+  refinement block) is not a site label, while 'TeA'/'TeB' (a split site) and 'BiI' stay labels — the
+  first form of that rule cost hitachiite its verdict. All four are an honest `none` now.
+- **The bond table's name for a site the coordinates table prints otherwise.** `bv_check` merges two
+  rows at one position into one site 'Ba/Ca', so neither occupant's bonds were compared (11 of 27 and
+  9 of 18 'not compared' with every label present); a split member without its letter ('Sb9' for
+  'Sb9a'/'Pb9b', and 'O11a' for 'O11'), a hydroxyl or water site by its oxygen number ('O8' for
+  'OH8'), a padded number ('O1' for 'O01' — added after the hydroxyl rule alone sent one paper's O1 to
+  its OH1 and cost a verified structure) are found when nothing exact is (`bond_hits`, `_loose_keys`;
+  exact names always first, so a table printing both O8 and OH8 is matched exactly). Whole corpus
+  coordinates 347 → 356 of 554 verified, ten papers to `agrees`.
+- **'Av.' as the mean column.** A table of fourteen analyses headed `#009 … #022 Av. St.dev.` had its
+  first analysis read as the mean: 'Mean', 'Average' and 'Avg' were the vocabulary, 'Av.' was not, so
+  the 'wt%' token over the label column won. One red finding (Ca 0.94 vs 0.865) was this.
+- **An element the table prints in two forms was reduced twice.** `MnO(tot) 0.59` beside the
+  `Mn2O3(calc) 0.50 / MnO(calc) 0.14` it was apportioned into (and `Fe2O3(tot)`/`(calc)` 1.32, one cell
+  read twice); `TiO2 5.54` as analysed beside `Ti2O3 4.48` recalculated. A cell read twice is one row;
+  then the printed total arbitrates — rows adding to more than it by over 0.3 wt%, and one row of a
+  twice-printed element whose removal lands on it within 0.15, is the recalculated one
+  (`_drop_recalculated`; two forms both analysed, FeO and Fe2O3 by Mössbauer, add to the total and are
+  untouched). Where the total was not read (one came out 13.81), rows over 101.5 lose a twice-printed
+  form only when the formula then follows and did not before (`_overshoot_drops`, in `_resolve`
+  beside the oxide alternatives). Two red findings were this (Mn 0.05 vs 0.086, Ti 0.57 vs 1.04); a
+  third paper gained its basis, index and compatibility readings because a stray 'H2O 15' in its prose
+  analysis is now settled by its total. Composition reds 9 → 6 on the corpus.
+- **The deviation line names the oxide form the paper's arithmetic used.** A table printing `SO4 14.58`
+  whose S 1.96 follows only from 14.58 read as SO3; a table printing `Mn2O3 4.09` with an Mn3+ formula
+  whose Mn 0.95 follows from 4.09 read as MnO. The finding stands (which of the label and the number is
+  wrong is the paper's to say) and now reads '— the coefficient would follow from the printed 4.09 wt%
+  read as MnO (0.949): the table's Mn2O3 and the formula's arithmetic disagree' (`_other_form`).
 - **'? look' on the .pdf found nothing for the commonest flag.** Replaying the button's own term
   builder over the two fixture batches (113 finding rows with a paired .pdf): a formula-integrity
   finding built no search term in 14 of 25 cases (its evidence is the formula string, too long to
