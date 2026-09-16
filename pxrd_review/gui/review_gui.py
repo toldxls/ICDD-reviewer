@@ -2489,6 +2489,46 @@ def _ms_docx_anchors(path, findings):
         if para is not None:
             f['para'] = para
 
+# the calculation findings of a .pdf manuscript that name no table, and the words that find their page
+_MS_PAGE_TERMS = {'gladstone': ['compatibility', 'Gladstone'], 'density': ['density'], 'name': ['IMA']}
+
+def _ms_pdf_pages(path, findings):
+    """A page for the calculation findings of a .pdf manuscript that name no table ('Gladstone–Dale:
+    …', 'cell: a=…', 'name: …', 'density …'): the page where the finding's own terms cluster, the way
+    _ms_docx_anchors picks the paragraph for a docx — so '? look' shows that page with the terms
+    highlighted instead of saying there is nowhere to go (five of a paper's nine lines said so). One
+    search per distinct term, in the page worker (a malformed image must not take the server down);
+    a finding whose terms match nothing on any page is left as it was. The cell line's term is the
+    a it prints, then that a to three decimals — the paper may print one more."""
+    cache = {}
+    def pages(term):
+        if term not in cache:
+            r = PW.run(PW.search, path, term, default=None) or {}
+            cache[term] = {p['page']: p['count'] for p in (r.get('pages') or [])}
+        return cache[term]
+    for f in findings:
+        if f.get('page') or f.get('para') is not None:
+            continue
+        lab = (f.get('label') or '').lower(); msg = f.get('msg') or ''
+        key = next((k for k in _MS_PAGE_TERMS if lab.startswith(k)), None)
+        terms = list(_MS_PAGE_TERMS[key]) if key else []
+        if lab == 'cell':
+            m = re.search(r'\ba=(\d+(?:\.\d+)?)', msg)
+            if m:
+                v = m.group(1); terms = [v]
+                if '.' in v and len(v) > v.index('.') + 4:
+                    terms.append(v[:v.index('.') + 4])
+        if not terms:
+            continue
+        tally = {}
+        for t in terms:
+            for p, n in pages(t).items():
+                tally[p] = tally.get(p, 0) + n
+        if tally:
+            best = max(tally, key=lambda p: (tally[p], -p))         # the page with most hits; the earlier on a tie
+            f['page'] = best + 1                                       # 1-based, as every page here is
+            f['find'] = '|'.join(t for t in terms if pages(t).get(best)) or None
+
 def _ms_cif_for(key, name=''):
     """The .cif of the same mineral in the folder: the same stem, the mineral's name, or the only one."""
     cifs = MS.get('cifs') or {}
@@ -2555,6 +2595,8 @@ def _ms_paper_findings(key, path):
                     'page': page if pdf_name else None, 'pdf': pdf_name, 'find': find})
     if path.lower().endswith('.docx'):
         _ms_docx_anchors(path, out)                                  # '? look' lands on the cell in the docx view (a pdf's findings show the page instead)
+    elif pdf_name:
+        _ms_pdf_pages(path, out)                                     # … and a line naming no table gets the page its words are on
     return out
 
 @app.route('/api/ms/pdf/<key>/page/<int:n>.png')

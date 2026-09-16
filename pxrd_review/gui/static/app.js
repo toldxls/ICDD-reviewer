@@ -567,11 +567,15 @@ function triageControls(fkey, t, label) {
 // '? look' clicks cycle through them. null = use the default term logic below.
 function lookGroups(f) {
   if (!f) return null;
-  // chemical-analysis findings: the evidence is the docx Analysis string (oxide wt%
-  // values) — those exact numbers appear in the paper's EPMA/EDS table, so they pinpoint
-  // it. Second click -> the 'Chemical composition' prose.
-  if (f.code === 'ideal_formula' || f.code === 'analysis' || f.code === 'mindat_chem') {
-    const nums = (f.evidence || '').match(/\d+\.\d{1,3}/g) || [];
+  // chemical findings (the Analysis field, a formula field, Mindat's formula): the evidence is
+  // the paper's analytical table. The docx Analysis string's oxide wt% values appear there
+  // verbatim, so they pinpoint it — the finding's own evidence is a formula or a constituent
+  // name, which locates nothing (14 of 25 formula flags built no term at all before this read
+  // the Analysis field). Second click -> the 'Chemical composition' prose.
+  if (f.code === 'formula' || f.code === 'analysis' || f.code === 'mindat_chem') {
+    const analysis = ((S.a && S.a.entry && S.a.entry.comments) || {}).Analysis || '';
+    const nums = (analysis.match(/\d+\.\d{1,3}/g) || []).length ? analysis.match(/\d+\.\d{1,3}/g)
+               : ((f.evidence || '').match(/\d+\.\d{1,3}/g) || []);
     const table = nums.length ? [...new Set(nums)].slice(0, 8)
                               : ['wt.%', 'apfu', 'Range', 'Mean', 'Total', 'Probe'];
     return [
@@ -613,8 +617,11 @@ function termsFor(fkey, step = 0) {
     // broke the zoom twice). anode is the lowercase element ('cu'); its λ pinpoints the line.
     const ev = a.lam_evidence || {};
     if (ev.anode) {
-      const sym = ev.anode.charAt(0).toUpperCase() + ev.anode.slice(1) + 'K';
-      terms = [sym, ...(ev.lam ? [ev.lam] : [])];
+      // 'CuKα' is set three ways ('CuKα', 'Cu Kα', 'Cu-Kα'), and a paper that never names the
+      // docx anode (a verify/unrec) may still print its λ — the docx value is the last resort
+      const sym = ev.anode.charAt(0).toUpperCase() + ev.anode.slice(1);
+      const lam = ev.lam || (a.docx && a.docx.lam ? String(a.docx.lam) : '');
+      terms = [sym + 'K', sym + ' K', sym + '-K', ...(lam ? [lam] : [])];
     } else {                                  // unrecognised docx anode (e.g. Sync) — last resort
       const docxrad = /([A-Za-z]{1,2})\s*K/.exec(a.docx.radiation || '');
       if (docxrad) terms = [docxrad[1] + 'K'];
@@ -635,9 +642,15 @@ function termsFor(fkey, step = 0) {
         terms = [...new Set([f.evidence, 'diffractometer'].filter(t => t && t.length < 40))];
       } else {
         const nums = (f.msg.match(/\d+\.\d{2,}/g) || []).slice(0, 2);
-        // a short evidence keyword (e.g. the detected "Gandolfi") is the best locator
-        const ev = (f.evidence && f.evidence.length < 40) ? [f.evidence] : [];
-        terms = [...new Set([...ev, ...phraseTerms(f.msg), ...phraseTerms(f.evidence || ''), ...nums])];
+        // a short evidence keyword (e.g. the detected "Gandolfi") is the best locator; a long one is
+        // the paper's own sentence, searched by two windows of its opening words (a phrase the page
+        // search matches where the whole sentence, wrapped or hyphenated, would not)
+        const evs = f.evidence || '', words = evs.split(/\s+/);
+        const ev = !evs ? [] : evs.length < 40 ? [evs] : [words.slice(0, 4).join(' '), words.slice(4, 8).join(' ')];
+        terms = [...new Set([...ev.filter(t => t.length > 2), ...phraseTerms(f.msg), ...phraseTerms(evs), ...nums])];
+        // a density finding's numbers are the docx's; the paper may round them differently, so the
+        // unit locates the density paragraph / crystal-data row when the values do not
+        if (f.code === 'xtl_density' || f.code === 'density') terms.push('g/cm', 'g cm', 'g·cm');
       }
     }
   }
@@ -650,7 +663,7 @@ function phraseTerms(msg) {
   const KW = [[/brentano/i, 'Brentano'], [/gandolfi/i, 'Gandolfi'], [/guinier/i, 'Guinier'],
     [/scherrer/i, 'Scherrer'], [/precession/i, 'precession'], [/synchrotron/i, 'synchrotron'],
     [/debye/i, 'Debye'], [/image[\s-]*plate|imaging plate/i, 'plate'], [/r[-\s]?axis\s*rapid/i, 'AXIS Rapid'],
-    [/rietveld/i, 'Rietveld'], [/le ?bail/i, 'Bail']];
+    [/rietveld/i, 'Rietveld'], [/le ?bail/i, 'Bail'], [/\bIMA\b/, 'IMA'], [/synthetic/i, 'synthetic']];
   const out = [];
   for (const [re, tok] of KW) if (re.test(msg) && !out.includes(tok)) out.push(tok);
   return out;
@@ -717,17 +730,24 @@ async function lookInPage(fkey) {
     for (const r of res) { for (const h of (r.hits || [])) hits.push(h); Object.assign(sizes, r.sizes || {}); }
   } catch (e) { /* fall through to evidence page */ }
   if (S.key !== key) return;         // stale continuation — a different entry owns the pane
-  if (!hits.length) {                            // terms didn't match -> just open the evidence page
+  // The snippet box says what was searched for (there is no context sentence for an extra-check
+  // finding), so a landing is explicable — and, for a finding with several look-groups, where the
+  // next click goes. Before this the box was simply cleared, and a miss opened the evidence page
+  // in silence, indistinguishable from a hit.
+  const groups = lookGroups(findingOf(fkey));
+  const again = groups && groups.length > 1 ? ' · ? look again → ' + groups[(step + 1) % groups.length].label : '';
+  if (!hits.length) {                            // terms didn't match -> the evidence page, and say so
     S.pdfHits = []; S.hitIdx = -1; S.pdfQuery = ''; S.pdfPage = t.page; $('#pdf-hits').textContent = '';
-    renderPdf(t.snippet, t.label, S.pdfTerms); return;
+    renderPdf(t.snippet, (t.label ? t.label + ' — ' : '') + 'not found in the .pdf, showing the evidence page' + again, S.pdfTerms); return;
   }
+  const label = (t.label || 'looked for') + again;
   const per = {}; for (const h of hits) per[h.page] = (per[h.page] || 0) + 1;
   const page = +Object.keys(per).sort((a, b) => per[b] - per[a])[0];   // cluster page
   const seen = new Set();
   hits = hits.filter(h => { const k = h.page + ':' + h.rect.join(','); if (seen.has(k)) return false; seen.add(k); return true; });
   hits.sort((a, b) => a.page - b.page || a.rect[1] - b.rect[1]);       // reading order
   S.pdfHits = hits; S.pdfSizes = sizes; S.hitIdx = -1; S.pdfQuery = ''; S.pdfPage = page;
-  renderPdf(t.snippet, t.label, S.pdfTerms);     // page stack with the terms highlighted
+  renderPdf(t.snippet, label, S.pdfTerms);       // page stack with the terms highlighted
   renderHitNav();
   const landIdx = hits.findIndex(h => h.page === page);
   requestAnimationFrame(() => gotoHit(landIdx >= 0 ? landIdx : 0));
@@ -1086,7 +1106,10 @@ function renderPager() {
 
 function renderSnippet(snippet, label, terms) {
   const box = $('#pdf-snippet');
-  if (!snippet) { box.innerHTML = ''; return; }
+  if (!snippet) {                    // no context sentence: the label alone, with the terms it stands for
+    box.innerHTML = label ? '<b>' + esc(label) + ':</b> ' + esc((terms || []).slice(0, 8).join(' · ')) : '';
+    return;
+  }
   // esc() first, then match/wrap the ESCAPED term, so the highlight survives escaping
   // (a term containing & or < would otherwise no longer match the escaped snippet).
   let h = esc(snippet);

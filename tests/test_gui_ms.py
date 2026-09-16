@@ -16,6 +16,44 @@ def _docx(path, paras):
     return path
 
 
+class PdfManuscriptPages(unittest.TestCase):
+    """'? look' on a calculation finding of a .pdf manuscript that names no table: the finding gets the
+    page its own words are on (1-based) and the words to highlight; a line whose words are nowhere in
+    the paper, and the readers line, are left without a page."""
+
+    @classmethod
+    def setUpClass(cls):
+        import pymupdf
+        cls.tmp = tempfile.mkdtemp(prefix='ms_pages_')
+        cls.path = os.path.join(cls.tmp, 'paper.pdf')
+        doc = pymupdf.open()
+        doc.new_page().insert_text((72, 72), 'Testite, IMA 2024-001, is a new mineral from Test Hill.')
+        doc.new_page().insert_text((72, 72), 'The Gladstone-Dale compatibility index is 0.011 (superior). a = 16.2184(3) A.')
+        doc.save(cls.path); doc.close()
+
+    @classmethod
+    def tearDownClass(cls):
+        from pxrd_review.gui import review_gui as G
+        G.PW.shutdown()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_pages(self):
+        from pxrd_review.gui import review_gui as G
+        fs = [{'kind': 'calcinfo', 'label': 'Gladstone–Dale', 'msg': 'Gladstone–Dale: n 1.55, K_C 0.22', 'para': None, 'page': None, 'find': None},
+              {'kind': 'calcinfo', 'label': 'cell', 'msg': 'cell: a=16.2184, b=16.2184, c=10.1357 (powder)', 'para': None, 'page': None, 'find': None},
+              {'kind': 'calcinfo', 'label': 'cell', 'msg': "the .cif's cell (a=6.9035, b=7.5844) differs", 'para': None, 'page': None, 'find': None},
+              {'kind': 'calcinfo', 'label': 'name', 'msg': 'name: testite is not on Mindat', 'para': None, 'page': None, 'find': None},
+              {'kind': 'calcinfo', 'label': 'readers', 'msg': 'readers: table ✓', 'para': None, 'page': None, 'find': None},
+              {'kind': 'calcinfo', 'label': 'composition', 'msg': 'composition: 2 constituents', 'para': None, 'page': 1, 'find': None}]
+        G._ms_pdf_pages(self.path, fs)
+        self.assertEqual((fs[0]['page'], fs[0]['find']), (2, 'compatibility|Gladstone'))
+        self.assertEqual((fs[1]['page'], fs[1]['find']), (2, '16.2184|16.218'))
+        self.assertIsNone(fs[2]['page'])                               # the .cif's a is not in the paper
+        self.assertEqual((fs[3]['page'], fs[3]['find']), (1, 'IMA'))
+        self.assertIsNone(fs[4]['page'])                               # the readers line names no place
+        self.assertEqual(fs[5]['page'], 1)                             # a page already set is kept
+
+
 class CalculationFindingAnchors(unittest.TestCase):
     """'? look' on a calculation finding of a .docx manuscript: the finding is anchored to the cell it
     names, in the table its section was read from, by the paragraph numbering the docx view uses."""

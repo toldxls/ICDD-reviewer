@@ -23,6 +23,38 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
+## [Unreleased]
+
+### Fixed
+- **'? look' on the .pdf found nothing for the commonest flag.** Replaying the button's own term
+  builder over the two fixture batches (113 finding rows with a paired .pdf): a formula-integrity
+  finding built no search term in 14 of 25 cases (its evidence is the formula string, too long to
+  search, and the look-group that reads the Analysis field was keyed on a code that no longer exists),
+  a missing-IMA finding never had one, and the density, synthetic, calculated-pattern and provenance
+  findings mostly missed. The chemical look-groups now take their wt% values from the docx Analysis
+  field (they appear verbatim in the paper's table), a long evidence sentence is searched by two
+  windows of its opening words, a density finding falls back to the unit, an anode is tried as
+  'CuK' / 'Cu K' / 'Cu-K' with the docx λ as the last resort, and 'IMA' / 'synthetic' are keywords.
+  Rows landing on their evidence: 87 → 110 of 113; the three left are papers that never print the
+  term. The snippet box now says what was searched, where a second click goes, and when nothing
+  was found (a miss used to open the evidence page in silence, indistinguishable from a hit).
+- **Manuscript mode, a .pdf manuscript:** a calculation line naming no table (Gladstone–Dale, the
+  cell, the species, density) said "there is no place in the docx to jump to"; it now shows the page
+  its own words are on, highlighted, as the docx anchors do for a .docx (`_ms_pdf_pages`).
+- The docx side was audited the same way — every anchor the checks emit, on 243 docx, against the
+  cell the annotator highlights: all resolve; the GUI lands on the value cell where the annotator's
+  merged-label lookup lands on the label ('Radiation =', 'Spacing Instr. :'), which is the better of
+  the two. No change needed.
+
+### Changed
+- **Corpus runs, measured.** 150 papers on an 11-core machine: 32 s at 5 workers, 24 s at 8, 20 s at
+  11 — the harness's default cap of 8 cost 15 % and is gone (every core). The per-paper CPU (~1.2 s)
+  is the cost: a third in MuPDF text extraction, a third in the analytical-table reader, a fifth
+  building .cif structures. Two pure caches take the cheap part: `text_of` is kept per file like
+  `_pages` (a review read the text four times over, each a full extraction), and `_constituent_ok` is
+  memoised (half a million calls over forty papers, a few hundred distinct tokens per paper): 14 %
+  less CPU on the 150-paper A/B, every output file byte-identical apart from the failure log's timestamps.
+
 ## [0.8.1] — 2026-09-16
 
 A second adversarial audit (2026-09-16), of the 0.7.2 fixes and the 0.8.0 commits, run by four

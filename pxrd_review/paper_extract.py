@@ -268,6 +268,18 @@ def _pages(path):
     return _pages_of_pdf(path, stamp)
 
 def text_of(pdf):
+    """The document's text, normalised for the sentence readers. Cached like `_pages`: a review
+    reads the text four times over (the composition, the cell, the bond valences, the record),
+    and each read was a full extraction of every page — a third of a paper's cost in MuPDF text
+    calls. The key carries the file's size and mtime, so an edited file is re-read."""
+    try:
+        st = os.stat(pdf); stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    return _text_of(pdf, stamp)
+
+@functools.lru_cache(maxsize=3)
+def _text_of(pdf, _stamp):
     if pdf.lower().endswith('.docx'):                                   # a manuscript: its paragraphs, then its tables' text
         parts = []; cells = []
         for kind, item in _docx_body(pdf):
@@ -279,8 +291,8 @@ def text_of(pdf):
         t = ' '.join(parts + cells).replace('þ', '+')                   # prose first: the sentence readers prefer it to a table's footnote
     else:
         import pymupdf
-        doc = pymupdf.open(pdf)
-        t = ' '.join(page.get_text() for page in doc).replace('þ', '+')   # a journal font prints '+' as 'þ'
+        with pymupdf.open(pdf) as doc:
+            t = ' '.join(page.get_text() for page in doc).replace('þ', '+')   # a journal font prints '+' as 'þ'
     t = t.replace('\xad', '')                             # a soft hyphen set before every oxide name ('\xadNa2O 3.79', Springer) is not a character
     t = re.sub(r'-\n(?=[a-z])', '', t)                     # de-hyphenate line breaks
     t = re.sub(r'(?<=[A-Za-z\)])\s*¼\s*(?=\d)', ' = ', t)   # a journal font that prints '=' as '¼' ("O ¼ 32")
@@ -306,7 +318,12 @@ def _dash(t):
     word-position reader on a negative cell. Normalise once, here, rather than at each call."""
     return (t or '').translate(_DASHES)
 
+@functools.lru_cache(maxsize=8192)
 def _constituent_ok(tok):
+    """(constituent as the parser reads it, 'constituent' | 'total') or (None, None). A pure function
+    of the token, memoised: the table readers ask it of every word of every candidate line — half
+    a million times over forty papers, a dozen regex passes each — and a paper's vocabulary is a
+    few hundred distinct tokens."""
     t = re.sub(r'\([^)]*\)$', '', tok.translate(_CYR))               # 'Fe2O3(tot)', 'H2O(calc)': a qualifier
     t = re.sub(r'[*∗⁎†‡§¹²³#¶°]+$', '', t)                            # a footnote mark, in whichever glyph the font delivers the asterisk
     t = re.sub(r'(?<=[O\d])(?:calc|calcd|meas|str|diff)\.?[a-d]?$', '', t, flags=re.I)   # 'H2Ocalc', 'CO2calc', 'H2Ocalcb' (a footnote letter after it): the qualifier welded onto the name — never 'tot': a total-iron row beside the FeO/Fe2O3 split is not a constituent

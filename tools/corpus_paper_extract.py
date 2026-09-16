@@ -7,8 +7,12 @@ basis and method vs its own formula) and against its .cif (bond-valence table). 
 --papers (a file of basenames, or a comma list) runs a subset: the papers a change could touch plus a sample,
 diffed against the baseline record — the owner's rule, a full run being half an hour.
 
---jobs runs the papers in worker processes (default: the machine's cores, capped at 8; --jobs 1 is the serial
-path, in-process). The papers are independent, so this is wall-clock only: results are folded in JOB order, so
+--jobs runs the papers in worker processes (default: every core; --jobs 1 is the serial path, in-process).
+The default is measured, not guessed: on an 11-core (5 performance + 6 efficiency) machine, 150 papers took
+32 s at 5 workers, 24 s at 8 and 20 s at 11 (2026-09-16) — the efficiency cores still pay, so the old cap of
+8 cost 15 %. The per-paper cost is where the time is (~1.2 s CPU: a third in MuPDF text extraction, a third
+in the analytical-table reader, a fifth building .cif structures); the parallel run scales as the cores do.
+The papers are independent, so this is wall-clock only: results are folded in JOB order, so
 every output file is byte-identical to a serial run. That equality is the acceptance test for the flag, and it
 matters because these files exist to be diffed against each other.
 
@@ -353,10 +357,10 @@ if __name__ == '__main__':
     ap.add_argument('--limit', type=int, help='stop after N papers (a smoke run)')
     ap.add_argument('--only', help='only papers whose file name contains this')
     ap.add_argument('--papers', help='a file with one pdf basename per line (or a comma list): only those papers — a subset run')
-    ap.add_argument('--jobs', type=int, default=0, help='worker processes: 0 (default) = the cores, capped at 8; 1 = serial, in-process')
+    ap.add_argument('--jobs', type=int, default=0, help='worker processes: 0 (default) = every core; 1 = serial, in-process')
     a = ap.parse_args()
     subset = None
     if a.papers:
         subset = set(open(a.papers, encoding='utf-8').read().split()) if os.path.exists(a.papers) else set(x.strip() for x in a.papers.split(',') if x.strip())
-    jobs = a.jobs or min(8, os.cpu_count() or 1)                       # capped: each worker holds PyMuPDF and a paper's page model
+    jobs = a.jobs or (os.cpu_count() or 1)                             # every core: measured faster than a cap of 8 (docstring); each worker holds PyMuPDF and a paper's page model
     main(a.roots.split(','), a.pdf_dirs.split(','), a.out_dir, a.tag, a.baseline, a.limit, a.only, subset, max(1, jobs))
