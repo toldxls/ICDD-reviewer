@@ -21,7 +21,9 @@ extraction of each pdf is kept keyed on the file's content and the PyMuPDF versi
 it, so a reader edit never invalidates it and the run after the first reads no pdf at all. `--no-cache` is
 the reference path (the outputs must be byte-identical either way — that is the acceptance test for the
 cache, as serial-vs-parallel is for --jobs). Measured 2026-09-16, 150 papers, 11 workers: 16.4 s uncached,
-16.3 s filling the cache, 11.1 s from it (CPU 142 s -> 103 s); 24 MB on disk for 150 papers.
+16.3 s filling the cache, 11.1 s from it (CPU 142 s -> 103 s); 24 MB on disk for 150 papers. With the
+structure-geometry prune (bv_check.Structure.within) and the _bv_norm / _norm_text memos: 7.5 s (CPU 73 s).
+A full 1,130-paper run that took ~5 min at the day's start should now take ~1 min from a warm cache.
 
 --baseline diffs this run's per-paper record (paper_checks_papers<tag>.json, written every run) against an
 earlier run's: the readers whose status changed, paper by paper. That is the A/B for a reader change — the

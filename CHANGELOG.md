@@ -57,6 +57,14 @@ package version in `pyproject.toml`.
   for the shipped tool, which reads each paper once. Outputs byte-identical cached, cold and
   uncached (the acceptance test); 150 papers at 11 workers: 16.4 s uncached, 11.1 s from the cache
   (CPU 142 s → 103 s), filling it costs nothing extra; 24 MB on disk per 150 papers.
+- **The structure geometry pruned, two helpers memoised.** With the page text cached, a third of a
+  corpus run's CPU was `bv_check.Structure` asking 27 metric distances of every pair of sites (the
+  site merge, the ammonium and sulfide tests, `_equivalents`) — 39 million inner terms over forty
+  papers. `Structure.within` answers "some image within cutoff" from the per-axis width bound
+  first, the bound `_images_within` already uses, and measures only the images that pass it: an
+  exact prune, never a loss. `_bv_norm` (900k calls for a few hundred labels) and `_norm_text` (the
+  whole paper, twenty times over) are memoised. 150 papers from the cache: 11.1 s → 7.5 s (CPU
+  103 s → 73 s), outputs byte-identical.
 - **Corpus runs, measured.** 150 papers on an 11-core machine: 32 s at 5 workers, 24 s at 8, 20 s at
   11 — the harness's default cap of 8 cost 15 % and is gone (every core). The per-paper CPU (~1.2 s)
   is the cost: a third in MuPDF text extraction, a third in the analytical-table reader, a fifth

@@ -2190,9 +2190,12 @@ def _same_counts(a, b):
     keys = set(a) | set(b)
     return all(abs(a.get(k, 0.0) - b.get(k, 0.0)) <= 0.011 + 0.01 * max(a.get(k, 0.0), b.get(k, 0.0)) for k in keys if k not in ('H', 'O'))
 
+@functools.lru_cache(maxsize=4)
 def _norm_text(text):
     """The paper's text as the formula finder reads it: control and zero-width codes out, 'þ' = '+', a
-    font's ':' for '.' and ð Þ for brackets, a charge superscript set mid-number rejoined."""
+    font's ':' for '.' and ð Þ for brackets, a charge superscript set mid-number rejoined. Memoised on
+    the text: the formula finder is asked twenty times over per paper and normalised the whole paper
+    each time."""
     t = re.sub(r'[\x00-\x08\x0b-\x1f\u200b\u200c\u200d\u2060\ufeff]', '', text.replace('þ', '+').replace('\xad', ''))   # soft hyphens, zero-width and glyph control codes
     t = re.sub(r'(\d):(\d)', r'\1.\2', t).replace('ð', '(').replace('Þ', ')')        # a font that prints '.' as ':' and brackets as ð Þ
     t = re.sub(r'([A-Z][a-z]?\d*)\. (\d\+) (\d+)(?=[A-Za-z□\)\]])', r'\1.\3', t)     # 'Fe0. 2+ 20o0.47': the charge superscript set between the digits of 0.20
@@ -4621,7 +4624,10 @@ _BV_TAIL = re.compile(r'(?:\s*×\s*\d+(?:\.\d+)?)?[↓→]*[*†‡§#¶]{0,3}$'
 _HEADER_WORDS = {'donated', 'donor', 'donors', 'accepted', 'acceptor', 'acceptors', 'bond', 'bonds', 'sum', 'sums', 'total', 'totals', 'anion', 'anions', 'cation', 'cations',
                  'hydrogen', 'valence', 'valences', 'site', 'sites', 'atom', 'atoms', 'expected', 'ideal', 'theoretical', 'formal', 'calculated', 'mean', 'average', 'label', 'from', 'to', 'net', 'charge'}
 
+@functools.lru_cache(maxsize=4096)
 def _bv_norm(t):
+    """A label as bv_check normalises it, the tail marks off. Pure, and memoised: the bond-valence
+    table search asks it 900k times over forty papers for a few hundred distinct labels."""
     from pxrd_review import bv_check as B
     t = t.replace('−', '-').replace('–', '-').strip()
     return B._norm_label(_BV_TAIL.sub('', t) or t)

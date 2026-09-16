@@ -370,8 +370,8 @@ class Structure:
         for r in raw:
             if r[1] != 'N':
                 continue
-            has_h = any(o[1] == 'H' and self._min_dist(r[3], o[3]) < 1.15 for o in raw)
-            bonded_o = any(o[1] == 'O' and self._min_dist(r[3], o[3]) < 1.5 for o in raw)
+            has_h = any(o[1] == 'H' and self.within(r[3], o[3], 1.15) for o in raw)
+            bonded_o = any(o[1] == 'O' and self.within(r[3], o[3], 1.5) for o in raw)
             if has_h or not bonded_o:
                 self.nh4.add(r[0])          # ammonium — with or without its H refined
         # a sulfide sulfur in a structure that also holds oxygen (a thiosulfate, an oxysulfide, a
@@ -381,13 +381,13 @@ class Structure:
         if has_o:
             for r in raw:
                 if r[1] in ('S', 'Se', 'Te') and r[2] is None and not (r[0] in ox_override or r[1] in ox_override or r[1] in type_ox) \
-                        and not any(o[1] in ('O', 'F', 'Cl') and self._min_dist(r[3], o[3]) < {'S': 1.65, 'Se': 1.9, 'Te': 2.15}[r[1]] for o in raw):   # S–O 1.47, Se–O 1.70, Te–O 1.88–2.0 Å
+                        and not any(o[1] in ('O', 'F', 'Cl') and self.within(r[3], o[3], {'S': 1.65, 'Se': 1.9, 'Te': 2.15}[r[1]]) for o in raw):   # S–O 1.47, Se–O 1.70, Te–O 1.88–2.0 Å
                     self.chalc_anion.add(r[0])
         # merge rows sharing a position into one (mixed) site
         merged = []
         for r in raw:
             for m in merged:
-                if self._min_dist(m['frac'], r[3]) < 0.02:
+                if self.within(m['frac'], r[3], 0.02):
                     m['rows'].append(r); break
             else:
                 merged.append({'frac': r[3], 'rows': [r]})
@@ -426,7 +426,7 @@ class Structure:
         if self.nh4:
             keep = []
             for s in self.sites:
-                if s.element == 'H' and any(self._min_dist(s.frac, n.frac) < 1.15 for n in self.sites if n.label in self.nh4):
+                if s.element == 'H' and any(self.within(s.frac, n.frac, 1.15) for n in self.sites if n.label in self.nh4):
                     continue
                 keep.append(s)
             self.sites = keep
@@ -437,6 +437,24 @@ class Structure:
     def _min_dist(self, p, q):
         return min(self.dist(p, [q[0] + i, q[1] + j, q[2] + k])
                    for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1))
+
+    def within(self, p, q, cutoff):
+        """Exactly `_min_dist(p, q) < cutoff` — is some image of q in the ±1 box within cutoff of p —
+        without the 27 distances. Along each axis the distance is at least |Δ − i| times the cell's
+        perpendicular width (the `_images_within` bound), so only the images that pass it on all three
+        axes are measured, and for most pairs that is none: the site merge, the ammonium and sulfide
+        tests and `_same` asked 27 metric distances of every pair of sites — 39 million inner terms
+        over forty papers, a third of a corpus run's CPU with the page text cached (2026-09-16).
+        A prune, never a loss: a pair the bound rejects cannot be within cutoff."""
+        axes = []
+        for c in range(3):
+            lim = cutoff / self.widths[c] * (1 + 1e-9) + 1e-12; dx = p[c] - q[c]    # a hair of margin: the bound is exact, the arithmetic is float
+            ok = [i for i in (-1, 0, 1) if abs(dx - i) <= lim]
+            if not ok:
+                return False
+            axes.append(ok)
+        return any(self.dist(p, [q[0] + i, q[1] + j, q[2] + k]) < cutoff
+                   for i in axes[0] for j in axes[1] for k in axes[2])
 
     def is_cation(self, s):
         return any(sp.ox is not None and sp.ox > 0 for sp in s.species)
@@ -451,12 +469,7 @@ class Structure:
         return out
 
     def _same(self, p, q):
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for dz in (-1, 0, 1):
-                    if self.dist(p, [q[0] + dx, q[1] + dy, q[2] + dz]) < 0.05:
-                        return True
-        return False
+        return self.within(p, q, 0.05)
 
     # -- neighbours
     def _images_within(self, p0, q, cutoff):
