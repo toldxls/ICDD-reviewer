@@ -78,6 +78,40 @@ def _save_docx(doc, path):
         if os.path.exists(tmp):
             os.remove(tmp)
 
+def _fit_page(doc):
+    """Widen the PAGE of an output copy whose tables do not fit it. ICDD's generated entries carry
+    14400-twip (10 in) tables; once Word re-saves one onto a Letter portrait page with 1 in margins —
+    a reviewer's copy of the 2028 Part 2 batch — the centred tables run off both edges and the left of
+    every row is cut. Page setup only: the page is turned landscape when that is enough, else widened,
+    and the side margins go to half an inch; no table, cell or run is touched. A page that already
+    holds its tables is left exactly as it is."""
+    from docx.shared import Twips
+    try:
+        widest = 0
+        for t in doc.tables:
+            w = t._tbl.tblPr.find(_q('tblW')) if t._tbl.tblPr is not None else None
+            v = int(w.get(_q('w')) or 0) if w is not None and w.get(_q('type')) in (None, 'dxa') else 0
+            if not v and t.rows:
+                v = sum(int(c.get(_q('w')) or 0) for c in t.rows[0]._tr.iter(_q('tcW')))
+            widest = max(widest, v)
+        sec = doc.sections[-1]
+        pw, ph = sec.page_width.twips, sec.page_height.twips
+        room = pw - sec.left_margin.twips - sec.right_margin.twips
+        if not widest or widest <= room:
+            return False
+        need = widest + 1440
+        if pw < ph and need <= ph:                          # portrait, and landscape holds it
+            from docx.enum.section import WD_ORIENT
+            sec.orientation = WD_ORIENT.LANDSCAPE
+            sec.page_width, sec.page_height = Twips(ph), Twips(pw)
+        elif need > pw:
+            sec.page_width = Twips(need)
+        sec.left_margin = Twips(min(sec.left_margin.twips, 720))
+        sec.right_margin = Twips(min(sec.right_margin.twips, 720))
+        return True
+    except Exception:
+        return False                                        # layout is a courtesy: never fail a review over it
+
 class _RunLock:
     """Advisory single-writer lock over one output folder.
 
@@ -1117,6 +1151,8 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=Non
             rec['accept'] = _mark_accept(doc)
         else:
             _clear_accept(doc)
+        if not inplace:
+            _fit_page(doc)
         _save_docx(doc, out)
         return rec
 
@@ -1198,6 +1234,8 @@ def annotate(docx_path, res, out_path, inplace=False, base_path=None, triage=Non
     elif triage and triage.get('accept') == 'disagree':
         _clear_accept(doc)     # refresh/inplace base carries a previous run's 'x' — undo it
 
+    if not inplace:
+        _fit_page(doc)
     _save_docx(doc, out_path)
     return rec
 

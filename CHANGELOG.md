@@ -36,6 +36,11 @@ package version in `pyproject.toml`.
 - **A pdf whose pages carry a `/Rotate 180` their own text contradicts** is rendered upright (in memory —
   the file is never written). The image, the word boxes and the search hits now share one frame: on such a
   paper `? look` had flashed a box at the mirrored spot of an upside-down page.
+- **An output copy whose tables overrun the page gets a page that holds them.** ICDD's generated entries
+  carry 10 in tables; re-saved by Word onto Letter portrait with 1 in margins (a reviewer's copies of the
+  Part 2 batch) the centred tables ran off both edges and the left of every row was cut. `_fit_page`
+  turns the page landscape (or widens it) and sets half-inch side margins — page setup only, in the
+  review_out copy only, never under `--inplace`; a page that holds its tables is left as it is.
 - **The one-keystroke hint names table values only.** A candidate must be written with the decimals the
   neighbouring found lines are printed with; a bond-valence sum elsewhere in a paper had been offered
   beside the table's value.
