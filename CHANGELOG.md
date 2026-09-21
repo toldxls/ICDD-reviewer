@@ -45,6 +45,36 @@ package version in `pyproject.toml`.
   bare in the file name ('Lepersonnite-Gd') is headed the IMA way, and the suffix keeps the element's own case: 'LEPERSONNITE-(Gd)' — the entry's own
   spelling is still quoted in the finding beneath it.
 
+### Fixed — an audit of the day's commits, and the `? look` button replayed over two batches
+- **`check33_dx_blank` named numbers that are not densities.** Beside the density it read, the flag offered
+  every number within reach that lay within 15 % of it: a calculated density of 1.930 was given the next
+  sentence's refractive indices (1.652, 1.66), the measured density, or a cell volume in nm³ as further
+  "calculated densities". A neighbour is now part of the same RUN of values — nothing between it and the value
+  before but an esd, the unit, a phase label in brackets and a separator — and never the measured density.
+  Two phases' values ('6.019 (Hak-Cd), 6.011 (Hak-Fe)'; a crystal-data row '2.198 2.127') are still listed. On
+  the corpus: 17 entries flagged, every message read, each value a stated calculated density.
+- **The launcher took any folder with a Word file one level down for an entries folder.** `I*.docx` one level
+  down matched 'ICDD … statement.docx' in a Desktop subfolder, so `pxrd gui` typed on the Desktop opened the
+  Desktop and overwrote the remembered folder. One level down a file must be NAMED as an entry
+  ('I003448(…).docx'); the folder itself is judged as before.
+- **`? look` on a reflection-list finding stayed on page one.** The entry pads a d with zeros the paper does not
+  print ('1.7160' for the table's 1.716), so nothing was found — all six blank-hkl flags of the two batches.
+  The d is searched with the padding dropped, then its neighbours BY d VALUE (the list is read across the
+  table's two column blocks, so the rows either side of a line are from the other end of the pattern), which
+  mark the powder table where the d alone is also a bond length pages on. Applies to every finding anchored on
+  the list (checks 15, 29, 34–36).
+- **`? look` lands on the term the finding is about.** The terms are ordered most telling first; the pane opened
+  the page with the most hits of any term and its first hit in reading order. It now opens, of the pages the
+  best term is on, the one where the terms cluster, and lands on that term — a line on a table's second page
+  opens that page.
+- **`? look` on a finding about the entry alone shows the docx cell.** A blank Final Quality Mark or a misspelt
+  vocabulary word has nothing to find in the paper; the pane sat on page one in silence. A .dft Z disagreement
+  now looks for the paper's 'Z = N', the Gladstone–Dale note for the paper's stated compatibility index.
+  Replayed over the 193 findings of the two batches: 130 → 143 find their place in the .pdf, the rest being
+  findings about the entry alone, which land on their cell.
+- Whole-corpus run of the entry checks (1,678 entries): no check errored; the paper-reader subset (162 papers)
+  against the last baseline: no status changed.
+
 ## [0.10.0] — 2026-09-21
 
 ### Added

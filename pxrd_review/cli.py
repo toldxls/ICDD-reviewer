@@ -88,14 +88,20 @@ def _save(sub, folder):
     except Exception:
         pass
 
+_ENTRY_FILE = re.compile(r'^[IO]\d{4,6}(?!\d)')
+
 def _has_entry_docx(folder):
     # entry docx only (I*/O*) — a random .docx in the cwd must not hijack resolution. Looked for one
     # level down as well, as the tools themselves find them at any depth: a batch folder whose entries sit
     # in a subfolder ('2028_Part 2/Part 2/I….docx') was passed over, and the REMEMBERED folder opened
     # instead, without a word. The tool's own output folders do not count.
+    # One level down the file must be NAMED as an entry ('I003448(…).docx'): any 'I*.docx' there
+    # ('ICDD commitment statement.docx' in a Desktop subfolder) made the Desktop an entries folder.
     for depth in ('', '*'):
         for pat in ('I*.docx', 'O*.docx'):
             for p in glob.glob(os.path.join(folder, depth, pat)):
+                if depth and not _ENTRY_FILE.match(os.path.basename(p)):
+                    continue
                 parts = os.path.relpath(p, folder).lower().split(os.sep)[:-1]
                 if not any(x in ('review_out', '.edit_backup') or x.startswith('review_out') for x in parts):
                     return True

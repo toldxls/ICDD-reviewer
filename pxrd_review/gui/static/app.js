@@ -637,6 +637,16 @@ function termsFor(fkey, step = 0) {
       } else if (f.code === 'indexing' && a.entry && (a.entry.refl_d || []).length) {
         // the reflection d-spacings cluster in the paper's powder table -> frame it
         terms = a.entry.refl_d;
+      } else if (f.anchor === 'refl' && reflTerms(f).length) {
+        terms = reflTerms(f);
+      } else if (f.code === 'dft' && /\bZ: docx=(\d+) but \.dft=(\d+)/.test(f.msg)) {
+        // a Z disagreement: the paper's own 'Z = N' settles it, whichever side it agrees with
+        const z = /\bZ: docx=(\d+) but \.dft=(\d+)/.exec(f.msg);
+        terms = [`Z = ${z[1]}`, `Z=${z[1]}`, `Z = ${z[2]}`, `Z=${z[2]}`];
+      } else if (f.code === 'gd_entry') {
+        // the paper's compatibility statement; the entry's own optics string is nowhere in the .pdf
+        const stated = /\.pdf states [^(]*\(([-+−]?\d\.\d+)\)/.exec(f.msg);
+        terms = [...(stated ? [stated[1].replace(/^[-+−]/, '')] : []), 'Gladstone', 'compatibility'];
       } else if (f.code === 'instr_class' || f.code === 'geometry') {
         // highlight the instrument as written in the .pdf (evidence, e.g. 'R-AXIS Rapid')
         // plus 'diffractometer' — not the generic 'axis' that matches everywhere
@@ -656,6 +666,23 @@ function termsFor(fkey, step = 0) {
     }
   }
   return { terms, snippet, label, page };
+}
+
+// A finding about lines of the reflection list ('d = 1.7160 is entered twice'): the entry pads its d
+// with zeros the paper does not print ('1.716'), so the value as written found nothing and the pane
+// stayed on page one. Search the d with the padding dropped (two decimals kept — the page search is a
+// substring match, so '1.716' finds '1.7160' too), and after it the list's neighbouring lines: the d
+// alone may also be a bond length pages away, and it is the neighbours that mark the powder table.
+function reflTerms(f) {
+  const trim = d => { const m = /^(\d+\.\d\d)(\d*?)0*$/.exec(d); return m ? m[1] + m[2] : d; };
+  const ds = [...new Set(((f.evidence || '') + ' ' + (f.msg || '')).match(/\d+\.\d{2,}/g) || [])].slice(0, 3);
+  if (!ds.length) return [];
+  // neighbours in d, not in list order: the list is read row by row across the table's two column
+  // blocks, so the lines either side of one are from the other end of the pattern
+  const gap = x => Math.abs(parseFloat(x) - parseFloat(ds[0]));      // a line the list LACKS has neighbours too
+  const near = [...new Set(((S.a && S.a.entry && S.a.entry.refl_d) || []).map(String))]
+    .filter(x => gap(x) >= 1e-6).sort((x, y) => gap(x) - gap(y)).slice(0, 6);
+  return [...new Set([...ds, ...near].map(trim))].slice(0, 8);
 }
 
 // distinctive, dash/case-robust PDF-search tokens for a text finding's message
@@ -718,7 +745,13 @@ async function lookInPage(fkey) {
   S.focusKey = fkey;
   const step = S.lookStep[fkey] || 0;
   const t = termsFor(fkey, step);
-  if (!S.a.pdf || !t.terms.length) { focusFinding(fkey); return; }
+  if (!S.a.pdf || !t.terms.length) {
+    // a finding about the entry alone (a blank Final Quality Mark, a misspelt vocabulary word) has
+    // nothing to find in the paper: show the cell it is about rather than page one, in silence
+    if ((S.anchorOf || {})[fkey] || (findingOf(fkey) || {}).anchor) lookInDocx(fkey);
+    else focusFinding(fkey);
+    return;
+  }
   S.lookStep[fkey] = step + 1;
   S.lookLabel = t.label || '';
   S.pdfTerms = t.terms.slice(0, 20);
@@ -728,7 +761,7 @@ async function lookInPage(fkey) {
     const probe = t.terms.slice(0, 8);
     const res = await Promise.all(probe.map(term =>
       fetch(`/api/pdf/${enc(S.a.key)}/search?q=${enc(term)}`).then(x => x.json()).catch(() => ({ hits: [], sizes: {} }))));
-    for (const r of res) { for (const h of (r.hits || [])) hits.push(h); Object.assign(sizes, r.sizes || {}); }
+    res.forEach((r, ti) => { for (const h of (r.hits || [])) hits.push({ ...h, ti }); Object.assign(sizes, r.sizes || {}); });
   } catch (e) { /* fall through to evidence page */ }
   if (S.key !== key) return;         // stale continuation — a different entry owns the pane
   // The snippet box says what was searched for (there is no context sentence for an extra-check
@@ -742,15 +775,20 @@ async function lookInPage(fkey) {
     renderPdf(t.snippet, (t.label ? t.label + ' — ' : '') + 'not found in the .pdf, showing the evidence page' + again, S.pdfTerms); return;
   }
   const label = (t.label || 'looked for') + again;
+  // The terms are ordered most telling first (the deviant axis value, the d the finding is about), the
+  // rest locate the table. So: of the pages the best term that hit at all is on, the one where the
+  // terms cluster — and on it, that term. The busiest page alone opened a table's first page for a
+  // line printed on its second, and the first hit in reading order was rarely the value in question.
   const per = {}; for (const h of hits) per[h.page] = (per[h.page] || 0) + 1;
-  const page = +Object.keys(per).sort((a, b) => per[b] - per[a])[0];   // cluster page
+  const best = Math.min(...hits.map(h => h.ti));
+  const page = +[...new Set(hits.filter(h => h.ti === best).map(h => h.page))].sort((a, b) => per[b] - per[a] || a - b)[0];
   const seen = new Set();
   hits = hits.filter(h => { const k = h.page + ':' + h.rect.join(','); if (seen.has(k)) return false; seen.add(k); return true; });
   hits.sort((a, b) => a.page - b.page || a.rect[1] - b.rect[1]);       // reading order
   S.pdfHits = hits; S.pdfSizes = sizes; S.hitIdx = -1; S.pdfQuery = ''; S.pdfPage = page;
   renderPdf(t.snippet, label, S.pdfTerms);       // page stack with the terms highlighted
   renderHitNav();
-  const landIdx = hits.findIndex(h => h.page === page);
+  const landIdx = hits.findIndex(h => h.page === page && h.ti === best);
   requestAnimationFrame(() => gotoHit(landIdx >= 0 ? landIdx : 0));
 }
 

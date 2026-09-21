@@ -1075,6 +1075,16 @@ CASES = [
      X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '3.69', 'Xtl Dx :', '3.728']]}), 'The calculated density is 3.690 g/cm3.') == []
      and X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '3.728']]}), 'The density, measured by flotation, is 3.70(2) g/cm3.') == []
      and X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '3.728']]}), 'The calculated density of the associated galena is 7.58 g/cm3.') == []),
+ ("dx_blank: only a run of densities is offered — not the next sentence's refractive indices, the measured density or a volume", lambda: all(
+     'a calculated density of 1.93 ' in f.msg for t in (
+         'The calculated density is 1.930 g/cm3. Optically, the mineral is biaxial (+), with alpha = 1.652(2), beta = 1.660(2).',
+         'The calculated density is 1.930 g/cm3. The density measured by flotation is 1.91(2) g/cm3.',
+         'The calculated density is 1.930 g/cm3 (Z = 4, V = 1.842 nm3).')
+     for f in X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '1.95']]}), t) or [type('F', (), {'msg': ''})])),
+ ("dx_blank: two phases' densities are still both offered", lambda: all(
+     any('6.019 and 6.011' in f.msg for f in X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '6.0']]}), t))
+     for t in ('The calculated density is 6.019 (Hak-Cd), 6.011 (Hak-Fe) g/cm3.',
+               'The calculated density is 6.019(3) g/cm3 and 6.011(3) g/cm3 for the two crystals.'))),
  # --- the reflection list against the paper's table and against itself (checks 34–36) ---
  ("hkl_blank: one row of a multiply-indexed line has no hkl", lambda: [f.sev for f in X.check35_blank_hkl_in_group(
      type('S', (), {'raw_rows': [['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['1.7160', '20.000', '1', '8', '2', 'M', ''],

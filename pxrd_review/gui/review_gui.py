@@ -347,7 +347,8 @@ def _serialize(key):
                'subfiles': entry.subfiles, 'refl_count': len(entry.refl),
                # d-spacings of the reflection list — search tokens to locate the
                # paper's powder table (used by the indexing finding's "? look")
-               'refl_d': [d for d in (_dval(r[0]) for r in entry.refl) if d][:24]}
+               # — and the neighbours of the line a reflection finding is about, wherever in the list it sits
+               'refl_d': [d for d in (_dval(r[0]) for r in entry.refl) if d][:300]}
 
     # Always show the natural-species Mindat record; the UI notes that for a
     # synthetic the tool deliberately skips the Mindat CELL compare (the formula

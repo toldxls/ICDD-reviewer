@@ -2848,15 +2848,24 @@ def check33_dx_blank(e, text):
         vals = ['%g' % d]
         sent = next((x for x in o.get('sentences') or [] if ('%g' % d) in x), '')
         # a paper on two phases prints two ('calculated density is 6.019 (Hak-Cd), 6.011 (Hak-Fe)'; a crystal-
-        # data row '2.198 2.127'): the reader takes the first, so its neighbours are offered beside it
+        # data row '2.198 2.127'): the reader takes the first, so its neighbours are offered beside it. A
+        # neighbour is part of the same RUN of values — nothing between it and the value before but an esd,
+        # the unit, a phase label in brackets and a separator. Any number within reach was offered before, and
+        # a density of 1.93 was given the refractive indices of the next sentence (1.652, 1.66), the measured
+        # density and a cell volume in nm3 as further 'calculated densities'.
         flat = re.sub(r'\s+', ' ', text)
         k = flat.find(re.sub(r'\s+', ' ', sent)[:60]) if sent else -1
         if k >= 0:
             seg = flat[k:k + len(sent) + 60]
-            j = seg.find('%g' % d)
-            for m in re.finditer(r'(?<![\d.])(\d{1,2}\.\d{2,4})(?![\d])', seg[j + 1:] if j >= 0 else ''):
+            first = re.search(r'(?<![\d.])%s0*(?!\d)' % re.escape('%g' % d), seg)
+            end = first.end() if first else None
+            for m in re.finditer(r'(?<![\d.])(\d{1,2}\.\d{2,4})(?![\d])', seg[end:] if first else ''):
+                gap = seg[end:first.end() + m.start()]
+                if not re.match(r'^(?:\(\d+\))?\s*(?:g\s*[/·⋅]?\s*cm\S*?)?\s*(?:\([^)]{1,20}\))?\s*[,;/&]?\s*(?:and|or)?\s*$', gap):
+                    break
                 v = float(m.group(1))
-                if abs(v - d) / d <= 0.15 and ('%g' % v) not in vals and len(vals) < 3:
+                end = first.end() + m.end()
+                if abs(v - d) / d <= 0.15 and v != o.get('D_meas') and ('%g' % v) not in vals and len(vals) < 3:
                     vals.append('%g' % v)
     else:
         # the paper never says 'calculated': touretite's measured density is 'in fairly good agreement with
