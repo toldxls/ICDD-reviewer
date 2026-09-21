@@ -84,6 +84,14 @@ _closing_at = None                                   # monotonic time a tab repo
 _inflight = 0                                        # requests currently being served (auto-exit gate)
 _inflight_lock = threading.Lock()
 
+_NEEDS_FOLDER = ('/api/rerun', '/api/triage/export')      # what writes into review_out: the two that failed with none (every other route answers)
+
+@app.before_request
+def _needs_folder():
+    """With no folder open (the GUI started on its chooser) the entry actions have nothing to act on: say so, never a 500."""
+    if not STATE.get('out_dir') and any(request.path == p or request.path.startswith(p + '/') for p in _NEEDS_FOLDER):
+        return jsonify({'ok': False, 'error': 'no entries folder is open — choose one first'}), 409
+
 @app.before_request
 def _guard_localhost():
     global _last_seen, _inflight
@@ -168,14 +176,15 @@ def folder_survey(folder):
     folder or a corpus root, typed by accident as the place `pxrd gui` was run from. `broad` = ask before doing that:
     a home folder or a drive root, more than SURVEY_MAX_DOCX documents, or a tree too large to count in the time allowed."""
     from pxrd_review import cli as CLI
-    path = os.path.abspath(folder); n = seen = 0; dirs = set(); capped = False; t0 = time.monotonic()
+    path = os.path.abspath(folder); n = seen = 0; dirs = set(); capped = slow = False; t0 = time.monotonic()
     for dp, dns, fns in os.walk(path):
         dns[:] = [x for x in dns if not x.startswith('.') and not x.lower().startswith('review_out') and x != '.edit_backup']
         for fn in fns:
             seen += 1
             if fn.lower().endswith('.docx') and not fn.startswith('~$'):
                 n += 1; dirs.add(dp)
-        if n > SURVEY_MAX_DOCX or seen > _SURVEY_SEEN or time.monotonic() - t0 > _SURVEY_SECONDS:
+        slow = time.monotonic() - t0 > _SURVEY_SECONDS
+        if n > SURVEY_MAX_DOCX or seen > _SURVEY_SEEN or slow:
             capped = True; break
     # one sentence for the page; a count cut short is said as 'more than', never as a number it is not
     why = ''
@@ -183,8 +192,11 @@ def folder_survey(folder):
         why = 'This is a home folder or a whole drive, not a batch.'
     elif n > SURVEY_MAX_DOCX:
         why = 'This folder holds more than %d documents, in %d subfolders and counting — a corpus, not a batch.' % (SURVEY_MAX_DOCX, len(dirs))
+    elif capped and seen > _SURVEY_SEEN:
+        why = 'This folder is a very large tree (more than %s files) — not a batch.' % format(_SURVEY_SEEN, ',')
     elif capped:
-        why = 'This folder is a very large tree (more than %s files) — not a batch.' % format(seen - 1, ',')
+        # out of time, not out of room: a slow (network) drive says nothing about the folder — never call a batch a corpus for it
+        why = 'This folder could not be counted in %g s (%d document%s found so far) — a slow drive, or a large tree.' % (_SURVEY_SECONDS, n, '' if n == 1 else 's')
     return {'path': path, 'docx': n, 'dirs': len(dirs), 'capped': capped, 'broad': bool(why), 'why': why}
 
 def _choose_payload():
@@ -1323,6 +1335,9 @@ def api_set_folder():
     if not folder or not os.path.isdir(folder):
         return jsonify({'ok': False, 'error': 'not a folder: %s' % (folder or '(empty)')}), 400
     folder = folder.rstrip('/\\') or folder
+    ask = _ask_first(folder, data)                      # a home folder, a corpus root: never by accident — and asked BEFORE the
+    if ask:                                             # discovery below, which is itself the long walk on such a folder
+        return ask
     found = C.discover(folder)
     # Picking a bare 'review_out' sidecar folder (its own triage.json / cache, but no entry docx of
     # its own) means "resume the review this belongs to" — open the PARENT that owns it, whose
@@ -1335,9 +1350,6 @@ def api_set_folder():
     if not found:                                       # validate BEFORE build_index mutates STATE, so a
         return jsonify({'ok': False,                    # rejected switch can't strand the tool on an empty
                         'error': 'no .docx entries found under %s' % folder}), 400   # folder
-    ask = _ask_first(folder, data)                      # a home folder, a corpus root: never by accident
-    if ask:
-        return ask
     with STATE['lock']:                                 # serialize with get_analysis: an in-flight
         STATE['gen'] += 1                               # analysis completes first, later ones see the
         build_index(folder, None)                       # bumped gen (or a KeyError) and stand down

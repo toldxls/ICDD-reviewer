@@ -76,6 +76,10 @@ package version in `pyproject.toml`.
   one click (`--open-anyway` on the command line) — it just cannot happen by accident. The same question is asked when a folder
   is switched to from inside the GUI. With no folder given and none remembered, or a remembered folder that is gone, the GUI
   opens on the chooser instead of exiting with an error (the other tools, which have no picker, still stop).
+  A look that runs out of time (a slow network drive) says so — "could not be counted in 1.5 s" — and never calls a batch a
+  corpus for it; the question is asked before the entries are discovered, that walk being the long one on such a folder; and
+  with no folder open, *Rerun all*, *Export triage* and *Import triage* are disabled, and the two that failed answer "choose
+  one first" (an adversarial review of the day's changes: five findings, these three and a `#DIV/0!` cell fixed).
 - **What the launcher remembers.** A folder is remembered for `pxrd gui` when the GUI OPENS it, not when the command is typed
   — a corpus root it asked about is not the folder to reopen — and a home folder, a drive root or a temp folder is never
   remembered for any tool. The folders opened lately are kept (eight, newest first; the batches the other tools were last

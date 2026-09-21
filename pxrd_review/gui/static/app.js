@@ -78,6 +78,7 @@ async function loadEntries() {
   renderMindatChip(r.mindat);
   S.entries = r.entries;
   renderList();
+  for (const id of ['#rerun-all', '#export', '#import']) { const b = $(id); if (b) b.disabled = !r.folder; }   // nothing to act on until a folder is open
   if (r.choose) startOnChooser(r.choose);                  // nothing (sensible) to open: start on the folder chooser
   // analysis runs in the background — poll until every entry's badges are in
   if (r.pending > 0) S.pollTimer = setTimeout(loadEntries, 1200);

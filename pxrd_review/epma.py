@@ -694,7 +694,7 @@ def _write_check(wb, red, published, decimals, notes, table_total, first, last, 
             rows_el = [first + j for j, r in enumerate(red.rows.values()) if ('H' if r.c.kind == 'water' else r.c.element) == el]
             if len(rows_el) == 1:
                 wc.cell(r_, 11, '=reduction!$B$%d' % rows_el[0])
-                wc.cell(r_, 12, '=K%d*C%d*$B$%d/B%d' % (r_, r_, r_med, r_))   # with the common factor, which is the dilution this value itself causes
+                wc.cell(r_, 12, '=IF(B%d=0,"",K%d*C%d*$B$%d/B%d)' % (r_, r_, r_, r_med, r_))   # with the common factor, which is the dilution this value itself causes
         rng = lambda c: '$%s$%d:$%s$%d' % (c, e0, c, e1)
         wc.conditional_formatting.add('A%d:F%d' % (e0, e1), FormulaRule(formula=['LEFT($F%d,8)="does not"' % e0], fill=red_fill))
         wc.conditional_formatting.add('A%d:F%d' % (e0, e1), FormulaRule(formula=['LEFT($F%d,5)="close"' % e0], fill=amber))

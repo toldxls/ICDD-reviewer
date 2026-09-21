@@ -35,6 +35,23 @@ class FolderGuard(unittest.TestCase):
             self.assertTrue(sv['broad'] and sv['capped']); self.assertIn('more than 10 documents', sv['why'])
         self.assertTrue(G.folder_survey(os.path.expanduser('~'))['broad'])       # a home folder, however few documents it holds — and the look is bounded
 
+    def test_out_of_time_is_not_a_large_tree(self):
+        G = self.G
+        with mock.patch.object(G, '_SURVEY_SECONDS', 0.0):                   # a slow (network) drive: the look runs out of time on a real batch
+            sv = G.folder_survey(self.root)
+        self.assertTrue(sv['broad'])                                         # still asked about …
+        self.assertIn('could not be counted', sv['why']); self.assertNotIn('not a batch', sv['why'])   # … but never called what it is not
+
+    def test_entry_actions_without_a_folder_say_so(self):
+        G = self.G
+        folder, G.STATE['out_dir'] = G.STATE['out_dir'], None
+        try:
+            for url in ('/api/rerun', '/api/rerun/I000001', '/api/triage/export'):
+                r = self.c.post(url, json={})
+                self.assertEqual(r.status_code, 409, url); self.assertIn('choose one first', json.loads(r.data)['error'])
+        finally:
+            G.STATE['out_dir'] = folder
+
     def test_the_folder_route_asks_before_a_folder_that_is_not_a_batch(self):
         G = self.G
         with mock.patch.object(G, 'SURVEY_MAX_DOCX', 10), mock.patch.object(G, 'build_index') as bi, mock.patch.object(G, 'start_analysis'), \
@@ -43,6 +60,7 @@ class FolderGuard(unittest.TestCase):
             self.assertEqual(r.status_code, 409); d = json.loads(r.data)
             self.assertTrue(d['broad']); self.assertIn('holds more than 10 documents, in 4 subfolders', d['error']); self.assertIn('Open it all, or pick a batch?', d['error'])
             bi.assert_not_called()                                           # nothing was indexed
+            G.C.discover.assert_not_called()                                 # … nor walked: discovery is the long part on such a folder
             r = self.c.post('/api/folder', json={'folder': self.root, 'confirm': True})   # on purpose: opened
             self.assertEqual(r.status_code, 200); bi.assert_called_once()
             self.assertEqual(self.cli._load()['gui'], os.path.abspath(self.root))     # and it is what the launcher reopens
