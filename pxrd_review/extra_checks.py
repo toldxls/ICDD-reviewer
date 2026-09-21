@@ -2694,6 +2694,50 @@ def _printed_damaged(d, text):
             return True
     return False
 
+def _paper_misprint(e, d, cand, found, stream):
+    """The paper's table, not the entry, has the wrong d. Popugaevaite's Table 1 prints 2.834 on the row
+    between 3.913 and 3.768 (the 3 0 1 row's value, copied); the entry's 3.834 is what belongs there. Two
+    things must hold, the first from the paper alone: a one-keystroke candidate stands in the text BETWEEN
+    the list's two neighbouring lines and is itself out of the table's descending order, where the entry's
+    d is in order; and, where the entry gives a cell and a hkl for the line, that hkl reproduces the
+    entry's d (1 %). Suenoite's 3.2200 fails the first — the paper's 3.322 sits in order among its own
+    neighbours, so the entry is what is wrong — and a hkl ICDD re-fitted to a wrong d cannot pass it.
+    -> (candidate, the neighbour above, the neighbour below, a clause on the cell) or None."""
+    dv = float(d)
+    above = [x for x in found if float(x) > dv]
+    below = [x for x in found if float(x) < dv]
+    if not cand or not above or not below:
+        return None
+    hi, lo = min(above, key=float), max(below, key=float)
+    for c in cand:
+        if float(lo) < float(c) < float(hi):
+            continue                                        # in order where it stands: nothing odd about it
+        for i, t in enumerate(stream):
+            if t == c and (_d_forms(hi) & set(stream[max(0, i - 12):i])) and (_d_forms(lo) & set(stream[i + 1:i + 13])):
+                break
+        else:
+            continue
+        cell = getattr(e, 'cell', None) or {}
+        a, b, cc = (_val(cell.get(k)) for k in 'abc')
+        clause = ''
+        if a and b and cc:
+            al, be, ga = (_val(cell.get(k)) or 90 for k in 'αβγ')
+            fits = []
+            for r in e.refl:
+                m = re.match(r'\d+\.\d+', re.sub(r'\s+', '', r[0] or ''))
+                if m and m.group(0) == d:
+                    for h, k, l in (t for t in _candidate_hkls(*r[2:5]) if t != (0, 0, 0)):
+                        ds2 = _dstar2(a, b, cc, al, be, ga, h, k, l)
+                        if ds2 > 0:
+                            fits.append((abs(1 / math.sqrt(ds2) - dv) / dv, 1 / math.sqrt(ds2), (h, k, l)))
+            if fits:
+                rel, dc, hkl = min(fits)
+                if rel > 0.01:
+                    return None                             # the entry's own hkl does not give its d
+                clause = ', and the cell gives %.3f for %d %d %d' % ((dc,) + hkl)
+        return (c, hi, lo, clause)
+    return None
+
 def check29_reflections_in_paper(e, text):
     """Every d of a measured reflection list, looked for among the numbers the .pdf prints. Measured on
     the 207 measured entries with a paired .pdf (2026-09-14) the coverage is bimodal: 155 lists are printed
@@ -2724,18 +2768,35 @@ def check29_reflections_in_paper(e, text):
         return out
     info = {re.sub(r'\s+', '', r[0]): r for r in e.refl}
     printed = {t for t in toks if 0.5 < float(t) < 50}
+    # the decimals the paper's TABLE prints each found line with. A candidate must be written the way the
+    # found lines nearest in d are: any number of the paper one keystroke away was offered before, and
+    # suenoite's comment named '3.92' — a bond-valence sum eight pages on — beside the table's 3.322
+    prec = {d: max(len(t.split('.')[1]) for t in _d_forms(d) & toks) for d in ds if _d_forms(d) & toks}
+    stream = re.findall(r'\d+\.\d+', text)
     parts = []
     for d in miss:
         r = info[num[d]]
         ip, fp = d.split('.', 1) if '.' in d else (d, '')
         sig = ip + '.' + (fp.rstrip('0') or '0')
+        near = {prec[x] for x in sorted(prec, key=lambda x: abs(float(x) - float(d)))[:4]}
         # what the paper prints ONE keystroke away (a digit changed, dropped, added or two swapped) — the
         # likely original, or the paper's own misprint (popugaevaite's table has 2.834 where 3.834 belongs)
-        cand = sorted((t for t in printed if len(t.split('.')[1]) >= len(sig.split('.')[1]) and _one_keystroke(sig, t)),
+        cand = sorted((t for t in printed if len(t.split('.')[1]) >= len(sig.split('.')[1]) and _one_keystroke(sig, t)
+                       and (not near or len(t.split('.')[1]) in near)),
                       key=lambda t: abs(float(t) - _val(d)))[:3]
         hkl = ' '.join(x for x in r[2:5] if x)
+        slip = _paper_misprint(e, d, cand, [x for x in ds if x in prec], stream)
+        if slip:
+            out.append(Finding('reflections', 'note',
+                       "Reflection list d = %s is not printed in the .pdf, whose table prints %s in its place — between "
+                       "%s and %s, where only the entry's value keeps the table in order%s: the paper's misprint, "
+                       "the entry stands." % ((num[d],) + slip), num[d], 'refl'))
+            continue
         parts.append('d = %s (I %s%s%s)' % (num[d], _num(r[1]), ', hkl ' + hkl if hkl else '',
                                            ' — the .pdf prints %s, one keystroke away' % ' or '.join(cand) if cand else ''))
+    if not parts:
+        return out
+    miss = [d for d in miss if not any(f.evidence == num[d] for f in out)]
     out.append(Finding('reflections', 'flag',
                "Reflection list %s: not printed anywhere in the .pdf, although the other %d lines of the list "
                "are — verify against the paper's table (a hkl assigned to the wrong d would hide it); a list "

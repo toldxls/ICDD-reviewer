@@ -15,6 +15,7 @@ const S = {
   pdfMode: 'page',    // 'page' = scrollable full pages | 'region' = zoomed crop around the hit
   pdfZoom: 1,         // display scale of whatever is shown
   lookStep: {},       // per-finding '? look' cycle index (findings with ordered look-groups)
+  docxStep: {},       // the same for the docx pane (a formula finding: its row, then the Analysis field)
   lookLabel: '',      // label of the current '? look' target (shown in the region pager)
   focusKey: null,     // the finding currently driving the PDF pane
   pdfIO: null,        // IntersectionObserver for lazy page loading + current-page tracking
@@ -352,7 +353,7 @@ async function openEntry(key) {
   S.a = r.analysis;
   S.t = normalizeTriage(r.triage);
   S.ue = r.user_edits || [];  // reviewer's own marks in the reviewed copy (live, not cached)
-  S.lookStep = {};            // reset '? look' cycles for the new entry
+  S.lookStep = {}; S.docxStep = {};           // reset '? look' cycles for the new entry
   $('#empty').classList.add('hidden');
   $('#entry').classList.remove('hidden');
   renderHead();
@@ -793,6 +794,24 @@ function docxAnchorCandidates(anchor) {
 }
 
 function docxTarget(view, anchor, fkey) {
+  // A 'reflections' finding is about ONE line of the list: its evidence is the d value(s) exactly as
+  // the list writes them, so land on that cell (where the annotator puts its highlight) rather than
+  // on the 'd(A)' header of a list that can run to a hundred rows.
+  const rf = fkey ? findingOf(fkey) : null;
+  if (anchor === 'refl' && rf && rf.code === 'reflections' && rf.evidence) {
+    const want = String(rf.evidence).split(',')[0].replace(/\s+/g, '');
+    const all = [...view.querySelectorAll('tr[data-h]')];
+    const at = all.findIndex(r => /^d\(a\)|^d\(å\)/i.test(r.dataset.h || ''));
+    if (at >= 0) {
+      const hit = all.slice(at + 1).flatMap(r => [...r.querySelectorAll('td')])
+        .find(td => {                        // the cell's own text — not the comment chip an annotated copy carries
+          const c = td.cloneNode(true);
+          c.querySelectorAll('.cmt, del').forEach(x => x.remove());
+          return (c.textContent || '').replace(/\s+/g, '') === want;
+        });
+      if (hit) return hit;
+    }
+  }
   for (const a of docxAnchorCandidates(anchor)) {
     const hit = view.querySelector('[data-anchor="' + CSS.escape(a) + '"]');
     if (hit) return hit;
@@ -826,7 +845,16 @@ async function lookInDocx(fkey) {
   // S.a.findings (which holds only the extra checks) — findingOf() returns null for them, so
   // their anchors were being lost and '? look' had nothing to aim at. renderFindings records
   // every row's anchor in S.anchorOf, which is the one place that knows all of them.
-  const anchor = (S.anchorOf || {})[fkey] || (findingOf(fkey) || {}).anchor;
+  let anchor = (S.anchorOf || {})[fkey] || (findingOf(fkey) || {}).anchor;
+  // A formula finding sets a formula row against the Analysis field ('contains F, but the wt% list
+  // has no constituent for it'), so it has two cells to show: the first click lands on the formula
+  // row the comment sits on, the next on the Analysis field, and so on round.
+  const ff = findingOf(fkey);
+  if (ff && ff.code === 'formula' && anchor && anchor !== 'analysis') {
+    const step = S.docxStep[fkey] || 0;
+    S.docxStep[fkey] = step + 1;
+    if (step % 2 === 1 && view && view.querySelector('[data-anchor="analysis"]')) anchor = 'analysis';
+  }
   const el = view && docxTarget(view, anchor, fkey);
   if (!el) { focusFinding(fkey); return; }    // nothing to aim at — still select the finding
   view.querySelectorAll('.docx-hit').forEach(x => x.classList.remove('docx-hit'));

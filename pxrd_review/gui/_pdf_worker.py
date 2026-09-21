@@ -71,13 +71,33 @@ def shutdown():
 
 
 # --- the isolated operations (each (re)imports pymupdf inside the worker) --------------
+def _upright(page):
+    """Drop a /Rotate 180 the page's own text contradicts. An accepted-manuscript export can carry
+    /Rotate 180 on every page while its text runs left to right WITHOUT it, so every viewer shows the
+    paper upside down. The line directions are reported in the unrotated frame: when four lines in
+    five read (1, 0) there, the rotation is the fault, and it is cleared — in memory only, the file is
+    never written. 90/270 are left alone (a sideways table page is typeset that way on purpose), and
+    the page size is unchanged, so `sizes` needs no counterpart."""
+    if page.rotation != 180:
+        return page
+    n = up = 0
+    for b in page.get_text('dict').get('blocks', []):
+        for l in b.get('lines', []):
+            n += 1
+            d = l.get('dir') or (0, 0)
+            up += (round(d[0]), round(d[1])) == (1, 0)
+    if n >= 5 and up >= 0.8 * n:
+        page.set_rotation(0)
+    return page
+
+
 def words(pdf, n):
     """{w, h, words:[[x0,y0,x1,y1,text], …]} for page n, or None for an out-of-range page."""
     import pymupdf
     with pymupdf.open(pdf) as doc:
         if not (0 <= n < doc.page_count):
             return None
-        page = doc[n]
+        page = _upright(doc[n])
         r = page.rect
         return {'w': r.width, 'h': r.height,
                 'words': [[round(w[0], 1), round(w[1], 1), round(w[2], 1), round(w[3], 1), w[4]]
@@ -90,7 +110,7 @@ def page_png(pdf, n, terms):
     with pymupdf.open(pdf) as doc:
         if not (0 <= n < doc.page_count):
             return None
-        page = doc[n]
+        page = _upright(doc[n])
         for t in (terms or []):
             for rect in page.search_for(t):
                 page.add_highlight_annot(rect)
@@ -104,7 +124,7 @@ def region_png(pdf, n, terms):
     with pymupdf.open(pdf) as doc:
         if not (0 <= n < doc.page_count):
             return None
-        page = doc[n]
+        page = _upright(doc[n])
         rects = []
         for t in (terms or []):
             rects += list(page.search_for(t))
@@ -177,10 +197,11 @@ def search(pdf, q):
     pages, hits, sizes = [], [], {}
     with pymupdf.open(pdf) as doc:
         for i in range(doc.page_count):
-            rects = doc[i].search_for(q)
+            pg = _upright(doc[i])                # the same frame the page is rendered in
+            rects = pg.search_for(q)
             if rects:
                 pages.append({'page': i, 'count': len(rects)})
-                r = doc[i].rect
+                r = pg.rect
                 sizes[i] = [round(r.width, 1), round(r.height, 1)]
                 for q_ in sorted(rects, key=lambda b: (round(b.y0, 1), b.x0)):
                     hits.append({'page': i, 'rect': [round(q_.x0, 1), round(q_.y0, 1),

@@ -463,6 +463,25 @@ def _rows(doc):
     return ac, rad
 
 # --- extra-check anchoring: map a Finding.anchor to the docx cell to comment on
+def _refl_d_cell(doc, f):
+    """The reflection-list cell holding the d-spacing a 'reflections' finding is about (its evidence
+    is the d value(s) exactly as the list writes them), so the highlight and comment sit on the
+    wrong line itself rather than on the 'd(A)' header of a list that can run to a hundred rows.
+    None when the finding names no d of the list — the header is then the anchor, as before."""
+    if f.code != 'reflections' or not f.evidence:
+        return None
+    want = [re.sub(r'\s+', '', d) for d in f.evidence.split(',')]
+    for t in doc.tables:
+        below = False
+        for row in t.rows:
+            for c in row.cells:
+                txt = re.sub(r'\s+', '', c.text)
+                if txt in ('d(A)', 'd(Å)'):
+                    below = True
+                elif below and txt == want[0]:
+                    return c
+    return None
+
 def _find_cell(doc, pred):
     for t in doc.tables:
         for row in t.rows:
@@ -636,7 +655,8 @@ def _write_extras(doc, ac_row, res, rec, triage=None):
         if _t_dismissed(triage, fkey):
             rec.setdefault('suppressed', []).append(f.code)
             continue
-        cell = _anchor_cell(doc, ac_row, f.anchor) or ac_row.cells[0]
+        cell = (_refl_d_cell(doc, f) if f.anchor == 'refl' else None) \
+               or _anchor_cell(doc, ac_row, f.anchor) or ac_row.cells[0]
         runs = _cell_runs(cell) or _cell_runs(ac_row.cells[0])
         if not runs:
             continue

@@ -162,10 +162,12 @@ def rows(ds):
 
 
 class ReflectionsAgainstPaper(unittest.TestCase):
-    ROWS = [('%.4f' % d, '10', '1', '0', '0') for d in (8.123, 6.412, 5.207, 4.388, 3.9021, 3.2200, 2.9714, 2.6532, 2.4105)]
+    ROWS = [('%.4f' % d, '10', '1', '0', '0') for d in (8.123, 6.412, 5.207, 4.388, 3.902, 3.2200, 2.971, 2.653, 2.411)]
 
     def table(self, rows):
-        return 'Table 3. Powder X-ray diffraction data ' + ' '.join('%s 10 %s' % (d, 'x') for d, *_ in rows)
+        # the paper prints 8.123 where the entry pads it to 8.1230, as the corpus papers do
+        return 'Table 3. Powder X-ray diffraction data ' + ' '.join(
+            '%s 10 %s' % (d[:-1] if d.endswith('0') else d, 'x') for d, *_ in rows)
 
     def test_one_line_not_printed_is_flagged_with_the_keystroke_neighbour(self):
         printed = [r for r in self.ROWS if r[0] != '3.2200'] + [('3.322',)]
@@ -174,8 +176,25 @@ class ReflectionsAgainstPaper(unittest.TestCase):
         self.assertIn('3.2200', m[0])
         self.assertIn('3.322', m[0])
 
+    def test_a_number_written_unlike_the_table_is_not_offered(self):
+        # suenoite: '3.92', a bond-valence sum elsewhere in the paper, was named beside the table's 3.322
+        printed = [r for r in self.ROWS if r[0] != '3.2200'] + [('3.322',)]
+        m = msgs(X.check29_reflections_in_paper(powder(self.ROWS), self.table(printed) + ' sums between 3.92 and 4.03 v.u.'))
+        self.assertIn('3.322', m[0])
+        self.assertNotIn('3.92', m[0])
+
+    def test_the_papers_own_misprint_is_a_note(self):
+        # popugaevaite: the table prints a value one keystroke off that breaks the table's descending order
+        text = self.table([r if r[0] != '3.2200' else ('3.922',) for r in self.ROWS])
+        f = X.check29_reflections_in_paper(powder(self.ROWS), text)
+        self.assertEqual([x.sev for x in f], ['note'], [x.msg for x in f])
+        self.assertIn("paper's misprint", f[0].msg)
+        # suenoite: the paper's 3.322 is in order where it stands, so the entry is what is wrong
+        text = self.table([r if r[0] != '3.2200' else ('3.322',) for r in self.ROWS])
+        self.assertEqual([x.sev for x in X.check29_reflections_in_paper(powder(self.ROWS), text)], ['flag'])
+
     def test_a_list_the_paper_does_not_print_says_nothing(self):
-        self.assertEqual(X.check29_reflections_in_paper(powder(self.ROWS), 'Table 3. ' + '3.9021 2.9714'), [])
+        self.assertEqual(X.check29_reflections_in_paper(powder(self.ROWS), 'Table 3. ' + '3.902 2.971'), [])
         # nor a calculated pattern, nor a short list
         text = self.table(self.ROWS[:5])
         self.assertEqual(X.check29_reflections_in_paper(powder(self.ROWS, 'Calculated'), text), [])

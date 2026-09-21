@@ -25,6 +25,24 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
+## [Unreleased]
+
+### Fixed — from a re-run of the 2028 Part 2 batch in the GUI
+- **A reflection finding sits on its own line.** The comment and highlight of a d that the .pdf does not
+  print went onto the `d(A)` header of the list, and `? look` followed it there; both now land on the cell
+  holding that d (the header remains the fallback). Finding keys are unchanged.
+- **`? look` on a formula finding alternates** between the formula row and the Analysis field in the docx
+  view — a finding such as "contains F, but the wt% list has no constituent for it" is about both.
+- **A pdf whose pages carry a `/Rotate 180` their own text contradicts** is rendered upright (in memory —
+  the file is never written). The image, the word boxes and the search hits now share one frame: on such a
+  paper `? look` had flashed a box at the mirrored spot of an upside-down page.
+- **The one-keystroke hint names table values only.** A candidate must be written with the decimals the
+  neighbouring found lines are printed with; a bond-valence sum elsewhere in a paper had been offered
+  beside the table's value.
+- **The paper's own misprint is a note, not a flag.** When the value the table prints in the line's place
+  breaks the table's descending order where the entry's d keeps it — and the entry's hkl gives its d from
+  its cell — the entry stands. A hkl re-fitted to a mistyped d cannot pass: the paper's value is then in order.
+
 ## [0.9.0] — 2026-09-16
 
 The evening of 0.8.2. Three checks that need no table of conditions: the reflection conditions of a space
