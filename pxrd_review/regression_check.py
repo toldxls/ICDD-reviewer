@@ -334,6 +334,19 @@ def _vertical_tables_stay_separate():
             and not any(c.a == '5.100' and c.b == '8.400' for c in C.find_cells(t)))
 
 # (description, predicate) — predicate returns True when behaviour is correct
+def _lines_missing_case():
+    ds = [8.12, 6.41, 5.21, 4.39, 3.90, 3.10, 2.97, 2.65, 2.41]
+    paper = [(d, 10.0 * (k + 1)) for k, d in enumerate(ds)] + [(2.279, 13.0)]
+    entry = type('S', (), {'instr': {'spacing_instr': 'Diffractometer'},
+                           'refl': [('%.3f' % d, '%.1f' % (10.0 * (k + 1)), '1', '0', '0') for k, d in enumerate(ds)] + [('2.229', '13.0', '1', '1', '0')]})
+    X.set_powder_reader(lambda pdf: (paper, []))
+    try:
+        f = X.check34_lines_missing(entry, 'x.pdf')
+        g = X.check34_lines_missing(entry, 'x.pdf', skip=[2.279])
+    finally:
+        X.set_powder_reader(None)
+    return [x.sev for x in f] == ['flag'] and '2.229' in f[0].msg and g == []
+
 CASES = [
  # --- calculated-pattern false positives (measured/comparison, not calculated) ---
  ("I003448 not flagged 'calculated'",        lambda: not extras('I003448', 'calculated', 'flag')),
@@ -1062,6 +1075,18 @@ CASES = [
      X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '3.69', 'Xtl Dx :', '3.728']]}), 'The calculated density is 3.690 g/cm3.') == []
      and X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '3.728']]}), 'The density, measured by flotation, is 3.70(2) g/cm3.') == []
      and X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '3.728']]}), 'The calculated density of the associated galena is 7.58 g/cm3.') == []),
+ # --- the reflection list against the paper's table and against itself (checks 34–36) ---
+ ("hkl_blank: one row of a multiply-indexed line has no hkl", lambda: [f.sev for f in X.check35_blank_hkl_in_group(
+     type('S', (), {'raw_rows': [['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['1.7160', '20.000', '1', '8', '2', 'M', ''],
+                                 ['1.7160', '20.000', '', '', '', 'M', ''], ['1.6000', '5.000', '', '', '', '', '']]}))] == ['flag']),
+ ("hkl_blank: an unindexed line on its own is not a group", lambda: X.check35_blank_hkl_in_group(
+     type('S', (), {'raw_rows': [['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['1.6000', '5.000', '', '', '', '', '']]})) == []),
+ ("same_d: one d, two intensities on a measured list is a note; a calculated list is silent", lambda:
+     [f.sev for f in X.check36_same_d_two_intensities(type('S', (), {'instr': {'spacing_instr': 'Diffractometer'}, 'raw_rows': [
+         ['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['3.1100', '40.000', '-1', '1', '2', '', ''], ['3.1100', '20.000', '0', '5', '1', '', '']]}))] == ['note']
+     and X.check36_same_d_two_intensities(type('S', (), {'instr': {'spacing_instr': 'Calculated'}, 'raw_rows': [
+         ['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['3.1100', '40.000', '-1', '1', '2', '', ''], ['3.1100', '20.000', '0', '5', '1', '', '']]})) == []),
+ ("lines_missing: the paper's 2.279 (I 13) is absent and the entry's 2.229 (I 13) is named as the mistyped d", lambda: _lines_missing_case()),
  # --- IMA number (new mineral vs reinvestigation/reference) ---
  ("I003633 IMA flag (new mineral)",     lambda: bool(extras('I003633', 'ima'))),
  ("I003688 IMA flag (new mineral)",    lambda: bool(extras('I003688', 'ima'))),

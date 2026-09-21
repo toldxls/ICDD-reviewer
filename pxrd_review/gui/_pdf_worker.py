@@ -158,6 +158,14 @@ def text(pdf):
         return '\n'.join(p.get_text() for p in doc)
 
 
+def powder(pdf):
+    """The paper's powder table (observed, calculated) as `paper_extract.pxrd_table` reads it — here, like
+    every other page op, so a pdf that crashes or stalls MuPDF costs one check and not the server."""
+    from pxrd_review import paper_extract as PE
+    o, c = PE.pxrd_table(pdf)
+    return [list(o), list(c)]
+
+
 def scan(pdf, terms):
     """[n_pages, best_evidence_page] — the page with the most hits for `terms`."""
     import pymupdf

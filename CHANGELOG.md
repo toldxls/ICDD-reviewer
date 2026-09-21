@@ -28,6 +28,17 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added — the reflection list against the paper's table, and against itself
+- **`check34_lines_missing`: an observed line of the paper's powder table that the list lacks** (flag). Compared
+  only where nine in ten of the entry's d values are in that table, and only for a handful of absences (<= 4);
+  a row the reader gives no intensity is not counted. On the corpus: 108 comparable entries, 89 complete, six
+  with real absences, every one hand-read — three were mistyped d values no other check saw, and the entry
+  line of the same intensity beside the gap is named as the mistyped d. A line check 29 has already named is
+  not repeated. The table is read through the GUI's isolating worker (`_pdf_worker.powder`).
+- **`check35_blank_hkl_in_group`: one row of a multiply-indexed line has no hkl** (flag; 6 of 266 entries).
+  The comment and `? look` land on that d's own row.
+- **`check36_same_d_two_intensities`: one d entered twice with two intensities on a measured list** (note).
+
 ### Fixed
 - **The logs head every entry by its mineral name.** A file ICDD returns as '…)_edited.docx' (and the tool's
   copy of one) had its name lost to the suffix, and the log showed the id twice; a Levinson suffix typed

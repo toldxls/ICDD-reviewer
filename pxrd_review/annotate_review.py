@@ -241,7 +241,7 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
     entry = None
     try:
         entry = X.parse_entry(docx_path)
-        res['extra'] = X.run_all(entry, text, cif_data, dft_data)
+        res['extra'] = X.run_all(entry, text, cif_data, dft_data, pdf_path=pdf_path if text else None)
     except Exception as ex:
         # Do NOT fail silently. If parse_entry dies, ALL 22 extra checks produce nothing —
         # and an entry with no findings is indistinguishable from a clean one, so a parse
@@ -516,7 +516,7 @@ def _refl_d_cell(doc, f):
     is the d value(s) exactly as the list writes them), so the highlight and comment sit on the
     wrong line itself rather than on the 'd(A)' header of a list that can run to a hundred rows.
     None when the finding names no d of the list — the header is then the anchor, as before."""
-    if f.code != 'reflections' or not f.evidence:
+    if f.code not in ('reflections', 'hkl_blank') or not f.evidence:
         return None
     want = [re.sub(r'\s+', '', d) for d in f.evidence.split(',')]
     for t in doc.tables:

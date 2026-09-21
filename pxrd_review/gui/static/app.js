@@ -798,7 +798,7 @@ function docxTarget(view, anchor, fkey) {
   // the list writes them, so land on that cell (where the annotator puts its highlight) rather than
   // on the 'd(A)' header of a list that can run to a hundred rows.
   const rf = fkey ? findingOf(fkey) : null;
-  if (anchor === 'refl' && rf && rf.code === 'reflections' && rf.evidence) {
+  if (anchor === 'refl' && rf && (rf.code === 'reflections' || rf.code === 'hkl_blank') && rf.evidence) {
     const want = String(rf.evidence).split(',')[0].replace(/\s+/g, '');
     const all = [...view.querySelectorAll('tr[data-h]')];
     const at = all.findIndex(r => /^d\(a\)|^d\(å\)/i.test(r.dataset.h || ''));

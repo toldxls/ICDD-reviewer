@@ -2884,6 +2884,113 @@ def check33_dx_blank(e, text):
                        sent[:160] or None, 'dx'))
     return out
 
+# ----------------------------------------------------------------------------- 34–36. the reflection list against the paper's table, and against itself
+def _refl_lines(e):
+    """(d, I, (h, k, l), flag) for every row of the reflection list — both column blocks of the table, with
+    the HKLEd flag (M, +, C) that `e.refl` does not carry."""
+    out, on = [], False
+    for r in (e.raw_rows or []):
+        if r and (r[0] or '').strip().lower() in ('d(a)', 'd(å)'):
+            on = True
+            continue
+        if not on:
+            continue
+        for o in (0, 8):
+            c = [(x or '').strip() for x in r[o:o + 7]]
+            if len(c) >= 5 and re.match(r'^\d+\.\d+', c[0]):
+                out.append((c[0], c[1], tuple(c[2:5]), c[5] if len(c) > 5 else ''))
+    return out
+
+_POWDER_READER = None
+def set_powder_reader(fn):
+    """The GUI routes every MuPDF read through its isolating worker pool; the CLI reads in process."""
+    global _POWDER_READER
+    _POWDER_READER = fn
+
+def _paper_obs(pdf_path):
+    if _POWDER_READER is not None:
+        r = _POWDER_READER(pdf_path)
+    else:
+        from pxrd_review import paper_extract as PE
+        r = PE.pxrd_table(pdf_path)
+    return [(float(x[0]), x[1]) for x in ((r or ([], []))[0] or []) if x and x[0]]
+
+def check34_lines_missing(e, pdf_path, skip=()):
+    """An OBSERVED line of the paper's powder table that the entry's list lacks. Compared only where the
+    list plainly came from that table — nine in ten of its d values are in it — and only for a handful of
+    absences (<= 4): more means another phase's column or a table read in part, and says nothing. A line
+    the reader gives no intensity is not counted (a d_calc read as observed). On the corpus 2026-09-21:
+    108 comparable entries, 89 complete, six with 1–4 real absences — kiryuite (the paper's 2.279 I 13; the
+    entry has 2.229 I 13), kvacekite (1.8632 / 1.8362), ferro-bosiite (1.292 / 1.298), trebiskyite (2.699
+    absent), popugaevaite (four lines), suenoite (3.322). An entry line of the same intensity beside the gap
+    is named: it is the mistyped d."""
+    out = []
+    if not pdf_path or not e.refl or len(e.refl) < 8 or not _measured(e):
+        return out
+    obs = _paper_obs(pdf_path)
+    if any(i for _, i in obs):                           # a table of visual estimates ('s', 'm', 'w') has no numbers at all: kept whole
+        obs = [(d, i) for d, i in obs if i]
+    if len(obs) < 8:
+        return out
+    ed = [(_val(r[0]), _val(r[1])) for r in e.refl if _val(r[0])]
+    def near(v, ds):
+        return any(abs(v - x) <= 0.0015 * max(v, 1) + 0.0006 for x in ds)
+    pds, eds = [d for d, _ in obs], [d for d, _ in ed]
+    if sum(near(v, pds) for v in eds) < 0.9 * len(eds):
+        return out
+    miss = [(d, i) for d, i in obs if not near(d, eds)]
+    if not miss or len(miss) > 4:
+        return out
+    miss = [(d, i) for d, i in miss if not any(abs(d - x) < 1e-6 for x in skip)]   # check29 has already named it as the original of a mistyped d
+    if not miss:
+        return out
+    # the two intensity scales: the entry's strongest line against the paper's
+    scale = (max(i for _, i in ed if i) / max(i for _, i in obs if i)) if any(i for _, i in ed) and any(i for _, i in obs) else 1
+    parts = []
+    for d, i in miss:
+        twin = next((x for x, xi in ed if xi and i and not near(x, pds) and abs(x - d) / d < 0.03
+                     and abs(xi - i * scale) <= 0.02 * max(xi, 1) + 0.5), None)
+        parts.append('%g%s%s' % (d, ' (I %g)' % i if i else '', ' — the entry has %g at that intensity, which the table does not print: a mistyped d'
+                                     % twin if twin else ''))
+    out.append(Finding('lines_missing', 'flag',
+                       "The .pdf's powder table observes %s absent from the reflection list: %s — the other %d of "
+                       "its lines are there; verify against the table."
+                       % ('a line' if len(miss) == 1 else '%d lines' % len(miss), '; '.join(parts), len(obs) - len(miss)),
+                       ', '.join('%g' % d for d, _ in miss), 'refl'))
+    return out
+
+def check35_blank_hkl_in_group(e, text=None):
+    """Two rows share a d — a multiply-indexed line — and one of them has no indices: the second hkl of
+    the pair was dropped (suenoite 1.716, argentopearceite 1.482, cloudite 2.236; 6 of 266 entries)."""
+    groups = {}
+    for d, i, hkl, fl in _refl_lines(e):
+        groups.setdefault(d, []).append(hkl)
+    bad = [d for d, v in groups.items() if len(v) > 1 and any(any(h) for h in v) and any(not any(h) for h in v)]
+    if not bad:
+        return []
+    return [Finding('hkl_blank', 'flag',
+                    "Reflection list d = %s is entered twice — a multiply-indexed line — and one of the rows has "
+                    "no hkl: the second index of the group is missing." % ', '.join(bad[:4]),
+                    ', '.join(bad[:4]), 'refl')]
+
+def check36_same_d_two_intensities(e, text=None):
+    """One d entered twice with two different intensities on a measured list: one peak has one observed
+    intensity, so the rows of a multiply-indexed line share it (vargite 3.11: I 40 and I 20, the second
+    the paper's CALCULATED intensity of the other index). A note — a paper may mean it."""
+    if not _measured(e):
+        return []
+    groups = {}
+    for d, i, hkl, fl in _refl_lines(e):
+        if _val(i) is not None:
+            groups.setdefault(d, set()).add(_val(i))
+    bad = ['%s (I %s)' % (d, ' and '.join('%g' % x for x in sorted(v, reverse=True))) for d, v in groups.items() if len(v) > 1]
+    if not bad:
+        return []
+    return [Finding('same_d', 'note',
+                    "Reflection list d = %s is entered twice with different intensities — the rows of one "
+                    "observed peak share its intensity; verify against the paper's table." % '; '.join(bad[:4]),
+                    None, 'refl')]
+
 # ----------------------------------------------------------------------------- driver
 # NOTE: check14_density is intentionally NOT registered. A batch survey showed the
 # docx Dcalc is computed from the empirical formula about as often as from the ideal
@@ -3984,7 +4091,8 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check23_sg_system, check24_optical_2v, check25_reflection_geometry,
           check26_reference_title_case, check27_formula_integrity, check28_density_consistency,
           check29_reflections_in_paper, check30_extinctions, check31_gd_entry,
-          check32_quality_mark, check33_dx_blank]
+          check32_quality_mark, check33_dx_blank, check35_blank_hkl_in_group,
+          check36_same_d_two_intensities]
 
 # An errored check must file under the CODE its findings normally carry (regression /
 # sweep lookups filter by code, and the raw function name would hide it from them).
@@ -3998,9 +4106,11 @@ _ERR_CODE = {
     'check27_formula_integrity': 'formula',
     'check28_density_consistency': 'xtl_density',
     'check29_reflections_in_paper': 'reflections',
+    'check35_blank_hkl_in_group': 'hkl_blank',
+    'check36_same_d_two_intensities': 'same_d',
 }
 
-def run_all(e, text, cif_data=None, dft_data=None):
+def run_all(e, text, cif_data=None, dft_data=None, pdf_path=None):
     findings = []
     for fn in CHECKS:
         try:
@@ -4008,6 +4118,12 @@ def run_all(e, text, cif_data=None, dft_data=None):
         except Exception as ex:
             code = _ERR_CODE.get(fn.__name__) or re.sub(r'^check\d+_', '', fn.__name__)
             findings.append(Finding(code, 'note', 'check errored: %s' % ex, None))
+    try:                                                 # reads the paper's TABLE (word positions), so it takes the file, not the text
+        named = [float(x) for f in findings if f.code == 'reflections' and 'prints' in (f.msg or '')
+                 for part in re.findall(r'the \.pdf prints ([^)]*?), one keystroke', f.msg) for x in re.findall(r'\d+\.\d+', part)]
+        findings.extend(check34_lines_missing(e, pdf_path, skip=named))
+    except Exception as ex:
+        findings.append(Finding('lines_missing', 'note', 'check errored: %s' % ex, None))
     try:
         findings.extend(check_cif(e, cif_data or {}))
     except Exception as ex:
@@ -4024,9 +4140,9 @@ def run_all(e, text, cif_data=None, dft_data=None):
 
 _SEV = {'flag': '⚑', 'info': 'ℹ', 'note': '·'}
 
-def print_findings(path, text):
+def print_findings(path, text, pdf_path=None):
     e = parse_entry(path)
-    fs = run_all(e, text)
+    fs = run_all(e, text, pdf_path=pdf_path)
     if not fs:
         print('  EXTRA : (no extra-check findings)')
         return
@@ -4052,7 +4168,7 @@ if __name__ == '__main__':
         # skip an unreadable docx/.pdf rather than abort the whole folder (see cell_lambda_check.main)
         try:
             text = C.pdf_text(pdf) if pdf else None
-            print_findings(dp, text)
+            print_findings(dp, text, pdf)
         except Exception as e:
             from pxrd_review.errors import explain
             print('  !! SKIPPED — %s' % explain(e, dp))

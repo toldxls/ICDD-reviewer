@@ -51,6 +51,7 @@ from pxrd_review.gui import _pdf_worker as PW   # MuPDF ops run in a subprocess 
 def _worker_pdf_reader(path):
     return PW.run(PW.text, path, default='')
 C.set_pdf_reader(_worker_pdf_reader)
+X.set_powder_reader(lambda path: PW.run(PW.powder, path, default=None))   # check34 reads the paper's table: same isolation
 
 try:
     from flask import Flask, jsonify, request, send_file, abort, Response, redirect
