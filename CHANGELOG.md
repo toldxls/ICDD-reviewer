@@ -68,6 +68,12 @@ package version in `pyproject.toml`.
   reproduces the paper's index is green; red is kept for arithmetic: a calculated density that is not Z·FW/(V·0.602214), a category
   word that is not the category of the paper's own number. An analysis with no constants at all (an element table) says so instead
   of dividing by zero.
+- **`? look` crosses to the other document.** It used to stay in the pane being read — the `.pdf` or the entry — and comparing a
+  value meant switching by hand. It is a tour now: the finding's targets in the document being read, then the flagged area in the
+  OTHER one, then round again. From the `.pdf`, the second click (the third, for a finding with two places to look in the paper)
+  lands on the entry's cell; from the entry, on the paper's line. The hint under the `.pdf` names the next stop ('? look again →
+  the entry (docx)'); toggling the pane by hand, or looking at another finding, starts the tour again from what is being read. A
+  finding with nothing to show in one of the two documents keeps to the other, as before. (From a reviewer's suggestion.)
 - **`pxrd gui` asks before it opens a folder that is not a batch, and starts on its folder chooser when there is nothing to
   open.** Run from a corpus root — or a home folder — it used to index every document beneath and analyse each one: hundreds
   of files, minutes of work, by accident of where the command was typed. A quick bounded look comes first now (a home folder

@@ -16,6 +16,7 @@ const S = {
   pdfZoom: 1,         // display scale of whatever is shown
   lookStep: {},       // per-finding '? look' cycle index (findings with ordered look-groups)
   docxStep: {},       // the same for the docx pane (a formula finding: its row, then the Analysis field)
+  lookTour: {},       // per-finding '? look' tour: the targets in the document being read, then the flagged area in the OTHER one
   lookLabel: '',      // label of the current '? look' target (shown in the region pager)
   focusKey: null,     // the finding currently driving the PDF pane
   pdfIO: null,        // IntersectionObserver for lazy page loading + current-page tracking
@@ -383,7 +384,7 @@ async function openEntry(key) {
   S.a = r.analysis;
   S.t = normalizeTriage(r.triage);
   S.ue = r.user_edits || [];  // reviewer's own marks in the reviewed copy (live, not cached)
-  S.lookStep = {}; S.docxStep = {};           // reset '? look' cycles for the new entry
+  S.lookStep = {}; S.docxStep = {}; S.lookTour = {};   // reset '? look' cycles for the new entry
   $('#empty').classList.add('hidden');
   $('#entry').classList.remove('hidden');
   renderHead();
@@ -576,21 +577,64 @@ function triageControls(fkey, t, label) {
     }
   }, lbl);
   // '? look' is pure NAVIGATION — it jumps to this finding's evidence and does NOT set a verdict,
-  // so investigating a flag can never overwrite a confirm/dismiss. It follows the pane you are
-  // actually reading: on the docx it lands on the cell the finding is about, on the .pdf it lands
-  // on the evidence in the live page. With no .pdf paired, the docx is the only place to look.
+  // so investigating a flag can never overwrite a confirm/dismiss. It STARTS in the pane you are
+  // actually reading — on the docx the cell the finding is about, on the .pdf the evidence in the
+  // live page — and, its targets there used up, the next click crosses to the flagged area in the
+  // OTHER document before it comes round again (lookTour). With no .pdf paired, the docx is all there is.
   const look = el('button', { class: 'tbtn look',
-    onclick: ev => {
-      ev.stopPropagation();
-      if (S.midMode === 'docx' || !(S.a && S.a.pdf)) lookInDocx(fkey);
-      else lookInPage(fkey);
-    } }, '? look');
+    title: 'click again for the next piece of evidence — then the same finding in the other document (.pdf ↔ entry), then round again',
+    onclick: ev => { ev.stopPropagation(); lookTour(fkey); } }, '? look');
   const note = el('input', { class: 'tnote', type: 'text', placeholder: 'note…',
     value: t.note || '',
     onclick: ev => ev.stopPropagation(),
     oninput: ev => { rec().note = ev.target.value; saveTriage(); } });
   return el('div', { class: 'triage' }, mk('confirm', '✓ confirm'),
     mk('dismiss', '✗ dismiss'), look, note);
+}
+
+// ---- the '? look' tour ---------------------------------------------------------
+// Comparing a value means seeing it in BOTH files: the entry's cell and the paper's line. The tour is
+// the finding's stops in the document being read, then its stops in the other one, then round again —
+// so a second (or third) click does what a reviewer otherwise does by hand with the .pdf / docx toggle.
+function lookStops(fkey) {
+  const f = findingOf(fkey);
+  const g = lookGroups(f);
+  const pdf = (S.a && S.a.pdf && termsFor(fkey, 0).terms.length) ? (g ? g.length : 1) : 0;   // nothing to find in the paper: no stop there
+  const anchor = (S.anchorOf || {})[fkey] || (f || {}).anchor;
+  const docx = anchor ? ((f && f.code === 'formula' && anchor !== 'analysis') ? 2 : 1) : 0;    // a formula finding: its row, then the Analysis field
+  return { pdf, docx };
+}
+function lookSeq(fkey, start) {
+  const n = lookStops(fkey), seq = [];
+  for (const d of (start === 'pdf' ? ['pdf', 'docx'] : ['docx', 'pdf'])) for (let k = 0; k < n[d]; k++) seq.push([d, k]);
+  return seq;
+}
+// what the NEXT click shows — for the hint under the .pdf ('? look again → the entry (docx)')
+function lookNextLabel(fkey) {
+  const t = S.lookTour[fkey]; if (!t) return '';
+  const seq = lookSeq(fkey, t.start); if (seq.length < 2) return '';
+  const [d, k] = seq[t.i % seq.length];
+  if (d === 'docx') return 'the entry (docx)';
+  const g = lookGroups(findingOf(fkey));
+  return g ? g[k % g.length].label : 'the .pdf';
+}
+function lookTour(fkey) {
+  const cur = (S.midMode === 'docx' || !(S.a && S.a.pdf)) ? 'docx' : 'pdf';
+  let t = S.lookTour[fkey];
+  // another finding looked at since, or the pane toggled by hand: start again from what is being read
+  if (!t || S.focusKey !== fkey || t.pane !== cur) t = { start: cur, i: 0 };
+  const seq = lookSeq(fkey, t.start);
+  if (!seq.length) { focusFinding(fkey); return; }
+  const [d, k] = seq[t.i % seq.length];
+  t.i += 1; t.pane = d; S.lookTour[fkey] = t;
+  if (d === 'pdf') {
+    S.lookStep[fkey] = k;
+    if (S.midMode !== 'pdf') setMidMode('pdf');
+    lookInPage(fkey);
+  } else {
+    S.docxStep[fkey] = k;
+    lookInDocx(fkey);
+  }
 }
 
 // Some findings have no number/keyword in their message to search, but the reviewer
@@ -798,8 +842,8 @@ async function lookInPage(fkey) {
   // finding), so a landing is explicable — and, for a finding with several look-groups, where the
   // next click goes. Before this the box was simply cleared, and a miss opened the evidence page
   // in silence, indistinguishable from a hit.
-  const groups = lookGroups(findingOf(fkey));
-  const again = groups && groups.length > 1 ? ' · ? look again → ' + groups[(step + 1) % groups.length].label : '';
+  const nextLabel = lookNextLabel(fkey);                                   // the tour's next stop: another group here, or the entry
+  const again = nextLabel ? ' · ? look again → ' + nextLabel : '';
   if (!hits.length) {                            // terms didn't match -> the evidence page, and say so
     S.pdfHits = []; S.hitIdx = -1; S.pdfQuery = ''; S.pdfPage = t.page; $('#pdf-hits').textContent = '';
     renderPdf(t.snippet, (t.label ? t.label + ' — ' : '') + 'not found in the .pdf, showing the evidence page' + again, S.pdfTerms); return;
