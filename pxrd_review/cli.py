@@ -75,15 +75,26 @@ MEM = os.path.join(P.cache_dir(), 'pxrd_last.json')   # remembered folder per su
 def _load():
     try:
         with open(MEM, encoding='utf-8') as f:
-            return json.load(f)
+            d = json.load(f)
+        if not isinstance(d, dict):
+            return {}                           # valid JSON that is not the memory ('[1, 2]', 'null'): an empty memory, not a traceback
+        if not isinstance(d.get('recent'), list):
+            d.pop('recent', None)
+        return d
     except Exception:
         return {}
 
 def is_broad_path(folder):
     """A home folder, the folder of home folders, or a drive root: never the entries folder, only ever where a command was typed."""
-    f = os.path.normcase(os.path.abspath(folder)).rstrip('/\\') or os.sep
-    home = os.path.normcase(os.path.abspath(os.path.expanduser('~'))).rstrip('/\\')
-    return f in (home, os.path.dirname(home).rstrip('/\\') or os.sep) or os.path.dirname(os.path.abspath(folder)) == os.path.abspath(folder)
+    for path in dict.fromkeys((os.path.abspath(folder), os.path.realpath(folder))):     # a link to the home folder is the home folder
+        f = os.path.normcase(path).rstrip('/\\') or os.sep
+        home = os.path.normcase(os.path.realpath(os.path.expanduser('~'))).rstrip('/\\')
+        home2 = os.path.normcase(os.path.abspath(os.path.expanduser('~'))).rstrip('/\\')
+        if f in (home, home2, os.path.dirname(home).rstrip('/\\') or os.sep) or os.path.dirname(path) == path:
+            return True
+        if re.fullmatch(r'/Volumes(/[^/]+)?', f):                                       # macOS: the drives, and a whole external drive
+            return True
+    return False
 
 def recent():
     """The folders opened lately that still exist, newest first (the GUI's 'choose a folder' screen lists them)."""
@@ -147,7 +158,11 @@ def _resolve_folder(sub, rest):
         # an entry id: leave it in rest (passes through to the module) and resolve
         # the folder as usual below
     cwd = os.getcwd()
-    if sub != 'check' and _has_entry_docx(cwd):
+    if sub not in ('check', 'gui') and is_broad_path(cwd) and _has_entry_docx(cwd):
+        # typed in the home folder with an entry somewhere one level down (a download): the one-level-down rule made the
+        # whole home folder the batch, and `review` walks it recursively. The GUI asks; a console tool cannot, so it does not guess
+        print("pxrd %s: %s is a home folder or a drive, not a batch — it is not taken as the entries folder; pass the folder itself to use it" % (sub, cwd), file=sys.stderr)
+    elif sub != 'check' and _has_entry_docx(cwd):
         if sub != 'gui':
             _save(sub, cwd)
         return cwd, rest

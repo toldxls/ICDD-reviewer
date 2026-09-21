@@ -660,14 +660,21 @@ def _write_check(wb, red, published, decimals, notes, table_total, first, last, 
     row = 1
     wc.cell(row, 1, 'The formula the paper prints against the one its own table gives — red: does not follow; amber: beyond rounding, within tolerance').font = bold
     e0 = e1 = None
-    if published:
+    have = {('H' if r.c.kind == 'water' else r.c.element) for r in red.rows.values()}
+    if published and not any(el != 'O' and el in have and v for el, v in published.items()):
+        # no element of the formula is in the table (the formula of another mineral, a table of another): nothing to set
+        # side by side, and the ranges below would be empty — which a worksheet refuses
+        row = 3
+        wc.cell(row, 1, "PROBLEM — no element of the paper's formula (%s) is in the table read (%s): nothing to compare"
+                % (', '.join(el for el in published if el != 'O') or '—', ', '.join(sorted(have)) or '—')).fill = red_fill
+        row += 2
+    elif published:
         row = 3
         heads = ['element', 'apfu from the reduction', "apfu in the paper's formula", 'difference', 'rounding of the printed value, ±', 'follows?',
                  'ratio reduction / paper', 'ratio of a major element', 'after the common factor: difference', 'stands out?',
                  "wt% in the table", "wt% that would give the paper's coefficient (≈)"]
         for c_, h in enumerate(heads, 1):
             wc.cell(row, c_, h).font = bold
-        have = {('H' if r.c.kind == 'water' else r.c.element) for r in red.rows.values()}
         amm = next((first + i for i, k in enumerate(red.rows) if k == 'N2H8O'), None)
         els = [(el, v) for el, v in published.items() if el != 'O' and el in have and v]
         e0 = row + 1; e1 = row + len(els)
@@ -694,7 +701,7 @@ def _write_check(wb, red, published, decimals, notes, table_total, first, last, 
             rows_el = [first + j for j, r in enumerate(red.rows.values()) if ('H' if r.c.kind == 'water' else r.c.element) == el]
             if len(rows_el) == 1:
                 wc.cell(r_, 11, '=reduction!$B$%d' % rows_el[0])
-                wc.cell(r_, 12, '=IF(B%d=0,"",K%d*C%d*$B$%d/B%d)' % (r_, r_, r_, r_med, r_))   # with the common factor, which is the dilution this value itself causes
+                wc.cell(r_, 12, '=IF(OR(B%d=0,COUNT($H$%d:$H$%d)<3),"",K%d*C%d*$B$%d/B%d)' % (r_, e0, e1, r_, r_, r_med, r_))   # with the common factor, which is the dilution this value itself causes
         rng = lambda c: '$%s$%d:$%s$%d' % (c, e0, c, e1)
         wc.conditional_formatting.add('A%d:F%d' % (e0, e1), FormulaRule(formula=['LEFT($F%d,8)="does not"' % e0], fill=red_fill))
         wc.conditional_formatting.add('A%d:F%d' % (e0, e1), FormulaRule(formula=['LEFT($F%d,5)="close"' % e0], fill=amber))
@@ -705,16 +712,20 @@ def _write_check(wb, red, published, decimals, notes, table_total, first, last, 
         row = e1 + 2
         wc.cell(row, 1, 'WHERE THE FAULT LIES').font = bold; wc.cell(row, 2, 'value').font = bold; wc.cell(row, 3, 'reading').font = bold
         assert row + 1 == r_med
-        wc.cell(r_med, 1, 'common factor (median ratio of the major elements)'); wc.cell(r_med, 2, '=IF(COUNT(%s)>0,MEDIAN(%s),1)' % (rng('H'), rng('H')))
+        wc.cell(r_med, 1, 'common factor (median ratio of the major elements)'); wc.cell(r_med, 2, '=IF(COUNT(%s)>=3,MEDIAN(%s),1)' % (rng('H'), rng('H')))
+        # below three majors (a gypsum: Ca and S, the water not judged) the median IS the mean of the good ratio and the bad
+        # one: a single slip read as 'the basis AND a number', and the right SO3 'corrected'. No factor is divided out there
+        few = 'COUNT(%s)<3' % rng('H')
         r_n = r_med + 1; r_imp = r_med + 2; r_out = r_med + 3
         wc.cell(r_n, 1, 'elements left standing once it is divided out'); wc.cell(r_n, 2, '=SUM(%s)' % rng('J'))
         # a reduction NORMALISES: one wrong number moves its own element a lot and every other one by a common factor, so a
         # common factor is the basis only when NO element is left standing once it is divided out
-        wc.cell(r_med, 3, '=IF(ABS(B%d-1)<=0.02,"ok — no common factor: the basis is the paper\'s",IF(B%d=0,IF(ABS(B%d-1)<=0.05,"note — every coefficient is shifted by ×"&TEXT(B%d,"0.000")&", each within tolerance: an oxide reduced in another valence (below), a constituent left out of the basis, or atomic weights","PROBLEM — every coefficient is off by ONE factor (×"&TEXT(B%d,"0.000")&"): the BASIS is not the one used, a constituent is missing from it, or an oxide was reduced in another valence (below) — not a wrong number"),IF(B%d=1,"note — the other elements are shifted by ×"&TEXT(B%d,"0.000")&": what ONE wrong value does to all the rest through the normalisation — not a basis problem","PROBLEM — the coefficients scatter around a factor of ×"&TEXT(B%d,"0.000")&": the basis AND a number, or the table as read")))' % (r_med, r_n, r_med, r_med, r_med, r_n, r_med, r_med))
-        wc.cell(r_n, 3, '=IF(B%d=0,"ok — none",IF(B%d=1,"PROBLEM — ONE element stands alone: "&INDEX(%s,MATCH(1,%s,0))&" — its wt%% or its printed coefficient is the slip (compare the last two columns above)","PROBLEM — "&TEXT(B%d,"0")&" elements stand out: not one slip — the table as read, the formula as read, or a formula written from other data"))' % (r_n, r_n, rng('A'), rng('J'), r_n))
+        wc.cell(r_med, 3, '=IF(%s,"note — fewer than three major elements are compared: a common factor cannot be told from one wrong number, so none is divided out",' % few + 'IF(ABS(B%d-1)<=0.02,"ok — no common factor: the basis is the paper\'s",IF(B%d=0,IF(ABS(B%d-1)<=0.05,"note — every coefficient is shifted by ×"&TEXT(B%d,"0.000")&", each within tolerance: an oxide reduced in another valence (below), a constituent left out of the basis, or atomic weights","PROBLEM — every coefficient is off by ONE factor (×"&TEXT(B%d,"0.000")&"): the BASIS is not the one used, a constituent is missing from it, or an oxide was reduced in another valence (below) — not a wrong number"),IF(B%d=1,"note — the other elements are shifted by ×"&TEXT(B%d,"0.000")&": what ONE wrong value does to all the rest through the normalisation — not a basis problem","PROBLEM — the coefficients scatter around a factor of ×"&TEXT(B%d,"0.000")&": the basis AND a number, or the table as read"))))' % (r_med, r_n, r_med, r_med, r_med, r_n, r_med, r_med))
+        wc.cell(r_n, 3, '=IF(B%d=0,"ok — none",IF(%s,"note — "&TEXT(B%d,"0")&" of them do not follow (the column \'follows?\'); with fewer than three majors the one at fault cannot be singled out",' % (r_n, few, r_n) + 'IF(B%d=1,"PROBLEM — ONE element stands alone: "&INDEX(%s,MATCH(1,%s,0))&" — its wt%% or its printed coefficient is the slip (compare the last two columns above)","PROBLEM — "&TEXT(B%d,"0")&" elements stand out: not one slip — the table as read, the formula as read, or a formula written from other data")))' % (r_n, rng('A'), rng('J'), r_n))
         kind = red.basis[0]
         wc.cell(r_imp, 1, 'the basis that would give the paper\'s coefficients'); wc.cell(r_imp, 2, '=reduction!$B$%d/B%d' % (R['basis'], r_med))
-        wc.cell(r_imp, 3, '=IF(ABS(B%d-1)<=0.02,"ok — the basis applied ("&TEXT(reduction!$B$%d,"0.00")&")","the basis applied is "&TEXT(reduction!$B$%d,"0.00")&"; the coefficients follow from "&TEXT(B%d,"0.00")&" on the same count")' % (r_med, R['basis'], R['basis'], r_imp))
+        # only where NOTHING stands alone: a factor beside a standing element is that element's dilution of the rest, not a basis
+        wc.cell(r_imp, 3, '=IF(ABS(B%d-1)<=0.02,"ok — the basis applied ("&TEXT(reduction!$B$%d,"0.00")&")",IF(B%d>0,"not read — the factor above is what the element standing alone does to the rest, not another basis","the basis applied is "&TEXT(reduction!$B$%d,"0.00")&"; the coefficients follow from "&TEXT(B%d,"0.00")&" on the same count"))' % (r_med, R['basis'], r_n, R['basis'], r_imp))
         wc.cell(r_out, 1, 'Σ wt% as read (with O ≡ F,Cl,S)'); wc.cell(r_out, 2, '=reduction!$B$%d' % R['total'])
         if table_total is not None:
             wc.cell(r_out + 1, 1, "the table's printed total"); wc.cell(r_out + 1, 2, table_total)
@@ -726,7 +737,7 @@ def _write_check(wb, red, published, decimals, notes, table_total, first, last, 
         row = r_out + 2
         if not getattr(red, 'water_oh', False) and not red.anions_structure and any(r.c.kind in ('oxide', 'other', 'water') for r in red.rows.values()):
             wc.cell(row, 1, 'charge balance of the reduced formula'); wc.cell(row, 2, '=reduction!$B$%d' % R['charge'])
-            wc.cell(row, 3, '=IF(ABS(B%d)<=0.05,"ok — neutral","note — Σ(+) − Σ(−) = "&TEXT(B%d,"+0.00;-0.00")&": on a cation basis the anions do not balance the valences as reported (OH for O, a valence state, H2O)")' % (row, row))
+            wc.cell(row, 3, '=IF(ABS(B%d)<=0.05,"ok — neutral","note — Σ(+) − Σ(−) = "&TEXT(B%d,"+0.00;-0.00")&": %s (OH for O, a valence state, H2O)")' % (row, row, 'on a cation basis the anions do not balance the valences as reported' if kind != 'O' else 'the cations as reported do not balance the anions of the basis'))
             row += 1
         if kind == 'O':
             # the same analysis with a multivalent oxide reduced the other way: the cation moles stay, its oxygen changes, and with it the factor

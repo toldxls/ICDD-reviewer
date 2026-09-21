@@ -34,6 +34,36 @@ class TablesMode(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def test_an_unreadable_paper_costs_the_check_sheet_not_the_export(self):
+        G = self.G
+        junk = os.path.join(self.tmp, 'junk.pdf')
+        with open(junk, 'wb') as f:
+            f.write(b'not a pdf at all')
+        G.MS['pdfs']['junk.pdf'] = junk
+        try:
+            b = self._post('/api/tb/bvs/rutile/export?fmt=xlsx&params=bo&paper=junk.pdf')
+            self.assertEqual(b['file'], 'rutile_bv.xlsx'); self.assertIn('could not be read', b['note'])
+            g = self._post('/api/tb/gd/export?fmt=xlsx&formula=Ti%3D1&n=2.7&name=rutile&paper=junk.pdf')
+            self.assertEqual(g['file'], 'rutile_gd.xlsx'); self.assertIn('could not be read', g['note'])
+            # an error path answers JSON with an explanation — `E` was never imported, and each was a NameError and an HTML 500
+            r = self.c.post('/api/tb/extract?pdf=junk.pdf')
+            self.assertEqual(r.status_code, 500); self.assertIn('error', json.loads(r.data))
+        finally:
+            G.MS['pdfs'].pop('junk.pdf', None); os.remove(junk)
+            for fn in ('rutile_bv.xlsx', 'rutile_bv.txt', 'rutile_gd.xlsx'):   # the other tests list this folder's outputs
+                if os.path.exists(os.path.join(self.tmp, 'review_out', fn)):
+                    os.remove(os.path.join(self.tmp, 'review_out', fn))
+
+    def test_with_no_folder_open_the_tables_routes_answer(self):
+        G = self.G
+        keep, G.MS['out_dir'] = G.MS['out_dir'], None
+        try:
+            r = self.c.post('/api/tb/gd/export?fmt=xlsx&formula=Ti%3D1&n=2.7&name=rutile')
+            self.assertEqual(r.status_code, 409); self.assertIn('choose one first', json.loads(r.data)['error'])
+            self.assertEqual(self.c.post('/api/tb/opts/gd', json={'n': '2.7'}).status_code, 200)
+        finally:
+            G.MS['out_dir'] = keep
+
     def _get(self, url, status=200):
         r = self.c.get(url)
         self.assertEqual(r.status_code, status, r.data[:300])
@@ -154,7 +184,9 @@ class TablesMode(unittest.TestCase):
         self.assertEqual(b.value('reduction', 'B%d' % cells['basis (anions apfu)']), 7)
         self.assertAlmostEqual(sum(b.value('reduction', 'K%d' % i) or 0 for i in range(2, cells['total'] - 1)), 7.0, places=9)   # the O apfu sum to the basis
         chk = {c.value: c.row for c in wc['A'] if isinstance(c.value, str)}
-        self.assertTrue(any(str(c.value).startswith('PROBLEM: the stated basis does not reproduce the formula') for c in wc['A']))
+        # the fixture's formula is reproduced on NO basis, and the composition check flags no basis: the sheet says so, and does not say PROBLEM
+        self.assertTrue(any(str(c.value).startswith('note: the stated basis does not reproduce the formula, and no other basis reproduces all of it') for c in wc['A']))
+        self.assertFalse(any(str(c.value).startswith('PROBLEM: the stated basis') for c in wc['A']))
         self.assertIn('does not follow from the table', [b.value('check', 'F%d' % chk[el]) for el in ('Ca', 'Mg', 'Si')])
         # and the check sheet says what kind of fault it is (the fixture's Si does not follow from its SiO2 on any basis)
         self.assertIn('ONE element stands alone: Si', b.value('check', 'C%d' % chk['elements left standing once it is divided out']))

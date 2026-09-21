@@ -177,6 +177,30 @@ class Reduction(unittest.TestCase):
         read = lambda name: b.value('check', 'C%d' % lab[name])
         return b, lab, read, red
 
+    def test_two_majors_no_factor_and_a_formula_of_other_elements(self):
+        F = 'common factor (median ratio of the major elements)'; N = 'elements left standing once it is divided out'
+        B = "the basis that would give the paper's coefficients"
+        # a gypsum: Ca and S are the only majors (H is not judged). One slip in CaO must not read as 'the basis AND a number',
+        # and no 'corrected' SO3 is offered
+        good = {'CaO': 32.5, 'SO3': 46.6, 'H2O': 20.9}
+        red0 = E.reduce(E.Dataset([E.parse_constituent(k) for k in good], [list(good.values())], ['m'], {}, 'p', None), ('O', 6))
+        pub = {('H' if r.c.kind == 'water' else r.c.element): round(r.apfu, 2) for r in red0.rows.values()}; pub['O'] = 6
+        b, lab, read, _ = self._check_book(dict(good, CaO=39.0), ('O', 6), pub)
+        self.assertEqual(b.value('check', 'B%d' % lab[F]), 1)
+        self.assertTrue(read(F).startswith('note — fewer than three major elements'), read(F))
+        self.assertTrue(read(N).startswith('note — '), read(N)); self.assertNotIn('PROBLEM', read(N))
+        self.assertEqual(b.value('check', 'L%d' % lab['S']), '')
+        self.assertIn('does not follow', b.value('check', 'F%d' % lab['Ca']))
+        # one element standing alone: the 'other basis' row stays out of it
+        wt = {'CaO': 20.10, 'MgO': 14.50, 'FeO': 9.80, 'Al2O3': 6.20, 'SiO2': 47.10, 'Na2O': 1.90}
+        red0 = E.reduce(E.Dataset([E.parse_constituent(k) for k in wt], [list(wt.values())], ['m'], {}, 'p', None), ('O', 6))
+        pub = {r.c.element: round(r.apfu, 2) for r in red0.rows.values()}; pub['O'] = 6
+        b, lab, read, _ = self._check_book(dict(wt, SiO2=38.0), ('O', 6), pub)
+        self.assertIn('ONE element stands alone: Si', read(N)); self.assertTrue(read(B).startswith('not read'), read(B))
+        # a formula none of whose elements is in the table: a sheet that says so, not an exception
+        b, lab, read, _ = self._check_book({'ZrO2': 67.0, 'SiO2': 32.8}, ('O', 4), {'Hf': 0.02, 'O': 4})
+        self.assertTrue(any(str(c.value).startswith("PROBLEM — no element of the paper's formula") for c in b.wb['check']['A']))
+
     def test_check_sheet_says_where_the_fault_lies(self):
         wt = {'CaO': 20.10, 'MgO': 14.50, 'FeO': 9.80, 'Al2O3': 6.20, 'SiO2': 47.10, 'Na2O': 1.90}
         tot = round(sum(wt.values()), 2)

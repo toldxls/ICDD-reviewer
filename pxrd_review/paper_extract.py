@@ -3561,9 +3561,12 @@ def gd_statement(text):
         num = re.search(r'(?<![\d.])(-?\s?0?\.\d{2,4})(?![\d]|\.\d)', seg)             # a CI, never the .907 of an index of 1.907, nor the '.2021' of 'mgm.2021.99'
         if num and out['ci'] is None:
             out['ci'] = float(num.group(1).replace(' ', '')); out['sentence'] = t[max(0, m.start() - 20):m.end() + min(len(seg), 120)].strip()
-        cat = re.search(r'\b(superior|excellent|good|fair|poor)\b', seg, re.I)
+        # the first category word of the sentence — with the long ones allowed the break a line end leaves in them
+        # (a hyphen, or the control character a pdf's soft hyphen arrives as: '("excel\x02 lent"), whereas … would result
+        # in poor compatibility' was read as 'poor', and the workbook then called the paper's word wrong in red)
+        cat = re.search(r'\b(%s|%s|good|fair|poor)\b' % tuple(r'(?:[-\x02\xad]\s*|\s)?'.join(w) for w in ('superior', 'excellent')), seg, re.I)
         if cat and out['category'] is None:
-            out['category'] = cat.group(1).lower(); out['sentence'] = out['sentence'] or t[max(0, m.start() - 20):m.end() + min(len(seg), 120)].strip()
+            out['category'] = re.sub(r'[-\s\x02\xad]', '', cat.group(1)).lower(); out['sentence'] = out['sentence'] or t[max(0, m.start() - 20):m.end() + min(len(seg), 120)].strip()
         if out['ci'] is not None and out['category']:
             break
     if out['category'] is None:
@@ -6231,7 +6234,19 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
     if unusable:
         notes.append(unusable)
     if keep_stated:
-        notes.append('PROBLEM: the stated basis does not reproduce the formula; every coefficient follows from %s' % EP._basis_label(found))
+        # PROBLEM is the composition check's word, said only where IT flags the basis (`basis_flag`: a basis a
+        # paper would state, the formula reproduced on another). The sheet said it wherever the two bases
+        # differed — 74 of 772 corpus workbooks against 0 flags — over the tool's own conventions (an ammonium
+        # count, OH with no water row, a group sum), and said 'every coefficient follows' of formulas that
+        # were not reproduced on any basis
+        follows = bool(comp.get('ok')) and not r.get('factor')
+        if comp.get('basis_flag'):
+            notes.append('PROBLEM: the stated basis does not reproduce the formula; every coefficient follows from %s' % EP._basis_label(found))
+        elif follows:
+            notes.append('note: the sheet keeps the stated basis; the coefficients follow from %s — another way of counting that the composition '
+                         'check does not hold against the paper (water or OH counted, an ammonium or a group count), so the differences on the check sheet are that basis, not misprints' % EP._basis_label(found))
+        else:
+            notes.append('note: the stated basis does not reproduce the formula, and no other basis reproduces all of it (the nearest: %s) — see what the composition check found, below' % EP._basis_label(found))
     notes += [''] + ['what the composition check found:'] + [l_.strip() for l_ in (comp.get('lines') or ['no empirical formula sentence was read: nothing to compare the apfu with'])]
     os.makedirs(out_dir, exist_ok=True)
     name = (stem or '') + 'epma.xlsx'
@@ -6291,8 +6306,11 @@ def main(argv=None):
     print('bond valence: params %s, U6+ %s, H bonds %s' % (out['bv']['params'], out['bv']['u6'], out['bv']['hb']))
     print('powder table: %d observed, %d calculated lines' % (out['pxrd']['obs'], out['pxrd']['calc']))
     if out['epma']:
-        fn = write_reduction_xlsx(out, check_composition(out, text_of(a.pdf)), a.out or os.path.join(os.path.dirname(os.path.abspath(a.pdf)), 'review_out'),
-                                  os.path.splitext(os.path.basename(a.pdf))[0] + ('_docx_' if a.pdf.lower().endswith('.docx') else '_paper_'))
+        try:
+            fn = write_reduction_xlsx(out, check_composition(out, text_of(a.pdf)), a.out or os.path.join(os.path.dirname(os.path.abspath(a.pdf)), 'review_out'),
+                                      os.path.splitext(os.path.basename(a.pdf))[0] + ('_docx_' if a.pdf.lower().endswith('.docx') else '_paper_'))
+        except Exception as e_:                                          # open in Excel (Windows locks it), a read-only folder: the other files are still reported
+            fn = None; out['notes'].append('the reduction workbook was not written (%s)' % str(e_)[:80])
         if fn:
             out['files']['reduction'] = fn
     for k, v in out['files'].items():

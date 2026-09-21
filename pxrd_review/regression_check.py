@@ -1090,6 +1090,26 @@ CASES = [
      any('6.019 and 6.011' in f.msg for f in X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '6.0']]}), t))
      for t in ('The calculated density is 6.019 (Hak-Cd), 6.011 (Hak-Fe) g/cm3.',
                'The calculated density is 6.019(3) g/cm3 and 6.011(3) g/cm3 for the two crystals.'))),
+ ("dx_blank: a paper on several species — every calculated density near Xtl Dx is offered, none as THE value", lambda: any(
+     '5.41, 5.16 and 4.84' in f.msg and 'the one that applies' in f.msg for f in X.check33_dx_blank(
+     type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '5.492']]}),
+     'Testite-A is opaque and has a calculated density of 5.16 g cm3 using the empirical formula. Testite-B has a calculated '
+     'density of 5.41 g cm3. Testite-C has a calculated density of 4.84 g cm3.'))),
+ ("dx_blank: past 8 % of Xtl Dx, with no Xtl Dx, or for a synthetic analogue, the value is a note", lambda: all(
+     [f.sev for f in X.check33_dx_blank(type('S', (), {'raw_rows': [row]}), t)] == ['note'] for row, t in (
+         (['Dx : ', '', 'Xtl Dx :', '5.124'], 'The calculated density is 5.757 g/cm3.'),
+         (['Dx : ', ''], 'The calculated density is 5.757 g/cm3.'),
+         (['Dx : ', '', 'Xtl Dx :', '3.728'], 'The calculated density of the synthetic analogue is 3.70 g/cm3.')))),
+ ("dx_blank: a sink-float measurement beside the word 'structure' is not a calculated density", lambda:
+     X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '3.728']]}),
+     'Single-crystal X-ray studies gave the structure. The density, 3.70 g/cm3, was determined by the sink-float method.') == []),
+ ("quality_mark: on a calculated pattern a blank Final Quality Mark is a note", lambda: [f.sev for f in X.check32_quality_mark(
+     type('S', (), {'instr': {'spacing_instr': 'Calculated'},
+                    'raw_rows': [['PDFID :', 'I000001', 'Pre. Quality Mark', 'C', 'Final Quality Mark', '']]}))] == ['note']),
+ ("reflections: a one-keystroke value printed IN ORDER is the original — the other block's number is not the paper's misprint", lambda: (
+     lambda e, ds: X._paper_misprint(e, '3.834', ['3.843', '2.834'], ds,
+                                     ['3.913', '3.913', '2.834', '2.834', '3.843', '3.843', '3.768']) is None)(
+     type('S', (), {'cell': {}, 'refl': []})(), ['3.913', '3.768'])),
  # --- the reflection list against the paper's table and against itself (checks 34–36) ---
  ("hkl_blank: one row of a multiply-indexed line has no hkl", lambda: [f.sev for f in X.check35_blank_hkl_in_group(
      type('S', (), {'raw_rows': [['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['1.7160', '20.000', '1', '8', '2', 'M', ''],

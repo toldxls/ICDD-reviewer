@@ -51,6 +51,28 @@ class FolderMemory(unittest.TestCase):
         cli._save('gui', self.t.name)                                       # a temp folder (a test's own) is never remembered
         self.assertNotIn(os.path.abspath(self.t.name), cli._load().get('recent'))
 
+    def test_a_console_tool_typed_in_the_home_folder_does_not_take_it(self):
+        from unittest import mock
+        home = os.path.join(self.t.name, 'home'); os.makedirs(os.path.join(home, 'Downloads'))
+        open(os.path.join(home, 'Downloads', 'I003448(Foo).docx'), 'w').close()
+        batch = os.path.join(self.t.name, 'Part 9'); os.makedirs(batch); cli._save('review', batch)
+        cwd = os.getcwd(); os.chdir(home); self.addCleanup(lambda: os.chdir(cwd))
+        with mock.patch.dict(os.environ, {'HOME': home, 'USERPROFILE': home}):
+            self.assertTrue(cli.is_broad_path(home))
+            self.assertEqual(os.path.realpath(cli._resolve_folder('review', [])[0]), os.path.realpath(batch))   # the remembered batch, not all of home
+            self.assertEqual(os.path.realpath(cli._resolve_folder('gui', [])[0]), os.path.realpath(home))       # the GUI is handed it — and asks
+            link = os.path.join(self.t.name, 'link'); os.symlink(home, link)
+            self.assertTrue(cli.is_broad_path(link))                                                            # a link to home is home
+        self.assertTrue(cli.is_broad_path('/Volumes/Backup')); self.assertFalse(cli.is_broad_path('/Volumes/Backup/Part 1'))
+
+    def test_a_memory_file_that_is_not_the_memory(self):
+        for junk in ('[1, 2]', 'null', '"str"', '{"recent": "abc"}'):
+            with open(cli.MEM, 'w') as f:
+                f.write(junk)
+            self.assertEqual(cli.recent(), [])
+            batch = os.path.join(self.t.name, 'B'); os.makedirs(batch, exist_ok=True); cli._save('gui', batch)
+            self.assertEqual(cli._load()['recent'], [os.path.abspath(batch)])
+
     def test_gui_with_nothing_to_open_starts_on_the_chooser(self):
         cwd = os.getcwd(); os.chdir(self.t.name); self.addCleanup(lambda: os.chdir(cwd))
         self.assertEqual(cli._resolve_folder('gui', []), (None, []))         # nothing remembered: the GUI has a picker of its own

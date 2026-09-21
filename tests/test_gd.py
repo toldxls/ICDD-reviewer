@@ -134,6 +134,32 @@ class CheckSheet(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_a_fluoride_totals_100_and_a_word_needs_no_density(self):
+        from tests.xl_eval import Book
+        tmp = tempfile.mkdtemp(prefix='gdchk_')
+        try:
+            # an ideal fluorite: the total carries the O ≡ F deduction (it read 120.49), so no 'normalised to 100 %' explanation is invented
+            res = G.prepare(formula='Ca=1,F=2', n=1.434, density=3.18)
+            b = Book(G.write_xlsx(res, os.path.join(tmp, 'f.xlsx'), 'fluorite', {'ci': 0.053})); wc = b.wb['check']
+            lab = {c.value: c.row for c in wc['A'] if isinstance(c.value, str)}
+            r = lab['Σ wt% of the analysis']
+            self.assertAlmostEqual(b.value('check', 'B%d' % r), 100.0, places=6); self.assertEqual(b.value('check', 'E%d' % r), 'ok')
+            norm = next(v for k_, v in lab.items() if k_.startswith('the analysis normalised to 100 %'))
+            self.assertNotIn('EXPLAINS', b.value('check', 'E%d' % norm))
+            # a wt% analysis with the deduction a table prints
+            res = G.prepare(wt='CaO=55.6,P2O5=42.2,F=3.77,O=F=-1.59', n=1.63, density=3.2)
+            b = Book(G.write_xlsx(res, os.path.join(tmp, 'w.xlsx'), 'apatite', {'ci': 0.01}))
+            lab = {c.value: c.row for c in b.wb['check']['A'] if isinstance(c.value, str)}
+            self.assertAlmostEqual(b.value('check', 'B%d' % lab['Σ wt% of the analysis']), 55.6 + 42.2 + 3.77 - 1.59, places=6)
+            # no density at all: the paper's word is still judged against the paper's own number
+            res = G.prepare(wt='SiO2=100', n=1.55)
+            for word, want in (('superior', 'ok'), ('poor', 'PROBLEM')):
+                b = Book(G.write_xlsx(res, os.path.join(tmp, 'n.xlsx'), 'q', {'ci': 0.01, 'category': word}))
+                lab = {c.value: c.row for c in b.wb['check']['A'] if isinstance(c.value, str)}
+                self.assertTrue(b.value('check', 'E%d' % lab['category']).startswith(want), b.value('check', 'E%d' % lab['category']))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == '__main__':
     unittest.main()

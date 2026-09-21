@@ -87,19 +87,13 @@ _inflight_lock = threading.Lock()
 _NEEDS_FOLDER = ('/api/rerun', '/api/triage/export')      # what writes into review_out: the two that failed with none (every other route answers)
 
 @app.before_request
-def _needs_folder():
-    """With no folder open (the GUI started on its chooser) the entry actions have nothing to act on: say so, never a 500."""
-    if not STATE.get('out_dir') and any(request.path == p or request.path.startswith(p + '/') for p in _NEEDS_FOLDER):
-        return jsonify({'ok': False, 'error': 'no entries folder is open — choose one first'}), 409
-
-@app.before_request
 def _guard_localhost():
     global _last_seen, _inflight
     with _inflight_lock:
         _inflight += 1                               # balanced by teardown_request (runs even on abort)
     if not _ALLOWED_HOSTS:
         _last_seen = time.monotonic()
-        return                                       # pre-launch / unconfigured
+        return _no_folder_answer()                   # pre-launch / unconfigured
     if (request.host or '').lower() not in _ALLOWED_HOSTS:
         abort(403)                                   # wrong Host -> DNS-rebinding / off-host
     if _AUTH_TOKEN and not secrets.compare_digest(request.cookies.get(_AUTH_COOKIE) or '', _AUTH_TOKEN):
@@ -123,6 +117,14 @@ def _guard_localhost():
     # open". Updated earlier, a rejected probe from another local user refreshed the timer and kept
     # the server alive under a closed browser (the auto-exit watchdog keys on _last_seen).
     _last_seen = time.monotonic()
+    # With no folder open (the GUI started on its chooser) the entry actions have nothing to act on: say so, never a 500.
+    # Here, AFTER the gate and the in-flight count — as a before_request of its own, registered first, it answered a
+    # foreign host 409 where every other route says 403, and its early return skipped the increment teardown undoes.
+    return _no_folder_answer()
+
+def _no_folder_answer():
+    if not STATE.get('out_dir') and any(request.path == p or request.path.startswith(p + '/') for p in _NEEDS_FOLDER):
+        return jsonify({'ok': False, 'error': 'no entries folder is open — choose one first'}), 409
 
 @app.teardown_request
 def _request_done(exc=None):
@@ -177,8 +179,16 @@ def folder_survey(folder):
     a home folder or a drive root, more than SURVEY_MAX_DOCX documents, or a tree too large to count in the time allowed."""
     from pxrd_review import cli as CLI
     path = os.path.abspath(folder); n = seen = 0; dirs = set(); capped = slow = False; t0 = time.monotonic()
-    for dp, dns, fns in os.walk(path):
-        dns[:] = [x for x in dns if not x.startswith('.') and not x.lower().startswith('review_out') and x != '.edit_backup']
+    # counted as `discover` will walk it — links to folders followed (once each), only 'review_out' and hidden folders left
+    # out: counted more narrowly, a folder linking to a 400-entry tree, or one with hundreds of copies in 'review_out_ours',
+    # surveyed as a small batch and was then indexed whole
+    been = set()
+    for dp, dns, fns in os.walk(path, followlinks=True):
+        real = os.path.realpath(dp)
+        if real in been:
+            dns[:] = []; continue                                       # a link back up the tree
+        been.add(real)
+        dns[:] = [x for x in dns if not x.startswith('.') and x != 'review_out']
         for fn in fns:
             seen += 1
             if fn.lower().endswith('.docx') and not fn.startswith('~$'):
@@ -198,6 +208,15 @@ def folder_survey(folder):
         # out of time, not out of room: a slow (network) drive says nothing about the folder — never call a batch a corpus for it
         why = 'This folder could not be counted in %g s (%d document%s found so far) — a slow drive, or a large tree.' % (_SURVEY_SECONDS, n, '' if n == 1 else 's')
     return {'path': path, 'docx': n, 'dirs': len(dirs), 'capped': capped, 'broad': bool(why), 'why': why}
+
+def _ms_crowd(folder):
+    """Manuscript mode reads the folder itself (never below it) and then analyses EVERY paper in it: the sentence to ask
+    with when that is hundreds (the corpus's 'Articles CIFs and dft files' surveys as 0 entries), else ''."""
+    try:
+        n = sum(1 for fn in os.listdir(folder) if fn.lower().endswith(('.docx', '.pdf')) and not fn.startswith(('~$', '.')))
+    except OSError:
+        return ''
+    return ('This folder holds %d papers — every one would be analysed. Open it all, or pick the folder of the manuscript?' % n) if n > SURVEY_MAX_DOCX else ''
 
 def _choose_payload():
     """What the page needs to start on the folder chooser — why, and the folders opened lately — or None."""
@@ -767,10 +786,10 @@ def _source_pool(folder, explicit=None):
         if parent == cur:                                # reached the filesystem root
             break
         cur = parent
+        if cur == home or CLI_is_home(cur):              # never the home folder itself, a drive, or above: indexing a pool globs ALL of it, unasked —
+            break                                        # a docx-only batch directly under home made the whole home folder the pool
         if _has_pdf_below(cur):
             return cur
-        if cur == home:                                  # never probe above the home directory
-            break
     return None
 
 def build_index(folder, out_dir, pdf_root=None):
@@ -1886,6 +1905,7 @@ from pxrd_review import tables as TB
 from pxrd_review import update as UPD
 
 from pxrd_review import epma as EP, gd as GD, pxrd_table as PX, bv_check as BV
+from pxrd_review import errors as E                  # E.explain: every error path below names it (unimported, each was a NameError and an HTML 500)
 
 _TB_TABS = ('coords', 'bvs', 'gd', 'epma', 'pxrd')
 
@@ -1906,6 +1926,8 @@ def _tb_save_opts(tab, opts):
     clean = {str(k)[:40]: str(v)[:400] for k, v in opts.items() if isinstance(v, (str, int, float, bool))}
     with MS['lock']:
         MS['tb_opts'][tab] = dict(list(clean.items())[:40])
+        if not MS.get('out_dir'):
+            return                                      # no folder open (the chooser): kept for the session, nowhere to write it
         os.makedirs(MS['out_dir'], exist_ok=True)
         path = _tb_opts_path(); tmp = path + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
@@ -2044,13 +2066,22 @@ def api_tb_bvs_export(key):
     opts = _tb_opts()
     pk = request.args.get('paper') or ''
     paper = ((MS.get('pdfs') or {}).get(pk) or _tb_docx_path(pk)) if pk else None   # the chosen paper (never a path from the page): its table goes on the check sheet
+    note = ''
+    run = lambda table: BV.run(MS['cifs'][key], table=table, params=opts['params'], ox=opts['ox'], cutoff=opts['cutoff'],
+                               include_h=opts['include_h'], out_dir=MS['out_dir'], quiet=True, xlsx=True,
+                               hbond=opts['hbond'], hmax=opts['hmax'], donors=opts['donors'], hb=opts['hb'], u6=opts['u6'])
     try:
-        st, result, anion_sum, cells, text = BV.run(MS['cifs'][key], table=paper, params=opts['params'], ox=opts['ox'], cutoff=opts['cutoff'],
-                                                    include_h=opts['include_h'], out_dir=MS['out_dir'], quiet=True, xlsx=True,
-                                                    hbond=opts['hbond'], hmax=opts['hmax'], donors=opts['donors'], hb=opts['hb'], u6=opts['u6'])
+        try:
+            run(paper)
+        except Exception as ex:
+            if not paper:
+                raise
+            # the paper is for the check sheet only: one that cannot be read (an empty .pdf, a damaged .docx) costs that sheet, not the workbook
+            note = 'the paper could not be read (%s) — exported without its check sheet' % str(ex)[:120]
+            run(None)
     except Exception as ex:
         return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
-    return jsonify({'ok': True, 'file': key + '_bv.xlsx'})
+    return jsonify({'ok': True, 'file': key + '_bv.xlsx', 'note': note})
 
 def _tb_docx_path(key):
     """One of the folder's manuscript .docx files by key (never a path from the page)."""
@@ -2253,17 +2284,26 @@ def api_tb_gd_export():
         return jsonify({'ok': False, 'error': err[0]}), err[1]
     name = _q('name', '', 80)
     stem = re.sub(r'[^\w.-]+', '_', name).strip('_') or 'gd'
+    if not MS.get('out_dir'):
+        return jsonify({'ok': False, 'error': 'no folder is open — choose one first: the file is written to its review_out'}), 409
     os.makedirs(MS['out_dir'], exist_ok=True)
+    note = ''
     try:
         if fmt == 'word':
             path = os.path.join(MS['out_dir'], stem + '_gd.docx'); TB.write_word(None, GD.table(res, name, _tb_journal()), path)
         else:
             pk = request.args.get('paper') or ''
             ppath = ((MS.get('pdfs') or {}).get(pk) or _tb_docx_path(pk)) if pk else None      # the chosen paper (never a path from the page)
-            path = GD.write_xlsx(res, os.path.join(MS['out_dir'], stem + '_gd.xlsx'), name, GD.paper_statement(ppath) if ppath else None)
+            stated = None
+            if ppath:
+                try:
+                    stated = GD.paper_statement(ppath)
+                except Exception as ex:                                 # for the check sheet only: an unreadable paper costs that sheet, not the workbook
+                    note = 'the paper could not be read (%s) — exported without its check sheet' % str(ex)[:120]
+            path = GD.write_xlsx(res, os.path.join(MS['out_dir'], stem + '_gd.xlsx'), name, stated)
     except Exception as ex:
         return jsonify({'ok': False, 'error': str(ex)}), 500
-    return jsonify({'ok': True, 'file': os.path.basename(path)})
+    return jsonify({'ok': True, 'file': os.path.basename(path), 'note': note})
 
 # ---- PXRD: observed peak list + calculated pattern -> the combined table, eight strongest in bold
 def _tb_pxrd():
@@ -2748,6 +2788,8 @@ def api_ms_folder():
         return jsonify({'ok': False, 'error': 'not a folder: %s' % (folder or '(empty)')}), 400
     if CLI_is_home(folder) and not data.get('confirm'):
         return jsonify({'ok': False, 'broad': True, 'folder': folder, 'error': 'This is a home folder or a whole drive. Open it anyway, or pick the folder the manuscripts are in?'}), 409
+    if _ms_crowd(folder) and not data.get('confirm'):
+        return jsonify({'ok': False, 'broad': True, 'folder': folder, 'error': _ms_crowd(folder)}), 409
     if not ms_set_folder(folder):
         return jsonify({'ok': False, 'error': 'no .docx in %s (manuscripts are looked for in the folder itself, not its subfolders)' % folder}), 400
     STATE['choose'] = None
@@ -2988,7 +3030,12 @@ def main():
                   '(findings this version does not raise), %d left to the local reviewer%s'
                   % (os.path.basename(args.import_triage), summ['entries'], summ['matched'], summ['kept_as_note'], summ['kept_local'],
                      ('; not in this folder: ' + ', '.join(summ['unknown_entries'])) if summ['unknown_entries'] else ''))
-        if args.manuscript or not STATE['order']:
+        if (args.manuscript or not STATE['order']) and _ms_crowd(args.folder) and not args.open_anyway:
+            # no 'broad': the page's 'Open it all' opens ENTRIES, which this folder has none of — Manuscript mode's own open asks, and takes the yes
+            STATE['choose'] = {'reason': _ms_crowd(args.folder) + ' (Manuscript mode opens it.)', 'folder': os.path.abspath(args.folder)}
+            STATE['folder'] = STATE['out_dir'] = None
+            print('[review_gui] %s' % STATE['choose']['reason'])
+        elif args.manuscript or not STATE['order']:
             # no ICDD entries here: a folder of manuscripts (or .cif files) opens in the other modes
             if ms_set_folder(args.folder):
                 MS['initial'] = 'manuscript' if MS['order'] else 'tables'
@@ -2996,6 +3043,7 @@ def main():
                       % (len(MS['order']), len(MS['cifs']), args.folder, MS['initial'].capitalize()))
             elif not STATE['order']:
                 STATE['choose'] = {'reason': 'No .docx entries (or manuscripts) found in %s.' % args.folder, 'folder': None}
+                STATE['folder'] = STATE['out_dir'] = None   # on the chooser nothing is open: 'Rerun all' ran annotate_review on the empty folder
                 print('[review_gui] %s' % STATE['choose']['reason'])
         if STATE['order'] or MS.get('folder'):
             _opened(args.folder)                            # opened: what a bare `pxrd gui` reopens, and first among the recent folders

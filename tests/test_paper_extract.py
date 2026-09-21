@@ -321,6 +321,30 @@ class GladstoneDale(unittest.TestCase):
         self.assertEqual(out['status']['optics.D_calc'], 'nooracle')      # the paper gives no calculated density
 
 
+class WorkbookBasisLine(unittest.TestCase):
+    """PROBLEM is the composition check's word: the workbook says it only where the check flags the basis."""
+    def _notes(self, **comp):
+        import openpyxl
+        tmp = tempfile.mkdtemp()
+        try:
+            ex = {'name': 'testite', 'basis': ('O', 7), 'epma': {'rows': []}}
+            c = dict({'result': {'basis': ('O', 8)}, 'wt': {'CaO': 24.0, 'MgO': 17.0, 'SiO2': 51.0}, 'counts': {'Ca': 1.0, 'Mg': 1.0, 'Si': 2.0},
+                      'formula': 'Ca1.00Mg1.00Si2.00O6'}, **comp)
+            fn = PE.write_reduction_xlsx(ex, c, tmp, 't_')
+            return [str(x.value) for x in openpyxl.load_workbook(os.path.join(tmp, fn))['check']['A'] if x.value]
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_problem_only_where_the_check_flags_the_basis(self):
+        self.assertTrue(any(n.startswith('PROBLEM: the stated basis') for n in self._notes(ok=True, basis_flag=True)))
+        conv = self._notes(ok=True, basis_flag=False)
+        self.assertFalse(any(n.startswith('PROBLEM: the stated basis') for n in conv))
+        self.assertTrue(any(n.startswith('note: the sheet keeps the stated basis') for n in conv))
+        none = self._notes(ok=False, basis_flag=False)
+        self.assertTrue(any('no other basis reproduces all of it' in n for n in none))
+        self.assertFalse(any('every coefficient follows' in n for n in none))
+
+
 class MeasuredCationBasis(unittest.TestCase):
     def test_cation_basis_leaves_out_the_calculated_carbon(self):
         import tempfile, shutil
@@ -1135,6 +1159,9 @@ class DocxPaper(unittest.TestCase):
         # the unit pieces
         g = PE.gd_statement('The compatibility index, 1 − (KP/KC), is −0.012, in the superior range of Mandarino (1981).')
         self.assertEqual((g['ci'], g['category']), (-0.012, 'superior'))
+        # the category word broken at a line end (the pdf's soft hyphen arrives as a control character): not the next clause's 'poor'
+        g = PE.gd_statement('from the Gladstone–Dale equation (1 – Kp/Kc) = –0.037 (“excel\x02 lent”), whereas a bivalent state would result in poor compatibility. The idealized')
+        self.assertEqual((g['ci'], g['category']), (-0.037, 'excellent'))
         cc = PE.cell_consistency('The cell is a = 4.5937, c = 2.9587 Å, V = 62.43 Å3, Z = 2 (powder data).', {'Ti': 1, 'O': 2}, None, 4.60, verified_formula=True)
         self.assertEqual(cc['status'], 'unverified'); self.assertFalse(cc['red'])                    # one formula tried: a doubt, not a finding
         cc = PE.cell_consistency('The cell is a = 4.5937, c = 2.9587 Å, V = 62.43 Å3, Z = 2 (powder data).', {'Ti': 1, 'O': 2}, None, 4.60, verified_formula=True, masses=[('the ideal formula', 79.9)])

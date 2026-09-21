@@ -219,7 +219,7 @@ async function tbExport(tab, fmt) {
   if (btn) { btn.disabled = false; btn.textContent = orig; }
   if (!r.ok) { msStatus('failed' + (r.error ? ': ' + r.error : '')); return; }
   TBS.last[tab] = r.file;
-  msStatus('written ✓ review_out/' + r.file);
+  msStatus('written ✓ review_out/' + r.file + (r.note ? ' — ' + r.note : ''));
   if (!TBS.outputs.includes(r.file)) TBS.outputs.push(r.file), TBS.outputs.sort();
   if ((tab === 'coords' || tab === 'bvs') && fmt !== 'xlsx') { const row = TBS.cifs.find(c => c.key === TBS.key); if (row) row.has_word = true; }
   tbRenderLists();

@@ -1994,14 +1994,19 @@ def _z_from_formula(st):
     return round(z)
 
 
-def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_anions=True):
+def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_anions=True, record=None):
     """Findings about bond-valence SUMS printed one per site (a BVS column of the coordinates or
     bond-distance table): each site's value against the sum computed from the .cif. A cation sum
     is accepted within 0.05 vu + 3 % (or the occupancy-weighted sum, for a split site); an anion
     sum within 0.12 vu + 3 %, and only when the structure has no hydrogen bonds (with them the
     conventions — H in or out, donor deducted or not — vary too much to compare). tables:
-    [{'rows': [(label, value), …], 'head'}]."""
+    [{'rows': [(label, value), …], 'head'}]. record: a list that receives one dict per site row, in the shape
+    check_bvs_table records a sum in — the workbook's check sheet shows THESE verdicts, never its own."""
     L = []
+    def rec(ti_, kind, site, v, status, why=''):
+        if record is not None:
+            record.append({'table': ti_ + 1, 'kind': kind + ' sum', 'anion': site if kind == 'anion' else None, 'cation': site if kind == 'cation' else None,
+                           'text': '%g' % v, 'nums': [v], 'status': status, 'why': why})
     bvs_of = {}
     skip = {_norm_label(x) for x in getattr(st, 'inferred', None) or ()}   # a site whose element the paper's prose supplied: its computed sum is not evidence
     for r in result:
@@ -2033,6 +2038,8 @@ def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_ani
         for i, (lab, v) in enumerate(rows_):
             hit = by_site.get(site_of.get(i))
             if not hit or (hit[2] == 'anion' and not compare_anions):
+                if hit:
+                    rec(ti, 'anion', hit[0], v, 'not compared', 'an anion sum: hydrogen bonds and H conventions vary too much to compare')
                 continue
             found = True; site, mine, kind, occ, shares = hit
             tol = (0.05 if kind == 'cation' else 0.12) + 0.03 * max(v, mine)
@@ -2042,6 +2049,7 @@ def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_ani
                 tol += 0.12 * max(v, mine)                             # a mixed site (Si/Al on T, Ce/Ca): the expected sum depends on how the species were weighted — a convention
             if kind == 'cation' and occ <= 0.5:
                 L.append('table %d: BVS of %s (%.0f %% occupied) is not compared — a site half occupied or less is weighted as the paper chooses' % (ti + 1, site, 100 * occ))
+                rec(ti, kind, site, v, 'not compared', 'a site half occupied or less is weighted as the paper chooses')
                 continue                                                   # the split-site rule of check_bvs_table, for sums (78897's Na7/Ca7, Na8/Ca8 pairs, Sr9 at 12 %)
             ncell += 1
             if abs(v - mine) > tol and not (occ < 0.98 and abs(v - mine * occ) <= tol) \
@@ -2049,11 +2057,28 @@ def check_bvs_sites(st, result, anion_sum, tables, params_label='?', compare_ani
                 nbad += 1
                 L.append('table %d: BVS of %s %.2f in the table vs %.2f from the .cif (parameters: %s)%s' % (
                     ti + 1, site, v, mine, params_label, '' if kind == 'cation' else ' — an anion sum: hydrogen bonds and H conventions vary'))
+                rec(ti, kind, site, v, 'differs', 'beyond %.2f vu, the tolerance for this site' % tol)
+            else:
+                rec(ti, kind, site, v, 'agrees', ('within %.2f vu, the tolerance for this site' % tol) if abs(v - mine) <= tol else 'as an occupancy-weighted sum')
         if found:
             L.insert(0, 'bond-valence sums (table %d, column %s): %d cells compared, %d disagree (computed with %s)' % (ti + 1, tab.get('head') or 'BVS', ncell, nbad, params_label))
     if not L:
         L.append('no bond-valence table found in the manuscript (a BVS column with the site labels)')
     return L
+
+def best_site_table(st, result, anion_sum, site_tables, params_label='?', compare_anions=True):
+    """A paper may print several BVS columns, and the pdf reader hands back every candidate it found — the real column, the
+    same one twice, an occupancy or a coordinate column under a like header. Each is judged ON ITS OWN and the one that
+    agrees best stands for the paper, as the paper check does; the others are not findings.
+    -> (lines, record) of that table, numbered 1; ([], []) when none has a site to compare."""
+    best = None
+    for tab in site_tables or []:
+        rec_ = []
+        lines = check_bvs_sites(st, result, anion_sum, [{'rows': list(tab), 'head': 'BVS'}], params_label, compare_anions=compare_anions, record=rec_)
+        n = sum(1 for d in rec_ if d['status'] in ('agrees', 'differs')); bad = sum(1 for d in rec_ if d['status'] == 'differs')
+        if n and (best is None or (bad / n, -n) < best[0]):
+            best = ((bad / n, -n), lines, rec_)
+    return (best[1], best[2]) if best else ([], [])
 
 # ----------------------------------------------------------------------------- Word output
 
@@ -2229,7 +2254,7 @@ def write_xlsx(st, params, result, anion_sum, cells, hbonds, path, tables=None, 
         where = {'an_row': {an.label: i for i, an in enumerate(anions, 2)}, 'cat_col': {}, 'r_sum': r_sum, 'c_san': c_san, 'bond_rows': bond_rows}
         for j, (site, *_r) in enumerate(result):
             where['cat_col'].setdefault(site.label, j)
-        _write_bv_check(wb, st, result, anion_sum, cells, tables or [], site_tables or [], params_label, scores, where, source)
+        _write_bv_check(wb, st, result, anion_sum, cells, tables or [], site_tables or [], params_label, scores, where, source, compare_anions=not hbonds)
     wp = wb.create_sheet('parameters'); wp.append(['pair', 'R0', 'b', 'reference']); wp.cell(1, 1).font = Font(bold=True)
     for (cat, cox, an), (r0, bb, rid) in params.used.items():
         wp.append(['%s%+d–%s' % (cat, cox, an), r0, bb, params.refs.get(rid, rid)])
@@ -2247,7 +2272,7 @@ def paper_tables(path, st):
     tabs = PE._find_bv_tables(path, st) or []
     return [t['rows'] for t in tabs if t.get('kind') != 'sites'], [list(t['rows']) for t in tabs if t.get('kind') == 'sites']
 
-def _write_bv_check(wb, st, result, anion_sum, cells, tables, site_tables, params_label, scores, where, source=''):
+def _write_bv_check(wb, st, result, anion_sum, cells, tables, site_tables, params_label, scores, where, source='', compare_anions=True):
     """The 'check' sheet of the bond-valence workbook: the paper's table cell by cell against the structure's. The VERDICT is
     check_bvs_table's — it allows for the conventions a formula cannot (a value per bond or the total over the ×n, an
     occupancy-weighted column, a contact under the cutoff) — and the NUMBERS beside it are live: the tool's valence per bond
@@ -2287,14 +2312,20 @@ def _write_bv_check(wb, st, result, anion_sum, cells, tables, site_tables, param
             wc.cell(row, 6, '=' + each[0] if len(br) == 1 else '=' + '&", "&'.join('TEXT(%s,"0.00")' % e for e in each))
             wc.cell(row, 7, '=' + '+'.join('%s*%s' % (e, nd) for e, (lo, hi, nd, na) in zip(each, br)))
             if len(nums) == 1:
-                wc.cell(row, 8, '=IF(ABS(E%d-F%d)<=ABS(E%d-G%d),E%d-F%d,E%d-G%d)' % ((row,) * 8) if len(br) == 1 else '=E%d-G%d' % (row, row))
+                # against the NEAREST reading — each distinct bond's valence, or the total: a cell that agrees with one bond of two
+                # showed paper − total (−0.39 on an 'agrees' row) and carried it into the column's mean
+                cands = (['F%d' % row] if len(br) == 1 else each[:4]) + ['G%d' % row]
+                f = 'E%d-%s' % (row, cands[-1])
+                for i_ in range(len(cands) - 2, -1, -1):
+                    f = 'IF(ABS(E%d-%s)<=MIN(%s),E%d-%s,%s)' % (row, cands[i_], ','.join('ABS(E%d-%s)' % (row, c_) for c_ in cands[i_ + 1:]), row, cands[i_], f)
+                wc.cell(row, 8, '=' + f)
                 lo, hi, nd, na = br[0]
                 if len(br) == 1 and lo == hi and wb['bonds'].cell(lo, 5).value is not None:
                     # the distance that would give the paper's valence on this R0 and b: a valence mistyped moves R by an amount no bond has;
                     # a bond of another length (another setting, a neighbour) lands on a distance the structure does have
                     wc.cell(row, 11, '=bonds!D%d' % lo)
-                    wc.cell(row, 12, '=bonds!E%d-bonds!F%d*LN(IF(ABS(E%d-F%d)<=ABS(E%d-G%d),E%d,E%d/%s))' % (lo, lo, row, row, row, row, row, row, nd))
-                    wc.cell(row, 13, '=L%d-K%d' % (row, row))
+                    wc.cell(row, 12, '=IF(E%d>0,bonds!E%d-bonds!F%d*LN(IF(ABS(E%d-F%d)<=ABS(E%d-G%d),E%d,E%d/%s)),"")' % (row, lo, lo, row, row, row, row, row, row, nd))   # a printed 0.00 has no distance
+                    wc.cell(row, 13, '=IF(E%d>0,L%d-K%d,"")' % (row, row, row))
                     for c_ in (11, 12, 13):
                         wc.cell(row, c_).number_format = '0.000'
         wc.cell(row, 9, d['status']); wc.cell(row, 10, clean(d['why']))
@@ -2306,12 +2337,13 @@ def _write_bv_check(wb, st, result, anion_sum, cells, tables, site_tables, param
             wc.conditional_formatting.add('A%d:M%d' % (c0, c1), FormulaRule(formula=['$I%d="%s"' % (c0, word)], fill=fill))
     # ---- the sums
     sums = [d for d in record if d['kind'] != 'cell']
-    for tab in site_tables:                                            # a BVS column: the sums alone
-        for lab, val in tab:
-            site = next((r[0].label for r in result if _norm_label(r[0].label) == _norm_label(lab) or lab in r[0].label.split('/')), None)
-            an = next((a.label for a in st.anions if _norm_label(a.label) == _norm_label(lab)), None) if site is None else None
-            if site or an:
-                sums.append({'table': 1, 'kind': 'cation sum' if site else 'anion sum', 'anion': an, 'cation': site, 'text': '%g' % val, 'nums': [val], 'status': '', 'why': ''})
+    for d in sums:
+        if d['kind'] == 'anion sum' and d['status'] == 'agrees' and not d['why']:
+            d['why'] = "judged on the CATION part of the row; the tool's Σ beside it also carries the hydrogen bonds the anion accepts"
+    # a BVS column: the sums alone, with check_bvs_sites' verdicts (its tolerances by site kind, the mixed-site,
+    # sulfosalt and half-occupied rules) — of the ONE candidate table that agrees best, not of every column the reader returned
+    site_lines, site_rec = best_site_table(st, result, anion_sum, site_tables, params_label or '?', compare_anions)
+    sums += site_rec; lines = list(lines) + site_lines
     if sums:
         row += 2
         for c_, h in enumerate(['table', 'Σ of', 'site', 'as printed', "paper's Σ", "tool's Σ", 'paper − tool', 'verdict', 'why'], 1):
@@ -2329,8 +2361,7 @@ def _write_bv_check(wb, st, result, anion_sum, cells, tables, site_tables, param
                 wc.cell(row, 6, "='BV table'!%s%d" % (L_(where['c_san']), where['an_row'][lab]))
             if wc.cell(row, 6).value and d['nums']:
                 wc.cell(row, 7, '=E%d-F%d' % (row, row))
-            # a BVS column carries no verdict of check_bvs_table's: 0.08 vu is its threshold for a sum, applied live
-            wc.cell(row, 8, d['status'] or ('=IF(ABS(G%d)<=0.08,"agrees","differs")' % row if wc.cell(row, 7).value else 'not compared'))
+            wc.cell(row, 8, d['status'] or 'not compared')
             wc.cell(row, 9, clean(d['why']))
             wc.cell(row, 6).number_format = wc.cell(row, 7).number_format = '0.00'
         wc.conditional_formatting.add('A%d:I%d' % (s0, row), FormulaRule(formula=['$H%d="differs"' % s0], fill=red_fill))
@@ -2351,7 +2382,7 @@ def _write_bv_check(wb, st, result, anion_sum, cells, tables, site_tables, param
             row += 1; wc.cell(row, 1, 'note — no set reproduces every cell: what is left below is not the choice of parameters').fill = amber
     if c1 >= c0:
         row += 2
-        for c_, h in enumerate(['cation column', 'cells compared', 'differ', 'mean paper − tool (vu)', 'reading'], 1):
+        for c_, h in enumerate(['cation column', 'cells compared', 'differ', 'mean paper − tool over the cells that differ (vu)', 'reading'], 1):
             wc.cell(row, c_, h).font = bold
         p0 = row + 1
         rngc = lambda c: '$%s$%d:$%s$%d' % (c, c0, c, c1)
@@ -2360,7 +2391,7 @@ def _write_bv_check(wb, st, result, anion_sum, cells, tables, site_tables, param
             wc.cell(row, 1, cat)
             wc.cell(row, 2, '=COUNTIFS(%s,A%d,%s,"agrees")+COUNTIFS(%s,A%d,%s,"differs")' % (rngc('C'), row, rngc('I'), rngc('C'), row, rngc('I')))
             wc.cell(row, 3, '=COUNTIFS(%s,A%d,%s,"differs")' % (rngc('C'), row, rngc('I')))
-            wc.cell(row, 4, '=SUMIFS(%s,%s,A%d)/MAX(1,COUNTIFS(%s,A%d,%s,"<>"))' % (rngc('H'), rngc('C'), row, rngc('C'), row, rngc('H')))
+            wc.cell(row, 4, '=SUMIFS(%s,%s,A%d,%s,"differs")/MAX(1,C%d)' % (rngc('H'), rngc('C'), row, rngc('I'), row))
             wc.cell(row, 4).number_format = '+0.00;-0.00'
             wc.cell(row, 5, '=IF(C%d=0,"ok",IF(AND(B%d>=3,C%d>=0.6*B%d),"PROBLEM — the whole column differs (mean "&TEXT(D%d,"+0.00;-0.00")&" vu): R0 and b for this cation — another parameter set, or another valence state — not the distances","PROBLEM — "&TEXT(C%d,"0")&" of "&TEXT(B%d,"0")&" cells: a distance, a ×n multiplicity or a mistyped valence — compare R in the structure with the R the printed valence needs"))' % ((row,) * 7))
         if row >= p0:
@@ -2412,10 +2443,17 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
         auto_params=True, hbond='oo', hmax=None, donors=None, hb=None, u6='burns', xlsx=False):
     st = Structure(cif, _parse_ox(ox), include_h=include_h)
     site_tables = []
-    if table and not table.lower().endswith('.docx'):
-        tables, site_tables = paper_tables(table, st)               # the paper's .pdf: its table as the pdf reader finds it
-    else:
-        tables = read_tables(table) if table else None
+    if table and not os.path.isfile(table):
+        raise ValueError('--table: no such file: %s' % table)
+    try:
+        if table and not table.lower().endswith('.docx'):
+            tables, site_tables = paper_tables(table, st)           # the paper's .pdf: its table as the pdf reader finds it
+        else:
+            tables = read_tables(table) if table else None
+    except ValueError:
+        raise
+    except Exception as ex_:
+        raise ValueError('--table: %s could not be read (%s)' % (os.path.basename(table), str(ex_)[:120]))
     P = Params(prefer=params, u6=u6)
     hb_args = dict(hbond=hbond, hmax=hmax, donors=_parse_donors(donors) if isinstance(donors, str) else donors,
                    force=_parse_hb(hb) if isinstance(hb, str) else hb)
@@ -2446,8 +2484,14 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
     text = report_text(st, P, result, anion_sum, cells, geom_self_check(st, result), hbonds)
     if table:
         text += '\n\nMANUSCRIPT TABLE CHECK — %s\n' % os.path.basename(table) + chosen_note + '  '
-        text += '\n  '.join(check_bond_table(st, result, tables))
-        text += '\n  ' + '\n  '.join(check_bvs_table(st, result, cells, anion_sum, tables, PARAM_NAMES[params]))
+        is_pdf = not table.lower().endswith('.docx')
+        site_lines = best_site_table(st, result, anion_sum, site_tables, PARAM_NAMES[params], compare_anions=not hbonds)[0]
+        # from a .pdf only the bond-VALENCE tables are read (the distances are the paper check's, `pxrd paper --check`)
+        text += '\n  '.join(['bond distances: not read from a .pdf — only its bond-valence table is'] if is_pdf else check_bond_table(st, result, tables))
+        if tables or not site_lines:
+            text += '\n  ' + '\n  '.join(check_bvs_table(st, result, cells, anion_sum, tables, PARAM_NAMES[params]))
+        if site_lines:
+            text += '\n  ' + '\n  '.join(site_lines)
     if not quiet:
         print(text)
     out_dir = out_dir or os.path.join(os.path.dirname(os.path.abspath(cif)), 'review_out')

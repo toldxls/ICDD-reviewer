@@ -52,6 +52,40 @@ class FolderGuard(unittest.TestCase):
         finally:
             G.STATE['out_dir'] = folder
 
+    def test_a_foreign_host_is_refused_before_anything_else(self):
+        G = self.G
+        keep, G.STATE['out_dir'] = G.STATE['out_dir'], None
+        G._ALLOWED_HOSTS = {'127.0.0.1:8000'}
+        try:
+            r = self.c.post('/api/rerun', json={}, headers={'Host': 'evil.example'})
+            self.assertEqual(r.status_code, 403)                             # not the 409 that says whether a folder is open
+            with G._inflight_lock:
+                self.assertEqual(G._inflight, 0)                             # counted in, counted out
+        finally:
+            G._ALLOWED_HOSTS = set(); G.STATE['out_dir'] = keep
+
+    def test_the_source_pool_never_climbs_into_the_home_folder(self):
+        G = self.G
+        home = os.path.join(self.tmp, 'home'); batch = os.path.join(home, 'batch'); os.makedirs(batch)
+        open(os.path.join(home, 'paper.pdf'), 'w').close()
+        with mock.patch.dict(os.environ, {'HOME': home, 'USERPROFILE': home}):
+            self.assertIsNone(G._source_pool(batch))                         # a docx-only batch directly under home: no pool, not ALL of home
+        pool = os.path.join(self.tmp, 'shared'); sub = os.path.join(pool, 'reviewer'); os.makedirs(sub)
+        open(os.path.join(pool, 'paper.pdf'), 'w').close()
+        self.assertEqual(G._source_pool(sub), pool)                          # the ordinary case still finds its pool
+
+    def test_a_folder_of_hundreds_of_papers_is_asked_about(self):
+        G = self.G
+        crowd = os.path.join(self.tmp, 'articles'); os.makedirs(crowd)
+        for i in range(12):
+            open(os.path.join(crowd, 'paper%d.pdf' % i), 'w').close()
+        self.assertEqual(G._ms_crowd(crowd), '')
+        with mock.patch.object(G, 'SURVEY_MAX_DOCX', 10), mock.patch.object(G, 'ms_set_folder', return_value=True) as ms:
+            self.assertIn('12 papers', G._ms_crowd(crowd))
+            r = self.c.post('/api/ms/folder', json={'folder': crowd})
+            self.assertEqual(r.status_code, 409); self.assertTrue(json.loads(r.data)['broad']); ms.assert_not_called()
+            self.assertEqual(self.c.post('/api/ms/folder', json={'folder': crowd, 'confirm': True}).status_code, 200); ms.assert_called_once()
+
     def test_the_folder_route_asks_before_a_folder_that_is_not_a_batch(self):
         G = self.G
         with mock.patch.object(G, 'SURVEY_MAX_DOCX', 10), mock.patch.object(G, 'build_index') as bi, mock.patch.object(G, 'start_analysis'), \

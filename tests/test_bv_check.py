@@ -318,6 +318,29 @@ class CheckSheet(unittest.TestCase):
         cell_rows = {(wc.cell(r, 2).value, wc.cell(r, 3).value): r for r in range(4, wc.max_row + 1) if wc.cell(r, 9).value in ('agrees', 'differs', 'blank', 'not compared') and wc.cell(r, 2).value}
         return b, wc, cell_rows
 
+    def test_a_bvs_column_takes_the_table_checks_verdicts_and_one_table(self):
+        import openpyxl
+        tmp = tempfile.mkdtemp(prefix='bvchk_')
+        try:
+            cif = _write(tmp, 'hydrate.cif', HYDRATE)
+            st = B.Structure(cif); P = B.Params(prefer='gh')
+            result, anion_sum, cells, hbonds = B.compute(st, P, hbond='none')
+            cats = [r for r in result if r[0].element != 'H']
+            # the paper's column, each sum a little off but inside check_bvs_sites' tolerance (0.05 vu + 3 %), beside a column of
+            # the same labels that is not valences at all (occupancies) — the pdf reader returns every candidate it finds
+            real = [(r[0].label, round(r[2] + 0.05, 2)) for r in cats]
+            junk = [(r[0].label, 0.979) for r in cats]
+            lines, rec = B.best_site_table(st, result, anion_sum, [junk, real])
+            self.assertTrue(rec and all(d['status'] == 'agrees' for d in rec), rec)
+            out = os.path.join(tmp, 's.xlsx')
+            B.write_xlsx(st, P, result, anion_sum, cells, hbonds, out, site_tables=[junk, real], params_label='Gagné & Hawthorne 2015')
+            wc = openpyxl.load_workbook(out)['check']
+            verdicts = [wc.cell(r, 8).value for r in range(1, wc.max_row + 1) if wc.cell(r, 2).value in ('cation', 'anion') and isinstance(wc.cell(r, 1).value, int)]
+            self.assertEqual(verdicts, ['agrees'] * len(cats))              # one table, the table check's verdicts, no live 0.08 rule
+            self.assertTrue(any(str(wc.cell(r, 1).value).startswith('bond-valence sums (table 1') for r in range(1, wc.max_row + 1)))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_a_mistyped_valence_a_shifted_column_and_bad_arithmetic(self):
         tmp = tempfile.mkdtemp(prefix='bvchk_')
         try:

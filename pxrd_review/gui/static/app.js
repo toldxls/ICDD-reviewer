@@ -248,12 +248,15 @@ function startOnChooser(c) {
 // A folder that is clearly not a batch: open it all on purpose, or pick a batch — never by accident.
 function askBeforeOpening(r) {
   $('#folder-hint').textContent = '';
-  $('#folder-ask-msg').textContent = r.error || 'This folder is not a batch. Open it all, or pick a batch?';
+  $('#folder-ask-msg').textContent = (r.error || 'This folder is not a batch. Open it all, or pick a batch?') + '  [' + r.folder + ']';   // the question names ITS folder
   $('#folder-ask').classList.remove('hidden');
   $('#folder-ask-all').onclick = () => { $('#folder-ask').classList.add('hidden'); openFolder(r.folder, true); };
   $('#folder-ask-pick').onclick = () => { $('#folder-ask').classList.add('hidden'); pickFolderNative(); };
 }
 async function browseFolder(path) {
+  // the question belongs to the folder it was asked about: browsing on withdraws it (left up, 'Open it all' still opened
+  // the home folder — with confirm — while the path box showed the batch browsed to)
+  $('#folder-ask').classList.add('hidden');
   let r;
   try { r = await fetch('/api/browse?path=' + enc(path)).then(x => x.json()); } catch (_) { return; }
   $('#folder-path').value = r.path;
@@ -285,6 +288,7 @@ async function openFolder(path, confirm) {
                                     // (un-awaited, the POST could land in the new folder's sidecar)
   const btns = ['#folder-open', '#folder-browse'].map($).filter(Boolean);
   btns.forEach(b => b.disabled = true);
+  $('#folder-ask').classList.add('hidden');
   $('#folder-hint').textContent = 'opening…';
   let r;
   try {

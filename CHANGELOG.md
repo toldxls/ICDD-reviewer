@@ -30,6 +30,63 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+An adversarial review of the day's three releases (0.10.0, 0.10.1, 0.11.0): eight reviewers, one slice each, every finding
+reproduced before it was fixed. The arithmetic held — the bond-valence workbook matched `compute` on every corpus .cif in
+both hydrogen-bond conventions, and real Excel agreed with the test evaluator on every formula the writers emit (22,300
+cells) — and what was wrong was what the tool SAID. Corpus gates after the fixes: the entries A/B (582 entries: 22 changed,
+all intended), the paper checks (1,130 papers: no status changed), 769 EPMA, 62 bond-valence and 256 Gladstone–Dale
+workbooks re-swept, the regression suite.
+
+### Fixed — entries
+- **check33 offered another mineral's density as "enter it".** A paper on several species states one calculated density per
+  species and the reader takes the first: two entries of a three-mineral paper were told to enter the third's. Every other
+  calculated density the paper states near Xtl Dx is now offered beside it ("enter the one that applies"); past 8 % of
+  Xtl Dx, with no Xtl Dx, or in a sentence about a synthetic analogue or a related mineral, the value is a note. Set on the
+  183 corpus entries that carry a Dx, blanked: no other species' value is offered as definite any more (8 were). A sink-float
+  measurement beside the word "structure" is no longer read as a calculated density.
+- **check29's "the paper's misprint" could swallow the entry's own typo** where the table is set in two blocks side by side:
+  a one-keystroke value printed IN ORDER where the line belongs is the original, and vetoes the misprint reading; a value
+  that is a line of the entry's own list is not "in its place". Nothing changed on the corpus.
+- **check32 (blank Final Quality Mark) is a note on a calculated pattern** — 12 of the 13 corpus blanks, a quarter of the
+  calculated entries even after review: a mark that class commonly receives later. Measured patterns still flag.
+
+### Fixed — the workbooks' check sheets
+- **EPMA: "PROBLEM: the stated basis does not reproduce the formula" was written wherever the stated and the found basis
+  differed** — 74 of 772 corpus workbooks, against 0 basis flags from the composition check, over the tool's own conventions
+  (an ammonium count, OH with no water row, a group sum), and "every coefficient follows" of formulas reproduced on no
+  basis. PROBLEM is now said only where the composition check flags the basis; otherwise a note that says which case it is.
+- **EPMA: fewer than three major elements** (a gypsum: Ca and S) — the median of two ratios is their mean, so one slip read
+  as "the basis AND a number" and the right SO3 was "corrected". No common factor is divided out there, and no wt% is
+  suggested. The "basis that would give the paper's coefficients" row no longer contradicts "ONE element stands alone".
+  A formula none of whose elements is in the table gave an exception (and no workbook); it now gives a sheet that says so.
+- **Gladstone–Dale: Σ wt% left out the O ≡ F,Cl deduction** — an ideal fluorite totalled 120.49, fluorapatite 101.59 — which
+  raised a false "total" note and could turn "the paper normalised its analysis to 100 %" green for a normalisation that
+  never happened. A wt% analysis may now carry the deduction a table prints (`O=F=-1.47`).
+- **Gladstone–Dale: reds that were not the paper's arithmetic.** With no density the category line was always red (the word
+  is now judged against the paper's own number, density or none); a category word broken at a line end ('excel‑lent') was
+  passed over for the next clause's 'poor'; a calculated density that differs from Z·FW/(V·0.602214) for the values typed,
+  and a constituent with no constant, are amber.
+- **Bond valence: a BVS-column paper was judged by a bare ±0.08 vu on every candidate table the reader returned** — occupancy
+  and coordinate columns as red rows, all "table 1" — while the console said "no table found". The sheet and the report now
+  carry `check_bvs_sites`' verdicts (its tolerances by site, the mixed-site, sulfosalt and half-occupied rules) for the one
+  table that agrees best. "paper − the nearer reading" is the nearest of each bond's valence and the total (an 'agrees' row
+  showed −0.39), the column mean is over the cells that differ, a printed 0.00 no longer gives `#NUM!`.
+
+### Fixed — the folder guard, the launcher, crashes
+- **"Open it all" outlived its question**: browsing on left it up, and it then opened the HOME folder, confirmed, while the path
+  box showed the batch. Browsing withdraws it, and the question names its folder.
+- **A console tool typed in the home folder** took all of it as the batch (the morning's one-level-down rule, with an entry in
+  a Downloads folder): it no longer does, and says so. A link to the home folder, `/Volumes` and a whole external drive are
+  broad paths; a memory file that is valid JSON but not the memory is an empty memory, not a traceback.
+- **The guard's holes**: the ancestor "source pool" never climbs into the home folder or a drive (a docx-only batch directly
+  under home globbed all of it); a folder of hundreds of papers is asked about before Manuscript mode analyses every one;
+  the survey counts what discovery will walk (links followed, only `review_out` left out).
+- **Ten error paths of the GUI answered an HTML 500**: `errors` was never imported as `E`. An unreadable paper now costs an
+  export its check sheet, not the workbook; the two Tables routes that failed with no folder open answer; the no-folder
+  answer comes after the localhost gate (a foreign host got 409 for 403, and the in-flight count ran one short).
+- `pxrd paper` no longer dies when the workbook cannot be written (open in Excel on Windows); `pxrd gd --paper` and
+  `pxrd bv --table` say which file could not be read.
+
 ## [0.11.0] — 2026-09-21
 
 ### Added

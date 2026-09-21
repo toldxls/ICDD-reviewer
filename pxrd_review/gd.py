@@ -166,6 +166,7 @@ def prepare(formula=None, wt=None, oxide=None, n=None, density=None, cif=None, z
     if not wt_:
         raise ValueError('nothing parsed from the composition — use X=value,X=value')
     res = evaluate(wt_, float(n), float(density) if density else None, cif, float(z) if z else None, _parse_pairs(k) if k else None, fw)
+    res['o_corr'] = sum(v for k_, v in wt_.items() if k_.startswith('O='))     # the O ≡ F,Cl deduction: no constant, but part of the total
     if formula and formula.strip():
         res['apfu'] = True; res['apfu_by_key'] = by_key; res['wt_keys'] = [k_ for k_ in wt_ if not k_.startswith('O=')]   # what the workbook derives the wt% from
     return res
@@ -199,7 +200,11 @@ def write_xlsx(res, path, name='', paper=None):
     for i, (key, w, k, c, src) in enumerate(res['rows']):
         r = first + i
         ws.append([key, ('=' + wt_ref[key]) if key in wt_ref else w, k, '=B%d*C%d/100' % (r, r), src if k is not None else 'NO CONSTANT: this constituent adds nothing to K_C'])
-    ws.append(['K_C', '=SUM(B%d:B%d)' % (first, last), '', '=SUM(D%d:D%d)' % (first, last), 'Σ k·wt%/100 — over the WHOLE analysis: a short list gives a short K_C'])
+    # Σ wt% is the analysis's total, so it carries the O ≡ F,Cl deduction although that row has no constant: without it
+    # fluorite totalled 120.49 and fluorapatite 101.59, and the check sheet 'explained' a paper's index by a normalisation
+    corr = ('+E%d' % r_corr) if apfu and any(k_ in ('F', 'Cl', 'Br') for k_ in res['wt_keys']) else ('%+r' % res['o_corr']) if res.get('o_corr') else ''
+    ws.append(['K_C', '=SUM(B%d:B%d)%s' % (first, last, corr), '', '=SUM(D%d:D%d)' % (first, last),
+               'Σ k·wt%/100 — over the WHOLE analysis: a short list gives a short K_C' + ('; Σ wt% less O ≡ F,Cl' if corr else '')])
     ws.append([]); ws.append(['n (mean index)', res['n']])
     row = r_n + 1; A = {'kc': 'D%d' % r_kc, 'sum': 'B%d' % r_kc, 'n': 'B%d' % r_n, 'first': first, 'last': last}
     cat = lambda cell: '=IF(ISNUMBER(%s),IF(ABS(%s)<0.02,"superior",IF(ABS(%s)<0.04,"excellent",IF(ABS(%s)<0.06,"good",IF(ABS(%s)<0.08,"fair","poor")))),"")' % ((cell,) * 5)   # no index, no category
@@ -244,8 +249,9 @@ def _write_gd_check(wb, res, paper, A, cat):
     """The 'check' sheet: the index the paper states beside the tool's, for each density, and — live — what would explain a
     difference. A Gladstone–Dale difference is NEVER red by itself: K_C is a mean over the whole analysis and rests on
     constants a paper may have taken from another class (Mandarino's variants), so a gap is amber and the line that
-    reproduces the paper's number is the finding. Red is for arithmetic alone: a calculated density that is not
-    Z·FW/(V·0.602214), a category word that is not the category of the paper's own number."""
+    reproduces the paper's number is the finding. Red is for the paper's own arithmetic alone: a category word that is not
+    the category of the paper's own number. (A calculated density that is not Z·FW/(V·0.602214) for the values typed here,
+    a constituent with no constant: amber — the input's doing as often as the paper's.)"""
     from openpyxl.styles import Font, PatternFill
     from openpyxl.formatting.rule import FormulaRule
     from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
@@ -275,6 +281,9 @@ def _write_gd_check(wb, res, paper, A, cat):
     if ci_p is not None and len(dens) == 2:
         row += 1
         wc.cell(row, 1, 'the density the paper used'); wc.cell(row, 5, '=IF(ABS(D%d)<=ABS(D%d),"its index is nearer the MEASURED density\'s","its index is nearer the CALCULATED density\'s")' % (r_ci['meas'], r_ci['calc']))
+    if ci_p is not None and not dens:
+        row += 1; r_ci['paper'] = row                                   # no density given: the paper's number still stands beside its word
+        wc.cell(row, 1, "1 − K_P/K_C as the paper states it (no density given here: none computed)"); wc.cell(row, 3, ci_p); wc.cell(row, 3).number_format = '+0.000;-0.000'
     if paper.get('category'):
         row += 1
         wc.cell(row, 1, 'category'); wc.cell(row, 3, paper['category'])
@@ -282,13 +291,16 @@ def _write_gd_check(wb, res, paper, A, cat):
         if best:
             wc.cell(row, 2, cat('B%d' % best))
         if ci_p is not None:
-            # the paper's word against the paper's own number: no constant enters into that
+            # the paper's word against the paper's own number: no constant and no density enters into that
+            own = cat('C%d' % (best or r_ci['paper']))[1:]
             wc.cell(row, 5, '=IF(%s="%s","ok — the paper\'s word is the category of its own number","PROBLEM — the paper calls %s a ‘%s’ compatibility; Mandarino\'s category for that number is "&%s)' % (
-                cat('C%d' % r_ci[dens[0][0]])[1:] if dens else '""', paper['category'], '%+.3f' % ci_p, paper['category'], cat('C%d' % r_ci[dens[0][0]])[1:] if dens else '""'))
+                own, paper['category'], '%+.3f' % ci_p, paper['category'], own))
     if paper.get('D_calc') and 'calc' in A:
         row += 1
         wc.cell(row, 1, 'D calculated = Z·FW/(V·0.602214)'); wc.cell(row, 2, '=' + g(A['calc']['D'])); wc.cell(row, 3, paper['D_calc']); wc.cell(row, 4, '=B%d-C%d' % (row, row))
-        wc.cell(row, 5, '=IF(ABS(D%d)<=0.01*C%d,"ok — the paper\'s calculated density follows from Z, the formula weight and V","PROBLEM — the paper\'s calculated density is not Z·FW/(V·0.602214) for these values ("&TEXT(100*D%d/C%d,"+0.0;-0.0")&" %%): Z, the formula (its water above all) or the cell")' % (row, row, row, row))
+        # amber: the paper's density is from its EMPIRICAL formula and the one here is whatever was typed; every corpus red of
+        # the paper check's D_calc line dissolved on inspection and it was retired to a note (owner, 2026-09-06)
+        wc.cell(row, 5, '=IF(ABS(D%d)<=0.01*C%d,"ok — the paper\'s calculated density follows from Z, the formula weight and V","note — Z·FW/(V·0.602214) for the values HERE differs from the paper\'s by "&TEXT(100*D%d/C%d,"+0.0;-0.0")&" %%: the formula typed (ideal against the paper\'s empirical one, its water above all), Z or the cell")' % (row, row, row, row))
         wc.cell(row, 2).number_format = wc.cell(row, 4).number_format = '0.000'
     row += 1
     wc.cell(row, 1, 'Σ wt% of the analysis'); wc.cell(row, 2, '=' + g(A['sum']))
@@ -296,7 +308,7 @@ def _write_gd_check(wb, res, paper, A, cat):
     r_sum = row
     missing = [r[0] for r in res['rows'] if r[2] is None]
     for m in missing:
-        row += 1; wc.cell(row, 1, 'no constant for %s' % m); wc.cell(row, 5, 'PROBLEM — %s adds nothing to K_C here: the index is short by its share (give one with --k)' % m)
+        row += 1; wc.cell(row, 1, 'no constant for %s' % m); wc.cell(row, 5, 'note — %s adds nothing to K_C here: the index is short by its share (give one with --k)' % m)
     if ci_p is not None and dens:
         row += 2
         wc.cell(row, 1, 'WHAT WOULD EXPLAIN A DIFFERENCE').font = bold
@@ -345,7 +357,8 @@ def _parse_pairs(s):
     out = OrderedDict()
     for tok in (s or '').split(','):
         if '=' in tok:
-            k, v = tok.split('=', 1); out[k.strip()] = float(v)
+            k, v = tok.rsplit('=', 1) if tok.strip().startswith('O=') else tok.split('=', 1)   # 'O=F=-1.47': the deduction a table prints
+            out[k.strip()] = float(v)
     return out
 
 def main(argv=None):
@@ -368,7 +381,10 @@ def main(argv=None):
     print(report_text(res, a.name))
     if a.xlsx:
         out = a.out or os.getcwd(); os.makedirs(out, exist_ok=True)
-        paper = paper_statement(a.paper) if a.paper else {}
+        try:
+            paper = paper_statement(a.paper) if a.paper else {}
+        except Exception as ex:
+            raise SystemExit('gd: --paper: %s could not be read (%s)' % (a.paper, str(ex)[:120]))
         if a.paper_ci is not None:
             paper['ci'] = a.paper_ci
         p = write_xlsx(res, os.path.join(out, (a.name or 'gd') + '_gd.xlsx'), a.name, paper or None); print('  xlsx → %s' % p)

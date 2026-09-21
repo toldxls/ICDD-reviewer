@@ -2709,9 +2709,15 @@ def _paper_misprint(e, d, cand, found, stream):
     if not cand or not above or not below:
         return None
     hi, lo = min(above, key=float), max(below, key=float)
+    if any(float(lo) < float(c) < float(hi) for c in cand):
+        # the paper prints a one-keystroke value IN ORDER where the line belongs: that is the likely original
+        # and the entry the likely slip. Passing over it to a second candidate let a table set in two blocks
+        # side by side ('3.913 3.913 … 2.834 2.834') turn the entry's 3.834 for 3.843 into 'the paper's misprint'
+        return None
+    own = set().union(*(_d_forms(x) for x in found))
     for c in cand:
-        if float(lo) < float(c) < float(hi):
-            continue                                        # in order where it stands: nothing odd about it
+        if c in own:
+            continue                                        # a line of the entry's own list: not 'in its place'
         for i, t in enumerate(stream):
             if t == c and (_d_forms(hi) & set(stream[max(0, i - 12):i])) and (_d_forms(lo) & set(stream[i + 1:i + 13])):
                 break
@@ -2820,9 +2826,15 @@ def check32_quality_mark(e, text=None):
                     return []
                 pre = next((cells[k + 1] for k, x in enumerate(cells[:-1])
                             if re.match(r'pre\.?\s*quality\s+mark', x, re.I)), '')
-                return [Finding('quality_mark', 'flag',
-                                "Final Quality Mark is blank%s — every entry carries one; assign it."
-                                % (" (Pre. Quality Mark = '%s')" % pre if pre else ''), None, 'quality')]
+                # a CALCULATED pattern is where the blank lives: 12 of the 13 corpus blanks, a quarter of the
+                # calculated entries even after review, against 1 measured entry in 211 — a mark that looks to
+                # be assigned downstream for that class, so there it is a note (owner, 2026-09-21)
+                calc = not _measured(e)
+                return [Finding('quality_mark', 'note' if calc else 'flag',
+                                "Final Quality Mark is blank%s — %s."
+                                % (" (Pre. Quality Mark = '%s')" % pre if pre else '',
+                                   'a calculated pattern, where the mark is commonly assigned later' if calc
+                                   else 'every entry carries one; assign it'), None, 'quality')]
     return []
 
 # ----------------------------------------------------------------------------- 33. Dx left blank although the paper states a calculated density
@@ -2842,11 +2854,23 @@ def check33_dx_blank(e, text):
     o = PE.optics(text)
     d = o.get('D_calc')
     xtl = next((_val(row[j + 1]) for j, c in enumerate(row[:-1]) if re.match(r'^xtl\s*dx', (c or '').strip(), re.I)), None)
+    sev = 'flag'
     if d:
         if xtl and abs(d - xtl) / xtl > 0.15:
             return out
         vals = ['%g' % d]
         sent = next((x for x in o.get('sentences') or [] if ('%g' % d) in x), '')
+        # WHOSE density it is. A paper on several species states one per species, a sentence each, and the
+        # reader takes the first: feiite and liuite were both told to enter tschaunerite's 5.16, the redmondite
+        # and betpakdalite families a relative's. Blanking the Dx of the 183 corpus entries that carry one
+        # (2026-09-21): an offer within 8 % of Xtl Dx was the entry's own or the paper's 120 times in 120 bar the
+        # papers that state several; every other species' value offered as definite sat 8–15 % away. So past 8 %,
+        # with no Xtl Dx to hold it against, or in a sentence about a synthetic analogue or a related mineral, the
+        # value is a note; and every other calculated density the paper states near Xtl Dx is offered beside it.
+        own = next((c for c in re.split(r'\.\s+(?=[A-Z])', sent) if ('%g' % d) in c), sent)   # the value's own sentence: the reader's window runs into its neighbours
+        if (not xtl or abs(d - xtl) / xtl > 0.08
+                or re.search(r'synthetic|analogue|analog\b|related|associated|isostructural', own, re.I)):
+            sev = 'note'
         # a paper on two phases prints two ('calculated density is 6.019 (Hak-Cd), 6.011 (Hak-Fe)'; a crystal-
         # data row '2.198 2.127'): the reader takes the first, so its neighbours are offered beside it. A
         # neighbour is part of the same RUN of values — nothing between it and the value before but an esd,
@@ -2867,6 +2891,14 @@ def check33_dx_blank(e, text):
                 end = first.end() + m.end()
                 if abs(v - d) / d <= 0.15 and v != o.get('D_meas') and ('%g' % v) not in vals and len(vals) < 3:
                     vals.append('%g' % v)
+        run = len(vals)
+        for m in re.finditer(r'calc[a-z.]*\)?[^.;]{0,80}?(?<![\d.])(\d{1,2}\.\d{2,4})(?:\(\d+\))?\s*g\s*[/·⋅]?\s*cm', flat):
+            v = float(m.group(1))
+            if (abs(v - (xtl or d)) / (xtl or d) <= 0.15 and abs(v - d) / d > 0.005 and v != o.get('D_meas')
+                    and ('%g' % v) not in vals and len(vals) < 4):
+                vals.append('%g' % v)
+        if xtl and len(vals) > run:                         # another sentence's: nearest Xtl Dx first; a run keeps the paper's order
+            vals.sort(key=lambda t: abs(float(t) - xtl))
     else:
         # the paper never says 'calculated': touretite's measured density is 'in fairly good agreement with
         # the values obtained from the single-crystal structure refinement (3.19 g/cm3) and from the
@@ -2880,16 +2912,20 @@ def check33_dx_blank(e, text):
             v = float(m.group(1)); lead = flat[max(0, m.start() - 110):m.start()]
             if (abs(v - xtl) / xtl <= 0.15 and v != o.get('D_meas') and m.group(1) not in vals
                     and re.search(r'single[- ]crystal|structure|unit-?\s?cell|X-ray|calculat', lead, re.I)
-                    and not re.search(r'measured|Clerici|pycnomet|flotation|floatation|sink', lead[-45:], re.I)):
+                    and not re.search(r'measured|Clerici|pycnomet|flotation|floatation|sink|float|heavy liquid|iodide', lead[-45:] + flat[m.end():m.end() + 45], re.I)):
                 vals.append(m.group(1)); sent = sent or flat[max(0, m.start() - 110):m.end() + 10]
         if not vals:
             return out
+        if min(abs(float(v) - xtl) / xtl for v in vals) > 0.08:
+            sev = 'note'                                    # the same 8 % as above: a relative's value from the prose
     several = len(vals) > 1
     shown = vals[0] if not several else ', '.join(vals[:-1]) + ' and ' + vals[-1]
-    out.append(Finding('dx_blank', 'flag',
-                       "Dx is blank, but the .pdf states %s of %s g/cm³%s — enter %s."
+    out.append(Finding('dx_blank', sev,
+                       "Dx is blank, but the .pdf states %s of %s g/cm³%s — %s."
                        % ('calculated densities' if several else 'a calculated density', shown,
-                          (' (Xtl Dx = %g)' % xtl) if xtl else '', 'the one that applies' if several else 'it'),
+                          (' (Xtl Dx = %g)' % xtl) if xtl else '',
+                          'whether it is this mineral\'s is not settled; verify against the paper' if sev == 'note'
+                          else 'enter the one that applies' if several else 'enter it'),
                        sent[:160] or None, 'dx'))
     return out
 
