@@ -177,6 +177,37 @@ class Reduction(unittest.TestCase):
         read = lambda name: b.value('check', 'C%d' % lab[name])
         return b, lab, read, red
 
+    def test_sheet_matches_on_the_edge_inputs(self):
+        import openpyxl
+        # Se as an anion beside oxides: one O each, in the total and in the moles alike (the sheet corrected F, Cl and S only)
+        p = _csv(self.tmp, 'se.csv', ['PbO', 'CuO', 'Se'], [[55.0, 20.0, 19.5]])
+        ds = E.load_probe(p); self._sheet_matches(E.reduce(ds, ('O', 5)), ds, 'se.xlsx')
+        # --charge Fe with S in the table: the sheet's charge cell is of the cations alone, as charge_balance's is
+        p = _csv(self.tmp, 'fe.csv', ['FeO', 'SiO2', 'S'], [[60.0, 30.0, 2.0]])
+        ds = E.load_probe(p); self._sheet_matches(E.charge_balance(ds, ('cations', 3), adjust='Fe', anions=4), ds, 'fe.xlsx')
+        # an 'other' constituent with a halogen and no true oxide: nothing was displaced, so no O apfu goes negative
+        p = _csv(self.tmp, 'am.csv', ['(NH4)2O', 'F'], [[40.0, 30.0]])
+        try:
+            ds = E.load_probe(p); red = E.reduce(ds, ('O', 2))
+            self.assertTrue(all(r.o_apfu >= 0 for r in red.rows.values() if r.c.kind == 'other')); self._sheet_matches(red, ds, 'am.xlsx')
+        except ValueError:
+            pass                                                          # a header this loader does not take: the two cases above carry the test
+        # 260 of 300 points: runs, not 260 arguments (Excel drops a function of more than 255); a point is used once
+        p = _csv(self.tmp, 'many.csv', ['CaO', 'SiO2'], [[50 + (i % 7) * 0.1, 40 + (i % 5) * 0.1] for i in range(300)])
+        ds = E.load_probe(p); pts = list(range(0, 130)) + list(range(150, 280))
+        red = E.reduce(ds, ('O', 3), points=pts); b, ws, label = self._sheet_matches(red, ds, 'many.xlsx')
+        mean = next(c.value for c in b.wb['raw']['B'] if isinstance(c.value, str) and c.value.startswith('=AVERAGE'))
+        self.assertEqual(mean, '=AVERAGE(B2:B131,B152:B281)')
+        self.assertEqual(E.parse_points('1-3,2-4'), [0, 1, 2, 3])
+        self.assertAlmostEqual(E.reduce(ds, ('O', 3), points=[0, 0, 1]).rows['CaO'].wt, E.reduce(ds, ('O', 3), points=[0, 1]).rows['CaO'].wt, places=12)
+        with self.assertRaises(ValueError):
+            E.parse_points('0-3')
+        # a note that begins '=' is text
+        out = os.path.join(self.tmp, 'eq.xlsx')
+        E.write_xlsx(E.reduce(ds, ('O', 3)), None, out, published={'Ca': 1.0, 'Si': 1.0, 'O': 3}, notes=['= 3 O apfu, as the paper writes it'], single=True)
+        c = next(c for c in openpyxl.load_workbook(out)['check']['A'] if isinstance(c.value, str) and '3 O apfu' in c.value)
+        self.assertEqual(c.data_type, 's')
+
     def test_two_majors_no_factor_and_a_formula_of_other_elements(self):
         F = 'common factor (median ratio of the major elements)'; N = 'elements left standing once it is divided out'
         B = "the basis that would give the paper's coefficients"

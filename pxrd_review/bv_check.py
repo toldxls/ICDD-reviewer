@@ -2287,7 +2287,8 @@ def _write_bv_check(wb, st, result, anion_sum, cells, tables, site_tables, param
     bold = Font(bold=True)
     red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid'); amber = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
     grey = PatternFill(start_color='E7E6E6', end_color='E7E6E6', fill_type='solid')
-    clean = lambda t: ILLEGAL_CHARACTERS_RE.sub(' ', t or '')
+    _cl = lambda t: ILLEGAL_CHARACTERS_RE.sub(' ', t or '')
+    clean = lambda t: (' ' + _cl(t)) if _cl(t).startswith('=') else _cl(t)   # the paper's text is text: a cell printed '=0.25' would be written as a formula (#NAME? in Excel)
     wc = wb.create_sheet('check', 1)
     record = []
     lines = check_bvs_table(st, result, cells, anion_sum, tables, params_label or '?', record=record) if tables else []
@@ -2440,7 +2441,9 @@ def _parse_hb(s):
     return out
 
 def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word=False, out_dir=None, quiet=False,
-        auto_params=True, hbond='oo', hmax=None, donors=None, hb=None, u6='burns', xlsx=False):
+        auto_params=True, hbond='oo', hmax=None, donors=None, hb=None, u6='burns', xlsx=False, follow_table=True):
+    """follow_table=False: the sets are still scored against the manuscript's table (the check sheet lists them) but the
+    report and the workbook stay on the set ASKED for — the GUI's export, whose pane shows that set."""
     st = Structure(cif, _parse_ox(ox), include_h=include_h)
     site_tables = []
     if table and not os.path.isfile(table):
@@ -2474,7 +2477,10 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
                 scores[key] = (sum(int(m.group(2)) for m in hits), 0 if key == params else 1, Pk, rk, (sum(int(m.group(1)) for m in hits), sum(int(m.group(2)) for m in hits)))
         if scores:
             best = min(scores, key=lambda k: scores[k][:2])
-            if best != params:
+            if best != params and not follow_table:
+                chosen_note = ('  the manuscript table agrees best with %s parameters (%d cells disagree, vs %d with %s); this report keeps %s, the set asked for\n' %
+                               (PARAM_NAMES[best], scores[best][0], scores[params][0] if params in scores else -1, PARAM_NAMES[params], PARAM_NAMES[params]))
+            elif best != params:
                 P, (result, anion_sum, cells, hbonds) = scores[best][2], scores[best][3]
                 chosen_note = ('  the manuscript table agrees best with %s parameters (%d cells disagree, vs %d with %s) '
                                '— the report below uses them; --params %s forces a set\n' %

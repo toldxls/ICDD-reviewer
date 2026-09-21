@@ -87,6 +87,24 @@ workbooks re-swept, the regression suite.
 - `pxrd paper` no longer dies when the workbook cannot be written (open in Excel on Windows); `pxrd gd --paper` and
   `pxrd bv --table` say which file could not be read.
 
+### Fixed — the edge inputs (the rest of the audit)
+- **EPMA: the sheet and the reduction now agree where they did not.** Se and Te as anions beside oxides displace one O each,
+  in the total as in the moles (the sheet knew F, Cl and S only: factor 7.72 against 12.67); with `--charge Fe` and S in the
+  table the sheet's charge cell is of the cations alone; with a halogen and no true oxide nothing is displaced, so no O apfu
+  goes negative. A point is used ONCE and must exist (`1-3,2-4`; a repeated index weighted a point twice, `0` took the last),
+  and a selection is written as runs — Excel drops a function of more than 255 arguments, and every wt% then read 0.
+- **The paper's workbook**: a coefficient printed as an integer (`Si3`) rounds at ±0.5, not the formula's common ±0.005; the
+  printed total and page are given only when the wt% used are the first table's (the check may settle on another column, whose
+  Σ was set against the first's total); text that begins with `=` — a note, a bond-valence cell as printed, the method
+  sentence — is written as text, and the method sheet is cleaned of control characters.
+- **Bond valence, from the GUI**: the export scores the parameter sets against the chosen paper and lists them, but the workbook
+  stays on the set the pane shows (`run(follow_table=False)`); a paper left selected no longer moves it to another set unsaid.
+- **Gladstone–Dale**: `H=2` in a formula is two H atoms — one water — not two waters (brucite came to 76.33 for 58.32).
+- **`? look`**: a second click while the entry's view was still loading no longer resets the page under the later landing
+  (one counter for both landers); a formula finding's Analysis stop is counted only where the entry's view has that field.
+- **`_fit_page`** leaves alone what it cannot judge: a table sized as a share of the window, the cells of tables nested in the
+  first row (the old template is one cell holding the whole entry), a document of several sections.
+
 ## [0.11.0] — 2026-09-21
 
 ### Added

@@ -283,6 +283,18 @@ class ManuscriptTable(unittest.TestCase):
             bvs = B.check_bvs_table(st, result, cells, anion_sum, tables, 'test')
             self.assertIn('1 cells compared, 0 disagree', bvs[0])
             self.assertEqual([x for x in bvs[1:] if 'Σ' in x], [], bvs)
+            # the table follows another set than the one asked for: the CLI report moves to it and says so; the GUI's export
+            # (follow_table=False) scores the sets just the same and stays on the pane's
+            from unittest import mock
+            out = os.path.join(tmp, 'o'); real = B.check_bvs_table
+            def scored(st_, res_, cells_, an_, tabs_, label='?', **kw):      # the asked-for set made to disagree with the table
+                return ['table 1: 1 cells compared, 1 disagree'] if label.startswith('Gagn') else real(st_, res_, cells_, an_, tabs_, label, **kw)
+            with mock.patch.object(B, 'check_bvs_table', side_effect=scored):
+                moved = B.run(cif, table=path, params='gh', out_dir=out, quiet=True)[4]
+                kept = B.run(cif, table=path, params='gh', out_dir=out, quiet=True, follow_table=False)[4]
+            self.assertIn('the report below uses them', moved); self.assertNotIn('Gagné', moved.split('MANUSCRIPT TABLE CHECK')[0])
+            self.assertIn('this report keeps Gagné & Hawthorne 2015, the set asked for', kept)
+            self.assertIn('Gagné', kept.split('MANUSCRIPT TABLE CHECK')[0])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

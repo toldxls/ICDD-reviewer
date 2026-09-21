@@ -2069,7 +2069,8 @@ def api_tb_bvs_export(key):
     note = ''
     run = lambda table: BV.run(MS['cifs'][key], table=table, params=opts['params'], ox=opts['ox'], cutoff=opts['cutoff'],
                                include_h=opts['include_h'], out_dir=MS['out_dir'], quiet=True, xlsx=True,
-                               hbond=opts['hbond'], hmax=opts['hmax'], donors=opts['donors'], hb=opts['hb'], u6=opts['u6'])
+                               hbond=opts['hbond'], hmax=opts['hmax'], donors=opts['donors'], hb=opts['hb'], u6=opts['u6'],
+                               follow_table=False)       # the workbook is the pane's table: a paper left selected never moves it to another parameter set
     try:
         try:
             run(paper)

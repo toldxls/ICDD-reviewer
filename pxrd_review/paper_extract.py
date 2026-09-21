@@ -6220,6 +6220,11 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
     if not red.factor:
         return None
     e = ex.get('epma') or {}
+    # the composition check may have settled on ANOTHER column or table than the first (chosen by fit): the page and the
+    # printed total of the first are then not this analysis's — bazzite's column 5 (Σ 101.51) was set against column 1's 100.62
+    first_wt = {row['constituent']: row['mean'] for row in (e.get('rows') or [])}
+    if comp.get('wt') and any(abs((first_wt.get(k) or 0.0) - v) > 1e-6 for k, v in comp['wt'].items() if k in first_wt):
+        e = {k: v for k, v in e.items() if k not in ('total', 'page')}
     notes = ['%s — the analytical table of %s, reduced on %s' % (ex.get('name') or 'paper', ('page %d' % e['page']) if e.get('page') else 'the manuscript',
                                                                   EP._basis_label(basis) + (' (the basis the paper states)' if stated and _same_basis(stated, basis) else
                                                                                            (' (the paper states none: the basis that reproduces its formula)' if not stated else
@@ -6254,8 +6259,13 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
     printed = re.findall(r'([A-Z][a-z]?)(?:\d[+-])?\s*(\d+)[.:](\d+)', comp.get('formula') or '')
     common = max([len(d) for _e, _i, d in printed] or [2])
     decimals = {el: common for el in (comp.get('counts') or {})}
+    seen_ = set()
     for el, _i, d in printed:
-        decimals[el] = min(decimals.get(el, common), len(d)) if el in decimals else len(d)
+        decimals[el] = min(decimals[el], len(d)) if el in seen_ else len(d); seen_.add(el)
+    for el, v in (comp.get('counts') or {}).items():
+        # 'Si3', 'Be3': printed to NO decimals, so ±0.5 is its rounding — it took the formula's common two and an apfu of 2.98 read 'beyond rounding'
+        if el not in seen_ and abs(v - round(v)) < 1e-9 and re.search(r'%s(?:\d[+-])?\s*%d(?![.:\d])' % (re.escape(el), round(v)), comp.get('formula') or ''):
+            decimals[el] = 0
     # an element the formula prints in two valence states is read as ONE coefficient (the composition check leaves it out for that reason)
     not_judged = {el: 'not judged: printed in two valence states, read as one coefficient' for el, v in (comp.get('ox_paper') or {}).items() if len(v or ()) > 1}
     EP.write_xlsx(red, None, os.path.join(out_dir, name), published=comp.get('counts') or None, notes=notes, single=True, decimals=decimals, not_judged=not_judged, table_total=e.get('total') if e.get('total') and 85 <= e['total'] <= 112 else None)   # an apfu sum read as the total is not one

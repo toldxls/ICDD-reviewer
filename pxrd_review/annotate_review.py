@@ -106,12 +106,20 @@ def _fit_page(doc):
     holds its tables is left exactly as it is."""
     from docx.shared import Twips
     try:
+        if len(doc.sections) != 1:
+            return False                                    # which section holds the wide table is not known: the last one was turned, the table's left as it was
         widest = 0
         for t in doc.tables:
             w = t._tbl.tblPr.find(_q('tblW')) if t._tbl.tblPr is not None else None
-            v = int(w.get(_q('w')) or 0) if w is not None and w.get(_q('type')) in (None, 'dxa') else 0
+            kind = w.get(_q('type')) if w is not None else None
+            if kind == 'pct':
+                continue                                    # a share of the window: fits whatever the page
+            v = int(w.get(_q('w')) or 0) if w is not None and kind in (None, 'dxa') else 0
             if not v and t.rows:
-                v = sum(int(c.get(_q('w')) or 0) for c in t.rows[0]._tr.iter(_q('tcW')))
+                # the cells of THIS table's first row, in twips: `iter` also walked the tables nested in them (the old
+                # template is one cell holding the whole entry — 437 widths in 'row 0'), and summed a pct width as twips
+                v = sum(int(pr.get(_q('w')) or 0) for tc in t.rows[0]._tr.findall(_q('tc'))
+                        for pr in tc.findall(_q('tcPr') + '/' + _q('tcW')) if pr.get(_q('type')) in (None, 'dxa'))
             widest = max(widest, v)
         sec = doc.sections[-1]
         pw, ph = sec.page_width.twips, sec.page_height.twips

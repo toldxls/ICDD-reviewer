@@ -52,6 +52,8 @@ def formula_to_wt(apfu, oxides=None, apfu_by_key=False):
         # written as such (H2O, F, Cl, CO2, Fe2O3) is kept
         key = oxides.get(el) or (el if el in ('H2O', 'F', 'Cl', 'Br', 'CO2', 'NH3') or re.search(r'\d|O', el) else USUAL_OXIDE.get(el, el))
         c = EP.parse_constituent(key)
+        if el == 'H' and c.kind == 'water':
+            n = n / 2.0                                          # H atoms, two to a water: 'Mg=1,H=2' is brucite (58.32), not Mg(OH)2·H2O (76.33)
         m = n * c.mw / (c.n_cat if c.kind != 'water' else 1)     # mass of this constituent per formula unit
         mass[key] = mass.get(key, 0.0) + m
         by_key[key] = by_key.get(key, 0.0) + n

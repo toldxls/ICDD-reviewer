@@ -605,7 +605,11 @@ function lookStops(fkey) {
   const g = lookGroups(f);
   const pdf = (S.a && S.a.pdf && termsFor(fkey, 0).terms.length) ? (g ? g.length : 1) : 0;   // nothing to find in the paper: no stop there
   const anchor = (S.anchorOf || {})[fkey] || (f || {}).anchor;
-  const docx = anchor ? ((f && f.code === 'formula' && anchor !== 'analysis') ? 2 : 1) : 0;    // a formula finding: its row, then the Analysis field
+  // a formula finding: its row, then the Analysis field — where the entry's view HAS one (an old-template entry has not,
+  // and the stop counted for it was a click that did nothing); not yet loaded, it is assumed
+  const html = (S.docxHtml || {})[S.key];
+  const hasAnalysis = html == null || html.indexOf('data-anchor="analysis"') >= 0;
+  const docx = anchor ? ((f && f.code === 'formula' && anchor !== 'analysis' && hasAnalysis) ? 2 : 1) : 0;
   return { pdf, docx };
 }
 function lookSeq(fkey, start) {
@@ -820,6 +824,7 @@ async function zoomToHighlight(fkey) {
 // clicks still cycle a multi-group finding's look-groups (via lookStep).
 async function lookInPage(fkey) {
   const key = S.key;                 // bail after any await if the entry changed under us
+  const gen = S.lookGen = (S.lookGen || 0) + 1;   // … or if a later '? look' overtook this one (see lookInDocx)
   S.focusKey = fkey;
   const step = S.lookStep[fkey] || 0;
   const t = termsFor(fkey, step);
@@ -841,7 +846,7 @@ async function lookInPage(fkey) {
       fetch(`/api/pdf/${enc(S.a.key)}/search?q=${enc(term)}`).then(x => x.json()).catch(() => ({ hits: [], sizes: {} }))));
     res.forEach((r, ti) => { for (const h of (r.hits || [])) hits.push({ ...h, ti }); Object.assign(sizes, r.sizes || {}); });
   } catch (e) { /* fall through to evidence page */ }
-  if (S.key !== key) return;         // stale continuation — a different entry owns the pane
+  if (S.key !== key || S.lookGen !== gen) return;   // stale continuation — a different entry, or a later look, owns the pane
   // The snippet box says what was searched for (there is no context sentence for an extra-check
   // finding), so a landing is explicable — and, for a finding with several look-groups, where the
   // next click goes. Before this the box was simply cleared, and a miss opened the evidence page
@@ -952,10 +957,13 @@ function docxTarget(view, anchor, fkey) {
 
 async function lookInDocx(fkey) {
   const key = S.key;
+  // one counter for both landers: a second '? look' while the entry's view was still loading crossed to the .pdf, and
+  // this one then resumed in a pane no longer shown, found nothing to aim at and reset the page under the later landing
+  const gen = S.lookGen = (S.lookGen || 0) + 1;
   S.focusKey = fkey;
   if (S.midMode !== 'docx') setMidMode('docx');
   await loadDocxView();                       // no-op when it is already cached
-  if (S.key !== key) return;                  // entry changed under us
+  if (S.key !== key || S.lookGen !== gen) return;   // entry changed under us, or a later look overtook this one
   const view = $('#docx-view');
   // The CELL / per-parameter / RADIATION rows are synthesised in renderFindings and are NOT in
   // S.a.findings (which holds only the extra checks) — findingOf() returns null for them, so

@@ -193,7 +193,8 @@ def reduce(ds, basis=('O', 21), adds=(), converts=(), drop=(), points=None, idea
     base is one of the others and the balance adjusts the H2O/OH (or Fe3+/Fe2+) content.
     adds: [(formula, mode, value)] with mode 'structure' (apfu), 'wt' (wt%), 'difference'.
     converts: [('UO2', 'UO3')]. drop: constituents to leave out."""
-    sel = range(len(ds.points)) if points is None else points
+    # a point is used once and must exist: '[0, 0, 1]' weighted the first twice, and -1 silently took the last
+    sel = range(len(ds.points)) if points is None else [i for i in dict.fromkeys(points) if 0 <= i < len(ds.points)]
     cons = list(ds.constituents); table = OrderedDict()
     for j, c in enumerate(cons):
         if c.formula in drop:
@@ -228,8 +229,8 @@ def reduce(ds, basis=('O', 21), adds=(), converts=(), drop=(), points=None, idea
         for k, r in table.items():
             if r['c'].kind == 'element-anion' and r['c'].element in ('F', 'Cl', 'Br', 'I'):
                 corr += r['mean'] * ATOMIC_WEIGHTS['O'] / ATOMIC_WEIGHTS[r['c'].element] * 0.5
-            if r['c'].kind == 'element-anion' and r['c'].element == 'S' and any(x['c'].kind == 'oxide' for x in table.values()):
-                corr += r['mean'] * ATOMIC_WEIGHTS['O'] / ATOMIC_WEIGHTS['S']
+            if r['c'].kind == 'element-anion' and r['c'].element in ('S', 'Se', 'Te') and any(x['c'].kind == 'oxide' for x in table.values()):
+                corr += r['mean'] * ATOMIC_WEIGHTS['O'] / ATOMIC_WEIGHTS[r['c'].element]   # one O per S, Se, Te — as the mole count below has it
         return corr
     # iterate: structure-based additions depend on the normalisation, which depends on the total
     for _ in range(12):
@@ -331,7 +332,7 @@ def _apfu(table, basis, raw_anions=False, water_oh=False):
         hal = sum(o[k] * (0.5 if table[k]['c'].element in ('F', 'Cl', 'Br', 'I') else 1.0)
                   for k in table if table[k]['c'].kind == 'element-anion')
         ox_o = sum(o[k] for k in table if table[k]['c'].kind in ('oxide', 'other'))
-        if ox_o and hal:
+        if ox_o and hal and any(x['c'].kind == 'oxide' for x in table.values()):   # the same gate as the total above: with no oxide nothing was displaced
             for k in table:
                 if table[k]['c'].kind in ('oxide', 'other'):
                     o[k] *= (ox_o - hal) / ox_o
@@ -501,10 +502,17 @@ def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), s
     sel = getattr(red, 'points', None)
     sel = list(range(n)) if sel is None else [i for i in sel if 0 <= i < n]
     r_mean = n + 3
+    sel = sorted(dict.fromkeys(sel)); runs = []
+    for i in sel:
+        if runs and i == runs[-1][1] + 1:
+            runs[-1][1] = i
+        else:
+            runs.append([i, i])
     ws.cell(r_mean, 1, 'mean' if len(sel) == n else 'mean of the %d points used' % len(sel))
     for j in range(ncol):
         col = L(j + 2)
-        rng = '%s2:%s%d' % (col, col, n + 1) if len(sel) == n else ','.join('%s%d' % (col, i + 2) for i in sel)
+        rng = '%s2:%s%d' % (col, col, n + 1) if len(sel) == n else ','.join(
+            ('%s%d:%s%d' % (col, a + 2, col, b + 2)) if b > a else '%s%d' % (col, a + 2) for a, b in runs)   # runs, not cells: Excel drops a function of more than 255 arguments
         ws.cell(r_mean, j + 2, '=AVERAGE(%s)' % rng)
         if len(sel) > 1:                                                    # one row (a paper's means) has no spread
             ws.cell(r_mean + 1, 1, 's.d.'); ws.cell(r_mean + 2, 1, 'min'); ws.cell(r_mean + 3, 1, 'max')
@@ -522,8 +530,10 @@ def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), s
     if method:
         wm = wb.create_sheet('method')
         wm.append(['What the paper states (basis, calculated constituents) — the reduction sheet applies it']); wm.cell(1, 1).font = Font(bold=True)
+        from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
         for part in method.split(' | '):
-            wm.append([part])
+            part = ILLEGAL_CHARACTERS_RE.sub(' ', part)                    # the paper's sentence: a lost minus sign arrives as a control character
+            wm.append([' ' + part if part.startswith('=') else part])
         wm.append([]); wm.append(['basis applied', _basis_label(red.basis)])
         wm.column_dimensions['A'].width = 120
     wb.save(path)
@@ -574,8 +584,8 @@ def _write_reduction(wb, wr, red, ds, r_mean, published, notes, path, decimals=N
             # the oxygen the oxide wt% still carries where this anion sits: half an O per F/Cl, one per S
             if c.element in ('F', 'Cl', 'Br', 'I'):
                 wr.cell(row, 9, '=B%d*%s/(2*%s)' % (row, O_ref, ATOMIC_WEIGHTS[c.element]))
-            elif c.element == 'S':
-                wr.cell(row, 9, '=B%d*%s/%s' % (row, O_ref, ATOMIC_WEIGHTS['S']))
+            else:                                                          # S, Se, Te: one O each
+                wr.cell(row, 9, '=B%d*%s/%s' % (row, O_ref, ATOMIC_WEIGHTS[c.element]))
         wr.cell(row, 10, '=G%d*%s' % (row, fac))
         if c.kind in ('oxide', 'other'):
             # net of the oxygen the halogens replace, shared over the oxides, so O + F sums to the basis
@@ -617,7 +627,9 @@ def _write_reduction(wb, wr, red, ds, r_mean, published, notes, path, decimals=N
         # struck against the structure's anion total: Σ(+) − [2·(anions − halogens) + halogens]
         hal = '+'.join('SUMIF(%s,"%s",%s)' % (col('M'), e, col('J')) for e in ('F', 'Cl', 'Br', 'I'))
         wr.cell(R['charge'], 1, 'charge balance Σ(+) − Σ(−), against %g anions from the structure' % red.anions_structure)
-        wr.cell(R['charge'], 2, '=SUMPRODUCT(%s,%s)+(%s)-(2*(%s-(%s))+(%s))' % (col('J'), col('L'), hal, red.anions_structure, hal, hal))
+        # Σ(+) is of the cations alone: F, Cl and S are among the structure's anions, so their rows come back out of the product
+        an_rows = ''.join('-J%d*L%d' % (first + i, first + i) for i, r_ in enumerate(red.rows.values()) if r_.c.kind == 'element-anion')
+        wr.cell(R['charge'], 2, '=SUMPRODUCT(%s,%s)%s-(2*(%s-(%s))+(%s))' % (col('J'), col('L'), an_rows, red.anions_structure, hal, hal))
     elif not any(r.c.kind in ('oxide', 'other', 'water') for r in red.rows.values()):
         pass                                                               # elements only: no valences to balance
     elif water_oh:
@@ -766,7 +778,8 @@ def _write_check(wb, red, published, decimals, notes, table_total, first, last, 
     else:
         row = 3
     for line in notes:
-        c = wc.cell(row, 1, ILLEGAL_CHARACTERS_RE.sub(' ', line)); row += 1   # a pdf's lost minus sign arrives as a control character, which a worksheet refuses
+        text = ILLEGAL_CHARACTERS_RE.sub(' ', line)
+        c = wc.cell(row, 1, ' ' + text if text.startswith('=') else text); row += 1   # a line that begins '=' is text, not a formula   # a pdf's lost minus sign arrives as a control character, which a worksheet refuses
         if line.startswith('PROBLEM'):
             c.fill = red_fill
     wc.column_dimensions['A'].width = 52
@@ -1154,7 +1167,9 @@ def parse_points(s):
             pts.append(int(tok) - 1)
         else:
             raise ValueError('points must be like 1-8 or 1,3,5: %r' % s)
-    return pts
+    if any(i < 0 for i in pts):
+        raise ValueError('points are numbered from 1: %r' % s)
+    return list(dict.fromkeys(pts))                                        # '1-3,2-4': a point is used once, not weighted twice
 
 def _parse_pairs(s):
     out = OrderedDict()

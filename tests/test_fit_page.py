@@ -39,6 +39,32 @@ class FitPage(unittest.TestCase):
         self.assertFalse(A._fit_page(d))
         self.assertEqual(before, (s.page_width, s.page_height, s.left_margin, s.right_margin))
 
+    def _letter(self, d):
+        s = d.sections[-1]
+        s.page_width, s.page_height = Twips(12240), Twips(15840); s.left_margin = s.right_margin = Twips(1440)
+        return s
+
+    def test_shapes_that_fit_or_cannot_be_judged_are_left_alone(self):
+        from docx.enum.section import WD_SECTION
+        # a table that fills its window (pct) fits by definition, whatever widths its cells still carry
+        d = doc_with_table(5000); self._letter(d)
+        d.tables[0]._tbl.tblPr.find(A._q('tblW')).set(A._q('type'), 'pct')
+        for c in d.tables[0].rows[0].cells:
+            c.width = Twips(7200)
+        self.assertFalse(A._fit_page(d))
+        # a table that fits, holding a nested table: the nested cells are not the outer row's
+        d = doc_with_table(0); self._letter(d)
+        d.tables[0]._tbl.tblPr.find(A._q('tblW')).set(A._q('type'), 'auto')
+        for c in d.tables[0].rows[0].cells:
+            c.width = Twips(4500)
+        inner = d.tables[0].cell(0, 0).add_table(rows=1, cols=2)
+        for c in inner.rows[0].cells:
+            c.width = Twips(4000)
+        self.assertFalse(A._fit_page(d))
+        # several sections: which one holds the wide table is not known, so none is turned
+        d = doc_with_table(14400); self._letter(d); d.add_section(WD_SECTION.NEW_PAGE)
+        self.assertFalse(A._fit_page(d))
+
 
 
 class LogName(unittest.TestCase):

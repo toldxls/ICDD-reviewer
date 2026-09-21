@@ -134,6 +134,9 @@ class CheckSheet(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_h_atoms_are_two_to_a_water(self):
+        self.assertAlmostEqual(G.formula_to_wt({'Mg': 1, 'H': 2})[1], G.formula_to_wt({'Mg': 1, 'H2O': 1})[1], places=9)   # brucite either way
+
     def test_a_fluoride_totals_100_and_a_word_needs_no_density(self):
         from tests.xl_eval import Book
         tmp = tempfile.mkdtemp(prefix='gdchk_')
