@@ -3376,6 +3376,31 @@ def check19_intensity_detector(e, text):
                        "the powder pattern intensities %s, so Intensity Instr. should be Visual, "
                        "not %s." % (why, ii or 'blank'), ev, 'intensity_instr'))
         return out
+    # ALL multiples of 5 (vargite: 100, 55, 45, 25, …; the paper says nothing of how they were got) is the
+    # same sign, weaker: a human review read it as a visual estimate, and of the fifteen such corpus entries
+    # four are papers that SAY so — but one is a Rietveld pattern whose authors rounded (fluorbritholite-(Nd))
+    # and two are scaled past 100, so it is a note, to be settled against the paper, and never a flag.
+    whole = [I for _d, I, _h, _k, _l in (e.refl or []) if re.match(r'\s*\d{1,4}(?:\.0*)?\s*$', I or '')]
+    if (len(whole) == len(ivals) >= 8 and len(set(ivals)) >= 3 and all(v % 5 == 0 for v in ivals)
+            and (e.instr.get('intensity_instr') or '').strip().lower() != 'visual'):
+        # where the paper names a digital area detector (vargite: a Photon III) the rounding is NOT the
+        # detector's — such a pattern is integrated — so it is the authors', or an estimate made from the
+        # converted pattern, and the paper does not say which: the note says that, and presumes neither
+        det = next((m.group(0) for sn in (_sentences(text) if text else []) if _POWDER_CTX.search(sn)
+                    for m in [re.search(AREA_DETECTOR, sn, re.I)] if m), None)
+        shown = ', '.join(str(v) for v in ivals[:5])
+        here = '%s / %s' % (it or 'blank', (e.instr.get('intensity_instr') or 'blank').strip())
+        if det:
+            msg = ("the powder pattern intensities are all multiples of 5 (%s, …) although the .pdf records the "
+                   "pattern on a digital area detector ('%s'), which integrates: the published values were rounded "
+                   "by the authors, or estimated from the converted pattern — the .pdf does not say which. A rounded "
+                   "integration stays Integrated; only an estimate by eye is Intensity Type Peak, Intensity Instr. "
+                   "Visual (here %s). Verify." % (shown, det, here))
+        else:
+            msg = ("the powder pattern intensities are all multiples of 5 (%s, …) — rounded as a visual estimate "
+                   "is; the .pdf does not say how they were obtained. If they were estimated by eye, ICDD records "
+                   "Intensity Type Peak and Intensity Instr. Visual (here %s); verify against the paper." % (shown, here))
+        out.append(Finding('intensity_type', 'note', msg, det, 'intensity_type'))
     if not text:
         return out
     area_kw = bb_kw = None                       # remember the matched phrase (for the GUI zoom)

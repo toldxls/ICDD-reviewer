@@ -1669,6 +1669,7 @@ def _export_report():
     path = os.path.join(STATE['out_dir'], 'triage_report.txt')
     fh = io.StringIO()                          # build in memory; tmp + os.replace below, so one
     fh.write('PXRD review — triage report\n')   # failing entry can't truncate a good report
+    fh.write('tool version  : %s\n' % A._tool_version())   # ICDD returns this file: it says which rules the verdicts were given on
     fh.write('source folder : %s\n' % STATE['folder'])
     fh.write('generated     : %s\n' % datetime.datetime.now().isoformat(timespec='seconds'))
     reviewed = [k for k in STATE['order'] if STATE['triage'].get(k, {}).get('reviewed')]
@@ -2785,8 +2786,8 @@ def api_ms_export():
     os.makedirs(MS['out_dir'], exist_ok=True)
     path = os.path.join(MS['out_dir'], 'ms_triage_report.txt')
     fh = io.StringIO()
-    fh.write('PXRD review — manuscript triage report\nfolder    : %s\ngenerated : %s\n%s\n'
-             % (MS['folder'], datetime.datetime.now().isoformat(timespec='seconds'), '=' * 78))
+    fh.write('PXRD review — manuscript triage report\nversion   : %s\nfolder    : %s\ngenerated : %s\n%s\n'
+             % (A._tool_version(), MS['folder'], datetime.datetime.now().isoformat(timespec='seconds'), '=' * 78))
     for key in MS['order']:
         t = MS['triage'].get(key) or {}
         verdicts = {fk: v for fk, v in (t.get('findings') or {}).items()

@@ -968,6 +968,12 @@ def find_radiation(text):
                          or bool(re.search(r'\d{1,3}\s*(?:kv|ma)\b', after, re.I)))
         if before_char in '(,/' and not is_rad_phrase:
             continue
+        # The list is as often set off by semicolons, each line followed by its standard and analysing
+        # crystal — 'TiKα (TiO2, LLIF); FeKα (Fe2O3, LLIF)': hopmannite's FeKα was read as a second
+        # radiation, and its one MoKα source asked to be verified. The analysing crystal is what marks it;
+        # the character before does not (', FeKα + β radiation' and ', CoKα, rotating anode' are sources).
+        if not is_rad_phrase and re.match(r'[αa]?\d?\s*\([^)]{0,40}\b(?:L?TAP|L?PET[HJL]?|L?LIF[HL]?|PC\d)\b', flat[m.end():m.end() + 60]):
+            continue
         # `pos` is an offset into `flat`, so classify on `flat` too — radiation_context /
         # classify_context slice the SAME string the offset came from (matching how
         # find_cells calls classify_context; passing the original `text` here read the

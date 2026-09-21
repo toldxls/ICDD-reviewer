@@ -78,6 +78,11 @@ def _save_docx(doc, path):
         if os.path.exists(tmp):
             os.remove(tmp)
 
+def _tool_version():
+    """'pxrd-review 0.10.0' — what the logs and reports head themselves with."""
+    from pxrd_review import __version__
+    return 'pxrd-review %s' % __version__
+
 def _log_name(f):
     """The entry's name as the logs head it: from the file name, with a Levinson suffix typed bare
     ('Lepersonnite-Gd') written the IMA way, '-(Gd)' — the log is read as a list of minerals, and the
@@ -368,6 +373,11 @@ def analyze(docx_path, pdf_path, cif_path=None, dft_path=None):
         res['lam'] = ('calc', res['lam'][1] +
                       ' — but pattern is CALCULATED, so this is the modelling '
                       'wavelength, not the experimental radiation (no action needed)')
+    elif is_calc and res['lam'] and res['lam'][0] == 'verify':
+        # 'no clear powder-context radiation' is what a calculated pattern's paper looks like: there
+        # was no powder experiment to name one. check20 asks whether the paper states the λ.
+        res['lam'] = ('calc', 'anode %s appears in the .pdf; the pattern is CALCULATED, so no powder '
+                      'radiation is expected — this is the modelling wavelength (no action needed)' % d.radiation)
     # Structured evidence for the GUI '? look', so it never parses the message prose (which
     # silently broke the zoom twice): the .pdf radiation the verdict concerns — the matched /
     # conflicting POWDER radiation when one was identified (anode element + its λ), else the
@@ -1563,6 +1573,7 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
     os.makedirs(os.path.dirname(log_path) or '.', exist_ok=True)
     with open(log_path, 'w', encoding='utf-8') as fh:
         fh.write('PXRD review — annotation log\n')
+        fh.write('tool version  : %s\n' % _tool_version())   # a log that comes back from another machine says which rules wrote it
         fh.write('source folder : %s\n' % os.path.abspath(args.folder))
         fh.write('output        : %s\n' % ('in place' if args.inplace else os.path.abspath(out_dir)))
         fh.write('entries       : %d total | %d edited | %d clean (untouched)\n'
@@ -1659,6 +1670,7 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
         with open(md_path, 'w', encoding='utf-8') as fh:
             fh.write('Mindat cross-check — verify against the paper and follow up; either side may be '
                      'the one to fix (Mindat data can lag the CNMNC newsletter). Not written into any docx.\n')
+            fh.write('tool version: %s\n' % _tool_version())
             fh.write('%d entr%s.\n' % (len(md_recs), 'y' if len(md_recs) == 1 else 'ies') + '=' * 78 + '\n')
             for f, r in md_recs:
                 fh.write('\n  %s   (%s)\n' % (_log_name(f), C.entry_id(f) or '?'))

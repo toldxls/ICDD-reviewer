@@ -1055,6 +1055,11 @@ CASES = [
  ("strongest_lines: genuinely missing I=100 line still flags", lambda: X.check15_strongest_lines(
      type('S', (), {'refl': [('3.20', '20', '1', '1', '0')]}),
      'The strongest lines (d A, I %, hkl): 4.49, 31, (110); 2.583, 100, (200).') != []),
+ # --- radiation: a microprobe line is not a source; a calculated pattern has no powder radiation to verify ---
+ ("radiation: 'TiKα (TiO2, LLIF); FeKα (Fe2O3, LLIF)' are microprobe lines, ', FeKα + β radiation' and '(…, CoKα, rotating anode' are sources", lambda:
+     C.find_radiation('Standards: NaKα (albite, TAP); TiKα (TiO2, LLIF); FeKα (Fe2O3, LLIF).') == []
+     and [r[0] for r in C.find_radiation('an RKD-57.3 camera (USMU, FeKα + β radiation, acceleration of 30 kV)')] == ['fe']
+     and [r[0] for r in C.find_radiation('Rapid II diffractometer (curved image plate, r = 127.4 mm, CoKα, rotating anode with microfocus optics, 40 kV, 15 mA)')] == ['co']),
  # --- Final Quality Mark (check32) ---
  ("quality_mark: a blank Final Quality Mark flags", lambda: [f.sev for f in X.check32_quality_mark(
      type('S', (), {'raw_rows': [['PDFID :', 'I000001', 'Pre. Quality Mark', 'C', 'Final Quality Mark', '']]}))] == ['flag']),
@@ -1269,6 +1274,12 @@ CASES = [
  ("I003807 visual: all-×10 intensities -> Intensity Instr. Visual (Type Peak stays)",
   lambda: bool(extras('I003807', 'intensity_type', 'flag', 'Intensity Instr. should be Visual'))
   and not extras('I003807', 'intensity_type', 'flag', 'Intensity Type should be')),
+ # all multiples of 5 is the same sign, weaker (a Rietveld pattern's authors may round too): a note, never a flag
+ ("intensity_type: intensities all multiples of 5 -> a note naming Peak / Visual; a list with a 13 in it is silent", lambda: (
+     lambda mk: [(f.sev, 'multiples of 5' in f.msg) for f in X.check19_intensity_detector(mk(['100', '55', '45', '25', '10', '30', '20', '40']), None)] == [('note', True)]
+     and X.check19_intensity_detector(mk(['100', '55', '45', '25', '13', '30', '20', '40']), None) == [])(
+     lambda iv: type('S', (), {'instr': {'spacing_instr': 'Diffractometer', 'intensity_instr': 'Diffractometer', 'intensity_type': 'Integrated'},
+                               'refl': [('%.2f' % (9 - k), i, '1', '0', '0') for k, i in enumerate(iv)]}))),
  # a measured (diffractometer) pattern can still carry VISUALLY-ESTIMATED intensities; the .pdf
  # saying so is its own signal (keutschite: Rigaku Rapid II d-spacings, Table-5 vs/s/ms/w Irel).
  ("I003806 keutschite: '.pdf visually estimated' -> Intensity Instr. Visual, not Diffractometer",

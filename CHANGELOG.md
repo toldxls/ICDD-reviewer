@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.10.1](#0101--2026-09-21) | 21 Sep | Three reflection-list checks (a paper line the list lacks, a blank hkl in a multiply-indexed group, one d with two intensities); an audit of the day's commits; `? look` finds a reflection line and lands on it; a microprobe line list no longer reads as a second radiation, and a calculated pattern has no powder radiation to verify; intensities all multiples of 5 are a note; every log says which version wrote it |
 | [0.10.0](#0100--2026-09-21) | 21 Sep | A re-run of the 2028 Part 2 batch in the GUI: two entry checks (a blank Final Quality Mark; Dx left blank although the .pdf states a calculated density), reflection findings on their own line, the paper's own misprint told from the entry's, upright pages for a pdf with a wrong /Rotate, output pages that hold their tables, the launcher opening the folder it is typed in |
 | [0.9.0](#090--2026-09-16) | 16 Sep | Three entry checks from the operators and the lattice: a reflection the space group forbids (`symops.absent`, the condition derived from the operators of the setting the symbol names), the same lattice in another setting is no discrepancy (Niggli reduction, `lattice.py`), the entry's own indices against the .pdf and its own Gladstone–Dale; gauntlet rounds 7–8; the recall inversion; a third adversarial audit — five defects fixed, one of them a half-read coordinates table verified at flag grade |
 | [0.8.2](#082--2026-09-16) | 16 Sep | Recall re-measured (unchanged since 0.6.0); coordinates round 6 on the whole corpus — displacement tables no longer read as sites, a bond table's name for a split site found; the composition reds hand-checked against the papers: three of thirteen were the tool's, fixed, the other nine now say which oxide form the arithmetic used; '? look' lands on the paper for every finding; corpus runs a third cheaper |
@@ -28,6 +29,8 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-09-21
+
 ### Added — the reflection list against the paper's table, and against itself
 - **`check34_lines_missing`: an observed line of the paper's powder table that the list lacks** (flag). Compared
   only where nine in ten of the entry's d values are in that table, and only for a handful of absences (<= 4);
@@ -44,6 +47,31 @@ package version in `pyproject.toml`.
   copy of one) had its name lost to the suffix, and the log showed the id twice; a Levinson suffix typed
   bare in the file name ('Lepersonnite-Gd') is headed the IMA way, and the suffix keeps the element's own case: 'LEPERSONNITE-(Gd)' — the entry's own
   spelling is still quoted in the finding beneath it.
+
+### Added — from a human review's remarks on the Part 2 batch
+- **Intensities that are all multiples of 5: a note** (`check19_intensity_detector`). The all-multiples-of-10 rule
+  and the paper's own "visually estimated" were the two signs of a visual estimate; vargite's list (100, 55, 45,
+  25, …) passes both, and a human review read it as one. Of the fifteen such corpus entries four are papers that say
+  so, one is a Rietveld pattern whose authors rounded, two are scaled past 100 — so it is a note, never a flag.
+  Where the paper names a digital area detector the note says what is odd about it: such a pattern is integrated,
+  so the rounding is the authors' or an estimate from the converted pattern, and the .pdf does not say which — a
+  rounded integration stays Integrated, only an estimate by eye is Peak / Visual. On the corpus: 13 entries gain
+  the note, nothing else changed.
+- **Every log says which version wrote it.** `annotation_log.txt`, `mindat_discrepancies.txt`, `triage_report.txt`
+  and the manuscript triage report carry a `tool version` line — a report that comes back from another machine
+  says which rules its findings and verdicts were given on. Import triage reads a report with the line unchanged.
+
+### Fixed — a calculated entry asked to verify its radiation
+- **A microprobe line list set off by semicolons read as a second radiation.** 'TiKα (TiO2, LLIF); FeKα (Fe2O3,
+  LLIF)' — each line followed by its standard and analysing crystal — passed the skip that knows the bracketed
+  and comma lists, so hopmannite's one MoKα source had an 'FeKα' beside it and the single-source rule could not
+  fire. A line followed by a bracket naming an analysing crystal (TAP, PET, LIF, PC…) is a microprobe line. A
+  broader rule (any line after a comma or semicolon) was tried first and turned two correct verdicts into flags
+  on the corpus A/B ('(USMU, FeKα + β radiation', ', CoKα, rotating anode'); both sentences are regression cases.
+- **'Verify' on a calculated pattern is settled as the flag already was.** 'No clear powder-context radiation'
+  is what a calculated pattern's paper looks like; it now reads as the modelling-wavelength note. `check20` still
+  asks whether the paper states the λ. Corpus A/B over 1,678 entries: 18 verify → calc, 3 verify → ok, no flag
+  gained or lost; the paper-reader subset: no status changed.
 
 ### Fixed — an audit of the day's commits, and the `? look` button replayed over two batches
 - **`check33_dx_blank` named numbers that are not densities.** Beside the density it read, the flag offered
