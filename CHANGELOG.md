@@ -31,7 +31,7 @@ package version in `pyproject.toml`.
 ### Fixed
 - **The logs head every entry by its mineral name.** A file ICDD returns as '…)_edited.docx' (and the tool's
   copy of one) had its name lost to the suffix, and the log showed the id twice; a Levinson suffix typed
-  bare in the file name ('Lepersonnite-Gd') is headed the IMA way, 'LEPERSONNITE-(GD)' — the entry's own
+  bare in the file name ('Lepersonnite-Gd') is headed the IMA way, and the suffix keeps the element's own case: 'LEPERSONNITE-(Gd)' — the entry's own
   spelling is still quoted in the finding beneath it.
 
 ## [0.10.0] — 2026-09-21

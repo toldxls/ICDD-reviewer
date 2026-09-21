@@ -86,6 +86,10 @@ def _log_name(f):
     mb = re.match(r'^(.+?)-([A-Z][a-z]?)$', name.strip())
     if mb and mb.group(2) in X.REE_ELEMENTS:
         name = '%s-(%s)' % mb.groups()
+    # the name in capitals, the Levinson suffix as the element is written: 'LEPERSONNITE-(Gd)', not '-(GD)'
+    ms = re.match(r'^(.*)-\(([A-Za-z]{1,2})\)$', name.strip())
+    if ms and ms.group(2).capitalize() in X.REE_ELEMENTS:
+        return '%s-(%s)' % (ms.group(1).upper(), ms.group(2).capitalize())
     return name.upper()
 
 def _fit_page(doc):
