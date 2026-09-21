@@ -1965,8 +1965,10 @@ def api_tb_bvs_export(key):
     if key not in MS['cifs']:
         abort(404)
     opts = _tb_opts()
+    pk = request.args.get('paper') or ''
+    paper = ((MS.get('pdfs') or {}).get(pk) or _tb_docx_path(pk)) if pk else None   # the chosen paper (never a path from the page): its table goes on the check sheet
     try:
-        st, result, anion_sum, cells, text = BV.run(MS['cifs'][key], params=opts['params'], ox=opts['ox'], cutoff=opts['cutoff'],
+        st, result, anion_sum, cells, text = BV.run(MS['cifs'][key], table=paper, params=opts['params'], ox=opts['ox'], cutoff=opts['cutoff'],
                                                     include_h=opts['include_h'], out_dir=MS['out_dir'], quiet=True, xlsx=True,
                                                     hbond=opts['hbond'], hmax=opts['hmax'], donors=opts['donors'], hb=opts['hb'], u6=opts['u6'])
     except Exception as ex:
@@ -2179,7 +2181,9 @@ def api_tb_gd_export():
         if fmt == 'word':
             path = os.path.join(MS['out_dir'], stem + '_gd.docx'); TB.write_word(None, GD.table(res, name, _tb_journal()), path)
         else:
-            path = GD.write_xlsx(res, os.path.join(MS['out_dir'], stem + '_gd.xlsx'), name)
+            pk = request.args.get('paper') or ''
+            ppath = ((MS.get('pdfs') or {}).get(pk) or _tb_docx_path(pk)) if pk else None      # the chosen paper (never a path from the page)
+            path = GD.write_xlsx(res, os.path.join(MS['out_dir'], stem + '_gd.xlsx'), name, GD.paper_statement(ppath) if ppath else None)
     except Exception as ex:
         return jsonify({'ok': False, 'error': str(ex)}), 500
     return jsonify({'ok': True, 'file': os.path.basename(path)})

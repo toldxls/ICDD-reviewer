@@ -287,6 +287,78 @@ class ManuscriptTable(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class CheckSheet(unittest.TestCase):
+    """The workbook's check sheet: a paper's table written from the tool's own cells, then spoiled in known ways."""
+
+    def _grid(self, st, result, cells, anion_sum, spoil=None, scale=None):
+        cats = [r[0].label for r in result if r[0].element != 'H']
+        rows = [['Atom'] + cats + ['Σ']]
+        for an in st.anions:
+            if not any((an.label, c) in cells for c in cats):
+                continue
+            row = [an.label]; tot = 0.0
+            for c in cats:
+                segs = cells.get((an.label, c))
+                if not segs:
+                    row.append(''); continue
+                k = (scale or {}).get(c, 1.0)
+                vals = [(s_ * k + (spoil or {}).get((an.label, c), 0.0), nd, na) for s_, nd, na in segs]
+                row.append(', '.join('%.2f%s' % (v, B._mark(nd, na)) for v, nd, na in vals))
+                tot += sum(v * (na if isinstance(na, int) else 1) for v, nd, na in vals)
+            rows.append(row + ['%.2f' % tot])
+        return rows
+
+    def _book(self, tmp, cif, grid, name):
+        from tests.xl_eval import Book
+        st = B.Structure(cif); P = B.Params(prefer='gh')
+        result, anion_sum, cells, hbonds = B.compute(st, P, hbond='none')
+        out = os.path.join(tmp, name)
+        B.write_xlsx(st, P, result, anion_sum, cells, hbonds, out, tables=[grid], params_label='Gagné & Hawthorne 2015')
+        b = Book(out); wc = b.wb['check']
+        cell_rows = {(wc.cell(r, 2).value, wc.cell(r, 3).value): r for r in range(4, wc.max_row + 1) if wc.cell(r, 9).value in ('agrees', 'differs', 'blank', 'not compared') and wc.cell(r, 2).value}
+        return b, wc, cell_rows
+
+    def test_a_mistyped_valence_a_shifted_column_and_bad_arithmetic(self):
+        tmp = tempfile.mkdtemp(prefix='bvchk_')
+        try:
+            cif = _write(tmp, 'hydrate.cif', HYDRATE)
+            st = B.Structure(cif); P = B.Params(prefer='gh')
+            result, anion_sum, cells, hbonds = B.compute(st, P, hbond='none')
+            single = [(a, c) for (a, c), segs in cells.items() if len(segs) == 1 and next(r[0] for r in result if r[0].label == c).element != 'H']
+            self.assertTrue(single)
+            # the table as the tool would print it: every cell agrees, every ΔR is nothing
+            b, wc, rows = self._book(tmp, cif, self._grid(st, result, cells, anion_sum), 'ok.xlsx')
+            self.assertEqual(b.wb.sheetnames[:3], ['bonds', 'check', 'BV table'])
+            self.assertEqual({wc.cell(r, 9).value for r in rows.values()}, {'agrees'})
+            for (a, c) in single:
+                self.assertAlmostEqual(b.value('check', 'M%d' % rows[(a, c)]), 0.0, delta=0.01)    # the rounding of a printed 0.xx
+            # one valence mistyped by +0.20: that cell differs, its column reads 'a cell', and the R it would need is not the structure's
+            bad = single[0]
+            b, wc, rows = self._book(tmp, cif, self._grid(st, result, cells, anion_sum, spoil={bad: 0.20}), 'typo.xlsx')
+            self.assertEqual(wc.cell(rows[bad], 9).value, 'differs')
+            self.assertEqual([k for k, r in rows.items() if wc.cell(r, 9).value == 'differs'], [bad])
+            self.assertAlmostEqual(b.value('check', 'H%d' % rows[bad]), 0.20, delta=0.011)
+            self.assertLess(b.value('check', 'M%d' % rows[bad]), -0.03)                             # a larger valence needs a shorter bond
+            lab = {wc.cell(r, 1).value: r for r in range(1, wc.max_row + 1) if isinstance(wc.cell(r, 1).value, str)}
+            r_col = next(r for r in range(lab['cation column'] + 1, wc.max_row + 1) if wc.cell(r, 1).value == bad[1])
+            self.assertIn('a distance, a ×n multiplicity or a mistyped valence', b.value('check', 'E%d' % r_col))
+            # a whole column printed 15 % high: the column, not its cells — R0 and b
+            col = max({c for a, c in cells if next(r[0] for r in result if r[0].label == c).element != 'H'}, key=lambda c: sum(1 for a, c2 in cells if c2 == c))
+            b, wc, rows = self._book(tmp, cif, self._grid(st, result, cells, anion_sum, scale={col: 1.15}), 'col.xlsx')
+            lab = {wc.cell(r, 1).value: r for r in range(1, wc.max_row + 1) if isinstance(wc.cell(r, 1).value, str)}
+            r_col = next(r for r in range(lab['cation column'] + 1, wc.max_row + 1) if wc.cell(r, 1).value == col)
+            if b.value('check', 'B%d' % r_col) >= 3:
+                self.assertIn('the whole column differs', b.value('check', 'E%d' % r_col))
+            # the paper's own Σ does not add up: said as arithmetic, before any comparison with the structure
+            grid = self._grid(st, result, cells, anion_sum)
+            grid[1][-1] = '%.2f' % (float(grid[1][-1]) + 0.30)
+            b, wc, rows = self._book(tmp, cif, grid, 'sum.xlsx')
+            why = [wc.cell(r, 9).value for r in range(4, wc.max_row + 1) if wc.cell(r, 2).value == 'anion' and wc.cell(r, 8).value == 'differs']
+            self.assertTrue(why and why[0].startswith('ARITHMETIC'), why)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class PaperTableConventions(unittest.TestCase):
     """The 2026-09-07 hand-check of three papers: a hydroxyl tagged in its row label ('O8(OH)'), two
     values in one cell read off a page with a space between them, a printed Σ that includes the

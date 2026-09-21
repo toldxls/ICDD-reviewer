@@ -51,6 +51,23 @@ package version in `pyproject.toml`.
   valence states are shown and not judged, as the composition check leaves them out. Rows of the reduction whose element
   does not follow are coloured too. Held against the composition check on the whole corpus (769 workbooks): where it
   says every coefficient follows, the sheet shows red on 4 papers — each a real difference between the numbers read.
+- **The bond-valence workbook gets the same `check` sheet** when it is given the paper (`pxrd bv x.cif --table paper.pdf|manuscript.docx
+  --xlsx`; in the GUI, the paper chosen in Tables mode). Every printed cell and Σ beside the structure's, red where it differs,
+  amber where the table leaves a bond blank, grey where it is not compared and why. The verdict is the table check's own — it
+  allows for what a formula cannot (a value per bond or the total over the ×n, an occupancy-weighted column, a contact under the
+  cutoff) — and the numbers beside it are live: the tool's valence per bond and over the ×n bonds, the difference, and **the
+  distance the printed valence would need** (R = R0 − b·ln s) beside the structure's, which tells a mistyped valence (an R no bond
+  has) from a bond of another length. Below: the parameter set the table follows, each cation column's pattern (a whole column
+  shifted = R0 and b — the set, or the valence state; one cell = a distance, a multiplicity or a typo), the Σ's with the paper's own
+  arithmetic said first. On the 62 corpus papers with a .cif and a table the reader finds, the sheet's agree/differ counts equal
+  the report's exactly.
+- **The Gladstone–Dale workbook too** (`pxrd gd … --xlsx --paper paper.pdf`, or `--paper-ci 0.021`): the index the paper states
+  beside the tool's for each density, and what would explain a difference, live — the analysis normalised to 100 %, each of
+  Mandarino's variant constants for a constituent that has them, and the K_C, n and D that would give the paper's number. A
+  difference is amber, never red (K_C rests on constants and on the whole analysis — the tool's own rule); the line that
+  reproduces the paper's index is green; red is kept for arithmetic: a calculated density that is not Z·FW/(V·0.602214), a category
+  word that is not the category of the paper's own number. An analysis with no constants at all (an element table) says so instead
+  of dividing by zero.
 
 ### Fixed
 - **A stated cation basis is counted over the cations the probe measured.** 'On the basis of 6 cations, excluding H+'

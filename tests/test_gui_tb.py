@@ -179,6 +179,7 @@ class TablesMode(unittest.TestCase):
         # the bond-valence workbook
         b = self._post('/api/tb/bvs/rutile/export?fmt=xlsx&params=bo')
         self.assertEqual(b['file'], 'rutile_bv.xlsx')
+        self.assertEqual(self._post('/api/tb/bvs/rutile/export?fmt=xlsx&params=bo&paper=nope.pdf')['file'], 'rutile_bv.xlsx')   # a paper that is not the folder's is ignored, never a path
         wb = openpyxl.load_workbook(os.path.join(self.tmp, 'review_out', 'rutile_bv.xlsx'))
         self.assertEqual(wb.sheetnames, ['bonds', 'BV table', 'H bonds', 'parameters'])
         self.assertTrue(str(wb['bonds']['G2'].value).startswith('=EXP('))

@@ -93,5 +93,47 @@ class GD(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class CheckSheet(unittest.TestCase):
+    """The workbook's check sheet: the paper's stated index against the tool's, and what would explain a difference."""
+    WT = {'MgO': 30.0, 'SiO2': 42.0, 'FeO': 12.0, 'H2O': 8.0}                       # 92.0 %: short of 100
+
+    def _book(self, tmp, paper, name='c.xlsx', **kw):
+        from tests.xl_eval import Book
+        res = G.evaluate(dict(self.WT), 1.580, density=2.60, **kw)
+        b = Book(G.write_xlsx(res, os.path.join(tmp, name), 'testite', paper)); wc = b.wb['check']
+        lab = {c.value: c.row for c in wc['A'] if isinstance(c.value, str)}
+        return res, b, lab, (lambda key: b.value('check', 'E%d' % next(r for k_, r in lab.items() if k_.startswith(key))))
+
+    def test_what_explains_the_papers_index(self):
+        tmp = tempfile.mkdtemp(prefix='gdchk_')
+        try:
+            res = G.evaluate(dict(self.WT), 1.580, density=2.60)
+            ci = res['CI_meas']
+            # the paper's index is the tool's: said so, nothing coloured
+            res, b, lab, read = self._book(tmp, {'ci': round(ci, 3), 'category': G.category(ci)})
+            self.assertTrue(read('1 − K_P/K_C, measured').startswith("ok — reproduces"), read('1 − K_P/K_C, measured'))
+            self.assertTrue(read('category').startswith('ok'), read('category'))
+            self.assertAlmostEqual(b.value('check', 'B%d' % lab['1 − K_P/K_C, measured density']), ci, places=9)
+            # the paper took Mandarino's constant for MgO in sulfates (0.225, not 0.200): amber above, and the line that explains it
+            alt = G.evaluate(dict(self.WT), 1.580, density=2.60, k_override={'MgO': 0.225})['CI_meas']
+            self.assertGreater(abs(alt - ci), 0.01)
+            res, b, lab, read = self._book(tmp, {'ci': round(alt, 4)})
+            self.assertFalse(read('1 − K_P/K_C, measured').startswith('ok — reproduces'))
+            self.assertIn("EXPLAINS IT — the paper took Mandarino's other constant for MgO", read('MgO with k = 0.225'))
+            self.assertEqual(read('the analysis normalised to 100 %'), 'does not reproduce it')
+            # the paper normalised its 97 % analysis to 100 before taking K_C
+            norm = 1 - res['KP_meas'] / (res['KC'] * 100 / sum(self.WT.values()))
+            res, b, lab, read = self._book(tmp, {'ci': round(norm, 4)})
+            self.assertIn('EXPLAINS IT — the paper normalised its analysis to 100 %', read('the analysis normalised to 100 %'))
+            self.assertTrue(read('Σ wt% of the analysis').startswith('note'), read('Σ wt% of the analysis'))
+            # what would give the paper's index: the K_C needed is the normalised one
+            self.assertAlmostEqual(b.value('check', 'B%d' % lab['K_C (measured density)']), res['KC'] * 100 / 92.0, places=3)
+            # arithmetic is red: a category word that is not the category of the paper's own number
+            res, b, lab, read = self._book(tmp, {'ci': 0.075, 'category': 'superior'})
+            self.assertTrue(read('category').startswith('PROBLEM') and 'fair' in read('category'), read('category'))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -160,9 +160,10 @@ function tbUrl(tab) {
 }
 function tbExportUrl(tab, fmt) {
   const q = tbQuery(tab);
-  if (tab === 'bvs' && fmt === 'xlsx') return TBS.key ? '/api/tb/bvs/' + enc(TBS.key) + '/export?' + q : null;
+  const paper = ($('#tb-paper') && $('#tb-paper').value) ? '&paper=' + enc($('#tb-paper').value) : '';   // the chosen paper: its table / stated index goes on the workbook's check sheet
+  if (tab === 'bvs' && fmt === 'xlsx') return TBS.key ? '/api/tb/bvs/' + enc(TBS.key) + '/export?' + q + paper : null;
   if (tab === 'coords' || tab === 'bvs') return TBS.key ? '/api/tb/word/' + enc(TBS.key) + '?' + q : null;
-  if (tab === 'gd') return '/api/tb/gd/export?fmt=' + fmt + '&' + q;
+  if (tab === 'gd') return '/api/tb/gd/export?fmt=' + fmt + '&' + q + (fmt === 'xlsx' ? paper : '');
   if (tab === 'epma') return tbOpt('epma', 'file') ? '/api/tb/epma/' + enc(tbOpt('epma', 'file')) + '/export?fmt=' + fmt + '&' + q : null;
   if (tab === 'pxrd') return '/api/tb/pxrd/export?fmt=' + fmt + '&' + q;
   return null;

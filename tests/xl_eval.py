@@ -22,10 +22,21 @@ def _sumif(rng, crit, vals):
 
 _FUNCS = {'SUM': lambda *a: sum(_nums(a)), 'AVERAGE': lambda *a: statistics.mean(_nums(a)), 'STDEV': lambda *a: statistics.stdev(_nums(a)),
           'MIN': lambda *a: min(_nums(a)), 'MAX': lambda *a: max(_nums(a)), 'ABS': abs, 'EXP': math.exp, 'MEDIAN': lambda *a: statistics.median(_nums(a)) if _nums(a) else 0, 'COUNT': lambda *a: len(_nums(a)),
+          'LN': math.log, 'ISNUMBER': lambda v: isinstance(v, (int, float)) and not isinstance(v, bool), 'COUNTIFS': lambda *a: _countifs(a), 'SUMIFS': lambda vals, *a: _countifs(a, vals),
           'INDEX': lambda rng, i: rng[int(i) - 1] if i else '#N/A', 'MATCH': lambda v, rng, _t=0: (rng.index(v) + 1) if v in rng else 0,   # IF is eager here, lazy in Excel: an unused branch must not raise
           'LEFT': lambda t, n_: str(t)[:int(n_)],
           '_AND': lambda *a: all(a), '_OR': lambda *a: any(a), 'TEXT': lambda v, f: _text(v, f), 'IF': lambda c, a, b: a if c else b, 'SUMIF': _sumif,
           'SUMPRODUCT': lambda x, y: sum(p * q for p, q in zip(x, y) if isinstance(p, (int, float)) and isinstance(q, (int, float)))}
+
+def _countifs(pairs, vals=None):
+    """COUNTIFS(range, criterion, ...) — or SUMIFS when `vals` is given. Criteria: a value, or "<>" (not blank)."""
+    n = len(pairs[0]); keep = [True] * n
+    for rng, crit in zip(pairs[0::2], pairs[1::2]):
+        for i, v in enumerate(rng):
+            keep[i] = keep[i] and ((v not in (None, '')) if crit == '<>' else v == crit)
+    if vals is None:
+        return sum(keep)
+    return sum(v for v, k in zip(vals, keep) if k and isinstance(v, (int, float)))
 
 def _text(v, f):
     f0 = f.split(';')[0]
@@ -61,4 +72,28 @@ class Book:
         parts = re.split(r'("[^"]*")', expr)                           # references are not looked for inside strings
         code = ''.join(p if p.startswith('"') else _REF.sub(sub, p).replace('<>', '!=').replace('^', '**').replace('&', '+').replace('AND(', '_AND(').replace('OR(', '_OR(') for p in parts)
         code = re.sub(r'(?<![<>!=])=(?!=)', '==', code)
+        return self._lazy(code, env)
+
+    def _lazy(self, code, env):
+        """Excel's IF evaluates only the branch it takes (IF(D6=0,"no K_C",1-B10/D6) must not divide): an expression
+        that IS an IF call is taken apart at its top-level commas and only the chosen branch is evaluated."""
+        code = code.strip()
+        if code.startswith('IF(') and code.endswith(')'):
+            depth = 0; quote = False; args = []; start = 3; whole = True
+            for i, ch in enumerate(code):
+                if ch == '"':
+                    quote = not quote
+                elif quote:
+                    continue
+                elif ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0 and i != len(code) - 1:
+                        whole = False; break                           # 'IF(a,b,c)+1': not one call
+                elif ch == ',' and depth == 1:
+                    args.append(code[start:i]); start = i + 1
+            if whole and len(args) == 2:
+                args.append(code[start:-1])
+                return self._lazy(args[1] if self._lazy(args[0], env) else args[2], env)
         return eval(code, {'__builtins__': {}}, env)

@@ -170,11 +170,13 @@ def prepare(formula=None, wt=None, oxide=None, n=None, density=None, cif=None, z
         res['apfu'] = True; res['apfu_by_key'] = by_key; res['wt_keys'] = [k_ for k_ in wt_ if not k_.startswith('O=')]   # what the workbook derives the wt% from
     return res
 
-def write_xlsx(res, path, name=''):
+def write_xlsx(res, path, name='', paper=None):
     """The whole calculation as live formulas: from a formula, apfu -> mass per formula unit (apfu x MW over
     the cations of the constituent) -> formula weight (less the oxygen F and Cl replace) -> wt%; then
     k·wt%/100 -> K_C; D_calc = Z·FW / (V·0.602214); K_P = (n − 1)/D; 1 − K_P/K_C and its category.
-    Change a k, an apfu, n, Z or a density and everything after it follows."""
+    Change a k, an apfu, n, Z or a density and everything after it follows.
+    paper: what the paper itself states — {'ci', 'category', 'D_calc', 'sentence', 'source'} — set beside the tool's on a
+    'check' sheet, with what would explain a difference (see _write_gd_check)."""
     import openpyxl
     from openpyxl.styles import Font
     bold = Font(bold=True)
@@ -199,17 +201,19 @@ def write_xlsx(res, path, name=''):
         ws.append([key, ('=' + wt_ref[key]) if key in wt_ref else w, k, '=B%d*C%d/100' % (r, r), src if k is not None else 'NO CONSTANT: this constituent adds nothing to K_C'])
     ws.append(['K_C', '=SUM(B%d:B%d)' % (first, last), '', '=SUM(D%d:D%d)' % (first, last), 'Σ k·wt%/100 — over the WHOLE analysis: a short list gives a short K_C'])
     ws.append([]); ws.append(['n (mean index)', res['n']])
-    row = r_n + 1
-    cat = lambda cell: '=IF(ABS(%s)<0.02,"superior",IF(ABS(%s)<0.04,"excellent",IF(ABS(%s)<0.06,"good",IF(ABS(%s)<0.08,"fair","poor"))))' % ((cell,) * 4)
+    row = r_n + 1; A = {'kc': 'D%d' % r_kc, 'sum': 'B%d' % r_kc, 'n': 'B%d' % r_n, 'first': first, 'last': last}
+    cat = lambda cell: '=IF(ISNUMBER(%s),IF(ABS(%s)<0.02,"superior",IF(ABS(%s)<0.04,"excellent",IF(ABS(%s)<0.06,"good",IF(ABS(%s)<0.08,"fair","poor")))),"")' % ((cell,) * 5)   # no index, no category
     if res.get('D_meas'):
         ws.append(['D measured', res['D_meas']]); ws.append(['K_P (measured D)', '=(B%d-1)/B%d' % (r_n, row), '(n − 1) / D'])
-        ws.append(['compatibility', '=1-B%d/D%d' % (row + 1, r_kc), '1 − K_P/K_C', cat('B%d' % (row + 2))]); row += 3
+        ws.append(['compatibility', '=IF(D%d=0,"no K_C: no constituent of this analysis has a constant",1-B%d/D%d)' % (r_kc, row + 1, r_kc), '1 − K_P/K_C', cat('B%d' % (row + 2))])
+        A['meas'] = {'D': 'B%d' % row, 'KP': 'B%d' % (row + 1), 'CI': 'B%d' % (row + 2)}; row += 3
     if res.get('D_calc'):
         ws.append(['formula weight', ('=' + fw_cell) if fw_cell else res['fw']]); ws.append(['Z', res['Z']]); ws.append(['V (Å³)', res['V'], 'from the .cif cell'])
         ws.append(['Avogadro × 10⁻²⁴', 0.602214])
         ws.append(['D calculated', '=B%d*B%d/(B%d*B%d)' % (row + 1, row, row + 2, row + 3), 'Z · FW / (V · 0.602214)'])
         ws.append(['K_P (calculated D)', '=(B%d-1)/B%d' % (r_n, row + 4), '(n − 1) / D'])
-        ws.append(['compatibility', '=1-B%d/D%d' % (row + 5, r_kc), '1 − K_P/K_C', cat('B%d' % (row + 6))]); row += 7
+        ws.append(['compatibility', '=IF(D%d=0,"no K_C: no constituent of this analysis has a constant",1-B%d/D%d)' % (r_kc, row + 5, r_kc), '1 − K_P/K_C', cat('B%d' % (row + 6))])
+        A['calc'] = {'D': 'B%d' % (row + 4), 'KP': 'B%d' % (row + 5), 'CI': 'B%d' % (row + 6)}; row += 7
     if apfu:
         from pxrd_review import epma as EP
         assert row + 1 == d0, (row, d0)
@@ -225,7 +229,117 @@ def write_xlsx(res, path, name=''):
     for col, w in zip('ABCDEF', (22, 12, 22, 22, 12, 60)):
         ws.column_dimensions[col].width = w
     ws.column_dimensions['E'].width = 44 if not apfu else 14
+    if paper and (paper.get('ci') is not None or paper.get('category') or paper.get('D_calc')):
+        _write_gd_check(wb, res, paper, A, cat)
     wb.save(path); return path
+
+def paper_statement(path):
+    """What a paper states about its own compatibility, for the check sheet — read locally, as every paper is."""
+    from pxrd_review import paper_extract as PE
+    text = PE.text_of(path)
+    g = PE.gd_statement(text); o = PE.optics(text)
+    return {'ci': g.get('ci'), 'category': g.get('category'), 'sentence': g.get('sentence') or '', 'D_calc': o.get('D_calc'), 'source': os.path.basename(path)}
+
+def _write_gd_check(wb, res, paper, A, cat):
+    """The 'check' sheet: the index the paper states beside the tool's, for each density, and — live — what would explain a
+    difference. A Gladstone–Dale difference is NEVER red by itself: K_C is a mean over the whole analysis and rests on
+    constants a paper may have taken from another class (Mandarino's variants), so a gap is amber and the line that
+    reproduces the paper's number is the finding. Red is for arithmetic alone: a calculated density that is not
+    Z·FW/(V·0.602214), a category word that is not the category of the paper's own number."""
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.formatting.rule import FormulaRule
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+    bold = Font(bold=True)
+    red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid'); amber = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+    green = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+    wc = wb.create_sheet('check')
+    if not res.get('KC'):
+        # an element table, an organic mineral: nothing here has a Gladstone–Dale constant, so there is no index to set beside the paper's
+        wc.cell(1, 1, 'PROBLEM — no constituent of this analysis has a Gladstone–Dale constant (an element table? oxides are needed): K_C is 0 and no index follows').fill = red_fill
+        wc.column_dimensions['A'].width = 120
+        return
+    g = lambda a: 'GD!$%s$%s' % (a[0], a[1:])
+    wc.cell(1, 1, "The compatibility the paper states against the one its numbers give%s — green: reproduces the paper's; amber: differs; red: arithmetic" % (' (%s)' % paper['source'] if paper.get('source') else '')).font = bold
+    for c_, h in enumerate(['', 'value', "paper's", 'difference', 'reading'], 1):
+        wc.cell(3, c_, h).font = bold
+    row = 3; ci_p = paper.get('ci'); r_ci = {}
+    dens = [(k, lab) for k, lab in (('meas', 'measured density'), ('calc', 'calculated density')) if k in A]
+    for k, lab in dens:
+        row += 1; r_ci[k] = row
+        wc.cell(row, 1, '1 − K_P/K_C, %s' % lab); wc.cell(row, 2, '=' + g(A[k]['CI']))
+        if ci_p is not None:
+            wc.cell(row, 3, ci_p); wc.cell(row, 4, '=B%d-C%d' % (row, row))
+            wc.cell(row, 5, '=IF(ABS(D%d)<=0.005,"ok — reproduces the paper\'s index",IF(ABS(D%d)<=0.03,"ok — within what the constants allow (0.03)","note — differs by "&TEXT(D%d,"+0.000;-0.000")&": see what would explain it, below"))' % (row, row, row))
+        for c_ in (2, 3, 4):
+            wc.cell(row, c_).number_format = '+0.000;-0.000'
+    if ci_p is not None and len(dens) == 2:
+        row += 1
+        wc.cell(row, 1, 'the density the paper used'); wc.cell(row, 5, '=IF(ABS(D%d)<=ABS(D%d),"its index is nearer the MEASURED density\'s","its index is nearer the CALCULATED density\'s")' % (r_ci['meas'], r_ci['calc']))
+    if paper.get('category'):
+        row += 1
+        wc.cell(row, 1, 'category'); wc.cell(row, 3, paper['category'])
+        best = r_ci[dens[0][0]] if dens else None
+        if best:
+            wc.cell(row, 2, cat('B%d' % best))
+        if ci_p is not None:
+            # the paper's word against the paper's own number: no constant enters into that
+            wc.cell(row, 5, '=IF(%s="%s","ok — the paper\'s word is the category of its own number","PROBLEM — the paper calls %s a ‘%s’ compatibility; Mandarino\'s category for that number is "&%s)' % (
+                cat('C%d' % r_ci[dens[0][0]])[1:] if dens else '""', paper['category'], '%+.3f' % ci_p, paper['category'], cat('C%d' % r_ci[dens[0][0]])[1:] if dens else '""'))
+    if paper.get('D_calc') and 'calc' in A:
+        row += 1
+        wc.cell(row, 1, 'D calculated = Z·FW/(V·0.602214)'); wc.cell(row, 2, '=' + g(A['calc']['D'])); wc.cell(row, 3, paper['D_calc']); wc.cell(row, 4, '=B%d-C%d' % (row, row))
+        wc.cell(row, 5, '=IF(ABS(D%d)<=0.01*C%d,"ok — the paper\'s calculated density follows from Z, the formula weight and V","PROBLEM — the paper\'s calculated density is not Z·FW/(V·0.602214) for these values ("&TEXT(100*D%d/C%d,"+0.0;-0.0")&" %%): Z, the formula (its water above all) or the cell")' % (row, row, row, row))
+        wc.cell(row, 2).number_format = wc.cell(row, 4).number_format = '0.000'
+    row += 1
+    wc.cell(row, 1, 'Σ wt% of the analysis'); wc.cell(row, 2, '=' + g(A['sum']))
+    wc.cell(row, 5, '=IF(AND(B%d>=98.5,B%d<=101.5),"ok","note — K_C is a mean over the WHOLE analysis: a total of "&TEXT(B%d,"0.00")&" moves K_C, and the index, by about that proportion")' % (row, row, row))
+    r_sum = row
+    missing = [r[0] for r in res['rows'] if r[2] is None]
+    for m in missing:
+        row += 1; wc.cell(row, 1, 'no constant for %s' % m); wc.cell(row, 5, 'PROBLEM — %s adds nothing to K_C here: the index is short by its share (give one with --k)' % m)
+    if ci_p is not None and dens:
+        row += 2
+        wc.cell(row, 1, 'WHAT WOULD EXPLAIN A DIFFERENCE').font = bold
+        for c_, h in enumerate(['index it gives', "paper's", 'difference', 'reading'], 2):
+            wc.cell(row, c_, h).font = bold
+        expl = '=IF(ABS(D%d)<=0.005,IF(ABS($D$%d)<=0.005,"reproduces it too","EXPLAINS IT — %s"),"does not reproduce it")'
+        for k, lab in dens:
+            base = r_ci[k]; kp = g(A[k]['KP'])
+            row += 1
+            wc.cell(row, 1, 'the analysis normalised to 100 %% (%s)' % lab)
+            wc.cell(row, 2, '=1-%s/(%s*100/%s)' % (kp, g(A['kc']), g(A['sum']))); wc.cell(row, 3, ci_p); wc.cell(row, 4, '=B%d-C%d' % (row, row))
+            wc.cell(row, 5, expl % (row, base, 'the paper normalised its analysis to 100 % before taking K_C'))
+            K = constants()
+            for i, (key, w, kk, c, src) in enumerate(res['rows']):
+                for var in (K.get(key, {}).get('variants') or []):
+                    if kk is None or var.get('k') is None or abs(var['k'] - kk) < 1e-9:
+                        continue
+                    row += 1
+                    wc.cell(row, 1, '%s with k = %g (%s) — %s' % (key, var['k'], ILLEGAL_CHARACTERS_RE.sub(' ', str(var.get('for', '')))[:60], lab))
+                    wc.cell(row, 2, '=1-%s/(%s+(%r-GD!$C$%d)*GD!$B$%d/100)' % (kp, g(A['kc']), var['k'], A['first'] + i, A['first'] + i))
+                    wc.cell(row, 3, ci_p); wc.cell(row, 4, '=B%d-C%d' % (row, row))
+                    wc.cell(row, 5, expl % (row, base, "the paper took Mandarino's other constant for %s" % key))
+        row += 2
+        wc.cell(row, 1, "WHAT WOULD GIVE THE PAPER'S INDEX").font = bold
+        for c_, h in enumerate(['needed', 'used', 'difference'], 2):
+            wc.cell(row, c_, h).font = bold
+        for k, lab in dens:
+            D = g(A[k]['D'])
+            for what, need, used in (('K_C (%s)' % lab, '=%s/(1-%r)' % (g(A[k]['KP']), ci_p), g(A['kc'])),
+                                     ('n (%s)' % lab, '=1+%s*%s*(1-%r)' % (D, g(A['kc']), ci_p), g(A['n'])),
+                                     ('D (%s)' % lab, '=(%s-1)/(%s*(1-%r))' % (g(A['n']), g(A['kc']), ci_p), D)):
+                row += 1
+                wc.cell(row, 1, what); wc.cell(row, 2, need); wc.cell(row, 3, '=' + used); wc.cell(row, 4, '=B%d-C%d' % (row, row))
+                for c_ in (2, 3, 4):
+                    wc.cell(row, c_).number_format = '0.0000' if what.startswith('K_C') else '0.000'
+    wc.conditional_formatting.add('A4:E%d' % row, FormulaRule(formula=['LEFT($E4,7)="PROBLEM"'], fill=red_fill))
+    wc.conditional_formatting.add('A4:E%d' % row, FormulaRule(formula=['LEFT($E4,4)="note"'], fill=amber))
+    wc.conditional_formatting.add('A4:E%d' % row, FormulaRule(formula=['LEFT($E4,8)="EXPLAINS"'], fill=green))
+    if paper.get('sentence'):
+        row += 2; wc.cell(row, 1, 'the paper: «%s»' % ILLEGAL_CHARACTERS_RE.sub(' ', paper['sentence'])[:400])
+    wc.column_dimensions['A'].width = 58
+    for c_, w in zip('BCDE', (16, 12, 12, 110)):
+        wc.column_dimensions[c_].width = w
 
 def _parse_pairs(s):
     out = OrderedDict()
@@ -244,6 +358,8 @@ def main(argv=None):
     ap.add_argument('--cif', help='.cif for the calculated density'); ap.add_argument('--z', type=float)
     ap.add_argument('--k', action='append', default=[], help='override a constant: UO3=0.118 (repeatable)')
     ap.add_argument('--name', default=''); ap.add_argument('--xlsx', action='store_true'); ap.add_argument('--out')
+    ap.add_argument('--paper', help="the paper (.pdf / .docx): its stated compatibility index, category and calculated density go on the workbook's check sheet")
+    ap.add_argument('--paper-ci', type=float, help='the compatibility index the paper states, when there is no file to read it from')
     a = ap.parse_args(argv)
     try:
         res = prepare(a.formula, a.wt, ','.join(a.oxide), a.n, a.density, a.cif, a.z, ','.join(a.k))
@@ -252,7 +368,10 @@ def main(argv=None):
     print(report_text(res, a.name))
     if a.xlsx:
         out = a.out or os.getcwd(); os.makedirs(out, exist_ok=True)
-        p = write_xlsx(res, os.path.join(out, (a.name or 'gd') + '_gd.xlsx'), a.name); print('  xlsx → %s' % p)
+        paper = paper_statement(a.paper) if a.paper else {}
+        if a.paper_ci is not None:
+            paper['ci'] = a.paper_ci
+        p = write_xlsx(res, os.path.join(out, (a.name or 'gd') + '_gd.xlsx'), a.name, paper or None); print('  xlsx → %s' % p)
     return 0
 
 if __name__ == '__main__':
