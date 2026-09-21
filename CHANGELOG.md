@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.11.0](#0110--2026-09-21) | 21 Sep | Workbooks that show their working: a paper's EPMA re-reduced on its stated basis, the bond-valence table as a paper prints it, and Gladstone–Dale from apfu to index — every number a live formula, each with a `check` sheet that colours what differs from the paper and says where the fault lies; a stated cation basis counts the measured cations; `pxrd gui` asks before opening a folder that is not a batch and starts on its chooser; `? look` crosses between the .pdf and the entry |
 | [0.10.1](#0101--2026-09-21) | 21 Sep | Three reflection-list checks (a paper line the list lacks, a blank hkl in a multiply-indexed group, one d with two intensities); an audit of the day's commits; `? look` finds a reflection line and lands on it; a microprobe line list no longer reads as a second radiation, and a calculated pattern has no powder radiation to verify; intensities all multiples of 5 are a note; every log says which version wrote it |
 | [0.10.0](#0100--2026-09-21) | 21 Sep | A re-run of the 2028 Part 2 batch in the GUI: two entry checks (a blank Final Quality Mark; Dx left blank although the .pdf states a calculated density), reflection findings on their own line, the paper's own misprint told from the entry's, upright pages for a pdf with a wrong /Rotate, output pages that hold their tables, the launcher opening the folder it is typed in |
 | [0.9.0](#090--2026-09-16) | 16 Sep | Three entry checks from the operators and the lattice: a reflection the space group forbids (`symops.absent`, the condition derived from the operators of the setting the symbol names), the same lattice in another setting is no discrepancy (Niggli reduction, `lattice.py`), the entry's own indices against the .pdf and its own Gladstone–Dale; gauntlet rounds 7–8; the recall inversion; a third adversarial audit — five defects fixed, one of them a half-read coordinates table verified at flag grade |
@@ -28,6 +29,8 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.11.0] — 2026-09-21
 
 ### Added
 - **A paper's analysis re-reduced step by step, as one sheet of live formulas** — `review_out/<paper>_paper_epma.xlsx`,
