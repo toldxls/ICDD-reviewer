@@ -89,8 +89,17 @@ def _save(sub, folder):
         pass
 
 def _has_entry_docx(folder):
-    # entry docx only (I*/O*) — a random .docx in the cwd must not hijack resolution
-    return any(glob.glob(os.path.join(folder, pat)) for pat in ('I*.docx', 'O*.docx'))
+    # entry docx only (I*/O*) — a random .docx in the cwd must not hijack resolution. Looked for one
+    # level down as well, as the tools themselves find them at any depth: a batch folder whose entries sit
+    # in a subfolder ('2028_Part 2/Part 2/I….docx') was passed over, and the REMEMBERED folder opened
+    # instead, without a word. The tool's own output folders do not count.
+    for depth in ('', '*'):
+        for pat in ('I*.docx', 'O*.docx'):
+            for p in glob.glob(os.path.join(folder, depth, pat)):
+                parts = os.path.relpath(p, folder).lower().split(os.sep)[:-1]
+                if not any(x in ('review_out', '.edit_backup') or x.startswith('review_out') for x in parts):
+                    return True
+    return False
 
 ENTRY_ID = re.compile(r'[A-Za-z]\d{4,6}')      # e.g. I003448 / O12345 — an id, not a folder
 
@@ -119,6 +128,8 @@ def _resolve_folder(sub, rest):
                          "folder once, e.g.  pxrd %s \"/path/to/Part 1\"" % (sub, sub))
     if not os.path.isdir(folder):
         raise SystemExit("pxrd %s: remembered folder no longer exists: %s" % (sub, folder))
+    # say so: the folder opened is not the one the command was typed in
+    print("pxrd %s: no entries under %s — using the remembered folder: %s" % (sub, cwd, folder), file=sys.stderr)
     return folder, rest
 
 # How each sub-command wants a single entry id. The launcher advertises a bare trailing id

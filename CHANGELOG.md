@@ -53,6 +53,10 @@ package version in `pyproject.toml`.
   Part 2 batch) the centred tables ran off both edges and the left of every row was cut. `_fit_page`
   turns the page landscape (or widens it) and sets half-inch side margins — page setup only, in the
   review_out copy only, never under `--inplace`; a page that holds its tables is left as it is.
+- **`pxrd <cmd>` typed in a batch folder opens that folder.** The launcher took the current folder only
+  when the entry docx sat at its top level; with the entries one level down ('2028_Part 2/Part 2/') it
+  opened the REMEMBERED folder instead, silently. It now looks one level down (the tool's own output
+  folders do not count), and says so on stderr whenever it does fall back to the remembered folder.
 - **The one-keystroke hint names table values only.** A candidate must be written with the decimals the
   neighbouring found lines are printed with; a bond-valence sum elsewhere in a paper had been offered
   beside the table's value.
