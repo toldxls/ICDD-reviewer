@@ -27,6 +27,11 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+- **`check32_quality_mark`: a blank Final Quality Mark is a flag** (13 of the 266 corpus entries whose
+  template has the field). The comment sits on the 'Final Quality Mark' label — the blank value cell has
+  nothing to anchor to — and `? look` lands on the value cell. An older template without the field is silent.
+
 ### Fixed — from a re-run of the 2028 Part 2 batch in the GUI
 - **A reflection finding sits on its own line.** The comment and highlight of a d that the .pdf does not
   print went onto the `d(A)` header of the list, and `? look` followed it there; both now land on the cell

@@ -2805,6 +2805,26 @@ def check29_reflections_in_paper(e, text):
                ', '.join(num[d] for d in miss), 'refl'))
     return out
 
+# ----------------------------------------------------------------------------- 32. Final Quality Mark left blank
+def check32_quality_mark(e, text=None):
+    """The header row carries 'Pre. Quality Mark' and 'Final Quality Mark'; the final one is what the
+    published card prints, and an entry that reaches review without it is unfinished (13 of the 266
+    corpus entries whose template has the field, 2026-09-21). An entry on the older template, which has
+    no such field, says nothing."""
+    for r in (e.raw_rows or []):
+        cells = [(c or '').strip() for c in r]
+        for j, c in enumerate(cells):
+            if re.match(r'final\s+quality\s+mark\b', c, re.I):
+                val = cells[j + 1] if j + 1 < len(cells) else ''
+                if val:
+                    return []
+                pre = next((cells[k + 1] for k, x in enumerate(cells[:-1])
+                            if re.match(r'pre\.?\s*quality\s+mark', x, re.I)), '')
+                return [Finding('quality_mark', 'flag',
+                                "Final Quality Mark is blank%s — every entry carries one; assign it."
+                                % (" (Pre. Quality Mark = '%s')" % pre if pre else ''), None, 'quality')]
+    return []
+
 # ----------------------------------------------------------------------------- driver
 # NOTE: check14_density is intentionally NOT registered. A batch survey showed the
 # docx Dcalc is computed from the empirical formula about as often as from the ideal
@@ -3904,7 +3924,8 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check19_intensity_detector, check20_calc_wavelength, check21_primary_name,
           check23_sg_system, check24_optical_2v, check25_reflection_geometry,
           check26_reference_title_case, check27_formula_integrity, check28_density_consistency,
-          check29_reflections_in_paper, check30_extinctions, check31_gd_entry]
+          check29_reflections_in_paper, check30_extinctions, check31_gd_entry,
+          check32_quality_mark]
 
 # An errored check must file under the CODE its findings normally carry (regression /
 # sweep lookups filter by code, and the raw function name would hide it from them).

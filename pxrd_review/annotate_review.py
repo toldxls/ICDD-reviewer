@@ -577,6 +577,8 @@ def _anchor_cell(doc, ac_row, anchor):
         return (_find_field_value(doc, lambda t: 'intensity type' in t.lower())
                 or _find_field_value(doc, lambda t: 'intensity instr' in t.lower())
                 or _find_field_value(doc, lambda t: 'spacing instr' in t.lower()))
+    if anchor == 'quality':                              # the (blank) value cell has no runs: the label carries it
+        return _find_value(doc, lambda t: re.match(r'final\s+quality\s+mark', t.strip(), re.I))
     if anchor == 'refl':
         return _find_cell(doc, lambda t: t.strip() in ('d(A)', 'd(Å)'))
     # the citation itself (References section) — highlight the value cell, not the label

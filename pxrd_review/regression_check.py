@@ -1042,6 +1042,12 @@ CASES = [
  ("strongest_lines: genuinely missing I=100 line still flags", lambda: X.check15_strongest_lines(
      type('S', (), {'refl': [('3.20', '20', '1', '1', '0')]}),
      'The strongest lines (d A, I %, hkl): 4.49, 31, (110); 2.583, 100, (200).') != []),
+ # --- Final Quality Mark (check32) ---
+ ("quality_mark: a blank Final Quality Mark flags", lambda: [f.sev for f in X.check32_quality_mark(
+     type('S', (), {'raw_rows': [['PDFID :', 'I000001', 'Pre. Quality Mark', 'C', 'Final Quality Mark', '']]}))] == ['flag']),
+ ("quality_mark: a filled mark, or a template without the field, is silent", lambda:
+     X.check32_quality_mark(type('S', (), {'raw_rows': [['PDFID :', 'I000001', 'Pre. Quality Mark', 'C', 'Final Quality Mark', 'S']]})) == []
+     and X.check32_quality_mark(type('S', (), {'raw_rows': [['PDFID :', 'I000001'], ['Mineral', 'Testite']]})) == []),
  # --- IMA number (new mineral vs reinvestigation/reference) ---
  ("I003633 IMA flag (new mineral)",     lambda: bool(extras('I003633', 'ima'))),
  ("I003688 IMA flag (new mineral)",    lambda: bool(extras('I003688', 'ima'))),
