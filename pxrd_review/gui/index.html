@@ -85,6 +85,7 @@
     <pre id="upd-log" class="hidden"></pre>
   </div>
   <div id="folderpanel" class="panel hidden">
+    <div id="folder-why" class="fp-why hidden"></div>
     <div class="set-row">
       <span class="set-label">Folder</span>
       <input type="text" id="folder-path" placeholder="/path/to/entries" spellcheck="false" autocomplete="off">
@@ -94,6 +95,14 @@
       <button id="folder-open" title="open the folder in the path box">Open</button>
     </div>
     <div id="folder-hint" class="muted"></div>
+    <div id="folder-ask" class="fp-ask hidden">
+      <div id="folder-ask-msg"></div>
+      <div class="set-row">
+        <button id="folder-ask-pick" title="choose the batch folder instead">Pick a batch…</button>
+        <button id="folder-ask-all" title="index and analyse every document under this folder">Open it all</button>
+      </div>
+    </div>
+    <div id="folder-recent" class="fp-recent hidden"></div>
     <div id="folder-list" class="fp-list"></div>
     <div class="fp-tip muted">Pick the folder that holds the entry <code>.docx</code> <b>and</b> the
       <code>.pdf</code> files — subfolders are searched.</div>

@@ -102,7 +102,7 @@ document.querySelectorAll('#ms-views button').forEach(b => b.addEventListener('c
 $('#ms-filter').addEventListener('input', msRenderList);
 
 // ---- folder -----------------------------------------------------------------
-async function msOpenFolder(path) {
+async function msOpenFolder(path, confirm) {
   await msFlushTriage();
   const btns = ['#folder-open', '#folder-browse'].map($).filter(Boolean);
   btns.forEach(b => b.disabled = true);
@@ -110,11 +110,12 @@ async function msOpenFolder(path) {
   let r;
   try {
     r = await fetch('/api/ms/folder', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder: path }) }).then(x => x.json());
+      body: JSON.stringify({ folder: path, confirm: !!confirm }) }).then(x => x.json());
   } catch (_) { r = { ok: false, error: 'request failed' }; }
   btns.forEach(b => b.disabled = false);
+  if (r.broad) { askBeforeOpening(r); return; }
   if (!r.ok) { $('#folder-hint').textContent = '⚠ ' + (r.error || 'could not open'); return; }
-  $('#folderpanel').classList.add('hidden');
+  $('#folderpanel').classList.add('hidden'); $('#folder-why').classList.add('hidden'); $('#folder-recent').classList.add('hidden');
   MSS.key = null; MSS.a = null; MSS.docxHtml = {};
   $('#ms-doc').classList.add('hidden'); $('#ms-empty').classList.remove('hidden');
   if (window.MODE === 'tables') { tbReset(); await tbLoad(); } else await msLoad();

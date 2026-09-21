@@ -155,7 +155,68 @@ STATE = {
     'triage': {},                  # key -> reviewer verdicts (separate sidecar)
     'gen': 0,                      # folder generation — bumped on each (re)index; aborts stale bg analysis
     'lock': threading.RLock(),
+    'choose': None,                # set when there is nothing (sensible) to open: the page starts on the folder chooser
 }
+
+# ------------------------------------------------------------------ a folder worth opening?
+SURVEY_MAX_DOCX = 300              # a batch is tens of entries, a corpus root hundreds: above this the GUI asks first
+_SURVEY_SEEN, _SURVEY_SECONDS = 20000, 1.5
+
+def folder_survey(folder):
+    """A quick, BOUNDED look at a folder before it is indexed: {'path', 'docx', 'dirs' (subfolders holding .docx), 'capped',
+    'broad', 'why'}. Indexing reads every .docx and .pdf under the folder and then analyses each entry — minutes on a home
+    folder or a corpus root, typed by accident as the place `pxrd gui` was run from. `broad` = ask before doing that:
+    a home folder or a drive root, more than SURVEY_MAX_DOCX documents, or a tree too large to count in the time allowed."""
+    from pxrd_review import cli as CLI
+    path = os.path.abspath(folder); n = seen = 0; dirs = set(); capped = False; t0 = time.monotonic()
+    for dp, dns, fns in os.walk(path):
+        dns[:] = [x for x in dns if not x.startswith('.') and not x.lower().startswith('review_out') and x != '.edit_backup']
+        for fn in fns:
+            seen += 1
+            if fn.lower().endswith('.docx') and not fn.startswith('~$'):
+                n += 1; dirs.add(dp)
+        if n > SURVEY_MAX_DOCX or seen > _SURVEY_SEEN or time.monotonic() - t0 > _SURVEY_SECONDS:
+            capped = True; break
+    # one sentence for the page; a count cut short is said as 'more than', never as a number it is not
+    why = ''
+    if CLI.is_broad_path(path):
+        why = 'This is a home folder or a whole drive, not a batch.'
+    elif n > SURVEY_MAX_DOCX:
+        why = 'This folder holds more than %d documents, in %d subfolders and counting — a corpus, not a batch.' % (SURVEY_MAX_DOCX, len(dirs))
+    elif capped:
+        why = 'This folder is a very large tree (more than %s files) — not a batch.' % format(seen - 1, ',')
+    return {'path': path, 'docx': n, 'dirs': len(dirs), 'capped': capped, 'broad': bool(why), 'why': why}
+
+def _choose_payload():
+    """What the page needs to start on the folder chooser — why, and the folders opened lately — or None."""
+    if not STATE.get('choose'):
+        return None
+    try:
+        from pxrd_review import cli as CLI
+        rec = CLI.recent()
+    except Exception:
+        rec = []
+    asked = os.path.abspath(STATE['choose']['folder']) if STATE['choose'].get('folder') else None
+    return dict(STATE['choose'], recent=[f for f in rec if os.path.abspath(f) != asked])   # not the folder being asked about
+
+def _ask_first(folder, data):
+    """The 409 a folder-switch route answers with when the folder is clearly not a batch and the page has not confirmed."""
+    if data.get('confirm'):
+        return None
+    sv = folder_survey(folder)
+    if not sv['broad']:
+        return None
+    return jsonify({'ok': False, 'broad': True, 'folder': sv['path'], 'docx': sv['docx'], 'dirs': sv['dirs'], 'capped': sv['capped'],
+                    'error': sv['why'] + ' Open it all, or pick a batch?'}), 409
+
+def _opened(folder):
+    """A folder was opened on purpose: the start screen is over, and the launcher reopens THIS folder next time."""
+    STATE['choose'] = None
+    try:
+        from pxrd_review import cli as CLI
+        CLI._save('gui', folder)
+    except Exception:
+        pass
 
 # ------------------------------------------------------------------ helpers
 def _u(s):
@@ -854,7 +915,7 @@ def api_entries():
     # WHICH entries show; the id orders them.
     rows.sort(key=_eid_key)
     return jsonify({'folder': STATE['folder'], 'out_dir': STATE['out_dir'],
-                    'pending': pending, 'entries': rows, 'mindat': _mindat_status()})
+                    'pending': pending, 'entries': rows, 'mindat': _mindat_status(), 'choose': _choose_payload()})
 
 def _mindat_status():
     """Cache age for the header chip. The Mindat-backed checks (group/classification,
@@ -1274,9 +1335,13 @@ def api_set_folder():
     if not found:                                       # validate BEFORE build_index mutates STATE, so a
         return jsonify({'ok': False,                    # rejected switch can't strand the tool on an empty
                         'error': 'no .docx entries found under %s' % folder}), 400   # folder
+    ask = _ask_first(folder, data)                      # a home folder, a corpus root: never by accident
+    if ask:
+        return ask
     with STATE['lock']:                                 # serialize with get_analysis: an in-flight
         STATE['gen'] += 1                               # analysis completes first, later ones see the
         build_index(folder, None)                       # bumped gen (or a KeyError) and stand down
+    _opened(folder)
     start_analysis()                                    # background; return at once so the switch is instant
     return jsonify({'ok': True, 'folder': STATE['folder'], 'out_dir': STATE['out_dir'],
                     'pdf_root': STATE.get('pdf_root'), 'count': len(STATE['order'])})
@@ -2659,14 +2724,21 @@ def api_ms_state():
     return jsonify({'folder': MS['folder'], 'out_dir': MS['out_dir'], 'initial': MS['initial'],
                     'files': rows, 'pending': pending, 'cifs': sorted(MS['cifs'])})
 
+def CLI_is_home(folder):
+    from pxrd_review import cli as CLI
+    return CLI.is_broad_path(folder)
+
 @app.route('/api/ms/folder', methods=['POST'])
 def api_ms_folder():
     data = request.get_json(silent=True) or {}
     folder = os.path.expanduser((data.get('folder') or '').strip())
     if not folder or not os.path.isdir(folder):
         return jsonify({'ok': False, 'error': 'not a folder: %s' % (folder or '(empty)')}), 400
+    if CLI_is_home(folder) and not data.get('confirm'):
+        return jsonify({'ok': False, 'broad': True, 'folder': folder, 'error': 'This is a home folder or a whole drive. Open it anyway, or pick the folder the manuscripts are in?'}), 409
     if not ms_set_folder(folder):
         return jsonify({'ok': False, 'error': 'no .docx in %s (manuscripts are looked for in the folder itself, not its subfolders)' % folder}), 400
+    STATE['choose'] = None
     return jsonify({'ok': True, 'folder': MS['folder'], 'count': len(MS['order'])})
 
 @app.route('/api/ms/doc/<key>')
@@ -2859,7 +2931,8 @@ def _pick_port(pref, tries=25):
 
 def main():
     ap = argparse.ArgumentParser(description='Local review-mode GUI for the PXRD review tool.')
-    ap.add_argument('folder', help='the entries folder (same one passed to annotate_review.py)')
+    ap.add_argument('folder', nargs='?', help='the entries folder (same one passed to annotate_review.py); without one the GUI opens on its folder chooser')
+    ap.add_argument('--open-anyway', action='store_true', help='index the folder even when it is clearly not a batch (a home folder, a corpus root of hundreds of documents) instead of asking first')
     ap.add_argument('--port', type=int, default=8000, help='preferred port (auto-falls back to the next free one)')
     ap.add_argument('--out', help='sidecar/output folder (default <folder>/review_out)')
     ap.add_argument('--pdf-root', help='folder holding the source .pdf/.cif/.dft files when the '
@@ -2875,28 +2948,47 @@ def main():
                          "folder's triage before serving: their verdict and note land on each finding")
     args = ap.parse_args()
 
-    if not os.path.isdir(args.folder):
-        sys.exit('not a folder: %s' % args.folder)
-    build_index(args.folder, args.out, args.pdf_root)
-    if args.import_triage:
-        if not os.path.isfile(args.import_triage):
-            sys.exit('no such report: %s' % args.import_triage)
-        summ = import_triage_report(args.import_triage)
-        _save_triage()
-        print('[review_gui] imported %s: %d entries, %d verdicts matched to current findings, %d kept as entry notes '
-              '(findings this version does not raise), %d left to the local reviewer%s'
-              % (os.path.basename(args.import_triage), summ['entries'], summ['matched'], summ['kept_as_note'], summ['kept_local'],
-                 ('; not in this folder: ' + ', '.join(summ['unknown_entries'])) if summ['unknown_entries'] else ''))
-    if args.manuscript or not STATE['order']:
-        # no ICDD entries here: a folder of manuscripts (or .cif files) opens in the other modes
-        if ms_set_folder(args.folder):
-            MS['initial'] = 'manuscript' if MS['order'] else 'tables'
-            print('[review_gui] %d manuscript(s), %d .cif in %s — opening in %s mode'
-                  % (len(MS['order']), len(MS['cifs']), args.folder, MS['initial'].capitalize()))
-        elif not STATE['order']:
-            sys.exit('no .docx entries (or manuscripts) found in %s' % args.folder)
-    if STATE['order']:
-        start_analysis()                                # background; the server comes up at once
+    # Nothing to open, or a folder that is clearly not a batch: the GUI comes up AT ONCE on its folder chooser. It used to
+    # exit on the first, and on the second index and analyse every document under a home folder or a corpus root —
+    # minutes of work nobody asked for, from running `pxrd gui` in the wrong place.
+    choose = None
+    if not args.folder:
+        choose = {'reason': 'Choose the entries folder.', 'folder': None}
+    elif not os.path.isdir(args.folder):
+        choose = {'reason': 'That folder no longer exists: %s' % args.folder, 'folder': None}
+    elif not args.open_anyway:
+        sv = folder_survey(args.folder)
+        if sv['broad']:
+            choose = {'reason': sv['why'] + ' Pick a batch, or open it all.', 'folder': sv['path'], 'broad': True}
+    if choose and args.import_triage:
+        sys.exit('--import-triage needs the entries folder: %s' % choose['reason'])
+    if choose:
+        STATE['choose'] = choose
+        print('[review_gui] %s' % choose['reason'])
+    else:
+        build_index(args.folder, args.out, args.pdf_root)
+        if args.import_triage:
+            if not os.path.isfile(args.import_triage):
+                sys.exit('no such report: %s' % args.import_triage)
+            summ = import_triage_report(args.import_triage)
+            _save_triage()
+            print('[review_gui] imported %s: %d entries, %d verdicts matched to current findings, %d kept as entry notes '
+                  '(findings this version does not raise), %d left to the local reviewer%s'
+                  % (os.path.basename(args.import_triage), summ['entries'], summ['matched'], summ['kept_as_note'], summ['kept_local'],
+                     ('; not in this folder: ' + ', '.join(summ['unknown_entries'])) if summ['unknown_entries'] else ''))
+        if args.manuscript or not STATE['order']:
+            # no ICDD entries here: a folder of manuscripts (or .cif files) opens in the other modes
+            if ms_set_folder(args.folder):
+                MS['initial'] = 'manuscript' if MS['order'] else 'tables'
+                print('[review_gui] %d manuscript(s), %d .cif in %s — opening in %s mode'
+                      % (len(MS['order']), len(MS['cifs']), args.folder, MS['initial'].capitalize()))
+            elif not STATE['order']:
+                STATE['choose'] = {'reason': 'No .docx entries (or manuscripts) found in %s.' % args.folder, 'folder': None}
+                print('[review_gui] %s' % STATE['choose']['reason'])
+        if STATE['order'] or MS.get('folder'):
+            _opened(args.folder)                            # opened: what a bare `pxrd gui` reopens, and first among the recent folders
+        if STATE['order']:
+            start_analysis()                                # background; the server comes up at once
 
     relaunched = os.environ.get('PXRD_GUI_PORT', '').isdigit()
     if relaunched:

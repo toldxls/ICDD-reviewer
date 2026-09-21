@@ -79,8 +79,33 @@ def _load():
     except Exception:
         return {}
 
+def is_broad_path(folder):
+    """A home folder, the folder of home folders, or a drive root: never the entries folder, only ever where a command was typed."""
+    f = os.path.normcase(os.path.abspath(folder)).rstrip('/\\') or os.sep
+    home = os.path.normcase(os.path.abspath(os.path.expanduser('~'))).rstrip('/\\')
+    return f in (home, os.path.dirname(home).rstrip('/\\') or os.sep) or os.path.dirname(os.path.abspath(folder)) == os.path.abspath(folder)
+
+def recent():
+    """The folders opened lately that still exist, newest first (the GUI's 'choose a folder' screen lists them)."""
+    d = _load()
+    # the folders the other tools were last pointed at are batches too: a first run of the chooser is not an empty list
+    seen = list(d.get('recent') or []) + [d.get(k) for k in ('gui', 'review', 'lambda', 'extras', 'sweep', 'candidates')]
+    out = []
+    for f in seen:
+        if isinstance(f, str) and f not in out and os.path.isdir(f) and not is_broad_path(f):
+            out.append(f)
+    return out[:8]
+
+def _is_temp(folder):
+    import tempfile
+    t = os.path.realpath(tempfile.gettempdir()); f = os.path.realpath(folder)
+    return f == t or f.startswith(t + os.sep)
+
 def _save(sub, folder):
+    if is_broad_path(folder) or _is_temp(folder):
+        return                                  # reopening a home folder or a drive by itself next time helps nobody; a temp folder (a test's) is gone by then
     d = _load(); d[sub] = os.path.abspath(folder)
+    d['recent'] = ([d[sub]] + [f for f in (d.get('recent') or []) if f != d[sub]])[:8]
     try:
         os.makedirs(os.path.dirname(MEM), exist_ok=True)
         with open(MEM, 'w', encoding='utf-8') as f:
@@ -114,14 +139,18 @@ def _resolve_folder(sub, rest):
     (`check` slots $PXRD_REGRESSION_DIR between the explicit arg and the memory)."""
     if rest and not rest[0].startswith('-'):
         if os.path.isdir(rest[0]):
-            _save(sub, rest[0]); return rest[0], rest[1:]
+            if sub != 'gui':                    # the GUI remembers a folder when it OPENS it: one it asks about first (a corpus root) is not the folder to reopen
+                _save(sub, rest[0])
+            return rest[0], rest[1:]
         if not ENTRY_ID.fullmatch(rest[0]):
             raise SystemExit("pxrd %s: not a folder: %s" % (sub, rest[0]))
         # an entry id: leave it in rest (passes through to the module) and resolve
         # the folder as usual below
     cwd = os.getcwd()
     if sub != 'check' and _has_entry_docx(cwd):
-        _save(sub, cwd); return cwd, rest
+        if sub != 'gui':
+            _save(sub, cwd)
+        return cwd, rest
     if sub == 'check':
         env = os.environ.get('PXRD_REGRESSION_DIR')
         if env:
@@ -129,6 +158,10 @@ def _resolve_folder(sub, rest):
                 raise SystemExit("pxrd check: $PXRD_REGRESSION_DIR is not a folder: %s" % env)
             return env, rest                    # env-derived: use, but never remember
     folder = _load().get(sub)
+    if sub == 'gui' and not (folder and os.path.isdir(folder)):
+        # the GUI has a folder picker of its own: with nothing to open it starts on that, where the other tools can only stop
+        print("pxrd gui: %s — opening on the folder chooser" % ('no folder given and none remembered' if not folder else 'the remembered folder no longer exists: %s' % folder), file=sys.stderr)
+        return None, rest
     if not folder:
         raise SystemExit("pxrd %s: no folder given and none remembered — pass the entries "
                          "folder once, e.g.  pxrd %s \"/path/to/Part 1\"" % (sub, sub))
@@ -176,7 +209,7 @@ def main():
 
     if sub in NEEDS_FOLDER:
         folder, passthru = _resolve_folder(sub, rest)
-        args = [folder] + _fix_entry_id(sub, passthru)
+        args = ([folder] if folder else []) + _fix_entry_id(sub, passthru)
     elif sub == 'refresh':
         args = rest or ['--refresh']        # bare `refresh` -> --refresh
     else:                                   # mindat / refs passthrough

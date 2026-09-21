@@ -78,6 +78,7 @@ async function loadEntries() {
   renderMindatChip(r.mindat);
   S.entries = r.entries;
   renderList();
+  if (r.choose) startOnChooser(r.choose);                  // nothing (sensible) to open: start on the folder chooser
   // analysis runs in the background — poll until every entry's badges are in
   if (r.pending > 0) S.pollTimer = setTimeout(loadEntries, 1200);
 }
@@ -221,7 +222,34 @@ async function copyChip(chip, text) {
 function openFolderPanel() {
   $('#settings').classList.add('hidden');
   $('#folderpanel').classList.remove('hidden');
+  $('#folder-ask').classList.add('hidden');
   browseFolder($('#folder').dataset.path || '');          // start at the current folder
+}
+// The GUI came up with nothing to open — no folder, a folder that is gone, or one that is clearly not a batch (a home
+// folder, a corpus root of hundreds of documents). The chooser IS the start screen then: why, the recent folders, the picker.
+let CHOOSER_SHOWN = false;
+function startOnChooser(c) {
+  if (CHOOSER_SHOWN) return;                              // once: a reviewer who closes the panel is not nagged by the poll
+  CHOOSER_SHOWN = true;
+  $('#settings').classList.add('hidden');
+  $('#folderpanel').classList.remove('hidden');
+  const why = $('#folder-why'); why.textContent = c.reason || 'Choose the entries folder.'; why.classList.remove('hidden');
+  const rec = $('#folder-recent'); rec.innerHTML = '';
+  if ((c.recent || []).length) {
+    rec.append(el('div', { class: 'fp-recent-head' }, 'Recent folders'));
+    for (const f of c.recent) rec.append(el('div', { class: 'fp-item', title: f, onclick: () => openFolder(f) }, '🕘  ' + f));
+    rec.classList.remove('hidden');
+  }
+  browseFolder(c.folder || '');
+  if (c.broad && c.folder) askBeforeOpening({ folder: c.folder, error: 'Open this folder anyway, or pick a batch?' });   // the banner above already says why
+}
+// A folder that is clearly not a batch: open it all on purpose, or pick a batch — never by accident.
+function askBeforeOpening(r) {
+  $('#folder-hint').textContent = '';
+  $('#folder-ask-msg').textContent = r.error || 'This folder is not a batch. Open it all, or pick a batch?';
+  $('#folder-ask').classList.remove('hidden');
+  $('#folder-ask-all').onclick = () => { $('#folder-ask').classList.add('hidden'); openFolder(r.folder, true); };
+  $('#folder-ask-pick').onclick = () => { $('#folder-ask').classList.add('hidden'); pickFolderNative(); };
 }
 async function browseFolder(path) {
   let r;
@@ -247,10 +275,10 @@ async function pickFolderNative() {
   $('#folder-path').value = r.folder;
   openFolder(r.folder);
 }
-async function openFolder(path) {
+async function openFolder(path, confirm) {
   path = (path || '').trim();
   if (!path) return;
-  if (window.MODE === 'manuscript' || window.MODE === 'tables') { msOpenFolder(path); return; }   // ms.js / tb.js share the folder
+  if (window.MODE === 'manuscript' || window.MODE === 'tables') { msOpenFolder(path, confirm); return; }   // ms.js / tb.js share the folder
   await flushTriage();              // persist any pending triage BEFORE re-pointing the tool
                                     // (un-awaited, the POST could land in the new folder's sidecar)
   const btns = ['#folder-open', '#folder-browse'].map($).filter(Boolean);
@@ -259,11 +287,12 @@ async function openFolder(path) {
   let r;
   try {
     r = await fetch('/api/folder', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder: path }) }).then(x => x.json());
+      body: JSON.stringify({ folder: path, confirm: !!confirm }) }).then(x => x.json());
   } catch (_) { r = { ok: false, error: 'request failed' }; }
   btns.forEach(b => b.disabled = false);
+  if (r.broad) { askBeforeOpening(r); return; }             // hundreds of documents, a home folder: asked, never assumed
   if (!r.ok) { $('#folder-hint').textContent = '⚠ ' + (r.error || 'could not open'); return; }
-  $('#folderpanel').classList.add('hidden');
+  $('#folderpanel').classList.add('hidden'); $('#folder-why').classList.add('hidden'); $('#folder-recent').classList.add('hidden');
   S.key = null; S.a = null; S.docxHtml = {}; S.docxHidden = new Set();     // reset per-entry view + caches
   $('#entry').classList.add('hidden'); $('#empty').classList.remove('hidden');
   await loadEntries();                                     // reload the dashboard for the new folder

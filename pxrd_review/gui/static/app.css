@@ -576,3 +576,9 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 
 /* the entry-level note (an imported triage report's decisions on findings this version does not raise) */
 .e-note { margin: 4px 12px 2px; padding: 4px 8px; font-size: 12px; line-height: 1.35; color: #5a4a1a; background: #fff8dc; border-left: 3px solid #d9b34a; white-space: pre-wrap; }
+
+/* the folder chooser as a start screen: why it is showing, the recent folders, and the ask before a folder that is not a batch */
+.fp-why { margin-bottom: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--warn); color: var(--text); font-weight: 600; }
+.fp-ask { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; color: var(--text); }
+.fp-recent { margin: 6px 0; }
+.fp-recent .fp-recent-head { font-size: 12px; opacity: .7; margin-bottom: 2px; }

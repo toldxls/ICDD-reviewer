@@ -68,6 +68,18 @@ package version in `pyproject.toml`.
   reproduces the paper's index is green; red is kept for arithmetic: a calculated density that is not Z·FW/(V·0.602214), a category
   word that is not the category of the paper's own number. An analysis with no constants at all (an element table) says so instead
   of dividing by zero.
+- **`pxrd gui` asks before it opens a folder that is not a batch, and starts on its folder chooser when there is nothing to
+  open.** Run from a corpus root — or a home folder — it used to index every document beneath and analyse each one: hundreds
+  of files, minutes of work, by accident of where the command was typed. A quick bounded look comes first now (a home folder
+  or a drive; more than 300 documents; a tree too large to count in a second and a half), and such a folder brings the GUI up
+  AT ONCE on the chooser: why, *Pick a batch… / Open it all*, the folders opened lately, the picker. Opening it all is still
+  one click (`--open-anyway` on the command line) — it just cannot happen by accident. The same question is asked when a folder
+  is switched to from inside the GUI. With no folder given and none remembered, or a remembered folder that is gone, the GUI
+  opens on the chooser instead of exiting with an error (the other tools, which have no picker, still stop).
+- **What the launcher remembers.** A folder is remembered for `pxrd gui` when the GUI OPENS it, not when the command is typed
+  — a corpus root it asked about is not the folder to reopen — and a home folder, a drive root or a temp folder is never
+  remembered for any tool. The folders opened lately are kept (eight, newest first; the batches the other tools were last
+  pointed at seed the list).
 
 ### Fixed
 - **A stated cation basis is counted over the cations the probe measured.** 'On the basis of 6 cations, excluding H+'
