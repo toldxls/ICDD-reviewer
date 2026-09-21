@@ -78,6 +78,16 @@ def _save_docx(doc, path):
         if os.path.exists(tmp):
             os.remove(tmp)
 
+def _log_name(f):
+    """The entry's name as the logs head it: from the file name, with a Levinson suffix typed bare
+    ('Lepersonnite-Gd') written the IMA way, '-(Gd)' — the log is read as a list of minerals, and the
+    entry's own spelling is quoted in the finding beneath it."""
+    name = C.entry_name(f) or C.entry_id(f) or os.path.basename(f)
+    mb = re.match(r'^(.+?)-([A-Z][a-z]?)$', name.strip())
+    if mb and mb.group(2) in X.REE_ELEMENTS:
+        name = '%s-(%s)' % mb.groups()
+    return name.upper()
+
 def _fit_page(doc):
     """Widen the PAGE of an output copy whose tables do not fit it. ICDD's generated entries carry
     14400-twip (10 in) tables; once Word re-saves one onto a Letter portrait page with 1 in margins —
@@ -1584,7 +1594,7 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
         fh.write('=' * 78 + '\n\nEDITED ENTRIES (highlights / comments)\n')
         for f, r in edited:
             hl = ', '.join(r['highlights']) if r['highlights'] else '(none)'
-            name = (C.entry_name(f) or C.entry_id(f) or f).upper()
+            name = _log_name(f)
             eid = C.entry_id(f)
             fh.write('\n' + '=' * 78 + '\n')
             fh.write('  %s   (%s)\n' % (name, eid or '?'))
@@ -1603,14 +1613,14 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
             fh.write('REVIEWER EDITS (tracked changes / non-tool comments — preserved, NOT tool-written)\n'
                      + '-' * 78 + '\n')
             for f, r in rev_recs:
-                fh.write('\n  %s   (%s)\n' % ((C.entry_name(f) or C.entry_id(f) or f).upper(), C.entry_id(f) or '?'))
+                fh.write('\n  %s   (%s)\n' % (_log_name(f), C.entry_id(f) or '?'))
                 for e in r['user_edits']:
                     fh.write(textwrap.fill(e, width=78, initial_indent='    - ', subsequent_indent=' ' * 6) + '\n')
             fh.write('\n' + '=' * 78 + '\n\n')
         fh.write('CLEAN ENTRIES (no edits — copied unchanged)\n' + '-' * 78 + '\n')
         for f, r in records:
             if r['clean']:
-                fh.write('  %-32s (%s)\n' % (C.entry_name(f).upper(), C.entry_id(f) or '?'))
+                fh.write('  %-32s (%s)\n' % (_log_name(f), C.entry_id(f) or '?'))
         # .dft cross-check: a co-equal ICDD proxy (NOT ground truth) — these are
         # surfaced for the reviewer to verify against the paper; they are NOT
         # written into any docx.
@@ -1620,7 +1630,7 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
             fh.write('ICDD .dft CROSS-CHECK (verify against the paper — NOT written to docx)\n'
                      + '-' * 78 + '\n')
             for f, r in dft_recs:
-                fh.write('\n  %s   (%s)\n' % ((C.entry_name(f) or C.entry_id(f) or f).upper(), C.entry_id(f) or '?'))
+                fh.write('\n  %s   (%s)\n' % (_log_name(f), C.entry_id(f) or '?'))
                 for c in r['dft']:
                     c = re.sub(r'^verify vs ICDD \.dft — ', '', c)
                     fh.write(textwrap.fill(c, width=78, initial_indent='    - ',
@@ -1647,7 +1657,7 @@ def _run(args, docs, out_dir, idx, cif_idx, dft_idx, triage):
                      'the one to fix (Mindat data can lag the CNMNC newsletter). Not written into any docx.\n')
             fh.write('%d entr%s.\n' % (len(md_recs), 'y' if len(md_recs) == 1 else 'ies') + '=' * 78 + '\n')
             for f, r in md_recs:
-                fh.write('\n  %s   (%s)\n' % ((C.entry_name(f) or C.entry_id(f) or f).upper(), C.entry_id(f) or '?'))
+                fh.write('\n  %s   (%s)\n' % (_log_name(f), C.entry_id(f) or '?'))
                 for code, msg in r['mindat']:
                     fh.write('    [%s]\n' % LABEL.get(code, code))
                     fh.write(textwrap.fill(msg, width=78, initial_indent='      - ', subsequent_indent=' ' * 8) + '\n')

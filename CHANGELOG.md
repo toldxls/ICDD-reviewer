@@ -26,6 +26,14 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
+## [Unreleased]
+
+### Fixed
+- **The logs head every entry by its mineral name.** A file ICDD returns as '…)_edited.docx' (and the tool's
+  copy of one) had its name lost to the suffix, and the log showed the id twice; a Levinson suffix typed
+  bare in the file name ('Lepersonnite-Gd') is headed the IMA way, 'LEPERSONNITE-(GD)' — the entry's own
+  spelling is still quoted in the finding beneath it.
+
 ## [0.10.0] — 2026-09-21
 
 ### Added

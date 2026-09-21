@@ -1309,7 +1309,9 @@ def entry_id(path):
 def entry_name(path):
     """Mineral name from the docx filename parenthetical, e.g.
     'Innnnnn(#mineral-(La)).docx' -> '#mineral-(La)'."""
-    m = re.search(r'\((.+)\)\.docx$', os.path.basename(path))
+    # a file ICDD returns is already named '…)_edited.docx', and the tool's own copy of one
+    # '…)_edited_edited.docx': the suffix is not part of the name (petersite-(Y) had none in the log)
+    m = re.search(r'\((.+)\)(?:_edited)*\.docx$', os.path.basename(path), re.I)
     return m.group(1) if m else None
 
 # ----------------------------------------------------------------------------- report

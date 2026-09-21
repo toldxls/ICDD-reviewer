@@ -40,5 +40,13 @@ class FitPage(unittest.TestCase):
         self.assertEqual(before, (s.page_width, s.page_height, s.left_margin, s.right_margin))
 
 
+
+class LogName(unittest.TestCase):
+    def test_a_returned_edited_file_keeps_its_name_and_a_bare_levinson_suffix_is_written_the_ima_way(self):
+        self.assertEqual(A._log_name('I002449(Petersite-(Y))_edited_edited.docx'), 'PETERSITE-(Y)')
+        self.assertEqual(A._log_name('I003682(Lepersonnite-Gd)_edited.docx'), 'LEPERSONNITE-(GD)')
+        self.assertEqual(A._log_name('I003743(Avicennite-Sb-rich).docx'), 'AVICENNITE-SB-RICH')
+
+
 if __name__ == '__main__':
     unittest.main()
