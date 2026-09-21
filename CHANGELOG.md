@@ -39,6 +39,18 @@ package version in `pyproject.toml`.
   **the basis the paper states**; the coefficients the paper prints stand beside the reduction's with the difference
   and a per-element "does not follow from the table", and what the composition check found is written under it —
   including, where the stated basis does not reproduce the formula, the basis that does.
+- **A `check` sheet in the paper's workbook: what differs from the paper is coloured, and the sheet says where the fault
+  lies** — live, from the same cells, so it re-reads itself when a wt% or the basis is changed. A reduction normalises,
+  so a fault has a shape: *every coefficient off by one factor* with no element left standing is the basis (and the
+  basis that would give the paper's coefficients is shown — 8, not the stated 7), or an oxide reduced in another valence
+  on an anion basis (`FeO as Fe2O3`: the line that explains the factor says so); *one element left standing* once the
+  common factor is divided out is one wrong wt% or one misprinted coefficient — named, with the wt% that would give the
+  paper's value, the shift of all the others called what it is (that one value's dilution, not a basis problem); several
+  standing out is the table or the formula as read. The wt% read against the printed total is amber, never red (on the
+  corpus a total that does not add up is the reading three times in four). H, ammonium and an element printed in two
+  valence states are shown and not judged, as the composition check leaves them out. Rows of the reduction whose element
+  does not follow are coloured too. Held against the composition check on the whole corpus (769 workbooks): where it
+  says every coefficient follows, the sheet shows red on 4 papers — each a real difference between the numbers read.
 
 ### Fixed
 - **A stated cation basis is counted over the cations the probe measured.** 'On the basis of 6 cations, excluding H+'
@@ -63,6 +75,9 @@ package version in `pyproject.toml`.
   they are now derived on the sheet — apfu → mass per formula unit → formula weight (less the oxygen F and Cl replace)
   → wt% → k·wt%/100 → K_C — with D_calc from Z, the formula weight and V, K_P, the index and its category as formulas,
   and a constituent without a constant says it adds nothing to K_C.
+- **A control character in a paper's sentence no longer stops the workbook.** A pdf's lost minus sign arrives as `\x01`,
+  which a worksheet refuses: 25 corpus papers raised, and the Tables mode's Fill ▸ would have failed on them. The notes are
+  cleaned, and `check_paper` reports a workbook it could not write instead of failing with it.
 - **`pxrd epma --xlsx`: the reduction sheet now derives every number it shows.** The O≡F,Cl correction, the anion
   sum net of the oxygen the halogens displace, the O apfu net of it, an element basis, a conversion (UO2 → UO3) and
   H2O by difference were values or were missing, so a sheet with F or Cl normalised on a different anion sum than the

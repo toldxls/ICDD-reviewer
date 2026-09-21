@@ -147,20 +147,65 @@ class Reduction(unittest.TestCase):
         p3 = _csv(self.tmp, 'u.csv', ['UO2', 'CaO'], [[80.0, 10.0], [81.0, 9.0]])
         ds3 = E.load_probe(p3)
         self._sheet_matches(E.reduce(ds3, ('O', 4), converts=[('UO2', 'UO3')]), ds3, 'i.xlsx')   # the conversion is a formula of the raw mean
-        # the single-sheet form: values in, the paper's coefficients beside the reduction's, a verdict per element
+        # the paper form: the reduction and a 'check' sheet — the paper's coefficients beside the reduction's, a verdict per element
         red = E.reduce(ds, ('O', 13))
         out = os.path.join(self.tmp, 's.xlsx')
         E.write_xlsx(red, None, out, published={'Ca': 5.0, 'P': 2.5, 'F': round(red.rows['F'].apfu + 0.02, 2), 'O': 12}, decimals={'F': 2}, notes=['a note'], single=True)
         from tests.xl_eval import Book
-        b = Book(out); ws = b.wb['reduction']
-        self.assertEqual(b.wb.sheetnames, ['reduction'])
+        b = Book(out); ws = b.wb['check']
+        self.assertEqual(b.wb.sheetnames, ['reduction', 'check'])
         label = {c.value: c.row for c in ws['A'] if isinstance(c.value, str)}
-        self.assertAlmostEqual(b.value('reduction', 'B%d' % label['Ca']), red.rows['CaO'].apfu, places=9)
-        self.assertEqual(b.value('reduction', 'G%d' % label['Ca']), 'yes, within the rounding')   # a printed 5.00 is 4.995–5.005
-        self.assertEqual(b.value('reduction', 'G%d' % label['P']), 'does not follow from the table')   # 3.0 from the table, 2.5 printed
-        self.assertEqual(b.value('reduction', 'G%d' % label['F']), 'close: beyond rounding, within tolerance')
+        self.assertAlmostEqual(b.value('check', 'B%d' % label['Ca']), red.rows['CaO'].apfu, places=9)
+        self.assertEqual(b.value('check', 'F%d' % label['Ca']), 'yes, within the rounding')   # a printed 5.00 is 4.995–5.005
+        self.assertEqual(b.value('check', 'F%d' % label['P']), 'does not follow from the table')   # 3.0 from the table, 2.5 printed
+        self.assertEqual(b.value('check', 'F%d' % label['F']), 'close: beyond rounding, within tolerance')
         self.assertIn('a note', label)
 
+    def _check_book(self, wt, basis, published, total=None, edit=None):
+        """A paper workbook from mean wt%; `edit(wb)` changes cells before the formulas are evaluated — as a reviewer would."""
+        import openpyxl
+        from tests.xl_eval import Book
+        cons = [E.parse_constituent(k) for k in wt]
+        ds = E.Dataset(cons, [list(wt.values())], ['mean'], {}, 'paper', None)
+        red = E.reduce(ds, basis)
+        out = os.path.join(self.tmp, 'chk.xlsx')
+        E.write_xlsx(red, None, out, published=published, single=True, table_total=total)
+        if edit:
+            wb = openpyxl.load_workbook(out); edit(wb); wb.save(out)
+        b = Book(out)
+        lab = {c.value: c.row for c in b.wb['check']['A'] if isinstance(c.value, str)}
+        read = lambda name: b.value('check', 'C%d' % lab[name])
+        return b, lab, read, red
+
+    def test_check_sheet_says_where_the_fault_lies(self):
+        wt = {'CaO': 20.10, 'MgO': 14.50, 'FeO': 9.80, 'Al2O3': 6.20, 'SiO2': 47.10, 'Na2O': 1.90}
+        tot = round(sum(wt.values()), 2)
+        red0 = E.reduce(E.Dataset([E.parse_constituent(k) for k in wt], [list(wt.values())], ['m'], {}, 'p', None), ('O', 6))
+        pub = {r.c.element: round(r.apfu, 2) for r in red0.rows.values()}; pub['O'] = 6
+        F = 'common factor (median ratio of the major elements)'; N = 'elements left standing once it is divided out'; T = "the table's printed total"
+        # nothing wrong: every line says so
+        b, lab, read, red = self._check_book(wt, ('O', 6), pub, tot)
+        self.assertTrue(read(F).startswith('ok') and read(N).startswith('ok') and read(T).startswith('ok'), (read(F), read(N), read(T)))
+        # one wt% mistyped in the table (MgO 14.50 -> 17.40): one element stands alone, named, and the total no longer adds up
+        def mg(wb):
+            ws = wb['reduction']; r = next(c.row for c in ws['A'] if c.value == 'MgO'); ws.cell(r, 2, 17.40)
+        b, lab, read, red = self._check_book(wt, ('O', 6), pub, tot, mg)
+        self.assertTrue(read(F).startswith('note') and 'not a basis problem' in read(F), read(F))   # the others' dilution is named for what it is
+        self.assertIn('ONE element stands alone: Mg', read(N))
+        self.assertTrue(read(T).startswith('note') and '+2.90' in read(T), read(T))   # amber: a total that does not add up is a place to look
+        self.assertAlmostEqual(b.value('check', 'L%d' % lab['Mg']), 14.5, delta=0.1)   # the wt% that would give the paper's coefficient
+        # the basis is not the paper's (6 O stated, the formula written on 12): one factor, no element alone, the basis named
+        pub12 = {k: (round(2 * v, 2) if k != 'O' else 12) for k, v in pub.items()}
+        b, lab, read, red = self._check_book(wt, ('O', 6), pub12, tot)
+        self.assertIn('every coefficient is off by ONE factor', read(F)); self.assertTrue(read(N).startswith('ok'), read(N))
+        self.assertAlmostEqual(b.value('check', 'B%d' % lab["the basis that would give the paper's coefficients"]), 12.0, delta=0.05)
+        # the paper reduced its FeO as Fe2O3: a common factor again — and the valence line is the one that explains it
+        wt3 = dict(wt); fe = wt3.pop('FeO'); wt3['Fe2O3'] = fe * 159.687 / (2 * 71.844)
+        red3 = E.reduce(E.Dataset([E.parse_constituent(k) for k in wt3], [list(wt3.values())], ['m'], {}, 'p', None), ('O', 6))
+        pub3 = {r.c.element: round(r.apfu, 3) for r in red3.rows.values()}; pub3['O'] = 6
+        b, lab, read, red = self._check_book(wt, ('O', 6), pub3, tot)
+        self.assertIn('every coefficient is shifted by ×1.026', read(F))            # 2.6 %: each within tolerance, so amber — the valence line is what names it
+        self.assertIn('this explains the common factor: the paper reduced FeO as Fe2O3', read('FeO as Fe2O3'))
 
 from pxrd_review import epma as EP
 

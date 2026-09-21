@@ -21,8 +21,19 @@ def _sumif(rng, crit, vals):
     return sum(v for k, v in zip(rng, vals) if k == crit and isinstance(v, (int, float)))
 
 _FUNCS = {'SUM': lambda *a: sum(_nums(a)), 'AVERAGE': lambda *a: statistics.mean(_nums(a)), 'STDEV': lambda *a: statistics.stdev(_nums(a)),
-          'MIN': lambda *a: min(_nums(a)), 'MAX': lambda *a: max(_nums(a)), 'ABS': abs, 'EXP': math.exp, 'TEXT': lambda v, f: '%.*f' % (len(f.split('.')[1]) if '.' in f else 0, v), 'IF': lambda c, a, b: a if c else b, 'SUMIF': _sumif,
+          'MIN': lambda *a: min(_nums(a)), 'MAX': lambda *a: max(_nums(a)), 'ABS': abs, 'EXP': math.exp, 'MEDIAN': lambda *a: statistics.median(_nums(a)) if _nums(a) else 0, 'COUNT': lambda *a: len(_nums(a)),
+          'INDEX': lambda rng, i: rng[int(i) - 1] if i else '#N/A', 'MATCH': lambda v, rng, _t=0: (rng.index(v) + 1) if v in rng else 0,   # IF is eager here, lazy in Excel: an unused branch must not raise
+          'LEFT': lambda t, n_: str(t)[:int(n_)],
+          '_AND': lambda *a: all(a), '_OR': lambda *a: any(a), 'TEXT': lambda v, f: _text(v, f), 'IF': lambda c, a, b: a if c else b, 'SUMIF': _sumif,
           'SUMPRODUCT': lambda x, y: sum(p * q for p, q in zip(x, y) if isinstance(p, (int, float)) and isinstance(q, (int, float)))}
+
+def _text(v, f):
+    f0 = f.split(';')[0]
+    d = f0.split('.')[1] if '.' in f0 else ''
+    out = '%.*f' % (len(d), v)
+    if '#' in d:
+        out = out.rstrip('0').rstrip('.')
+    return ('+' if f0.startswith('+') and v >= 0 else '') + out
 
 class Book:
     def __init__(self, path):
@@ -48,5 +59,6 @@ class Book:
                 v = self.value(sh, m.group(3)); env[name] = 0 if v is None else v
             return name
         parts = re.split(r'("[^"]*")', expr)                           # references are not looked for inside strings
-        code = ''.join(p if p.startswith('"') else _REF.sub(sub, p).replace('<>', '!=').replace('^', '**').replace('&', '+') for p in parts)
+        code = ''.join(p if p.startswith('"') else _REF.sub(sub, p).replace('<>', '!=').replace('^', '**').replace('&', '+').replace('AND(', '_AND(').replace('OR(', '_OR(') for p in parts)
+        code = re.sub(r'(?<![<>!=])=(?!=)', '==', code)
         return eval(code, {'__builtins__': {}}, env)

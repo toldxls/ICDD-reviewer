@@ -467,7 +467,7 @@ def _mw_formula(c):
 
 _XL_KIND = {'oxide': 'oxide', 'other': 'oxide', 'water': 'water', 'element-anion': 'anion', 'element': 'element'}
 
-def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), single=False, decimals=None):
+def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), single=False, decimals=None, table_total=None, not_judged=None):
     """raw points | reduction with live formulas | the published table | method (the paper's own
     statements of basis and treatment, when the inputs came from a paper).
 
@@ -476,11 +476,13 @@ def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), s
     formula of the constituent (As2O5: 2 and 5) -> cation and anion moles -> the oxygen a halogen
     replaces -> the normalisation factor from the basis -> apfu. Changing a wt%, the basis or a
     stoichiometric factor re-derives the formula, so the number a manuscript got wrong can be found.
-    published: {element: apfu} of the formula the paper prints — a comparison block under the table;
+    published: {element: apfu} of the formula the paper prints — compared on a 'check' sheet (see _write_check);
+    not_judged: {element: why} shown beside the paper's value but kept out of every verdict;
+    table_total: the total the paper's table prints, held against the sum of the wt% read;
     decimals: {element: the decimals it is printed to} (default 2) — a coefficient printed '0.02' is anything
     from 0.015 to 0.025, so a difference inside that half-unit is the paper's rounding and says so.
     notes: lines written under it (what was converted, which column was used, what does not follow).
-    single: the reduction sheet alone, its wt% the values themselves — what a paper's table gives."""
+    single: no raw / table / method sheets, the wt% the values themselves — what a paper's table gives."""
     import openpyxl
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter as L
@@ -488,7 +490,7 @@ def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), s
     ds = ds or red.ds
     bold = Font(bold=True)
     if single:
-        return _write_reduction(wb, wb.active, red, ds, None, published, notes, path, decimals)
+        return _write_reduction(wb, wb.active, red, ds, None, published, notes, path, decimals, table_total, not_judged)
     # ---- raw
     ws = wb.active; ws.title = 'raw'
     ws.append(['point'] + [c.formula for c in ds.constituents] + ['total'])
@@ -507,7 +509,7 @@ def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), s
         if len(sel) > 1:                                                    # one row (a paper's means) has no spread
             ws.cell(r_mean + 1, 1, 's.d.'); ws.cell(r_mean + 2, 1, 'min'); ws.cell(r_mean + 3, 1, 'max')
             ws.cell(r_mean + 1, j + 2, '=STDEV(%s)' % rng); ws.cell(r_mean + 2, j + 2, '=MIN(%s)' % rng); ws.cell(r_mean + 3, j + 2, '=MAX(%s)' % rng)
-    _write_reduction(wb, wb.create_sheet('reduction'), red, ds, r_mean, published, notes, None, decimals)
+    _write_reduction(wb, wb.create_sheet('reduction'), red, ds, r_mean, published, notes, None, decimals, table_total, not_judged)
     # ---- table
     wt = wb.create_sheet('table')
     wt.append(table['head'])
@@ -527,7 +529,7 @@ def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), s
     wb.save(path)
     return path
 
-def _write_reduction(wb, wr, red, ds, r_mean, published, notes, path, decimals=None):
+def _write_reduction(wb, wr, red, ds, r_mean, published, notes, path, decimals=None, table_total=None, not_judged=None):
     """The reduction sheet of write_xlsx. r_mean: the row of the raw sheet's means, None when the
     wt% are written as values; path: save the workbook there (the single-sheet form)."""
     from openpyxl.styles import Font
@@ -625,37 +627,142 @@ def _write_reduction(wb, wr, red, ds, r_mean, published, notes, path, decimals=N
     wr.cell(R['formula'], 1, 'empirical formula (as reduced; not live)'); wr.cell(R['formula'], 2, red.formula())
     if has_oxide:
         wr.cell(R['formula'] + 2, 1, 'atomic weight of O'); wr.cell(R['formula'] + 2, 2, AW_O)
-    nxt = R['formula'] + 4
-    if published:
-        # the paper's own coefficients beside what its numbers give, element by element
-        wr.cell(nxt, 1, 'element'); wr.cell(nxt, 2, 'apfu from this reduction'); wr.cell(nxt, 3, "apfu in the paper's formula"); wr.cell(nxt, 4, 'difference'); wr.cell(nxt, 5, 'difference, %'); wr.cell(nxt, 6, 'rounding of the printed value, ±'); wr.cell(nxt, 7, 'follows?')
-        for c in range(1, 8):
-            wr.cell(nxt, c).font = bold
-        have = {('H' if r.c.kind == 'water' else r.c.element) for r in red.rows.values()}
-        amm = next((first + i for i, k in enumerate(red.rows) if k == 'N2H8O'), None)
-        for el, v in published.items():
-            if el == 'O' or el not in have or not v:
-                continue
-            nxt += 1
-            wr.cell(nxt, 1, el)
-            wr.cell(nxt, 2, '=SUMIF(%s,"%s",%s)' % (col('M'), el, col('J')) + ('+4*J%d' % amm if el == 'H' and amm else ''))
-            wr.cell(nxt, 3, v); wr.cell(nxt, 4, '=B%d-C%d' % (nxt, nxt)); wr.cell(nxt, 5, '=100*D%d/C%d' % (nxt, nxt))
-            wr.cell(nxt, 6, 0.5 * 10 ** -int((decimals or {}).get(el, 2)))
-            # inside the half-unit of the last printed digit the two agree, whatever the percentage (0.023 against a printed 0.02 is 16 %);
-            # past the composition check's tolerance the coefficient does not follow; between the two it is close
-            wr.cell(nxt, 7, '=IF(ABS(D%d)<=F%d+0.0000001,"yes, within the rounding",IF(ABS(D%d)>MAX(0.03,0.05*C%d),"does not follow from the table","close: beyond rounding, within tolerance"))' % (nxt, nxt, nxt, nxt))
-        missing = [el for el, v in published.items() if el not in have and el not in ('O', 'H') and v]
-        if missing:
-            nxt += 1; wr.cell(nxt, 1, 'in the formula, not in the table: ' + ', '.join(missing))
-        nxt += 2
-    for line in notes:
-        wr.cell(nxt, 1, line); nxt += 1
+    if published or notes:
+        _write_check(wb, red, published, decimals, notes, table_total, first, last, R, not_judged)
     for c_, w in zip('ABCDEFGHIJKLMNO', (16, 12, 12, 12, 12, 14, 22, 12, 14, 10, 10, 10, 9, 9, 30)):
         wr.column_dimensions[c_].width = w
     wr.freeze_panes = 'B2'
     if path:
         wb.save(path)
     return path
+
+# The other oxide a constituent may have been reduced as. On an ANION basis the oxygen a cation brings sets the
+# normalisation, so FeO reduced as Fe2O3 moves EVERY coefficient by one factor (on a cation basis it moves none).
+_OTHER_OXIDE = {'FeO': ['Fe2O3'], 'Fe2O3': ['FeO'], 'MnO': ['Mn2O3', 'MnO2'], 'Mn2O3': ['MnO', 'MnO2'], 'MnO2': ['MnO', 'Mn2O3'],
+                'UO2': ['UO3'], 'UO3': ['UO2'], 'As2O3': ['As2O5'], 'As2O5': ['As2O3'], 'Sb2O3': ['Sb2O5'], 'Sb2O5': ['Sb2O3'],
+                'V2O3': ['VO2', 'V2O5'], 'VO2': ['V2O3', 'V2O5'], 'V2O5': ['VO2', 'V2O3'], 'Ce2O3': ['CeO2'], 'CeO2': ['Ce2O3'],
+                'Tl2O': ['Tl2O3'], 'Tl2O3': ['Tl2O'], 'Cu2O': ['CuO'], 'CuO': ['Cu2O'], 'PbO': ['PbO2'], 'PbO2': ['PbO'],
+                'TeO2': ['TeO3'], 'TeO3': ['TeO2'], 'SeO2': ['SeO3'], 'SeO3': ['SeO2'], 'Cr2O3': ['CrO3'], 'CrO3': ['Cr2O3'],
+                'MoO2': ['MoO3'], 'MoO3': ['MoO2'], 'SO2': ['SO3'], 'SO3': ['SO2'], 'CoO': ['Co2O3'], 'Ti2O3': ['TiO2'], 'TiO2': ['Ti2O3']}
+
+def _write_check(wb, red, published, decimals, notes, table_total, first, last, R, not_judged=None):
+    """The 'check' sheet: the paper's coefficients beside the reduction's, what does not follow coloured, and — live, from
+    the same cells — WHERE the fault lies. A reduction normalises, so a fault has a shape: a wrong basis (or an oxide
+    reduced in another valence on an anion basis) moves every coefficient by ONE factor; one wrong wt% or one misprinted
+    coefficient leaves one element standing once that factor is divided out; a misread table scatters."""
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.formatting.rule import FormulaRule
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+    bold = Font(bold=True)
+    red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid'); amber = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+    wc = wb.create_sheet('check')
+    col = lambda c: "reduction!$%s$%d:$%s$%d" % (c, first, c, last)
+    row = 1
+    wc.cell(row, 1, 'The formula the paper prints against the one its own table gives — red: does not follow; amber: beyond rounding, within tolerance').font = bold
+    e0 = e1 = None
+    if published:
+        row = 3
+        heads = ['element', 'apfu from the reduction', "apfu in the paper's formula", 'difference', 'rounding of the printed value, ±', 'follows?',
+                 'ratio reduction / paper', 'ratio of a major element', 'after the common factor: difference', 'stands out?',
+                 "wt% in the table", "wt% that would give the paper's coefficient (≈)"]
+        for c_, h in enumerate(heads, 1):
+            wc.cell(row, c_, h).font = bold
+        have = {('H' if r.c.kind == 'water' else r.c.element) for r in red.rows.values()}
+        amm = next((first + i for i, k in enumerate(red.rows) if k == 'N2H8O'), None)
+        els = [(el, v) for el, v in published.items() if el != 'O' and el in have and v]
+        e0 = row + 1; e1 = row + len(els)
+        r_med = e1 + 3                                                   # the common factor lives here
+        for i, (el, v) in enumerate(els):
+            r_ = e0 + i
+            wc.cell(r_, 1, el)
+            wc.cell(r_, 2, '=SUMIF(%s,"%s",%s)' % (col('M'), el, col('J')) + ('+4*reduction!$J$%d' % amm if el == 'H' and amm else ''))
+            wc.cell(r_, 3, v); wc.cell(r_, 4, '=B%d-C%d' % (r_, r_))
+            wc.cell(r_, 5, 0.5 * 10 ** -int((decimals or {}).get(el, 2)))
+            # inside the half-unit of the last printed digit the two agree, whatever the percentage (0.023 against a printed 0.02 is 16 %);
+            # past the composition check's tolerance the coefficient does not follow; between the two it is close
+            skip = (not_judged or {}).get(el) or ('not judged: H is calculated' if el == 'H' else
+                                                  'not judged: ammonium is calculated' if el == 'N' and amm else '')
+            if skip:
+                # H (and ammonium) is calculated, not analysed, and a formula's OH and H2O are read loosely: shown, never judged — as the composition check does
+                wc.cell(r_, 6, skip)
+            else:
+                wc.cell(r_, 6, '=IF(ABS(D%d)<=E%d+0.0000001,"yes, within the rounding",IF(ABS(D%d)>MAX(0.03,0.05*C%d),"does not follow from the table","close: beyond rounding, within tolerance"))' % (r_, r_, r_, r_))
+            wc.cell(r_, 7, '=B%d/C%d' % (r_, r_))
+            wc.cell(r_, 8, '=IF(C%d>=0.1,G%d,"")' % (r_, r_) if not skip else '')   # a small coefficient's ratio is its rounding; H is usually calculated to fit
+            wc.cell(r_, 9, '=B%d/$B$%d-C%d' % (r_, r_med, r_))
+            wc.cell(r_, 10, '=IF(ABS(I%d)>MAX(E%d,0.03,0.05*C%d),1,0)' % (r_, r_, r_) if not skip else 0)
+            rows_el = [first + j for j, r in enumerate(red.rows.values()) if ('H' if r.c.kind == 'water' else r.c.element) == el]
+            if len(rows_el) == 1:
+                wc.cell(r_, 11, '=reduction!$B$%d' % rows_el[0])
+                wc.cell(r_, 12, '=K%d*C%d*$B$%d/B%d' % (r_, r_, r_med, r_))   # with the common factor, which is the dilution this value itself causes
+        rng = lambda c: '$%s$%d:$%s$%d' % (c, e0, c, e1)
+        wc.conditional_formatting.add('A%d:F%d' % (e0, e1), FormulaRule(formula=['LEFT($F%d,8)="does not"' % e0], fill=red_fill))
+        wc.conditional_formatting.add('A%d:F%d' % (e0, e1), FormulaRule(formula=['LEFT($F%d,5)="close"' % e0], fill=amber))
+        wc.conditional_formatting.add('I%d:J%d' % (e0, e1), FormulaRule(formula=['$J%d=1' % e0], fill=red_fill))
+        # the constituent rows of the reduction whose element does not follow
+        wb['reduction'].conditional_formatting.add('A%d:J%d' % (first, last), FormulaRule(
+            formula=['COUNTIFS(check!%s,$M%d,check!%s,"does not*")>0' % (rng('A'), first, rng('F'))], fill=red_fill))
+        row = e1 + 2
+        wc.cell(row, 1, 'WHERE THE FAULT LIES').font = bold; wc.cell(row, 2, 'value').font = bold; wc.cell(row, 3, 'reading').font = bold
+        assert row + 1 == r_med
+        wc.cell(r_med, 1, 'common factor (median ratio of the major elements)'); wc.cell(r_med, 2, '=IF(COUNT(%s)>0,MEDIAN(%s),1)' % (rng('H'), rng('H')))
+        r_n = r_med + 1; r_imp = r_med + 2; r_out = r_med + 3
+        wc.cell(r_n, 1, 'elements left standing once it is divided out'); wc.cell(r_n, 2, '=SUM(%s)' % rng('J'))
+        # a reduction NORMALISES: one wrong number moves its own element a lot and every other one by a common factor, so a
+        # common factor is the basis only when NO element is left standing once it is divided out
+        wc.cell(r_med, 3, '=IF(ABS(B%d-1)<=0.02,"ok — no common factor: the basis is the paper\'s",IF(B%d=0,IF(ABS(B%d-1)<=0.05,"note — every coefficient is shifted by ×"&TEXT(B%d,"0.000")&", each within tolerance: an oxide reduced in another valence (below), a constituent left out of the basis, or atomic weights","PROBLEM — every coefficient is off by ONE factor (×"&TEXT(B%d,"0.000")&"): the BASIS is not the one used, a constituent is missing from it, or an oxide was reduced in another valence (below) — not a wrong number"),IF(B%d=1,"note — the other elements are shifted by ×"&TEXT(B%d,"0.000")&": what ONE wrong value does to all the rest through the normalisation — not a basis problem","PROBLEM — the coefficients scatter around a factor of ×"&TEXT(B%d,"0.000")&": the basis AND a number, or the table as read")))' % (r_med, r_n, r_med, r_med, r_med, r_n, r_med, r_med))
+        wc.cell(r_n, 3, '=IF(B%d=0,"ok — none",IF(B%d=1,"PROBLEM — ONE element stands alone: "&INDEX(%s,MATCH(1,%s,0))&" — its wt%% or its printed coefficient is the slip (compare the last two columns above)","PROBLEM — "&TEXT(B%d,"0")&" elements stand out: not one slip — the table as read, the formula as read, or a formula written from other data"))' % (r_n, r_n, rng('A'), rng('J'), r_n))
+        kind = red.basis[0]
+        wc.cell(r_imp, 1, 'the basis that would give the paper\'s coefficients'); wc.cell(r_imp, 2, '=reduction!$B$%d/B%d' % (R['basis'], r_med))
+        wc.cell(r_imp, 3, '=IF(ABS(B%d-1)<=0.02,"ok — the basis applied ("&TEXT(reduction!$B$%d,"0.00")&")","the basis applied is "&TEXT(reduction!$B$%d,"0.00")&"; the coefficients follow from "&TEXT(B%d,"0.00")&" on the same count")' % (r_med, R['basis'], R['basis'], r_imp))
+        wc.cell(r_out, 1, 'Σ wt% as read (with O ≡ F,Cl,S)'); wc.cell(r_out, 2, '=reduction!$B$%d' % R['total'])
+        if table_total is not None:
+            wc.cell(r_out + 1, 1, "the table's printed total"); wc.cell(r_out + 1, 2, table_total)
+            # amber, never red: on the corpus a total that does not add up is the READING three times in four (another column's total,
+            # an apfu sum under the table, a row converted or left out) — it says where to look, not that the paper is wrong
+            wc.cell(r_out + 1, 3, '=IF(ABS(B%d-B%d)<=0.06,"ok — the wt%% read add up to the printed total",IF(ABS(B%d-B%d)>5,"note — the total read is not the total of these rows (another column, or a sum of something else): not compared","note — the wt%% read differ from the printed total by "&TEXT(B%d-B%d,"+0.00;-0.00")&": a value misprinted, misread, converted or left out (or the total itself) — compare the wt%% column with the table"))' % ((r_out, r_out + 1) * 3))
+        else:
+            wc.cell(r_out + 1, 1, "the table's printed total"); wc.cell(r_out + 1, 3, 'not read')
+        row = r_out + 2
+        if not getattr(red, 'water_oh', False) and not red.anions_structure and any(r.c.kind in ('oxide', 'other', 'water') for r in red.rows.values()):
+            wc.cell(row, 1, 'charge balance of the reduced formula'); wc.cell(row, 2, '=reduction!$B$%d' % R['charge'])
+            wc.cell(row, 3, '=IF(ABS(B%d)<=0.05,"ok — neutral","note — Σ(+) − Σ(−) = "&TEXT(B%d,"+0.00;-0.00")&": on a cation basis the anions do not balance the valences as reported (OH for O, a valence state, H2O)")' % (row, row))
+            row += 1
+        if kind == 'O':
+            # the same analysis with a multivalent oxide reduced the other way: the cation moles stay, its oxygen changes, and with it the factor
+            alts = [(first + j, k, alt) for j, (k, r) in enumerate(red.rows.items()) for alt in _OTHER_OXIDE.get(k, []) if r.wt > 0]
+            if alts:
+                row += 1
+                wc.cell(row, 1, 'IF AN OXIDE WAS REDUCED IN ANOTHER VALENCE (anion basis)').font = bold; wc.cell(row, 2, 'every apfu ×').font = bold; wc.cell(row, 3, 'reading').font = bold
+                for rr_, k, alt in alts:
+                    row += 1
+                    ca, cb = parse_constituent(k), parse_constituent(alt)
+                    d_o = cb.n_o / cb.n_cat - ca.n_o / ca.n_cat                 # oxygens per cation, the other oxide less this one
+                    wc.cell(row, 1, '%s as %s' % (k, alt))
+                    wc.cell(row, 2, '=reduction!$B$%d/(reduction!$B$%d+reduction!$G$%d*(%r))' % (R['sum'], R['sum'], rr_, d_o))
+                    wc.cell(row, 3, '=IF(AND(ABS($B$%d-1)>0.02,ABS(B%d*$B$%d-1)<=0.01),"PROBLEM — this explains the common factor: the paper reduced %s as %s","does not explain it")' % (r_med, row, r_med, k, alt))
+        f0 = r_med; f1 = row
+        wc.conditional_formatting.add('A%d:C%d' % (f0, f1), FormulaRule(formula=['LEFT($C%d,7)="PROBLEM"' % f0], fill=red_fill))
+        wc.conditional_formatting.add('A%d:C%d' % (f0, f1), FormulaRule(formula=['LEFT($C%d,4)="note"' % f0], fill=amber))
+        row += 2
+        missing = [el for el, v in published.items() if el not in have and el not in ('O', 'H') and v]
+        extra = sorted({r.c.element for r in red.rows.values() if r.wt >= 0.5 and r.c.kind != 'water'} - set(published) - {'O', 'H'})
+        if missing:
+            wc.cell(row, 1, 'PROBLEM — in the formula, not in the table read: ' + ', '.join(missing)).fill = red_fill; row += 1
+        if extra:
+            wc.cell(row, 1, 'PROBLEM — in the table (≥ 0.5 wt%%), not in the formula read: %s' % ', '.join(extra)).fill = red_fill; row += 1
+        row += 1
+    else:
+        row = 3
+    for line in notes:
+        c = wc.cell(row, 1, ILLEGAL_CHARACTERS_RE.sub(' ', line)); row += 1   # a pdf's lost minus sign arrives as a control character, which a worksheet refuses
+        if line.startswith('PROBLEM'):
+            c.fill = red_fill
+    wc.column_dimensions['A'].width = 52
+    for c_, w in zip('BCDEFGHIJKL', (22, 26, 12, 16, 38, 14, 14, 18, 12, 14, 22)):
+        wc.column_dimensions[c_].width = w
+    if e0:
+        wc.freeze_panes = 'B4'
 
 # ----------------------------------------------------------------------------- ICDD entries: replicate the published formula
 # An ICDD entry's Analysis field carries the mean wt% list and the empirical formula in the ICDD

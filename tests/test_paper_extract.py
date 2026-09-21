@@ -336,10 +336,11 @@ class MeasuredCationBasis(unittest.TestCase):
             self.assertFalse(c['basis_flag'])
             # and the workbook is reduced on it, nothing marked as not following
             from tests.xl_eval import Book
-            b = Book(os.path.join(tmp, 'review_out', r['extract']['reduction_xlsx'])); ws = b.wb['reduction']
+            b = Book(os.path.join(tmp, 'review_out', r['extract']['reduction_xlsx'])); ws = b.wb['check']
             label = {x.value: x.row for x in ws['A'] if isinstance(x.value, str)}
-            self.assertAlmostEqual(b.value('reduction', 'B%d' % label['C']), 2.0, places=2)
-            self.assertEqual({b.value('reduction', 'G%d' % x.row) for x in ws['G'] if x.row > label['element'] + 0 and x.value and x.row != label['element']}, {'yes, within the rounding'})
+            self.assertAlmostEqual(b.value('check', 'B%d' % label['C']), 2.0, places=2)
+            self.assertEqual({b.value('check', 'F%d' % label[el]) for el in ('Ca', 'Mg', 'C')}, {'yes, within the rounding'})
+            self.assertTrue(b.value('check', 'C%d' % label['common factor (median ratio of the major elements)']).startswith('ok'))
             self.assertFalse(any(str(x.value).startswith('PROBLEM') for x in ws['A']))
         finally:
             shutil.rmtree(tmp)

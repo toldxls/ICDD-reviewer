@@ -148,13 +148,16 @@ class TablesMode(unittest.TestCase):
         # the reduction as one sheet of live formulas, on the basis the paper STATES (7 O), the mismatch written under it
         self.assertEqual(r['reduction'], 'testite_paper_epma.xlsx')
         from tests.xl_eval import Book
-        b = Book(os.path.join(self.tmp, 'review_out', r['reduction'])); ws = b.wb['reduction']
-        self.assertEqual(b.wb.sheetnames, ['reduction'])
+        b = Book(os.path.join(self.tmp, 'review_out', r['reduction'])); ws = b.wb['reduction']; wc = b.wb['check']
+        self.assertEqual(b.wb.sheetnames, ['reduction', 'check'])
         cells = {c.value: c.row for c in ws['A'] if isinstance(c.value, str)}
         self.assertEqual(b.value('reduction', 'B%d' % cells['basis (anions apfu)']), 7)
         self.assertAlmostEqual(sum(b.value('reduction', 'K%d' % i) or 0 for i in range(2, cells['total'] - 1)), 7.0, places=9)   # the O apfu sum to the basis
-        self.assertTrue(any(str(c.value).startswith('PROBLEM: the stated basis does not reproduce the formula') for c in ws['A']))
-        self.assertIn('does not follow from the table', [b.value('reduction', 'G%d' % c.row) for c in ws['G'] if c.row > cells['element']])
+        chk = {c.value: c.row for c in wc['A'] if isinstance(c.value, str)}
+        self.assertTrue(any(str(c.value).startswith('PROBLEM: the stated basis does not reproduce the formula') for c in wc['A']))
+        self.assertIn('does not follow from the table', [b.value('check', 'F%d' % chk[el]) for el in ('Ca', 'Mg', 'Si')])
+        # and the check sheet says what kind of fault it is (the fixture's Si does not follow from its SiO2 on any basis)
+        self.assertIn('ONE element stands alone: Si', b.value('check', 'C%d' % chk['elements left standing once it is divided out']))
         self.assertEqual(self.c.post('/api/tb/extract?pdf=nope.pdf').status_code, 404)
         # the same paper is a manuscript: its own numbers are checked and carried as findings
         self.assertIn('testite', self.G.MS['files'])

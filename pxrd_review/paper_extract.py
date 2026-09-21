@@ -3034,7 +3034,7 @@ def _check_formula(ex, text, fcand):
         lines.append('  the paper states its formula is calculated on %s, but every coefficient follows from %s — the stated basis does not reproduce the formula; one of the two is a slip'
                      % (EP._basis_label(ex['basis']), EP._basis_label(b)))
     return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts, 'wt': wt, 'counts': counts, 'basis_flag': basis_flag, 'basis_equiv': basis_equiv,
-            'apfu': apfu_note, 'apfu_vouches': apfu_vouches}
+            'apfu': apfu_note, 'apfu_vouches': apfu_vouches, 'ox_paper': ox_paper}
 
 def _basis_comparable(stated, found, wt, counts, r_stated, basis_sentence=''):
     """Whether a stated basis that fails can be held against the paper — the cases the corpus
@@ -4655,7 +4655,10 @@ def check_paper(pdf, cif=None, out_dir=None):
         out['lines'].append('the .cif could not be used (%s) — the paper is checked as one without a .cif' % cif_error)
     if out_dir and ex.get('epma'):
         # the reduction itself, to follow cell by cell (beside the .csv the EPMA tab reads)
-        fn = write_reduction_xlsx(ex, out['composition'], out_dir, os.path.splitext(os.path.basename(pdf))[0] + ('_docx_' if pdf.lower().endswith('.docx') else '_paper_'))
+        try:
+            fn = write_reduction_xlsx(ex, out['composition'], out_dir, os.path.splitext(os.path.basename(pdf))[0] + ('_docx_' if pdf.lower().endswith('.docx') else '_paper_'))
+        except Exception as e_:                                          # a workbook that cannot be written never takes the check down with it
+            fn = None; ex['notes'].append('the reduction workbook was not written (%s)' % str(e_)[:80])
         if fn:
             ex['reduction_xlsx'] = fn
     if out['composition']:
@@ -6238,7 +6241,9 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
     decimals = {el: common for el in (comp.get('counts') or {})}
     for el, _i, d in printed:
         decimals[el] = min(decimals.get(el, common), len(d)) if el in decimals else len(d)
-    EP.write_xlsx(red, None, os.path.join(out_dir, name), published=comp.get('counts') or None, notes=notes, single=True, decimals=decimals)
+    # an element the formula prints in two valence states is read as ONE coefficient (the composition check leaves it out for that reason)
+    not_judged = {el: 'not judged: printed in two valence states, read as one coefficient' for el, v in (comp.get('ox_paper') or {}).items() if len(v or ()) > 1}
+    EP.write_xlsx(red, None, os.path.join(out_dir, name), published=comp.get('counts') or None, notes=notes, single=True, decimals=decimals, not_judged=not_judged, table_total=e.get('total') if e.get('total') and 85 <= e['total'] <= 112 else None)   # an apfu sum read as the total is not one
     return name
 
 def basis_string(b):
