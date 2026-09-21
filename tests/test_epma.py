@@ -108,6 +108,60 @@ class Reduction(unittest.TestCase):
         self.assertTrue(str(ws['B3'].value).startswith('=raw!'))          # CaO reads the raw mean; UO3 (converted) is a value
 
 
+    def _sheet_matches(self, red, ds, name, **kw):
+        """Every derived cell of the reduction sheet, evaluated, is the number the Python gave."""
+        from tests.xl_eval import Book
+        out = os.path.join(self.tmp, name)
+        E.write_xlsx(red, E.published_table(red), out, ds, **kw)
+        b = Book(out); ws = b.wb['reduction']
+        for i, (k, r) in enumerate(red.rows.items()):
+            row = i + 2
+            self.assertEqual(ws.cell(row, 1).value, k)
+            for col, want in (('B', r.wt), ('C', r.c.mw), ('D', r.mol), ('G', r.cations), ('J', r.apfu)):
+                self.assertAlmostEqual(b.value('reduction', '%s%d' % (col, row)), want, places=9, msg='%s %s' % (k, col))
+            if r.c.kind in ('oxide', 'other', 'water'):
+                self.assertAlmostEqual(b.value('reduction', 'K%d' % row), r.o_apfu, places=9, msg=k)
+        label = {c.value: c.row for c in ws['A'] if isinstance(c.value, str)}
+        self.assertAlmostEqual(b.value('reduction', 'B%d' % label['total']), red.total, places=9)
+        self.assertAlmostEqual(b.value('reduction', 'B%d' % label['normalisation factor']), red.factor, places=9)
+        ch = next((r_ for l_, r_ in label.items() if l_.startswith('charge balance Σ')), None)
+        if ch:
+            self.assertAlmostEqual(b.value('reduction', 'B%d' % ch), red.charge, places=9)
+        return b, ws, label
+
+    def test_xlsx_formulas_reproduce_the_reduction(self):
+        # F and Cl on an anion basis: the O=F correction, the displaced oxygen and the netted O apfu are formulas
+        p = _csv(self.tmp, 'ap.csv', ['CaO', 'P2O5', 'F', 'Cl'], [[55.60, 42.22, 3.10, 0.4], [55.2, 42.5, 3.3, 0.5], [54.9, 42.0, 3.2, 0.3]])
+        ds = E.load_probe(p)
+        b, ws, label = self._sheet_matches(E.reduce(ds, ('O', 13)), ds, 'a.xlsx')
+        self.assertEqual(ws['C3'].value, '=2*30.974+5*15.999')                # the MW is the sum it is
+        self.assertEqual((ws['E3'].value, ws['F3'].value), (2, 5))            # P2O5: 2 cations, 5 anions per formula
+        self._sheet_matches(E.reduce(ds, ('O', 13.5), raw_anions=True), ds, 'b.xlsx')
+        self._sheet_matches(E.reduce(ds, ('O', 13), points=[0, 2]), ds, 'c.xlsx')          # the mean of the points used, not of every row
+        self._sheet_matches(E.reduce(ds, ('cations', 8)), ds, 'd.xlsx')
+        self._sheet_matches(E.reduce(ds, ('element', 'P', 3), adds=[('H2O', 'difference', None)]), ds, 'e.xlsx')
+        p2 = _csv(self.tmp, 'mt.csv', ['FeO', 'H2O'], [[80.0, 10.0]])
+        ds2 = E.load_probe(p2)
+        self._sheet_matches(E.charge_balance(ds2, ('cations', 3), adjust='Fe', anions=4), ds2, 'g.xlsx')
+        self._sheet_matches(E.reduce(ds2, ('O', 4), water_oh=True), ds2, 'h.xlsx')
+        p3 = _csv(self.tmp, 'u.csv', ['UO2', 'CaO'], [[80.0, 10.0], [81.0, 9.0]])
+        ds3 = E.load_probe(p3)
+        self._sheet_matches(E.reduce(ds3, ('O', 4), converts=[('UO2', 'UO3')]), ds3, 'i.xlsx')   # the conversion is a formula of the raw mean
+        # the single-sheet form: values in, the paper's coefficients beside the reduction's, a verdict per element
+        red = E.reduce(ds, ('O', 13))
+        out = os.path.join(self.tmp, 's.xlsx')
+        E.write_xlsx(red, None, out, published={'Ca': 5.0, 'P': 2.5, 'F': round(red.rows['F'].apfu + 0.02, 2), 'O': 12}, decimals={'F': 2}, notes=['a note'], single=True)
+        from tests.xl_eval import Book
+        b = Book(out); ws = b.wb['reduction']
+        self.assertEqual(b.wb.sheetnames, ['reduction'])
+        label = {c.value: c.row for c in ws['A'] if isinstance(c.value, str)}
+        self.assertAlmostEqual(b.value('reduction', 'B%d' % label['Ca']), red.rows['CaO'].apfu, places=9)
+        self.assertEqual(b.value('reduction', 'G%d' % label['Ca']), 'yes, within the rounding')   # a printed 5.00 is 4.995–5.005
+        self.assertEqual(b.value('reduction', 'G%d' % label['P']), 'does not follow from the table')   # 3.0 from the table, 2.5 printed
+        self.assertEqual(b.value('reduction', 'G%d' % label['F']), 'close: beyond rounding, within tolerance')
+        self.assertIn('a note', label)
+
+
 from pxrd_review import epma as EP
 
 

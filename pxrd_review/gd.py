@@ -40,11 +40,11 @@ USUAL_OXIDE = {'H': 'H2O', 'Li': 'Li2O', 'Na': 'Na2O', 'K': 'K2O', 'Rb': 'Rb2O',
                'C': 'CO2', 'P': 'P2O5', 'As': 'As2O5', 'V': 'V2O5', 'Nb': 'Nb2O5', 'Ta': 'Ta2O5', 'S': 'SO3', 'Cr6': 'CrO3',
                'Mo': 'MoO3', 'W': 'WO3', 'U': 'UO3', 'Th': 'ThO2', 'F': 'F', 'Cl': 'Cl', 'Br': 'Br'}
 
-def formula_to_wt(apfu, oxides=None):
+def formula_to_wt(apfu, oxides=None, apfu_by_key=False):
     """{'Pb':1,'U':3,'Se':2,'H2O':5} (O implied) -> {constituent: wt%} and the formula weight.
     Elements map to their usual oxide unless `oxides` says otherwise (e.g. {'Fe': 'Fe2O3', 'S': 'S'})."""
     oxides = oxides or {}
-    mass = OrderedDict(); fw = 0.0
+    mass = OrderedDict(); fw = 0.0; by_key = OrderedDict()
     for el, n in apfu.items():
         if el == 'O':
             continue
@@ -54,6 +54,9 @@ def formula_to_wt(apfu, oxides=None):
         c = EP.parse_constituent(key)
         m = n * c.mw / (c.n_cat if c.kind != 'water' else 1)     # mass of this constituent per formula unit
         mass[key] = mass.get(key, 0.0) + m
+        by_key[key] = by_key.get(key, 0.0) + n
+    if apfu_by_key:
+        return by_key                                          # the apfu each constituent stands for (Fe and Fe2O3 given together add up)
     # oxygen is implied by the oxides; a stated O count only matters for the formula weight
     fw = sum(mass.values())
     hal = sum(mass[k] for k in mass if k in ('F', 'Cl', 'Br'))
@@ -153,37 +156,75 @@ def prepare(formula=None, wt=None, oxide=None, n=None, density=None, cif=None, z
         raise ValueError('the mean refractive index n is needed')
     fw = None
     if formula and formula.strip():
-        wt_, fw = formula_to_wt(_parse_pairs(formula), dict(kv.split('=', 1) for kv in (oxide or '').split(',') if '=' in kv))
+        ox_ = dict(kv.split('=', 1) for kv in (oxide or '').split(',') if '=' in kv)
+        wt_, fw = formula_to_wt(_parse_pairs(formula), ox_)
+        by_key = formula_to_wt(_parse_pairs(formula), ox_, apfu_by_key=True)
     elif wt and wt.strip():
         wt_ = _parse_pairs(wt)
     else:
         raise ValueError('give a formula (apfu) or wt% oxides')
     if not wt_:
         raise ValueError('nothing parsed from the composition — use X=value,X=value')
-    return evaluate(wt_, float(n), float(density) if density else None, cif, float(z) if z else None, _parse_pairs(k) if k else None, fw)
+    res = evaluate(wt_, float(n), float(density) if density else None, cif, float(z) if z else None, _parse_pairs(k) if k else None, fw)
+    if formula and formula.strip():
+        res['apfu'] = True; res['apfu_by_key'] = by_key; res['wt_keys'] = [k_ for k_ in wt_ if not k_.startswith('O=')]   # what the workbook derives the wt% from
+    return res
 
 def write_xlsx(res, path, name=''):
+    """The whole calculation as live formulas: from a formula, apfu -> mass per formula unit (apfu x MW over
+    the cations of the constituent) -> formula weight (less the oxygen F and Cl replace) -> wt%; then
+    k·wt%/100 -> K_C; D_calc = Z·FW / (V·0.602214); K_P = (n − 1)/D; 1 − K_P/K_C and its category.
+    Change a k, an apfu, n, Z or a density and everything after it follows."""
     import openpyxl
     from openpyxl.styles import Font
+    bold = Font(bold=True)
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'GD'
-    ws.append(['Gladstone–Dale' + (' — ' + name if name else '')]); ws['A1'].font = Font(bold=True)
-    ws.append(['constituent', 'wt%', 'k', 'k·wt%/100', 'source'])
-    first = 3
+    ws.append(['Gladstone–Dale' + (' — ' + name if name else '')]); ws['A1'].font = bold
+    ws.append(['constituent', 'wt%', 'k', 'k·wt%/100', 'source of k']); ws.row_dimensions[2].font = bold
+    first = 3; n_rows = len(res['rows']); last = first + n_rows - 1
+    r_kc = last + 1; r_n = last + 3
+    apfu = res.get('apfu'); fw_cell = None
+    # the block a formula's wt% come from sits under the results; the wt% cells above point into it
+    n_res = 1 + (3 if res.get('D_meas') else 0) + (7 if res.get('D_calc') else 0)
+    d0 = r_n + n_res + 1                                                 # header row of the derivation
+    wt_ref = {}
+    if apfu:
+        keys = [k for k in res['wt_keys']]
+        for j, key in enumerate(keys):
+            wt_ref[key] = 'E%d' % (d0 + 1 + j)
+        r_corr = d0 + 1 + len(keys); r_fw = r_corr + 1
+        fw_cell = 'D%d' % r_fw
     for i, (key, w, k, c, src) in enumerate(res['rows']):
         r = first + i
-        ws.append([key, w, k, '=B%d*C%d/100' % (r, r), src])
-    last = first + len(res['rows']) - 1
-    ws.append(['K_C', '=SUM(B%d:B%d)' % (first, last), '', '=SUM(D%d:D%d)' % (first, last)])
-    r_kc = last + 1
-    ws.append([]); ws.append(['n_mean', res['n']]); r_n = last + 3
+        ws.append([key, ('=' + wt_ref[key]) if key in wt_ref else w, k, '=B%d*C%d/100' % (r, r), src if k is not None else 'NO CONSTANT: this constituent adds nothing to K_C'])
+    ws.append(['K_C', '=SUM(B%d:B%d)' % (first, last), '', '=SUM(D%d:D%d)' % (first, last), 'Σ k·wt%/100 — over the WHOLE analysis: a short list gives a short K_C'])
+    ws.append([]); ws.append(['n (mean index)', res['n']])
     row = r_n + 1
+    cat = lambda cell: '=IF(ABS(%s)<0.02,"superior",IF(ABS(%s)<0.04,"excellent",IF(ABS(%s)<0.06,"good",IF(ABS(%s)<0.08,"fair","poor"))))' % ((cell,) * 4)
     if res.get('D_meas'):
-        ws.append(['D measured', res['D_meas']]); ws.append(['K_P (measured D)', '=(B%d-1)/B%d' % (r_n, row)]); ws.append(['compatibility', '=1-B%d/D%d' % (row + 1, r_kc)]); row += 3
+        ws.append(['D measured', res['D_meas']]); ws.append(['K_P (measured D)', '=(B%d-1)/B%d' % (r_n, row), '(n − 1) / D'])
+        ws.append(['compatibility', '=1-B%d/D%d' % (row + 1, r_kc), '1 − K_P/K_C', cat('B%d' % (row + 2))]); row += 3
     if res.get('D_calc'):
-        ws.append(['formula weight', res['fw']]); ws.append(['Z', res['Z']]); ws.append(['V (Å³)', res['V']])
-        ws.append(['D calculated', '=B%d*B%d/(B%d*0.602214)' % (row + 1, row, row + 2)])
-        ws.append(['K_P (calculated D)', '=(B%d-1)/B%d' % (r_n, row + 3)]); ws.append(['compatibility', '=1-B%d/D%d' % (row + 4, r_kc)])
-    ws.column_dimensions['A'].width = 20; ws.column_dimensions['E'].width = 40
+        ws.append(['formula weight', ('=' + fw_cell) if fw_cell else res['fw']]); ws.append(['Z', res['Z']]); ws.append(['V (Å³)', res['V'], 'from the .cif cell'])
+        ws.append(['Avogadro × 10⁻²⁴', 0.602214])
+        ws.append(['D calculated', '=B%d*B%d/(B%d*B%d)' % (row + 1, row, row + 2, row + 3), 'Z · FW / (V · 0.602214)'])
+        ws.append(['K_P (calculated D)', '=(B%d-1)/B%d' % (r_n, row + 4), '(n − 1) / D'])
+        ws.append(['compatibility', '=1-B%d/D%d' % (row + 5, r_kc), '1 − K_P/K_C', cat('B%d' % (row + 6))]); row += 7
+    if apfu:
+        from pxrd_review import epma as EP
+        assert row + 1 == d0, (row, d0)
+        ws.append([]); ws.append(['from the formula', 'apfu', 'MW of the constituent', 'mass per formula unit', 'wt%', 'cations per formula of the constituent'])
+        ws.row_dimensions[d0].font = bold
+        for j, key in enumerate(keys):
+            r = d0 + 1 + j; c = EP.parse_constituent(key)
+            ws.append([key, res['apfu_by_key'][key], EP._mw_formula(c), '=B%d*C%d/F%d' % (r, r, r), '=100*D%d/$D$%d' % (r, r_fw), c.n_cat if c.kind != 'water' else 1])
+        hal = [d0 + 1 + j for j, key in enumerate(keys) if key in ('F', 'Cl', 'Br')]
+        ws.append(['O ≡ F,Cl', '', '', ('=-(%s)*%s/2' % ('+'.join('B%d' % h for h in hal), EP.ATOMIC_WEIGHTS['O'])) if hal else 0,
+                   ('=100*D%d/$D$%d' % (r_corr, r_fw)) if hal else 0, 'half an O per F, Cl: the oxides count an oxygen the halogen replaces'])
+        ws.append(['formula weight', '', '', '=SUM(D%d:D%d)' % (d0 + 1, r_corr)])
+    for col, w in zip('ABCDEF', (22, 12, 22, 22, 12, 60)):
+        ws.column_dimensions[col].width = w
+    ws.column_dimensions['E'].width = 44 if not apfu else 14
     wb.save(path); return path
 
 def _parse_pairs(s):

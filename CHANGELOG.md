@@ -29,6 +29,46 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+- **A paper's analysis re-reduced step by step, as one sheet of live formulas** — `review_out/<paper>_paper_epma.xlsx`,
+  written by `pxrd paper` and by the Tables mode's **Fill ▸** beside the `.csv` the EPMA tab reads. One row a
+  constituent: wt%, the molecular weight as the sum of its atomic weights (`=2*74.922+5*15.999`), moles, the cations
+  and anions per formula of the constituent (As2O5: 2 and 5), cation and anion moles, the oxygen a halogen replaces,
+  the normalisation factor, apfu and O apfu — every step a formula of the cells before it, so a changed wt%, basis or
+  stoichiometric factor re-derives the formula and the number a manuscript got wrong can be found. It is reduced on
+  **the basis the paper states**; the coefficients the paper prints stand beside the reduction's with the difference
+  and a per-element "does not follow from the table", and what the composition check found is written under it —
+  including, where the stated basis does not reproduce the formula, the basis that does.
+
+### Fixed
+- **A stated cation basis is counted over the cations the probe measured.** 'On the basis of 6 cations, excluding H+'
+  beside `(CO3)5.88`: C — like B, Li, Be and N — is calculated from the stoichiometry after the measured cations are
+  normalised, and the count leaves it out whether or not the sentence says so. The tool counted it, so every coefficient
+  of such a carbonate came out at half the paper's and the stated basis read as failing. It is now tried as the stated
+  basis written the tool's way, and such equivalents (this one, the anhydrous count, 'N cations excluding X') are tried
+  before any group sum read off the formula, which reproduces its own cations by construction. Whole corpus, 1,130
+  papers: five `basis` records unverified → agrees, each hand-checked, and no other status changed.
+- **The bond-valence workbook (`pxrd bv --xlsx`, the GUI's export) gives the tool's sums.** Evaluated against every
+  corpus .cif (208 structures) it did not: a mixed anion site (`O4/F4`) got one R0 where the tool weights each species
+  by occupancy, a half-occupied water gave a whole hydrogen bond, two sites sharing a label were summed together, and
+  with H as a cation the hydrogen bonds were counted twice. One row per cation species × anion species now, the H-bond
+  strength times the occupancy it carries, each site summed over its own rows: no cation or anion sum differs, in
+  either hydrogen-bond convention.
+  The `cation sums` and `anion sums` sheets are now ONE `BV table` sheet, laid out as a paper prints it — anion rows ×
+  cation columns, each cell the valence with its `×n↓` / `×n→` marks, an H bonds column, Σan / O–H / Σall on the right,
+  Σ / expected / deviation along the bottom — and every cell is a formula of the `bonds` sheet, so a changed distance,
+  R0 or b is seen in the table. Distances and occupancy shares are stored exact (shown to four decimals): the cells
+  round as the tool's report does.
+- **The Gladstone–Dale workbook (`pxrd gd --xlsx`) carries the whole calculation.** From a formula the wt% were values;
+  they are now derived on the sheet — apfu → mass per formula unit → formula weight (less the oxygen F and Cl replace)
+  → wt% → k·wt%/100 → K_C — with D_calc from Z, the formula weight and V, K_P, the index and its category as formulas,
+  and a constituent without a constant says it adds nothing to K_C.
+- **`pxrd epma --xlsx`: the reduction sheet now derives every number it shows.** The O≡F,Cl correction, the anion
+  sum net of the oxygen the halogens displace, the O apfu net of it, an element basis, a conversion (UO2 → UO3) and
+  H2O by difference were values or were missing, so a sheet with F or Cl normalised on a different anion sum than the
+  tool did; the mean averaged every point when `--points` had chosen some. A test evaluates the written formulas
+  (`tests/xl_eval.py`) and holds every derived cell to the Python reduction over each basis kind.
+
 ## [0.10.1] — 2026-09-21
 
 ### Added — the reflection list against the paper's table, and against itself

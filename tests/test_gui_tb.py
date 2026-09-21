@@ -145,6 +145,16 @@ class TablesMode(unittest.TestCase):
         self.assertEqual((r['fill']['gd']['n'], r['fill']['gd']['density']), ('1.6100', '3.120'))
         self.assertEqual(r['fill']['bvs']['params'], 'gh'); self.assertEqual(r['fill']['pxrd']['obs'], 'testite_paper_obs.txt')
         self.assertTrue(any('basis of 7 O' in n for n in r['notes']))
+        # the reduction as one sheet of live formulas, on the basis the paper STATES (7 O), the mismatch written under it
+        self.assertEqual(r['reduction'], 'testite_paper_epma.xlsx')
+        from tests.xl_eval import Book
+        b = Book(os.path.join(self.tmp, 'review_out', r['reduction'])); ws = b.wb['reduction']
+        self.assertEqual(b.wb.sheetnames, ['reduction'])
+        cells = {c.value: c.row for c in ws['A'] if isinstance(c.value, str)}
+        self.assertEqual(b.value('reduction', 'B%d' % cells['basis (anions apfu)']), 7)
+        self.assertAlmostEqual(sum(b.value('reduction', 'K%d' % i) or 0 for i in range(2, cells['total'] - 1)), 7.0, places=9)   # the O apfu sum to the basis
+        self.assertTrue(any(str(c.value).startswith('PROBLEM: the stated basis does not reproduce the formula') for c in ws['A']))
+        self.assertIn('does not follow from the table', [b.value('reduction', 'G%d' % c.row) for c in ws['G'] if c.row > cells['element']])
         self.assertEqual(self.c.post('/api/tb/extract?pdf=nope.pdf').status_code, 404)
         # the same paper is a manuscript: its own numbers are checked and carried as findings
         self.assertIn('testite', self.G.MS['files'])
@@ -167,7 +177,7 @@ class TablesMode(unittest.TestCase):
         b = self._post('/api/tb/bvs/rutile/export?fmt=xlsx&params=bo')
         self.assertEqual(b['file'], 'rutile_bv.xlsx')
         wb = openpyxl.load_workbook(os.path.join(self.tmp, 'review_out', 'rutile_bv.xlsx'))
-        self.assertEqual(wb.sheetnames, ['bonds', 'cation sums', 'anion sums', 'H bonds', 'parameters'])
+        self.assertEqual(wb.sheetnames, ['bonds', 'BV table', 'H bonds', 'parameters'])
         self.assertTrue(str(wb['bonds']['G2'].value).startswith('=EXP('))
 
     def test_opts_roundtrip_and_open_guard(self):

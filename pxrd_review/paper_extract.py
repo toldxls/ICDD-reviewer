@@ -2704,6 +2704,24 @@ def _check_formula(ex, text, fcand):
                 equiv[b_] = '%s cations excluding %s, as the paper says: %s' % (m_ex.group(1), ', '.join(sorted(excl)), EP._basis_label(b_))
             except Exception:
                 pass
+    if stated and stated[0] == 'cations':
+        # 'based on 6 cations' of a carbonate, a borate, a Li or Be mineral: the cations the probe MEASURED.
+        # C, B, Li, Be and N are not analysed — their oxides are calculated from the stoichiometry once the
+        # measured cations are normalised — so the count the paper states leaves them out whether or not it
+        # says so ('6 cations, excluding H+' with (CO3)5.88 beside it: counting C halves every coefficient)
+        excl_ = set(re.findall(r'[A-Z][a-z]?', m_ex.group(2))) if m_ex else set()
+        els_ = {EP.parse_constituent(c).element for c in wt if _parses(c) and EP.parse_constituent(c).kind != 'water'} - {'O', 'F', 'Cl', 'Br', 'I', 'S', 'Se', 'Te', 'H'} - excl_
+        calc_ = sorted(els_ & (set(EP.CALCULATED_ELEMENTS) - {'H'}))
+        if calc_ and els_ - set(calc_):
+            try:
+                b_ = EP._parse_basis('%s=%s' % ('+'.join(sorted(els_ - set(calc_))), ('%g' % float(stated[1]))))
+                if b_ not in equiv:
+                    if b_ not in bases:
+                        bases.insert(1, b_)
+                    equiv[b_] = 'the stated %s counted over the cations the probe measures — %s, calculated from the stoichiometry, left out: %s' % (
+                        EP._basis_label(stated), ', '.join(calc_), EP._basis_label(b_))
+            except Exception:
+                pass
     def _rep(wt_, bs):
         return EP.replicate_formula(wt_, counts_cmp, bs, ex.get('name') or 'paper', tol_abs=0.03, tol_rel=0.05) if bs else None
     def _best(wt_):
@@ -2721,6 +2739,12 @@ def _check_formula(ex, text, fcand):
             if r_oh is not None and r_oh['score'] <= 0.03 and not r_oh.get('factor'):
                 r_oh['water_oh'] = True                                # '31 anions (O + OH + F)': every H2O of the table as two OH
                 return r_oh
+        for b_e in [b for b in bases if b in equiv]:
+            # the stated basis written the tool's way comes before any group sum read off the formula, for the
+            # reason the stated one does: a group sum reproduces its own cations by construction
+            r_e = _rep(wt_, [b_e])
+            if r_e is not None and r_e['score'] <= 0.03 and not r_e.get('factor'):
+                return r_e
         r_ = _rep(wt_, bases) or r_
         if r_ is None or r_['score'] > 0.03 or r_.get('factor'):
             alt = _rep(wt_, [b for b in EP.basis_candidates(counts) if b not in bases])
@@ -4629,6 +4653,11 @@ def check_paper(pdf, cif=None, out_dir=None):
     if cif_error:
         out['cif_error'] = cif_error
         out['lines'].append('the .cif could not be used (%s) — the paper is checked as one without a .cif' % cif_error)
+    if out_dir and ex.get('epma'):
+        # the reduction itself, to follow cell by cell (beside the .csv the EPMA tab reads)
+        fn = write_reduction_xlsx(ex, out['composition'], out_dir, os.path.splitext(os.path.basename(pdf))[0] + ('_docx_' if pdf.lower().endswith('.docx') else '_paper_'))
+        if fn:
+            ex['reduction_xlsx'] = fn
     if out['composition']:
         out['lines'] += out['composition']['lines']
     elif ex.get('epma'):
@@ -6150,6 +6179,68 @@ def extract(pdf, out_dir=None, stem=None, write=True):
     out['fields'] = _fields_init(out, text)
     return out
 
+def write_reduction_xlsx(ex, comp, out_dir, stem=None):
+    """The paper's analysis re-reduced step by step, as ONE sheet of live formulas:
+    <stem>epma.xlsx — constituent, wt%, MW, moles, the cations and anions per formula of each
+    constituent (As2O5: 2 and 5), the normalisation on the basis THE PAPER STATES, apfu, and beside
+    them the coefficients the paper prints, with what the composition check found written under it.
+    The basis that reproduces the formula is used only where the paper states none, or where the
+    two are one basis written two ways (the anhydrous count, 'N cations excluding X'); where the
+    stated basis does not reproduce the formula the sheet keeps the stated one and says which does.
+    -> the file's name, or None when there is nothing to reduce (no table, or no basis at all)."""
+    comp = comp or {}
+    r = comp.get('result') or {}
+    wt = comp.get('wt') or {row['constituent']: row['mean'] for row in ((ex.get('epma') or {}).get('rows') or [])}
+    stated, found = ex.get('basis'), (r.get('basis') or comp.get('basis'))
+    found = tuple(found) if isinstance(found, list) else found
+    keep_stated = bool(stated and found and not _same_basis(stated, found) and not comp.get('basis_equiv'))
+    basis = stated if keep_stated or not found else found
+    cons, vals = [], []
+    for c, v in wt.items():
+        if _parses(c):
+            cons.append(EP.parse_constituent(c)); vals.append(v)
+    if not cons or not basis:
+        return None
+    ds = EP.Dataset(cons, [vals], ['mean'], {}, ex.get('name') or 'paper', None)
+    unusable = ''
+    try:
+        red = EP.reduce(ds, basis, water_oh=bool(r.get('water_oh')) and not keep_stated)
+        if not red.factor and keep_stated:                             # '16 Me': a basis the table has no row for — nothing to normalise on
+            unusable = 'the stated basis (%s) names nothing in the table, so the sheet is reduced on the basis that reproduces the formula' % EP._basis_label(stated)
+            keep_stated = False; basis = found
+            red = EP.reduce(ds, basis, water_oh=bool(r.get('water_oh')))
+    except Exception:
+        return None
+    if not red.factor:
+        return None
+    e = ex.get('epma') or {}
+    notes = ['%s — the analytical table of %s, reduced on %s' % (ex.get('name') or 'paper', ('page %d' % e['page']) if e.get('page') else 'the manuscript',
+                                                                  EP._basis_label(basis) + (' (the basis the paper states)' if stated and _same_basis(stated, basis) else
+                                                                                           (' (the paper states none: the basis that reproduces its formula)' if not stated else
+                                                                                            (' (the %s the paper states, as the table can give it — see below)' % EP._basis_label(stated) if comp.get('basis_equiv') else ''))))]
+    if ex.get('basis_sentence'):
+        bs_ = ex['basis_sentence']
+        notes.append('the paper: «%s»' % (bs_ if len(bs_) <= 300 else '…' + bs_[-300:]))   # a footnote's sentence arrives behind the table's rows: the basis is at its end
+    if comp.get('formula'):
+        notes.append("the paper's formula: %s" % comp['formula'][:300])
+    if e.get('total') is not None:
+        notes.append("the table's own total: %.2f" % e['total'])
+    if unusable:
+        notes.append(unusable)
+    if keep_stated:
+        notes.append('PROBLEM: the stated basis does not reproduce the formula; every coefficient follows from %s' % EP._basis_label(found))
+    notes += [''] + ['what the composition check found:'] + [l_.strip() for l_ in (comp.get('lines') or ['no empirical formula sentence was read: nothing to compare the apfu with'])]
+    os.makedirs(out_dir, exist_ok=True)
+    name = (stem or '') + 'epma.xlsx'
+    # the decimals each coefficient is printed to: its rounding is what a small difference is measured against
+    printed = re.findall(r'([A-Z][a-z]?)(?:\d[+-])?\s*(\d+)[.:](\d+)', comp.get('formula') or '')
+    common = max([len(d) for _e, _i, d in printed] or [2])
+    decimals = {el: common for el in (comp.get('counts') or {})}
+    for el, _i, d in printed:
+        decimals[el] = min(decimals.get(el, common), len(d)) if el in decimals else len(d)
+    EP.write_xlsx(red, None, os.path.join(out_dir, name), published=comp.get('counts') or None, notes=notes, single=True, decimals=decimals)
+    return name
+
 def basis_string(b):
     if not b:
         return ''
@@ -6194,6 +6285,11 @@ def main(argv=None):
     print('optics: n %s (%s); D meas %s; D calc %s' % (out['optics']['n'], out['optics']['n_from'], out['optics']['D_meas'], out['optics']['D_calc']))
     print('bond valence: params %s, U6+ %s, H bonds %s' % (out['bv']['params'], out['bv']['u6'], out['bv']['hb']))
     print('powder table: %d observed, %d calculated lines' % (out['pxrd']['obs'], out['pxrd']['calc']))
+    if out['epma']:
+        fn = write_reduction_xlsx(out, check_composition(out, text_of(a.pdf)), a.out or os.path.join(os.path.dirname(os.path.abspath(a.pdf)), 'review_out'),
+                                  os.path.splitext(os.path.basename(a.pdf))[0] + ('_docx_' if a.pdf.lower().endswith('.docx') else '_paper_'))
+        if fn:
+            out['files']['reduction'] = fn
     for k, v in out['files'].items():
         print('  wrote %s' % v)
     for n in out['notes']:

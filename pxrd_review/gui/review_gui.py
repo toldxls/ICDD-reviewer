@@ -2062,6 +2062,8 @@ def api_tb_extract():
     if ex['epma']:
         notes.append('analytical table: %d constituents (%s)%s' % (len(ex['epma']['rows']), ('page %d' % ex['epma']['page']) if ex['epma'].get('page') else 'a table of the manuscript',
                                                                   (', total %.2f' % ex['epma']['total']) if ex['epma']['total'] else ''))
+    if ex.get('reduction_xlsx'):
+        notes.append('the reduction step by step, on the basis the paper states: review_out/' + ex['reduction_xlsx'])
     bvcheck = None
     if r.get('bv'):
         bvcheck = next((ln for ln in r['lines'] if ln.startswith('bond valence:')), '') + '\n' + '\n'.join('  ' + ln for ln in r['bv']['lines'])
@@ -2080,7 +2082,7 @@ def api_tb_extract():
     checks = '\n'.join(ln for ln in r['lines'] if not ln.startswith('bond valence:') and not (ln.startswith('  ') and r.get('bv') and ln.strip() in r['bv']['lines']))
     return jsonify({'ok': True, 'fill': fill, 'notes': notes, 'files': ex['files'], 'name': name, 'bvcheck': bvcheck, 'status': status,
                     'bv_from_paper': bool(r.get('paper_structure')) and not cif_key,   # checked against the structure the paper prints, not a .cif of the folder
-                    'readers': r['lines'][0] if r['lines'] else '', 'checks': checks, 'left_out': left_out})
+                    'readers': r['lines'][0] if r['lines'] else '', 'checks': checks, 'left_out': left_out, 'reduction': ex.get('reduction_xlsx')})
 
 @app.route('/api/tb/word/<key>', methods=['POST'])
 def api_tb_word(key):

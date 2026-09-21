@@ -173,8 +173,18 @@ class Rutile(unittest.TestCase):
         B.run(self.cif, params='bo', out_dir=out, quiet=True, xlsx=True)
         import openpyxl
         ws = openpyxl.load_workbook(os.path.join(out, 'rutile_bv.xlsx'))['bonds']
-        self.assertEqual([c.value for c in ws[2]][:6], ['Ti1', 'Ti+4', 'O1', 1.9485, 1.815, 0.37])
-
+        self.assertEqual([round(c.value, 4) if isinstance(c.value, float) else c.value for c in ws[2]][:6], ['Ti1', 'Ti+4', 'O1', 1.9485, 1.815, 0.37])
+        # the sums the workbook derives are the tool's (held over every corpus .cif when the writer changed: mixed anions, split waters)
+        from tests.xl_eval import Book
+        b = Book(os.path.join(out, 'rutile_bv.xlsx'))
+        st, result, anion_sum, cells, text = B.run(self.cif, params='bo', out_dir=out, quiet=True)
+        wt = b.wb['BV table']                                   # the table as a paper prints it, every cell a formula of the bonds sheet
+        self.assertEqual([c.value for c in wt[1]], ['(vu)', 'Ti1', 'Σan'])
+        self.assertEqual([c.value for c in wt['A']][1:4], ['O1', 'Σ', 'expected'])
+        self.assertEqual(b.value('BV table', 'B2'), ', '.join('%.2f%s' % (s_, B._mark(nd, na)) for s_, nd, na in cells[('O1', 'Ti1')]))
+        self.assertIn('↓', b.value('BV table', 'B2'))
+        self.assertAlmostEqual(b.value('BV table', 'B3'), result[0][2], places=9)          # Σ of the Ti column
+        self.assertAlmostEqual(b.value('BV table', 'C2'), anion_sum['O1'], places=9)       # Σan of the O row
 
 class HydrogenBonds(unittest.TestCase):
     def test_ferraris_ivaldi_and_labels(self):

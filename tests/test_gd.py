@@ -68,6 +68,27 @@ class GD(unittest.TestCase):
             out = G.write_xlsx(res, os.path.join(tmp, 'x.xlsx'))
             self.assertTrue(os.path.exists(out))
             self.assertIn('K_P', G.report_text(res))
+            # the workbook's formulas give the tool's numbers — from the formula: apfu -> mass -> formula weight -> wt% -> K_C -> D_calc -> index
+            from tests.xl_eval import Book
+            res = G.prepare(formula='Ca=5,P=3,F=1', n=1.633, density=3.20, cif=cif, z=2)
+            b = Book(G.write_xlsx(res, os.path.join(tmp, 'f.xlsx'))); ws = b.wb['GD']
+            lab = {}
+            for c in ws['A']:
+                if isinstance(c.value, str):
+                    lab.setdefault(c.value, []).append(c.row)
+            val = lambda name, col='B', i=0: b.value('GD', '%s%d' % (col, lab[name][i]))
+            self.assertAlmostEqual(val('K_C', 'D'), res['KC'], places=9)
+            self.assertAlmostEqual(val('formula weight', 'B'), res['fw'], places=6)
+            self.assertAlmostEqual(val('D calculated'), res['D_calc'], places=6)
+            self.assertAlmostEqual(val('compatibility', i=0), res['CI_meas'], places=9)
+            self.assertAlmostEqual(val('compatibility', i=1), res['CI_calc'], places=9)
+            self.assertEqual(val('compatibility', 'D', 0), G.category(res['CI_meas']))
+            for key, w, k, c_, src in res['rows']:
+                self.assertAlmostEqual(val(key), w, places=9, msg=key)            # wt% from the formula, the O=F correction in the weight
+            res = G.evaluate(SPANOITE, 2.062, density=6.69, k_override=OWNER_UO3)   # the wt% route: values in, the rest live
+            b = Book(G.write_xlsx(res, os.path.join(tmp, 'w.xlsx')))
+            r_kc = next(c.row for c in b.wb['GD']['A'] if c.value == 'K_C')
+            self.assertAlmostEqual(b.value('GD', 'D%d' % r_kc), res['KC'], places=9)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

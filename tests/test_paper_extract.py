@@ -43,6 +43,21 @@ def make_pdf(path):
     doc.save(path); doc.close()
 
 
+def make_carbonate_pdf(path):
+    """A carbonate whose formula is 'on the basis of 2 cations, excluding H+' — and excluding C, as its (CO3)2.00 shows."""
+    import pymupdf
+    doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
+    y = 60
+    for txt in ('Dolotestite, a new mineral from Nowhere',
+                'The empirical formula, calculated on the basis of 2 cations, excluding H+, is Ca1.00Mg1.00(CO3)2.00.',
+                'CO2 was calculated from the stoichiometry.',
+                'Table 1. Chemical data (wt%) for dolotestite.',
+                'Constituent   Mean     Range        S.D.   Standard',
+                'CaO  30.41  30.10-30.70  0.21  calcite', 'MgO  21.86  21.60-22.10  0.30  dolomite', 'CO2  47.73', 'Total  100.00'):
+        page.insert_text((40, y), txt, fontsize=9); y += 16
+    doc.save(path); doc.close()
+
+
 class Extract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -304,6 +319,30 @@ class GladstoneDale(unittest.TestCase):
         self.assertEqual(out['status']['optics.n'], 'agrees')
         self.assertEqual(out['status']['optics.D_meas'], 'agrees')
         self.assertEqual(out['status']['optics.D_calc'], 'nooracle')      # the paper gives no calculated density
+
+
+class MeasuredCationBasis(unittest.TestCase):
+    def test_cation_basis_leaves_out_the_calculated_carbon(self):
+        import tempfile, shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            pdf = os.path.join(tmp, 'dolotestite.pdf'); make_carbonate_pdf(pdf)
+            r = PE.check_paper(pdf, None, os.path.join(tmp, 'review_out'))
+            c = r['composition']
+            self.assertEqual(r['extract']['basis'], ('cations', 2.0))
+            self.assertTrue(c['ok'] and c['basis_equiv'], c['lines'])              # counting C would halve every coefficient
+            self.assertEqual(tuple(c['basis']), ('element', 'Ca+Mg', 2.0))
+            self.assertTrue(any('the cations the probe measures' in l for l in c['lines']), c['lines'])
+            self.assertFalse(c['basis_flag'])
+            # and the workbook is reduced on it, nothing marked as not following
+            from tests.xl_eval import Book
+            b = Book(os.path.join(tmp, 'review_out', r['extract']['reduction_xlsx'])); ws = b.wb['reduction']
+            label = {x.value: x.row for x in ws['A'] if isinstance(x.value, str)}
+            self.assertAlmostEqual(b.value('reduction', 'B%d' % label['C']), 2.0, places=2)
+            self.assertEqual({b.value('reduction', 'G%d' % x.row) for x in ws['G'] if x.row > label['element'] + 0 and x.value and x.row != label['element']}, {'yes, within the rounding'})
+            self.assertFalse(any(str(x.value).startswith('PROBLEM') for x in ws['A']))
+        finally:
+            shutil.rmtree(tmp)
 
 
 if __name__ == '__main__':

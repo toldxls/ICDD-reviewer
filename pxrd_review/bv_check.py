@@ -2093,48 +2093,104 @@ def write_xlsx(st, params, result, anion_sum, cells, hbonds, path):
     from openpyxl.styles import Font
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'bonds'
     ws.append(['cation', 'species', 'anion', 'R (Å)', 'R0', 'b', 's = exp((R0−R)/b)', '×↓ (per cation)', '×→ (per anion)',
-               'anion occ', 'cation occ', 'to the cation sum', 'to the anion sum', 'parameter source'])
-    for c in range(1, 15):
+               'anion occ', 'cation occ', 'to the cation sum', 'to the anion sum', 'parameter source', 'anion species', 'share of the anion site', 's weighted over the species'])
+    for c in range(1, 18):
         ws.cell(1, c).font = Font(bold=True)
-    r = 2; first = {}
+    r = 2; first = {}; span = []; bond_rows = {}                   # (site index, anion label) -> [(first row, last row, ×↓, ×→)] per distinct bond
     for site, bonds, bvs, expected, mean_d in result:
         tot_occ = sum(sp.occ for sp in site.species if sp.ox and sp.ox > 0) or 1.0
+        span.append([r, r - 1])                                    # this site's rows: two sites may share a label in a careless .cif
         for b in bonds:
             n_across = b.count * site.mult / b.anion.mult
+            r_bond = r
+            # as compute() does: a mixed anion site ('O4/F4') is its species weighted by occupancy, each with its own R0
+            an_species = [a for a in b.anion.species if a.ox is not None and a.ox < 0] or [Species(b.anion.element, ANION_OX.get(b.anion.element, -2), 1.0)]
+            an_tot = sum(a.occ for a in an_species) or 1.0
             for sp, sval in b.vals:
                 if sp.ox is None or sp.ox <= 0:
                     continue
-                key = (sp.element, sp.ox, b.anion.element)
-                p = params.used.get(key)
-                if p is None:
-                    continue
-                r0, bb, rid = p
-                ws.append([site.label, '%s%+d' % (sp.element, sp.ox), b.anion.label, round(b.dist, 4), r0, bb,
-                           '=EXP((E%d-D%d)/F%d)' % (r, r, r), b.count, round(n_across, 3), min(b.anion.occ_total, 1.0),
-                           round(sp.occ / tot_occ, 4), '=G%d*H%d*J%d*K%d' % (r, r, r, r), '=G%d*I%d*K%d*MIN(1,%s)' % (r, r, r, round(min(tot_occ, 1.0), 4)),
-                           params.short_ref(rid)])
-                first.setdefault(site.label, r); r += 1
+                for a in an_species:
+                    p = params.get(sp.element, sp.ox, a.element, a.ox) if sp.element != 'H' else None
+                    if p is None and sp.element != 'H':
+                        continue
+                    if sp.element == 'H':
+                        # H as a cation: the acceptor valences follow Brown's H⋯O ranges and the donor takes 1 − Σ — a value, not one exponential
+                        if a is not an_species[0]:
+                            continue
+                        row = [site.label, 'H+1', b.anion.label, b.dist, None, None, sval or 0.0]
+                        src = 'H⋯O ranges (Brown 2002); the donor takes 1 − Σ acceptors'; share = 1.0
+                    else:
+                        row = [site.label, '%s%+d' % (sp.element, sp.ox), b.anion.label, b.dist, p[0], p[1], '=EXP((E%d-D%d)/F%d)' % (r, r, r)]
+                        src = params.short_ref(p[2]) if len(p) > 2 else ''; share = a.occ / an_tot
+                    ws.append(row + [b.count, n_across, min(b.anion.occ_total, 1.0), sp.occ / tot_occ,
+                                     '=G%d*H%d*J%d*K%d*P%d' % (r, r, r, r, r), '=G%d*I%d*K%d*P%d*MIN(1,%s)' % (r, r, r, r, repr(min(tot_occ, 1.0))),
+                                     src, a.element, share, '=G%d*K%d*P%d' % (r, r, r)])
+                    ws.cell(r, 4).number_format = '0.0000'             # shown as a paper prints it, kept exact so the table rounds as the tool's does
+                    first.setdefault(site.label, r); span[-1][1] = r; r += 1
+            if r > r_bond:
+                n_across_r = int(round(n_across)) if abs(n_across - round(n_across)) < 0.02 else round(n_across, 2)
+                bond_rows.setdefault((len(span) - 1, b.anion.label), []).append((r_bond, r - 1, b.count, n_across_r))
     last = r - 1
-    for col, w in zip('ABCDEFGHIJKLMN', (10, 8, 10, 9, 8, 7, 18, 12, 12, 9, 10, 16, 16, 30)):
+    for col, w in zip('ABCDEFGHIJKLMNOPQ', (10, 8, 10, 9, 8, 7, 18, 12, 12, 9, 10, 16, 16, 30, 12, 18, 22)):
         ws.column_dimensions[col].width = w
-    # sums
-    wc = wb.create_sheet('cation sums'); wc.append(['cation', 'Σ (vu)', 'expected', 'Σ/expected − 1']); wc.cell(1, 1).font = Font(bold=True)
-    for i, (site, bonds, bvs, expected, mean_d) in enumerate(result, 2):
-        wc.append([site.label, '=SUMIF(bonds!A:A,A%d,bonds!L:L)' % i, round(expected, 3), '=B%d/C%d-1' % (i, i)])
-    wa = wb.create_sheet('anion sums'); wa.append(['anion', 'cations (vu)', 'accepted H bonds (vu)', 'Σan', 'donated O–H (vu)', 'Σall']); wa.cell(1, 1).font = Font(bold=True)
+    # the table as a paper prints it: anion rows × cation columns, '×n↓' counted n times in the column sum, '×n→' in the row
+    # sum; every cell is a formula of the bonds sheet, the sums of its contribution columns — so a changed R, R0 or b shows here
+    from openpyxl.utils import get_column_letter as L_
+    wt = wb.create_sheet('BV table')
     hb_rows = {}
-    for hb in hbonds:
-        hb_rows.setdefault(hb.acceptor.label, []).append(hb)
-    don = donated(hbonds)
-    for i, an in enumerate([a for a in st.anions if any((a.label, r_[0].label) in cells for r_ in result) or a.label in hb_rows], 2):
-        wa.append([an.label, '=SUMIF(bonds!C:C,A%d,bonds!M:M)' % i, '=SUMIF(\'H bonds\'!B:B,A%d,\'H bonds\'!F:F)' % i, '=B%d+C%d' % (i, i),
-                   round(don.get(an.label, 0.0), 4), '=D%d+E%d' % (i, i)])
-    wh = wb.create_sheet('H bonds'); wh.append(['donor', 'acceptor', 'D⋯A (Å)', 's (vu) = (d/2.17)^-8.2 + 0.06', '×→ (per acceptor)', 'to the acceptor sum', 'source'])
+    for i, hb in enumerate(hbonds, 2):
+        hb_rows.setdefault(hb.acceptor.label, []).append((i, hb))
+    as_bonds = bool(hbonds) and hbonds[0].via != 'H···A'               # with H as a cation the hydrogen bonds are H columns already
+    don = donated(hbonds) if as_bonds else {}
+    ncat = len(result)
+    c_hb = ncat + 2 if as_bonds else None
+    c_san = ncat + (3 if as_bonds else 2)
+    wt.append(['(vu)'] + [site.label for site, *_ in result] + (['H bonds'] if as_bonds else []) + ['Σan'] + (['O–H', 'Σall'] if don else []))
+    for c in range(1, c_san + (3 if don else 1)):
+        wt.cell(1, c).font = Font(bold=True)
+    anions = [a for a in st.anions if any((j, a.label) in bond_rows for j in range(ncat)) or a.label in hb_rows]
+    for i, an in enumerate(anions, 2):
+        wt.cell(i, 1, an.label).font = Font(bold=True)
+        for j in range(ncat):
+            parts = ['TEXT(SUM(bonds!Q%d:Q%d),"0.00")%s' % (lo, hi, ('&"%s"' % _mark(nd, na)) if _mark(nd, na) else '') for lo, hi, nd, na in bond_rows.get((j, an.label), [])]
+            wt.cell(i, j + 2, ('=' + '&", "&'.join(parts)) if parts else '–')
+        if as_bonds:
+            parts = ["TEXT('H bonds'!D%d,\"0.00\")%s" % (k, ('&"×%s→"' % hb.n_across) if hb.n_across != 1 else '') for k, hb in hb_rows.get(an.label, [])]
+            wt.cell(i, c_hb, ('=' + '&", "&'.join(parts)) if parts else '')
+        san = '=SUMIF(bonds!C:C,A%d,bonds!M:M)' % i
+        if as_bonds and an.label in hb_rows:
+            san += '+' + '+'.join("'H bonds'!F%d" % k for k, _hb in hb_rows[an.label])
+        wt.cell(i, c_san, san)
+        if don:
+            wt.cell(i, c_san + 1, round(don.get(an.label, 0.0), 4) if an.label in don else None)
+            wt.cell(i, c_san + 2, '=%s%d+%s%d' % (L_(c_san), i, L_(c_san + 1), i))
+    r_sum = len(anions) + 2
+    for k, lab in enumerate(('Σ', 'expected', 'Σ/expected − 1')):
+        wt.cell(r_sum + k, 1, lab).font = Font(bold=True)
+    for j, (site, bonds, bvs, expected, mean_d) in enumerate(result):
+        lo, hi = span[j]; col = L_(j + 2)
+        wt.cell(r_sum, j + 2, '=SUM(bonds!L%d:L%d)' % (lo, hi) if hi >= lo else 0)
+        wt.cell(r_sum + 1, j + 2, round(expected, 3)); wt.cell(r_sum + 2, j + 2, '=%s%d/%s%d-1' % (col, r_sum, col, r_sum + 1))
+    wt.cell(r_sum + 4, 1, '×n↓: counted n times in the column sum; ×n→: n times in the row sum. A cell is the bond valence weighted over the species of a mixed site '
+                          "(bonds!Q); the sums are of the contribution columns bonds!L and bonds!M" + (", Σan with the hydrogen bonds accepted ('H bonds'!F); the donated O–H is shown, not deducted." if as_bonds else '.'))
+    for row in wt.iter_rows(min_row=2, max_row=r_sum + 2):
+        for c in row:
+            if c.column > 1 and (c.row >= r_sum or c.column >= c_san):
+                c.number_format = '0.00'                               # the sums to two decimals, as the cells are
+    wt.column_dimensions['A'].width = 12
+    for c in range(2, c_san + 3):
+        wt.column_dimensions[L_(c)].width = 16
+    wt.freeze_panes = 'B2'
+    wh = wb.create_sheet('H bonds'); wh.append(['donor', 'acceptor', 'D⋯A (Å)', 's (vu) = ((d/2.17)^-8.2 + 0.06) × occupancy', '×→ (per acceptor)', 'to the acceptor sum', 'source', 'occupancy of the H (or the donor)'])
     wh.cell(1, 1).font = Font(bold=True)
     for i, hb in enumerate(hbonds, 2):
-        formula = '=(C%d/2.17)^(-8.2)+0.06' % i if hb.via != 'H···A' else round(hb.s, 4)
-        wh.append([hb.donor.label, hb.acceptor.label, round(hb.d, 4), formula, hb.n_across, '=D%d*E%d' % (i, i),
-                   {'loop': 'D–H⋯A from the .cif loop', 'H': 'from the H positions', 'OO': 'PROPOSED from the O⋯O geometry (no H in the .cif)', 'H···A': 'H⋯A distance, Brown 2002'}[hb.via]])
+        full = fi_valence(hb.d)
+        occ = hb.s / full if full and hb.via != 'H···A' else 1.0   # a half-occupied water gives half a hydrogen bond
+        formula = '=((C%d/%s)^(-%s)+%s)*H%d' % (i, FI_R0, FI_N, FI_K, i) if hb.via != 'H···A' else hb.s
+        # with H as a cation the bond is already a row of the bonds sheet (the H column): listed here, counted there
+        wh.append([hb.donor.label, hb.acceptor.label, hb.d, formula, hb.n_across, '=D%d*E%d' % (i, i) if hb.via != 'H···A' else 0,
+                   {'loop': 'D–H⋯A from the .cif loop', 'H': 'from the H positions', 'OO': 'PROPOSED from the O⋯O geometry (no H in the .cif)', 'H···A': 'H⋯A distance, Brown 2002 — counted on the bonds sheet, in the H column'}[hb.via], occ])
+        wh.cell(i, 3).number_format = '0.0000'
     wp = wb.create_sheet('parameters'); wp.append(['pair', 'R0', 'b', 'reference']); wp.cell(1, 1).font = Font(bold=True)
     for (cat, cox, an), (r0, bb, rid) in params.used.items():
         wp.append(['%s%+d–%s' % (cat, cox, an), r0, bb, params.refs.get(rid, rid)])

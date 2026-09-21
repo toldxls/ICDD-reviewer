@@ -256,12 +256,15 @@ def reduce(ds, basis=('O', 21), adds=(), converts=(), drop=(), points=None, idea
         out[k] = Row(r['c'], r['mean'], r['mean'], r['sd'], r['lo'], r['hi'], r['n'], rows['mol'][k], rows['cat'][k], rows['an'][k], rows['apfu'][k], rows['o'][k], r['source'])
     corr = anion_correction()
     total = sum(r.wt for r in out.values()) - corr
-    return Reduction(out, basis, rows['factor'], corr, total, rows['charge'], ds)
+    red = Reduction(out, basis, rows['factor'], corr, total, rows['charge'], ds)
+    red.points, red.raw_anions, red.water_oh = (None if points is None else list(points)), raw_anions, water_oh   # what the xlsx needs to write the same steps as formulas
+    return red
 
 class Reduction:
     def __init__(self, rows, basis, factor, corr, total, charge, ds):
         self.rows, self.basis, self.factor, self.corr, self.total, self.charge, self.ds = rows, basis, factor, corr, total, charge, ds
         self.anions_structure = None
+        self.points = None; self.raw_anions = False; self.water_oh = False
     def formula(self, order=None, digits=2):
         """A plain empirical formula: cations in the given (or table) order, then O and (OH)/H2O."""
         parts = []
@@ -455,69 +458,56 @@ def report_text(red, table):
 def _basis_label(b):
     return {'O': '%s anions apfu', 'cations': '%s cations apfu'}.get(b[0], '%s').replace('%s', str(b[1]) if len(b) > 1 else '') if b[0] != 'element' else '%s = %s apfu' % (b[1], b[2])
 
-def write_xlsx(red, table, path, ds=None, method=''):
+def _mw_formula(c):
+    """The molecular weight as the sum it is: As2O5 -> '=2*74.922+5*15.999'."""
+    counts = OrderedDict()
+    for el, n in _FORM.findall(c.formula):
+        counts[el] = counts.get(el, 0) + (int(n) if n else 1)
+    return '=' + '+'.join('%d*%s' % (n, ATOMIC_WEIGHTS[el]) for el, n in counts.items())
+
+_XL_KIND = {'oxide': 'oxide', 'other': 'oxide', 'water': 'water', 'element-anion': 'anion', 'element': 'element'}
+
+def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), single=False, decimals=None):
     """raw points | reduction with live formulas | the published table | method (the paper's own
-    statements of basis and treatment, when the inputs came from a paper)."""
+    statements of basis and treatment, when the inputs came from a paper).
+
+    The reduction sheet is the whole derivation, one step a column, every step a formula of the
+    cells before it: wt% -> MW (the sum of its atomic weights) -> moles -> cations and anions per
+    formula of the constituent (As2O5: 2 and 5) -> cation and anion moles -> the oxygen a halogen
+    replaces -> the normalisation factor from the basis -> apfu. Changing a wt%, the basis or a
+    stoichiometric factor re-derives the formula, so the number a manuscript got wrong can be found.
+    published: {element: apfu} of the formula the paper prints — a comparison block under the table;
+    decimals: {element: the decimals it is printed to} (default 2) — a coefficient printed '0.02' is anything
+    from 0.015 to 0.025, so a difference inside that half-unit is the paper's rounding and says so.
+    notes: lines written under it (what was converted, which column was used, what does not follow).
+    single: the reduction sheet alone, its wt% the values themselves — what a paper's table gives."""
     import openpyxl
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter as L
     wb = openpyxl.Workbook()
     ds = ds or red.ds
+    bold = Font(bold=True)
+    if single:
+        return _write_reduction(wb, wb.active, red, ds, None, published, notes, path, decimals)
     # ---- raw
     ws = wb.active; ws.title = 'raw'
     ws.append(['point'] + [c.formula for c in ds.constituents] + ['total'])
-    for lab, pt in zip(ds.labels, ds.points):
-        ws.append([lab] + [None if v != v else v for v in pt] + [sum(v for v in pt if v == v)])
+    ws.row_dimensions[1].font = bold
+    for i, (lab, pt) in enumerate(zip(ds.labels, ds.points)):
+        ws.append([lab] + [None if v != v else v for v in pt] + ['=SUM(%s%d:%s%d)' % (L(2), i + 2, L(len(pt) + 1), i + 2)])
     n = len(ds.points); ncol = len(ds.constituents)
+    sel = getattr(red, 'points', None)
+    sel = list(range(n)) if sel is None else [i for i in sel if 0 <= i < n]
     r_mean = n + 3
-    ws.cell(r_mean, 1, 'mean'); ws.cell(r_mean + 1, 1, 's.d.'); ws.cell(r_mean + 2, 1, 'min'); ws.cell(r_mean + 3, 1, 'max')
+    ws.cell(r_mean, 1, 'mean' if len(sel) == n else 'mean of the %d points used' % len(sel))
     for j in range(ncol):
-        col = L(j + 2); rng = '%s2:%s%d' % (col, col, n + 1)
-        ws.cell(r_mean, j + 2, '=AVERAGE(%s)' % rng); ws.cell(r_mean + 1, j + 2, '=STDEV(%s)' % rng)
-        ws.cell(r_mean + 2, j + 2, '=MIN(%s)' % rng); ws.cell(r_mean + 3, j + 2, '=MAX(%s)' % rng)
-    # ---- reduction
-    wr = wb.create_sheet('reduction')
-    wr.append(['constituent', 'wt%', 'MW', 'moles', 'cations/unit', 'O/unit', 'cations', 'anions', 'apfu', 'O apfu', 'charge/cation', 'source'])
-    for c in range(1, 13):
-        wr.cell(1, c).font = Font(bold=True)
-    raw_col = {c.formula: L(j + 2) for j, c in enumerate(ds.constituents)}
-    first = 2
-    for i, (k, r) in enumerate(red.rows.items()):
-        row = first + i
-        wr.cell(row, 1, k)
-        if r.source == 'measured' and k in raw_col:
-            wr.cell(row, 2, "=raw!%s%d" % (raw_col[k], r_mean))
-        else:
-            wr.cell(row, 2, r.wt)
-        wr.cell(row, 3, r.c.mw); wr.cell(row, 4, '=B%d/C%d' % (row, row))
-        n_an = r.c.n_o if r.c.kind in ('oxide', 'other') else (r.c.n_cat if r.c.kind == 'element-anion' else (1 if r.c.kind == 'water' else 0))
-        wr.cell(row, 5, r.c.n_cat); wr.cell(row, 6, n_an)
-        wr.cell(row, 7, '=D%d*E%d' % (row, row)); wr.cell(row, 8, '=D%d*F%d' % (row, row))
-        wr.cell(row, 9, '=G%d*$B$%d' % (row, first + len(red.rows) + 4)); wr.cell(row, 10, '=H%d*$B$%d' % (row, first + len(red.rows) + 4) if r.c.kind in ('oxide', 'other', 'water') else 0)
-        wr.cell(row, 11, r.c.charge); wr.cell(row, 12, r.source)
-    last = first + len(red.rows) - 1
-    rr = last + 1
-    wr.cell(rr, 1, 'O=F,Cl'); wr.cell(rr, 2, -red.corr)
-    wr.cell(rr + 1, 1, 'total'); wr.cell(rr + 1, 2, '=SUM(B%d:B%d)+B%d' % (first, last, rr))
-    wr.cell(rr + 2, 1, 'Σ anions (for the basis)')
-    kind = red.basis[0]
-    if kind == 'O':
-        wr.cell(rr + 2, 2, '=SUM(H%d:H%d)' % (first, last))
-        wr.cell(rr + 3, 1, 'basis (anions apfu)'); wr.cell(rr + 3, 2, red.basis[1])
-        wr.cell(rr + 4, 1, 'normalisation factor'); wr.cell(rr + 4, 2, '=B%d/B%d' % (rr + 3, rr + 2))
-    elif kind == 'cations':
-        wr.cell(rr + 2, 2, '=SUM(G%d:G%d)-SUMIF(A%d:A%d,"H2O",G%d:G%d)' % (first, last, first, last, first, last))
-        wr.cell(rr + 3, 1, 'basis (cations apfu)'); wr.cell(rr + 3, 2, red.basis[1])
-        wr.cell(rr + 4, 1, 'normalisation factor'); wr.cell(rr + 4, 2, '=B%d/B%d' % (rr + 3, rr + 2))
-    else:
-        wr.cell(rr + 2, 2, sum(r.cations for k, r in red.rows.items() if r.c.element in red.basis[1].split('+')))
-        wr.cell(rr + 3, 1, 'basis (%s apfu)' % red.basis[1]); wr.cell(rr + 3, 2, red.basis[2])
-        wr.cell(rr + 4, 1, 'normalisation factor'); wr.cell(rr + 4, 2, '=B%d/B%d' % (rr + 3, rr + 2))
-    assert rr + 4 == first + len(red.rows) + 4
-    wr.cell(rr + 5, 1, 'charge balance Σ(+) − Σ(−)'); wr.cell(rr + 5, 2, '=SUMPRODUCT(I%d:I%d,K%d:K%d)-2*SUM(J%d:J%d)' % (first, last, first, last, first, last))
-    wr.cell(rr + 6, 1, 'empirical formula'); wr.cell(rr + 6, 2, red.formula())
-    for col, w in zip('ABCDEFGHIJKL', (14, 10, 10, 10, 12, 8, 10, 10, 10, 10, 12, 26)):
-        wr.column_dimensions[col].width = w
+        col = L(j + 2)
+        rng = '%s2:%s%d' % (col, col, n + 1) if len(sel) == n else ','.join('%s%d' % (col, i + 2) for i in sel)
+        ws.cell(r_mean, j + 2, '=AVERAGE(%s)' % rng)
+        if len(sel) > 1:                                                    # one row (a paper's means) has no spread
+            ws.cell(r_mean + 1, 1, 's.d.'); ws.cell(r_mean + 2, 1, 'min'); ws.cell(r_mean + 3, 1, 'max')
+            ws.cell(r_mean + 1, j + 2, '=STDEV(%s)' % rng); ws.cell(r_mean + 2, j + 2, '=MIN(%s)' % rng); ws.cell(r_mean + 3, j + 2, '=MAX(%s)' % rng)
+    _write_reduction(wb, wb.create_sheet('reduction'), red, ds, r_mean, published, notes, None, decimals)
     # ---- table
     wt = wb.create_sheet('table')
     wt.append(table['head'])
@@ -535,6 +525,136 @@ def write_xlsx(red, table, path, ds=None, method=''):
         wm.append([]); wm.append(['basis applied', _basis_label(red.basis)])
         wm.column_dimensions['A'].width = 120
     wb.save(path)
+    return path
+
+def _write_reduction(wb, wr, red, ds, r_mean, published, notes, path, decimals=None):
+    """The reduction sheet of write_xlsx. r_mean: the row of the raw sheet's means, None when the
+    wt% are written as values; path: save the workbook there (the single-sheet form)."""
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter as L
+    bold = Font(bold=True)
+    wr.title = 'reduction'
+    head = ['constituent', 'wt%', 'MW', 'moles', 'cations per formula', 'anions per formula', 'cation moles', 'anion moles',
+            'O ≡ F,Cl,S (wt%)', 'apfu', 'O apfu', 'charge per cation', 'element', 'kind', 'source']
+    wr.append(head)
+    for c in range(1, len(head) + 1):
+        wr.cell(1, c).font = bold
+    raw_col = {c.formula: L(j + 2) for j, c in enumerate(ds.constituents)}
+    kind = red.basis[0]
+    raw_anions = getattr(red, 'raw_anions', False); water_oh = getattr(red, 'water_oh', False)
+    has_oxide = any(r.c.kind == 'oxide' for r in red.rows.values())
+    first = 2; last = first + len(red.rows) - 1
+    rr = last + 2                                                          # the summary block
+    R = {k: rr + i for i, k in enumerate(('corr', 'total', 'displaced', 'oxide_o', 'sum', 'basis', 'factor', 'charge', 'formula'))}
+    col = lambda c: '%s%d:%s%d' % (c, first, c, last)
+    fac = '$B$%d' % R['factor']
+    AW_O = ATOMIC_WEIGHTS['O']
+    O_ref = '$B$%d' % (R['formula'] + 2)                                   # the atomic weight of O, one cell, so the correction reads as a formula
+    diff_row = None
+    for i, (k, r) in enumerate(red.rows.items()):
+        row = first + i; c = r.c
+        wr.cell(row, 1, k)
+        m = re.match(r'converted from (\S+)$', r.source)
+        if r_mean and r.source == 'measured' and k in raw_col:
+            wr.cell(row, 2, '=raw!%s%d' % (raw_col[k], r_mean))
+        elif r_mean and m and m.group(1) in raw_col:                                  # UO2 -> UO3: the same cations, the other oxide's weight
+            ca = parse_constituent(m.group(1))
+            wr.cell(row, 2, '=raw!%s%d*(%s/%d)/(%s/%d)' % (raw_col[m.group(1)], r_mean, _mw_formula(c)[1:].join('()'), c.n_cat, _mw_formula(ca)[1:].join('()'), ca.n_cat))
+        elif r.source == 'by difference':
+            diff_row = row
+        else:
+            wr.cell(row, 2, r.wt)
+        wr.cell(row, 3, _mw_formula(c)); wr.cell(row, 4, '=B%d/C%d' % (row, row))
+        n_an = c.n_o if c.kind in ('oxide', 'other') else (c.n_cat if c.kind == 'element-anion' else ((2 if water_oh else 1) if c.kind == 'water' else 0))
+        wr.cell(row, 5, c.n_cat); wr.cell(row, 6, n_an)
+        wr.cell(row, 7, '=D%d*E%d' % (row, row)); wr.cell(row, 8, '=D%d*F%d' % (row, row))
+        if c.kind == 'element-anion' and has_oxide:
+            # the oxygen the oxide wt% still carries where this anion sits: half an O per F/Cl, one per S
+            if c.element in ('F', 'Cl', 'Br', 'I'):
+                wr.cell(row, 9, '=B%d*%s/(2*%s)' % (row, O_ref, ATOMIC_WEIGHTS[c.element]))
+            elif c.element == 'S':
+                wr.cell(row, 9, '=B%d*%s/%s' % (row, O_ref, ATOMIC_WEIGHTS['S']))
+        wr.cell(row, 10, '=G%d*%s' % (row, fac))
+        if c.kind in ('oxide', 'other'):
+            # net of the oxygen the halogens replace, shared over the oxides, so O + F sums to the basis
+            wr.cell(row, 11, '=H%d*%s*(1-$B$%d/$B$%d)' % (row, fac, R['displaced'], R['oxide_o']) if kind == 'O' and not raw_anions and has_oxide
+                    else '=H%d*%s' % (row, fac))
+        elif c.kind == 'water':
+            wr.cell(row, 11, '=H%d*%s' % (row, fac))
+        wr.cell(row, 12, c.charge); wr.cell(row, 13, c.element); wr.cell(row, 14, _XL_KIND[c.kind]); wr.cell(row, 15, r.source)
+    if diff_row:
+        others = ','.join('B%d' % x for x in range(first, last + 1) if x != diff_row)
+        wr.cell(diff_row, 2, '=MAX(0,100-SUM(%s)-B%d)' % (others, R['corr']) if has_oxide else '=MAX(0,100-SUM(%s))' % others)
+    halogen = any(r.c.kind == 'element-anion' for r in red.rows.values())
+    wr.cell(R['total'], 1, 'total'); wr.cell(R['total'], 2, '=SUM(%s)+B%d' % (col('B'), R['corr']))
+    if has_oxide or red.corr:                                              # an alloy or a sulfide has no oxygen to correct
+        wr.cell(R['corr'], 1, 'O ≡ F,Cl,S'); wr.cell(R['corr'], 2, '=-SUM(%s)' % col('I') if has_oxide else -red.corr)
+    if has_oxide:
+        wr.cell(R['displaced'], 1, 'anion moles the halogens displace'); wr.cell(R['displaced'], 2, '=SUM(%s)/%s' % (col('I'), O_ref))
+        wr.cell(R['displaced'], 3, 'O ≡ F,Cl,S over the atomic weight of O: the oxide wt% count an oxygen where the F, Cl or S sits')
+        wr.cell(R['oxide_o'], 1, 'anion moles of the oxides'); wr.cell(R['oxide_o'], 2, '=SUMIF(%s,"oxide",%s)' % (col('N'), col('H')))
+    if kind == 'O':
+        wr.cell(R['sum'], 1, 'Σ anion moles (for the basis)')
+        wr.cell(R['sum'], 2, '=SUM(%s)' % col('H') if raw_anions or not has_oxide else '=SUM(%s)-B%d' % (col('H'), R['displaced']))
+        wr.cell(R['sum'], 3, 'every anion counted, the displaced oxygen too (the spreadsheet convention)' if raw_anions and halogen
+                else ('O + OH + F: every H2O of the table as two OH' if water_oh else ''))
+        wr.cell(R['basis'], 1, 'basis (anions apfu)'); wr.cell(R['basis'], 2, red.basis[1])
+    elif kind == 'cations':
+        wr.cell(R['sum'], 1, 'Σ cation moles (for the basis)')
+        wr.cell(R['sum'], 2, '=SUM(%s)-SUMIF(%s,"H",%s)-SUMIF(%s,"anion",%s)' % (col('G'), col('M'), col('G'), col('N'), col('G')))
+        wr.cell(R['sum'], 3, 'every cation but H; F, Cl and S are anions')
+        wr.cell(R['basis'], 1, 'basis (cations apfu)'); wr.cell(R['basis'], 2, red.basis[1])
+    else:
+        els = [e.strip() for e in red.basis[1].split('+')]
+        wr.cell(R['sum'], 1, 'Σ %s moles (for the basis)' % ' + '.join(els))
+        wr.cell(R['sum'], 2, '=' + '+'.join('SUMIF(%s,"%s",%s)' % (col('M'), e, col('G')) for e in els))
+        wr.cell(R['basis'], 1, 'basis (%s apfu)' % red.basis[1]); wr.cell(R['basis'], 2, red.basis[2])
+    wr.cell(R['factor'], 1, 'normalisation factor'); wr.cell(R['factor'], 2, '=B%d/B%d' % (R['basis'], R['sum']))
+    wr.cell(R['factor'], 3, 'basis over Σ; apfu = cation moles × this')
+    if red.anions_structure:
+        # struck against the structure's anion total: Σ(+) − [2·(anions − halogens) + halogens]
+        hal = '+'.join('SUMIF(%s,"%s",%s)' % (col('M'), e, col('J')) for e in ('F', 'Cl', 'Br', 'I'))
+        wr.cell(R['charge'], 1, 'charge balance Σ(+) − Σ(−), against %g anions from the structure' % red.anions_structure)
+        wr.cell(R['charge'], 2, '=SUMPRODUCT(%s,%s)+(%s)-(2*(%s-(%s))+(%s))' % (col('J'), col('L'), hal, red.anions_structure, hal, hal))
+    elif not any(r.c.kind in ('oxide', 'other', 'water') for r in red.rows.values()):
+        pass                                                               # elements only: no valences to balance
+    elif water_oh:
+        wr.cell(R['charge'], 1, 'charge balance'); wr.cell(R['charge'], 2, 'not struck: the OH count is a convention of the basis here')
+    else:
+        wr.cell(R['charge'], 1, 'charge balance Σ(+) − Σ(−)'); wr.cell(R['charge'], 2, '=SUMPRODUCT(%s,%s)-2*SUM(%s)' % (col('J'), col('L'), col('K')))
+    wr.cell(R['formula'], 1, 'empirical formula (as reduced; not live)'); wr.cell(R['formula'], 2, red.formula())
+    if has_oxide:
+        wr.cell(R['formula'] + 2, 1, 'atomic weight of O'); wr.cell(R['formula'] + 2, 2, AW_O)
+    nxt = R['formula'] + 4
+    if published:
+        # the paper's own coefficients beside what its numbers give, element by element
+        wr.cell(nxt, 1, 'element'); wr.cell(nxt, 2, 'apfu from this reduction'); wr.cell(nxt, 3, "apfu in the paper's formula"); wr.cell(nxt, 4, 'difference'); wr.cell(nxt, 5, 'difference, %'); wr.cell(nxt, 6, 'rounding of the printed value, ±'); wr.cell(nxt, 7, 'follows?')
+        for c in range(1, 8):
+            wr.cell(nxt, c).font = bold
+        have = {('H' if r.c.kind == 'water' else r.c.element) for r in red.rows.values()}
+        amm = next((first + i for i, k in enumerate(red.rows) if k == 'N2H8O'), None)
+        for el, v in published.items():
+            if el == 'O' or el not in have or not v:
+                continue
+            nxt += 1
+            wr.cell(nxt, 1, el)
+            wr.cell(nxt, 2, '=SUMIF(%s,"%s",%s)' % (col('M'), el, col('J')) + ('+4*J%d' % amm if el == 'H' and amm else ''))
+            wr.cell(nxt, 3, v); wr.cell(nxt, 4, '=B%d-C%d' % (nxt, nxt)); wr.cell(nxt, 5, '=100*D%d/C%d' % (nxt, nxt))
+            wr.cell(nxt, 6, 0.5 * 10 ** -int((decimals or {}).get(el, 2)))
+            # inside the half-unit of the last printed digit the two agree, whatever the percentage (0.023 against a printed 0.02 is 16 %);
+            # past the composition check's tolerance the coefficient does not follow; between the two it is close
+            wr.cell(nxt, 7, '=IF(ABS(D%d)<=F%d+0.0000001,"yes, within the rounding",IF(ABS(D%d)>MAX(0.03,0.05*C%d),"does not follow from the table","close: beyond rounding, within tolerance"))' % (nxt, nxt, nxt, nxt))
+        missing = [el for el, v in published.items() if el not in have and el not in ('O', 'H') and v]
+        if missing:
+            nxt += 1; wr.cell(nxt, 1, 'in the formula, not in the table: ' + ', '.join(missing))
+        nxt += 2
+    for line in notes:
+        wr.cell(nxt, 1, line); nxt += 1
+    for c_, w in zip('ABCDEFGHIJKLMNO', (16, 12, 12, 12, 12, 14, 22, 12, 14, 10, 10, 10, 9, 9, 30)):
+        wr.column_dimensions[c_].width = w
+    wr.freeze_panes = 'B2'
+    if path:
+        wb.save(path)
     return path
 
 # ----------------------------------------------------------------------------- ICDD entries: replicate the published formula
