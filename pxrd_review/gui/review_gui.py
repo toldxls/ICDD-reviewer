@@ -974,6 +974,7 @@ _DOCX_INLINE = [
     (re.compile(r'^filter\s*:', re.I),        'filter'),
     (re.compile(r'^xtl\s*dx\s*:', re.I),      'density'),
     (re.compile(r'^final\s+quality\s+mark', re.I), 'quality'),
+    (re.compile(r'^dx\s*:?\s*$', re.I),        'dx'),
 ]
 _DOCX_AXES = ['a', 'b', 'c', 'α', 'β', 'γ', 'SG', 'Z']       # Author's Cell columns 1..8
 

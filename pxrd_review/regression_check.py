@@ -1048,6 +1048,20 @@ CASES = [
  ("quality_mark: a filled mark, or a template without the field, is silent", lambda:
      X.check32_quality_mark(type('S', (), {'raw_rows': [['PDFID :', 'I000001', 'Pre. Quality Mark', 'C', 'Final Quality Mark', 'S']]})) == []
      and X.check32_quality_mark(type('S', (), {'raw_rows': [['PDFID :', 'I000001'], ['Mineral', 'Testite']]})) == []),
+ # --- Dx blank although the paper states a calculated density (check33) ---
+ ("dx_blank: a stated calculated density flags a blank Dx", lambda: [f.sev for f in X.check33_dx_blank(
+     type('S', (), {'raw_rows': [['Dx : ', '', 'Dm : ', '', 'Xtl Dx :', '3.728']]}),
+     'The calculated density, for the empirical formula and single-crystal unit-cell volume, is 3.690 g/cm3.')] == ['flag']),
+ ("dx_blank: 'values obtained from the structure refinement (3.19 g/cm3)' — never says calculated", lambda: any(
+     '3.19' in f.msg and '3.266' in f.msg for f in X.check33_dx_blank(
+     type('S', (), {'raw_rows': [['Dx : ', '', 'Dm : ', '3.060', 'Xtl Dx :', '3.083']]}),
+     'The density, measured by immersion in Clerici solutions, is 3.06(1) g/cm3, in fairly good agreement with the values '
+     'obtained from the single-crystal structure refinement (3.19 g/cm3) and from the single-crystal unit-cell parameters '
+     'coupled with GemTOF data (3.266 g/cm3).'))),
+ ("dx_blank: a filled Dx, a paper with no calculated density, or a density far from Xtl Dx is silent", lambda:
+     X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '3.69', 'Xtl Dx :', '3.728']]}), 'The calculated density is 3.690 g/cm3.') == []
+     and X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '3.728']]}), 'The density, measured by flotation, is 3.70(2) g/cm3.') == []
+     and X.check33_dx_blank(type('S', (), {'raw_rows': [['Dx : ', '', 'Xtl Dx :', '3.728']]}), 'The calculated density of the associated galena is 7.58 g/cm3.') == []),
  # --- IMA number (new mineral vs reinvestigation/reference) ---
  ("I003633 IMA flag (new mineral)",     lambda: bool(extras('I003633', 'ima'))),
  ("I003688 IMA flag (new mineral)",    lambda: bool(extras('I003688', 'ima'))),

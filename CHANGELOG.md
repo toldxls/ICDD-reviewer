@@ -32,6 +32,13 @@ package version in `pyproject.toml`.
   template has the field). The comment sits on the 'Final Quality Mark' label — the blank value cell has
   nothing to anchor to — and `? look` lands on the value cell. An older template without the field is silent.
 
+- **`check33_dx_blank`: Dx left blank although the .pdf states a calculated density** — a flag carrying the
+  paper's value and its sentence (17 of the 43 corpus entries with a blank Dx; every one read as a stated
+  calculated density). The value comes from `paper_extract.optics`; a paper that never says "calculated"
+  ("the values obtained from the single-crystal structure refinement (3.19 g/cm3)") is read by a clause
+  rule that requires Xtl Dx; a value more than 15 % from Xtl Dx is not offered, and a paper printing
+  several (two phases, two methods) has them listed for the reviewer to choose.
+
 ### Fixed — from a re-run of the 2028 Part 2 batch in the GUI
 - **A reflection finding sits on its own line.** The comment and highlight of a d that the .pdf does not
   print went onto the `d(A)` header of the list, and `? look` followed it there; both now land on the cell

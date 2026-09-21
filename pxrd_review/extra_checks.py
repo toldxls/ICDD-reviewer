@@ -2825,6 +2825,65 @@ def check32_quality_mark(e, text=None):
                                 % (" (Pre. Quality Mark = '%s')" % pre if pre else ''), None, 'quality')]
     return []
 
+# ----------------------------------------------------------------------------- 33. Dx left blank although the paper states a calculated density
+def check33_dx_blank(e, text):
+    """'Dx :' is the calculated density the PAPER states ('Xtl Dx' is ICDD's own, from the cell and the
+    Chemical formula). Touretite, hopmannite and cloudite reached review with it blank although each paper
+    prints one. Read by `paper_extract.optics`, the corpus-tuned density sentence reader; the value is
+    offered with its sentence, and must sit within 15 % of Xtl Dx when the entry has one — a density of
+    another phase, or a misread number, is then not offered."""
+    out = []
+    if not text:
+        return out
+    row = next((r for r in (e.raw_rows or []) if r and re.match(r'^Dx\s*:?\s*$', (r[0] or '').strip())), None)
+    if row is None or (len(row) > 1 and (row[1] or '').strip()):
+        return out
+    from pxrd_review import paper_extract as PE
+    o = PE.optics(text)
+    d = o.get('D_calc')
+    xtl = next((_val(row[j + 1]) for j, c in enumerate(row[:-1]) if re.match(r'^xtl\s*dx', (c or '').strip(), re.I)), None)
+    if d:
+        if xtl and abs(d - xtl) / xtl > 0.15:
+            return out
+        vals = ['%g' % d]
+        sent = next((x for x in o.get('sentences') or [] if ('%g' % d) in x), '')
+        # a paper on two phases prints two ('calculated density is 6.019 (Hak-Cd), 6.011 (Hak-Fe)'; a crystal-
+        # data row '2.198 2.127'): the reader takes the first, so its neighbours are offered beside it
+        flat = re.sub(r'\s+', ' ', text)
+        k = flat.find(re.sub(r'\s+', ' ', sent)[:60]) if sent else -1
+        if k >= 0:
+            seg = flat[k:k + len(sent) + 60]
+            j = seg.find('%g' % d)
+            for m in re.finditer(r'(?<![\d.])(\d{1,2}\.\d{2,4})(?![\d])', seg[j + 1:] if j >= 0 else ''):
+                v = float(m.group(1))
+                if abs(v - d) / d <= 0.15 and ('%g' % v) not in vals and len(vals) < 3:
+                    vals.append('%g' % v)
+    else:
+        # the paper never says 'calculated': touretite's measured density is 'in fairly good agreement with
+        # the values obtained from the single-crystal structure refinement (3.19 g/cm3) and from the
+        # single-crystal unit-cell parameters ... (3.266 g/cm3)'. A g/cm3 value whose own clause names the
+        # structure or the cell, other than the measured one, and near Xtl Dx — which this path requires.
+        if not xtl:
+            return out
+        flat = re.sub(r'\s+', ' ', text)
+        vals, sent = [], ''
+        for m in re.finditer(r'(?<![\d.])(\d{1,2}\.\d{2,4})(?:\(\d+\))?\s*g\s*[/·⋅]?\s*cm', flat):
+            v = float(m.group(1)); lead = flat[max(0, m.start() - 110):m.start()]
+            if (abs(v - xtl) / xtl <= 0.15 and v != o.get('D_meas') and m.group(1) not in vals
+                    and re.search(r'single[- ]crystal|structure|unit-?\s?cell|X-ray|calculat', lead, re.I)
+                    and not re.search(r'measured|Clerici|pycnomet|flotation|floatation|sink', lead[-45:], re.I)):
+                vals.append(m.group(1)); sent = sent or flat[max(0, m.start() - 110):m.end() + 10]
+        if not vals:
+            return out
+    several = len(vals) > 1
+    shown = vals[0] if not several else ', '.join(vals[:-1]) + ' and ' + vals[-1]
+    out.append(Finding('dx_blank', 'flag',
+                       "Dx is blank, but the .pdf states %s of %s g/cm³%s — enter %s."
+                       % ('calculated densities' if several else 'a calculated density', shown,
+                          (' (Xtl Dx = %g)' % xtl) if xtl else '', 'the one that applies' if several else 'it'),
+                       sent[:160] or None, 'dx'))
+    return out
+
 # ----------------------------------------------------------------------------- driver
 # NOTE: check14_density is intentionally NOT registered. A batch survey showed the
 # docx Dcalc is computed from the empirical formula about as often as from the ideal
@@ -3925,7 +3984,7 @@ CHECKS = [check1_geometry, check2_cell_provenance, check3_classification,
           check23_sg_system, check24_optical_2v, check25_reflection_geometry,
           check26_reference_title_case, check27_formula_integrity, check28_density_consistency,
           check29_reflections_in_paper, check30_extinctions, check31_gd_entry,
-          check32_quality_mark]
+          check32_quality_mark, check33_dx_blank]
 
 # An errored check must file under the CODE its findings normally carry (regression /
 # sweep lookups filter by code, and the raw function name would hide it from them).
