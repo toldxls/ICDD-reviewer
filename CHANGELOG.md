@@ -33,6 +33,42 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+**The powder-table reader, from the entry-recall worklist (2026-09-22 pm; plan block 1, item 1).** The 35 entries whose paper
+prints the list and whose seeded dropped line or intensity slip went unseen were the reader's: it read nothing (a header with
+the indices in the MIDDLE — `Iobs Icalc h k l dobs dcalc`, the commonest journal layout — dropped every row), a few lines (a
+two-column page's prose between the rows ended the table; a header on two baselines), or only the calculated column (a
+simulated pattern, which is what such an entry was typed from). Fourteen rules in the header path's row walker, each with a
+corpus paper and a test (`tests/test_paper_extract.py::PowderTableLayouts`), every one re-run on the whole corpus four ways —
+the reader statuses, the red list by hand, the cell metric, the whole-tree entry findings read against the papers:
+
+| | before | after |
+|---|---|---|
+| a dropped line caught, where the paper prints the list (123 entries) | 78 % | **92 %** |
+| the strongest line's intensity slipped, caught | 66 % | **88 %** |
+| observed / calculated lines read, whole corpus | 20,896 / 24,923 | 23,286 / 30,572 |
+| papers whose table the cell check can judge | 559 | 580 |
+| red lines (a line that does not follow the cell) | 35 in 26 papers | 33 in 25 |
+| cell metric (`tools/corpus_pxrd_ab.py`): calculated rows whose d follows from their h k l and the .cif cell | 5,400 of 6,041 | **6,494 of 7,065**; no paper less consistent; suspect lines 55 → 35 |
+
+- **One hkl column is one block**, whatever the label order; the first column OWNS a repeated label even on a row where it
+  is empty (a second sample's `Iobs dobs` stays out — six-sample tables, comparison columns); several hkl columns cut
+  blocks at the indices or at a repeated label. Multi-sample tables are read for their first sample only now (the losers in
+  the A/B, each one read: the other samples' lines, and calculated d values that stood in the observed column).
+- A header split over two baselines; natures on the line below (`I1meas dmeas I1 d2` over `calc calc`); `{hkl}`, `(Eddavidite)`,
+  `hkl1`, `d2`, `I%`, `dcalc**,`; a 2θ column owns the numbers under it; a continuation page reads under the page before's header.
+- **A multiply-indexed row pairs value k with triple k** (`dcalc 1.5943, 1.5837, 1.5753` beside `4 4 2, 3 4 5, 2 0 9`): read as
+  one row, its first value took a triple made of the leftovers and every such line was a red one. A comma carries a cell.
+- Prose between rows is tolerated two lines at a time; a real header ends the rows; a number glued to a word on either side of
+  the table is prose (`Nakamoto, 2009;`, `CaO 38.14,`, `94 s frames` — each was a flag or an index); a number left of the
+  table is the page's other column; a fourth index token is h k i l only when h + k = −i; a d outside 0.5–40 Å is no line.
+- **Checks 34 and 37**: the calculated column stands in where the paper prints no observed one; the two lists are paired
+  one-to-one on the entry's unique d values (a dropped 2.965 hid behind the 2.968 beside it; a multiply-indexed d is one line);
+  check37 leaves a d the entry writes with two intensities to check36 and a d the paper prints twice alone; check34 counts a
+  paper d once, skips the line check15 has named, and a paper line weaker than the entry's weakest is a cut, not a miss.
+  New corpus flags after the round, each read: popugaevaite's four lines (kept), argentopearceite's mistyped 1.4282, okruginite's
+  1.3076 (I 1) — nothing else moved.
+- `tools/entry_recall.py` seeds the intensity slip on every row of a multiply-indexed d (one row slipped is check36's finding).
+
 ## [0.11.3] — 2026-09-22
 
 **A deep-dive bug check over the whole corpus (2026-09-22)** — every paper (1,130) through the paper checks against the

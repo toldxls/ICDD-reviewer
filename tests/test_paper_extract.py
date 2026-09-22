@@ -2129,3 +2129,234 @@ class LostAnionSubscript(unittest.TestCase):
         self.assertEqual(PE._constituent_ok('SiO'), ('SiO2', 'constituent'))
         self.assertEqual(PE._constituent_ok('SO'), ('SO3', 'constituent'))
         self.assertEqual(PE._constituent_ok('CoO'), ('CoO', 'constituent'))                    # cobalt oxide is one
+
+
+class PowderTableLayouts(unittest.TestCase):
+    """The powder-table layouts the 2026-09-22 entry-recall worklist turned up (35 entries whose paper prints the
+    list and the reader read nothing, a few lines, or no intensity), each as a page of typeset lines."""
+
+    def pages(self, *pages):
+        saved = PE._pages
+        PE._pages = lambda _pdf, **kw: list(pages)
+        self.addCleanup(lambda: setattr(PE, '_pages', saved))
+
+    def rows(self, y0, *rows):
+        return [_line(y0 + 12 * k, *r) for k, r in enumerate(rows)]
+
+    def test_indices_in_the_middle_of_the_header_are_one_block(self):
+        # 'Iobs Icalc h k l dobs dcalc' (katsarosite): the walk used to end the block at the indices and drop every row
+        page = [_line(40, (30, 'Table'), (60, '1'), (80, 'X-ray'), (110, 'powder'), (179, 'Iobs'), (235, 'Icalc'), (298, 'h'), (346, 'k'), (394, 'l'), (442, 'dobs'), (512, 'dcalc'))] + \
+               self.rows(60, ((179, '94'), (235, '100.0'), (298, '2'), (346, '0'), (394, '2'), (442, '4.768'), (512, '4.7678')),
+                             ((179, '37'), (239, '34.9'), (298, '1'), (346, '1'), (394, '1'), (442, '4.704'), (512, '4.7030')),
+                             ((179, '100'), (239, '91.3'), (298, '2'), (346, '0'), (394, '0'), (442, '4.675'), (512, '4.6745')),
+                             ((179, '33'), (239, '37.4'), (298, '0'), (346, '0'), (394, '2'), (442, '3.927'), (512, '3.9266')),
+                             ((179, '8'), (239, '11.5'), (298, '1'), (346, '1'), (394, '2'), (442, '3.599'), (512, '3.5992')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual([d for d, _ in o], [4.768, 4.704, 4.675, 3.927, 3.599]); self.assertEqual(o[2][1], 100.0)
+        self.assertEqual(c[0], (4.7678, 100.0, (2, 0, 2)))
+
+    def test_two_blocks_side_by_side_with_the_header_on_two_baselines_and_prose_between_rows(self):
+        # jimkrieghite: the right block's header words sit one baseline below the left's; the page's other column runs prose beside the table
+        page = [_line(40, (276, 'h'), (290, 'k'), (304, 'l'), (330, 'Icalc'), (367, 'Iobs'), (403, 'dcalc'), (440, 'dobs')),
+                _line(43, (44, 'h'), (63, 'k'), (89, 'l'), (120, 'Icalc'), (157, 'Iobs'), (193, 'dcalc'), (230, 'dobs'))] + \
+               self.rows(60, ((44, '0'), (63, '0'), (89, '2'), (120, '14.5'), (157, '11.6'), (193, '7.675'), (230, '7.67'), (276, '2'), (290, '7'), (304, '0'), (330, '2.3'), (367, '2.2'), (403, '1.326'), (440, '1.325')),
+                             ((44, '1'), (63, '1'), (89, '1'), (120, '88.9'), (157, '89.4'), (193, '6.066'), (230, '6.06'), (276, '5'), (290, '4'), (304, '5'), (330, '2.1'), (367, '2.0'), (403, '1.307'), (440, '1.308')),
+                             ((44, '1'), (63, '0'), (89, '2'), (120, '72.1'), (157, '40.7'), (193, '5.828'), (230, '5.84')),
+                             ((252, 'Museum'), (290, '(Catalogue'), (330, '#'), (340, '22728)'), (370, 'and'), (390, 'the')),
+                             ((252, 'RRUFF'), (290, 'Project'), (330, '(deposition'), (380, '#'), (390, 'R220012).')),
+                             ((44, '1'), (63, '1'), (89, '2'), (120, '9.8'), (157, '7.7'), (193, '5.021'), (230, '5.00')),
+                             ((44, '0'), (63, '2'), (89, '0'), (120, '33.0'), (157, '39.3'), (193, '4.826'), (230, '4.85'), (252, 'SAMPLE'), (300, 'DESCRIPTION')),
+                             ((44, '0'), (63, '2'), (89, '1'), (120, '10.3'), (157, '12.6'), (193, '4.614'), (230, '4.63')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(len(o), 8); self.assertEqual(len(c), 8)
+        self.assertIn((1.325, 2.2), o); self.assertIn((4.63, 12.6), o)
+        self.assertIn((1.326, 2.3, (2, 7, 0)), c); self.assertIn((4.614, 10.3, (0, 2, 1)), c)
+
+    def test_bracketed_indices_and_a_parenthesised_sample_name_in_the_header(self):
+        # eddavidite: 'dobs (Eddavidite) Iobs dcalc (Eddavidite) dobs (Murdochite) {hkl}'; the indices in braces
+        page = [_line(40, (178, 'dobs'), (197, '(Eddavidite)'), (269, 'Iobs'), (310, 'dcalc'), (329, '(Eddavidite)'), (405, 'dobs'), (424, '(Murdochite)'), (510, '{hkl}'))] + \
+               self.rows(60, ((203, '5.296'), (273, '40'), (335, '5.336'), (434, '5.30'), (510, '{111}')),
+                             ((203, '4.739'), (273, '15'), (335, '4.621'), (434, '4.59'), (510, '{200}')),
+                             ((203, '3.260'), (275, '9'), (335, '3.268'), (434, '3.25'), (510, '{220}')),
+                             ((203, '2.788'), (275, '5'), (335, '2.787'), (431, '2.776'), (510, '{311}')),
+                             ((203, '2.668'), (270, '100'), (335, '2.668'), (431, '2.659'), (510, '{222}')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(o, [(5.296, 40.0), (4.739, 15.0), (3.26, 9.0), (2.788, 5.0), (2.668, 100.0)])   # the first dobs column: this mineral's, not the comparison's
+        self.assertEqual(c[-1], (2.668, None, (2, 2, 2)))
+
+    def test_an_intensity_labelled_as_a_percentage_and_a_comma_after_a_label(self):
+        page = [_line(40, (42, 'I%'), (83, 'dobs.'), (129, 'dcalc.'), (174, 'h'), (205, 'k'), (237, 'l'))] + \
+               self.rows(60, ((42, '18'), (81, '6.693'), (128, '6.706'), (174, '1'), (204, '0'), (235, '0')),
+                             ((42, '100'), (81, '5.759'), (128, '5.772'), (174, '0'), (204, '0'), (235, '1')),
+                             ((42, '7'), (81, '3.632'), (128, '3.633'), (174, '2'), (204, '0'), (235, '1')),
+                             ((42, '40'), (81, '3.334'), (128, '3.321'), (174, '1'), (204, '1'), (235, '0')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(o[1], (5.759, 100.0)); self.assertEqual(c[1], (5.772, None, (0, 0, 1)))
+        page = [_line(40, (40, 'Imeas'), (76, 'dmeas,'), (98, 'Å'), (133, 'dcalc,'), (152, 'Å'), (188, 'Imeas'), (232, 'dmeas,'), (254, 'Å'), (294, 'Icalc'), (343, 'dcalc,'), (362, 'Å'), (412, 'hkl'))] + \
+               self.rows(60, ((40, '28'), (82, '6.36'), (136, '6.352'), (192, '18'), (238, '6.36'), (297, '22'), (346, '6.354'), (398, '111')),
+                             ((40, '100'), (82, '4.05'), (136, '4.052'), (192, '100'), (238, '4.05'), (297, '100'), (346, '4.053'), (398, '200')),
+                             ((40, '12'), (82, '3.21'), (136, '3.208'), (192, '10'), (238, '3.21'), (297, '9'), (346, '3.209'), (398, '211,')),
+                             ((40, '35'), (82, '2.83'), (136, '2.831'), (192, '30'), (238, '2.83'), (297, '31'), (346, '2.832'), (398, '220')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(o, [(6.36, 28.0), (4.05, 100.0), (3.21, 12.0), (2.83, 35.0)])   # ONE hkl column: one block; the first of a repeated label (this sample's) wins
+        self.assertEqual(c[2], (3.208, 9.0, (2, 1, 1)))
+
+    def test_natures_on_the_line_below_the_header_and_footnote_digits_on_labels(self):
+        # bainbridgeite: 'I1meas dmeas I1 d2 hkl' over 'calc calc'; the comparison cells hold several values
+        page = [_line(40, (60, 'I1meas'), (96, 'dmeas'), (128, 'I1'), (225, 'd2'), (393, 'hkl')),
+                _line(48, (132, 'calc'), (230, 'calc'))] + \
+               self.rows(64, ((60, '7'), (101, '7.87'), (128, '17'), (225, '7.90'), (393, '010')),
+                             ((60, '4'), (101, '7.27'), (128, '10,'), (142, '14'), (225, '7.28,'), (245, '7.25'), (393, '100,'), (411, '110')),
+                             ((60, '42'), (101, '6.22'), (128, '100,'), (146, '4,'), (225, '6.22,'), (245, '6.04'), (393, '001,'), (411, '111')),
+                             ((60, '100'), (96, '4.430'), (128, '83,'), (142, '84,'), (225, '4.44,'), (245, '4.43'), (393, '011,'), (411, '211')),
+                             ((60, '37'), (96, '4.094'), (128, '27,'), (142, '25,'), (225, '4.10,'), (245, '4.10'), (393, '121,'), (411, '111')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(o, [(7.87, 7.0), (7.27, 4.0), (6.22, 42.0), (4.43, 100.0), (4.094, 37.0)])
+        self.assertEqual(c[0], (7.9, 17.0, (0, 1, 0)))
+
+    def test_a_calculated_only_table_stands_in_for_the_observed_lines(self):
+        from pxrd_review import extra_checks as X
+        saved = X._POWDER_READER
+        X.set_powder_reader(lambda p: ([], [(5.27, 33.0, (0, 4, 1)), (3.82, 23.0, (0, 6, 0))]))
+        self.addCleanup(lambda: X.set_powder_reader(saved))
+        self.assertEqual(X._paper_obs('x.pdf'), [(5.27, 33.0), (3.82, 23.0)])
+        X.set_powder_reader(lambda p: ([(5.27, 30.0)], [(5.27, 33.0, (0, 4, 1))]))
+        self.assertEqual(X._paper_obs('x.pdf'), [(5.27, 30.0)])
+
+    def test_two_paper_lines_cannot_share_one_entry_line(self):
+        from pxrd_review import extra_checks as X
+        paired = X._pair_lines([2.968, 2.965, 2.673], [2.968, 2.673])
+        self.assertEqual(paired, {0: 0, 2: 1})                       # merelaniite: the dropped 2.965 no longer hides behind 2.968
+
+    def test_a_multiply_indexed_row_pairs_each_value_with_its_own_triple(self):
+        # 77449: 'Iobs Icalc dobs dcalc h k l' with 'dcalc 1.5943, 1.5837, 1.5753' beside 'h k l 4 4 2, 3 4 5, 2 0 9';
+        # read as one row, the first value took a triple made of the leftovers and every such line came out red
+        page = [_line(40, (43, 'Iobs'), (106, 'Icalc'), (196, 'dobs'), (273, 'dcalc'), (454, 'h'), (462, 'k'), (470, 'l'))] + \
+               self.rows(60, ((43, '46'), (106, '5,'), (115, '9,'), (123, '13'), (196, '2.854'), (272, '2.8665,'), (299, '2.8567,'), (325, '2.8380'), (454, '1'), (460, '4'), (467, '1,'), (475, '2'), (481, '2'), (488, '1,'), (496, '2'), (503, '3'), (509, '0')),
+                             ((43, '41'), (106, '16,'), (118, '3,'), (127, '3'), (196, '3.791'), (272, '3.8055,'), (299, '3.7955,'), (325, '3.7411'), (454, '0'), (460, '2'), (467, '4,'), (475, '1'), (481, '2'), (488, '2,'), (496, '1'), (503, '3'), (509, '3')),
+                             ((43, '20'), (106, '2,'), (114, '4,'), (122, '5'), (196, '1.5871'), (273, '1.5943,'), (297, '1.5837,'), (322, '1.5753'), (454, '4'), (460, '4'), (466, '2,'), (474, '3'), (480, '4'), (486, '5,'), (494, '2'), (500, '0'), (507, '9')),
+                             ((43, '10'), (106, '10'), (196, '1.5000'), (273, '1.5010'), (454, '2'), (460, '2'), (466, '8')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(o, [(2.854, 46.0), (3.791, 41.0), (1.5871, 20.0), (1.5, 10.0)])
+        self.assertIn((1.5943, 2.0, (4, 4, 2)), c); self.assertIn((1.5837, 4.0, (3, 4, 5)), c); self.assertIn((1.5753, 5.0, (2, 0, 9)), c)
+        self.assertIn((2.8665, 5.0, (1, 4, 1)), c); self.assertIn((1.501, 10.0, (2, 2, 8)), c)
+        self.assertEqual(len(c), 10)
+
+    def test_a_two_theta_column_owns_the_numbers_under_it(self):
+        # 2899 supp: 'I/meas h k l 2θ (°) d (Å)' — the 2θ value beside the d value is not the d
+        page = [_line(40, (78, 'I/meas'), (142, 'h'), (190, 'k'), (239, 'l'), (270, '2θ'), (282, '(°)'), (318, 'd'), (326, '(Å)'))] + \
+               self.rows(60, ((97, '0.17'), (142, '1'), (190, '0'), (238, '0'), (276, '14.00'), (337, '6.32')),
+                             ((97, '5.82'), (142, '1'), (190, '1'), (238, '0'), (276, '24.37'), (337, '3.65')),
+                             ((86, '100.00'), (142, '2'), (190, '1'), (238, '1'), (276, '41.73'), (337, '2.16')),
+                             ((97, '0.51'), (142, '2'), (190, '2'), (238, '6'), (276, '48.84'), (338, '1.86')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(o, [(6.32, 0.17), (3.65, 5.82), (2.16, 100.0), (1.86, 0.51)])
+
+    def test_a_continuation_page_reads_under_the_page_before_s_header(self):
+        # boevskite: page 15 prints the rest of page 14's two-block table with no header of its own
+        p14 = [_line(40, (113, 'dobs'), (152, 'Iobs'), (183, 'dcalc'), (223, 'Icalc'), (269, 'h'), (278, 'k'), (285, 'l'), (314, 'dobs'), (354, 'Iobs'), (388, 'dcalc'), (428, 'Icalc'), (470, 'h'), (478, 'k'), (486, 'l'))] + \
+              self.rows(60, ((108, '3.120'), (153, '51'), (182, '3.118'), (231, '37'), (268, '3'), (276, '0'), (284, '1'), (309, '1.858'), (355, '6'), (387, '1.856'), (438, '11'), (469, '1'), (477, '5'), (485, '4')),
+                            ((108, '3.033'), (153, '34'), (182, '3.036'), (231, '15'), (268, '3'), (276, '1'), (284, '1'), (309, '1.812'), (355, '6'), (387, '1.806'), (438, '7'), (469, '3'), (477, '6'), (485, '1')),
+                            ((182, '3.021'), (231, '17'), (268, '1'), (276, '4'), (284, '1'), (387, '1.797'), (435, '10'), (469, '2'), (477, '3'), (485, '5')),
+                            ((108, '2.996'), (153, '28'), (182, '2.999'), (231, '15'), (268, '1'), (276, '2'), (284, '3'), (309, '1.764'), (358, '6'), (387, '1.766'), (435, '15'), (469, '5'), (477, '3'), (485, '1')))
+        p15 = self.rows(30, ((182, '2.885'), (231, '12'), (268, '2'), (276, '0'), (284, '3'), (309, '1.740'), (355, '8'), (387, '1.741'), (438, '9'), (469, '0'), (477, '6'), (485, '2')),
+                            ((108, '2.832'), (153, '19'), (182, '2.835'), (231, '16'), (268, '0'), (276, '4'), (284, '2'), (309, '1.700'), (355, '4'), (387, '1.699'), (438, '5'), (469, '4'), (477, '4'), (485, '0')),
+                            ((182, '2.554'), (231, '18'), (268, '3'), (276, '3'), (284, '1'), (309, '1.613'), (355, '20'), (387, '1.610'), (438, '5'), (469, '5'), (477, '4'), (485, '2')),
+                            ((108, '2.501'), (153, '9'), (182, '2.503'), (231, '8'), (268, '2'), (276, '2'), (284, '2'), (309, '1.590'), (355, '3'), (387, '1.588'), (438, '2'), (469, '1'), (477, '7'), (485, '1')))
+        self.pages(p14, p15)
+        o, c, pages = PE.pxrd_table('x.pdf', with_pages=True)
+        self.assertEqual(pages, [1, 2])
+        self.assertIn((1.613, 20.0), o); self.assertNotIn((1.61, 5.0), o)          # the second block's observed line, not its calculated one
+        self.assertNotIn(2.885, [d for d, _ in o]); self.assertIn((1.61, 5.0, (5, 4, 2)), c)   # a calc-only row prints no observed line
+
+    def test_the_first_column_owns_a_repeated_label_even_on_a_row_where_it_is_empty(self):
+        # stannopalladinite: 'h k l dobs Iobs dobs Iobs …' six samples; a row where only the sixth prints a line is not the first's
+        page = [_line(40, (43, 'h'), (77, 'k'), (112, 'l'), (147, 'dobs'), (192, 'Iobs'), (235, 'dobs'), (280, 'Iobs'), (323, 'dobs'), (368, 'Iobs'))] + \
+               self.rows(60, ((43, '1'), (77, '0'), (112, '1'), (147, '3.660'), (192, '30'), (235, '3.65'), (280, '30'), (323, '3.66'), (368, '20')),
+                             ((43, '1'), (77, '1'), (112, '0'), (235, '3.160'), (280, '40')),
+                             ((43, '2'), (77, '0'), (112, '0'), (147, '2.166'), (192, '100'), (235, '2.17'), (280, '100'), (323, '2.17'), (368, '100')),
+                             ((43, '2'), (77, '0'), (112, '1'), (147, '2.013'), (192, '30'), (323, '2.01'), (368, '40')),
+                             ((43, '2'), (77, '1'), (112, '1'), (147, '1.740'), (192, '5'), (235, '1.740'), (280, '20')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(o, [(3.66, 30.0), (2.166, 100.0), (2.013, 30.0), (1.74, 5.0)])
+
+    def test_the_next_table_s_header_ends_the_rows_and_prose_numbers_stay_out(self):
+        # 70667: a second table under the first with other column positions; 78891: '94 s frames' printed beside the indices
+        page = [_line(40, (51, 'Imeas'), (91, 'dmeas'), (133, 'Icalc'), (169, 'dcalc'), (211, 'h'), (246, 'k'), (280, 'l'))] + \
+               self.rows(60, ((51, '2'), (91, '2.742'), (133, '2'), (169, '2.741'), (211, '1'), (246, '1'), (280, '1'), (330, '94'), (342, 's'), (352, 'frames')),
+                             ((51, '5'), (91, '2.600'), (133, '4'), (169, '2.601'), (211, '2'), (246, '0'), (280, '1')),
+                             ((51, '9'), (91, '2.410'), (133, '8'), (169, '2.412'), (211, '0'), (246, '2'), (280, '1')),
+                             ((51, '4'), (91, '2.100'), (133, '3'), (169, '2.099'), (211, '1'), (246, '2'), (280, '1')),
+                             ((51, '3'), (91, '1.902'), (133, '1'), (169, '1.902'), (211, '0'), (246, '-4'), (280, '1'))) + \
+               [_line(140, (51, 'Imeas'), (114, 'dmeas'), (179, 'Icalc'), (237, 'dcalc'), (301, 'h'), (358, 'k'), (414, 'l'))] + \
+               self.rows(160, ((51, '4'), (114, '1.774'), (183, '3'), (237, '1.774'), (302, '-1'), (358, '-4'), (414, '3')),
+                              ((51, '5'), (114, '1.708'), (183, '2'), (237, '1.707'), (302, '2'), (358, '-4'), (414, '1')),
+                              ((51, '14'), (114, '1.660'), (183, '15'), (237, '1.659'), (302, '-4'), (358, '0'), (414, '1')),
+                              ((51, '6'), (114, '1.593'), (183, '1'), (237, '1.593'), (302, '-2'), (358, '-4'), (414, '3')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(len(o), 9); self.assertEqual(len(c), 9)
+        self.assertIn((2.741, 2.0, (1, 1, 1)), c); self.assertIn((1.659, 15.0, (-4, 0, 1)), c)
+        self.assertNotIn(-4.0, [d for d, _ in o])                                   # the second table's indices never landed in the first's d column
+
+    def test_a_value_outside_the_d_range_is_no_line(self):
+        page = [_line(40, (201, 'hkl'), (269, 'd'), (336, 'I'), (404, 'd'), (476, 'I'))] + \
+               self.rows(60, ((201, '100'), (269, '4.21'), (336, '30'), (404, '4.20'), (476, '25')),
+                             ((201, '110'), (269, '2.98'), (336, '100'), (404, '2.97'), (476, '100')),
+                             ((201, '111'), (269, '2.43'), (336, '12'), (404, '2.43'), (476, '10')),
+                             ((201, '200'), (269, '2.10'), (336, '40'), (404, '2.10'), (476, '38')),
+                             ((169, 'R%'), (257, '63.2'), (298, '62.5'), (338, '60.0'), (378, '53.7'), (426, '15.8')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual([d for d, _ in o], [4.21, 2.98, 2.43, 2.1])
+
+    def test_a_number_glued_to_prose_beside_the_table_is_not_a_cell(self):
+        # theuerdankite: 'Nakamoto, 2009;' ends where the Iobs column begins; bakakinite: 'CaO 38.14,' — the comma carried '6' into the same cell
+        page = [_line(40, (306, 'Iobs'), (349, 'dobs'), (405, 'dcalc'), (455, 'Icalc'), (494, 'h'), (503, 'k'), (512, 'l'))] + \
+               self.rows(60, ((144, 'Vansant'), (200, 'et'), (215, 'al.,'), (240, '1973;'), (306, '100'), (349, '3.0100'), (405, '3.0090'), (455, '96.1'), (494, '1'), (503, '1'), (512, '0')),
+                             ((116, 'modes'), (170, 'lattice'), (228, 'Nakamoto,'), (272, '2009;'), (306, '35.7'), (349, '1.7050'), (405, '1.7043'), (455, '25.8'), (494, '2'), (503, '1'), (512, '3')),
+                             ((81, 'bakakinite'), (139, 'Ca2V2O7'), (245, 'CaO'), (269, '38.14,'), (306, '6'), (347, '1.617'), (380, '1.616'), (454, '7'), (494, '3'), (503, '1'), (512, '4')),
+                             ((306, '12'), (349, '1.500'), (405, '1.501'), (455, '11'), (494, '4'), (503, '0'), (512, '0')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual(o, [(3.01, 100.0), (1.705, 35.7), (1.617, 6.0), (1.5, 12.0)])
+
+    def test_a_fourth_index_token_is_the_next_column_s_unless_h_plus_k_is_minus_i(self):
+        self.assertEqual(PE._hkl_of(['4', '2', '2', '1']), (4, 2, 2))            # 78279: a bond table's '1' beside the indices
+        self.assertEqual(PE._hkl_of(['1', '1', '-2', '3']), (1, 1, 3))           # h k i l: i is redundant
+        self.assertEqual(PE._hkl_of(['0', '0', '9']), (0, 0, 9)); self.assertEqual(PE._hkl_of(['001']), (0, 0, 1))
+
+    def test_a_paper_line_weaker_than_the_entry_s_weakest_was_cut_not_missed(self):
+        from pxrd_review import extra_checks as X
+        saved = X._POWDER_READER
+        obs = [(4.21, 30.0), (2.98, 100.0), (2.43, 12.0), (2.1, 40.0), (1.98, 5.0), (1.9, 8.0), (1.8, 9.0), (1.7, 6.0), (1.6, 1.0), (1.5, 7.0)]
+        X.set_powder_reader(lambda p: (obs, []))
+        self.addCleanup(lambda: X.set_powder_reader(saved))
+        refl = [(str(d), str(int(i)), '1', '0', '0') for d, i in obs if i >= 3]      # the entry stops at I 3: the I 1 line is not missing
+        e = type('E', (), {'refl': refl, 'instr': {'spacing_instr': 'Diffractometer'}, 'comments': {}, 'formulas': {}, 'raw_rows': [], 'name': 'testite'})()
+        self.assertEqual([f.msg for f in X.check34_lines_missing(e, 'x.pdf')], [])
+        refl2 = [r for r in refl if r[0] != '1.9']                                    # a line of I 8, above the floor: missing
+        e2 = type('E', (), {'refl': refl2, 'instr': {'spacing_instr': 'Diffractometer'}, 'comments': {}, 'formulas': {}, 'raw_rows': [], 'name': 'testite'})()
+        m = [f.msg for f in X.check34_lines_missing(e2, 'x.pdf')]
+        self.assertEqual(len(m), 1); self.assertIn('1.9 (I 8)', m[0])
+
+    def test_a_number_left_of_the_table_and_a_stray_token_in_a_cell(self):
+        # 5754: 'lcal' (a typo for Icalc) is no label, so its '1.30' sits 40 pt left of 'dcalc 7.317' — it is not the d;
+        # nannoniite: an unlabelled '100' beside 'dcalc 4.867' — the nearer token is the cell
+        page = [_line(40, (56, 'lcal'), (96, 'dcalc'), (133, 'h'), (138, 'k'), (143, 'l'))] + \
+               self.rows(60, ((56, '1.30'), (93, '7.317'), (132, '0'), (137, '1'), (142, '1')),
+                             ((56, '3.70'), (93, '5.174'), (132, '0'), (137, '0'), (142, '2')),
+                             ((56, '2.70'), (93, '4.224'), (132, '1'), (137, '1'), (142, '2')),
+                             ((56, '5.80'), (93, '1.679'), (132, '2'), (137, '3'), (142, '5')))
+        self.pages(page)
+        o, c = PE.pxrd_table('x.pdf')
+        self.assertEqual([x[0] for x in c], [7.317, 5.174, 4.224, 1.679]); self.assertEqual(c[0][2], (0, 1, 1))

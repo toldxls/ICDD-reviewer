@@ -78,8 +78,8 @@ def _run_one(job):
             seed(kind, refl=[((sw + d[len(m.group(0)):],) + tuple(r[1:])) if r is row else r for r in e.refl], needle=sw)
     sd = re.sub(r'\s+', '', strong[0])
     seed('drop', refl=[r for r in e.refl if re.sub(r'\s+', '', r[0] or '') != sd], needle=re.match(r'[\d.]+', re.sub(r'\s+', '', strong[0])).group(0).rstrip('0'))
-    if (X._val(strong[1]) or 0) >= 90:
-        seed('I-slip', refl=[((r[0], '10') + tuple(r[2:])) if r is strong else r for r in e.refl], needle=re.match(r'[\d.]+', re.sub(r'\s+', '', strong[0])).group(0).rstrip('0'))
+    if (X._val(strong[1]) or 0) >= 90:                              # every row of a multiply-indexed d (as 'drop' does): one row slipped is check36's 'one d, two intensities'
+        seed('I-slip', refl=[((r[0], '10') + tuple(r[2:])) if re.sub(r'\s+', '', r[0] or '') == sd else r for r in e.refl], needle=re.match(r'[\d.]+', re.sub(r'\s+', '', strong[0])).group(0).rstrip('0'))
     dx = next((i for i, r in enumerate(e.raw_rows or []) if r and re.match(r'^Dx\s*:?\s*$', (r[0] or '').strip()) and len(r) > 1 and (r[1] or '').strip()), None)
     if dx is not None:
         val = (e.raw_rows[dx][1] or '').strip()

@@ -3042,12 +3042,31 @@ def set_powder_reader(fn):
     _POWDER_READER = fn
 
 def _paper_obs(pdf_path):
+    """The paper's powder lines as (d, I): its observed column — or, when the table prints none, its
+    calculated one (a simulated pattern is what such an entry's list was typed from: letnikovite-(Ce),
+    2026-09-22, 74 calculated lines and no observed column; the seeded slips were invisible)."""
     if _POWDER_READER is not None:
         r = _POWDER_READER(pdf_path)
     else:
         from pxrd_review import paper_extract as PE
         r = PE.pxrd_table(pdf_path)
-    return [(float(x[0]), x[1]) for x in ((r or ([], []))[0] or []) if x and x[0]]
+    r = r or ([], [])
+    obs = [(float(x[0]), x[1]) for x in (r[0] or []) if x and x[0]]
+    if not obs and len(r) > 1:
+        obs = [(float(x[0]), x[1]) for x in (r[1] or []) if x and x[0]]
+    return obs
+
+def _pair_lines(pds, eds):
+    """The paper's d values paired ONE-TO-ONE with the entry's, closest first, within 0.15 % + 0.0006 Å
+    -> ({paper index: entry index}). 'Any entry line within tolerance' let a dropped 2.965 hide behind
+    the entry's 2.968 beside it (merelaniite, 2026-09-22): two paper lines cannot share one entry line."""
+    tol = lambda v: 0.0015 * max(v, 1) + 0.0006
+    cand = sorted((abs(pd - ed), i, j) for i, pd in enumerate(pds) for j, ed in enumerate(eds) if abs(pd - ed) <= tol(pd))
+    pi, ej = {}, set()
+    for _, i, j in cand:
+        if i not in pi and j not in ej:
+            pi[i] = j; ej.add(j)
+    return pi
 
 def check34_lines_missing(e, pdf_path, skip=()):
     """An OBSERVED line of the paper's powder table that the entry's list lacks. Compared only where the
@@ -3064,15 +3083,21 @@ def check34_lines_missing(e, pdf_path, skip=()):
     obs = _paper_obs(pdf_path)
     if any(i for _, i in obs):                           # a table of visual estimates ('s', 'm', 'w') has no numbers at all: kept whole
         obs = [(d, i) for d, i in obs if i]
+    seen_pd = {}
+    for d, i in obs:                                     # a d the paper prints twice (two lines it resolved, or a comparison column) is one line here
+        if d not in seen_pd or (i or 0) > (seen_pd[d] or 0):
+            seen_pd[d] = i
+    obs = sorted(seen_pd.items(), reverse=True)
     if len(obs) < 8:
         return out
     ed = [(_val(r[0]), _val(r[1])) for r in e.refl if _val(r[0])]
     def near(v, ds):
         return any(abs(v - x) <= 0.0015 * max(v, 1) + 0.0006 for x in ds)
-    pds, eds = [d for d, _ in obs], [d for d, _ in ed]
-    if sum(near(v, pds) for v in eds) < 0.9 * len(eds):
+    pds, eds = [d for d, _ in obs], sorted({d for d, _ in ed}, reverse=True)   # a multiply-indexed line is one line, however many rows carry its d
+    paired = _pair_lines(pds, eds)
+    if len(paired) < 0.9 * len(eds):
         return out
-    miss = [(d, i) for d, i in obs if not near(d, eds)]
+    miss = [(d, i) for k, (d, i) in enumerate(obs) if k not in paired]
     if not miss or len(miss) > 4:
         return out
     miss = [(d, i) for d, i in miss if not any(abs(d - x) < 1e-6 for x in skip)]   # check29 has already named it as the original of a mistyped d
@@ -3080,6 +3105,11 @@ def check34_lines_missing(e, pdf_path, skip=()):
         return out
     # the two intensity scales: the entry's strongest line against the paper's
     scale = (max(i for _, i in ed if i) / max(i for _, i in obs if i)) if any(i for _, i in ed) and any(i for _, i in obs) else 1
+    floor = min((i for _, i in ed if i), default=None)
+    if floor is not None:
+        miss = [(d, i) for d, i in miss if not i or i * scale >= floor - 1e-9]   # weaker than the entry's weakest line: the list was cut there, the line is not missing (okruginite's I 1 against a list that stops at 3)
+        if not miss:
+            return out
     parts = []
     for d, i in miss:
         twin = next((x for x, xi in ed if xi and i and not near(x, pds) and abs(x - d) / d < 0.03
@@ -3109,15 +3139,20 @@ def check37_intensity_vs_paper(e, pdf_path):
         except (TypeError, ValueError):
             return None
     obs = [(d, num(i)) for d, i in _paper_obs(pdf_path) if num(i)]
-    ed = [(_val(r[0]), _val(r[1]), re.sub(r'\s+', '', r[0] or '')) for r in e.refl if _val(r[0]) and _val(r[1])]
+    dup = {d for k, (d, _) in enumerate(obs) if any(abs(d - d2) < 1e-6 for d2, _ in obs[:k])}
+    obs = [(d, i) for d, i in obs if d not in dup]           # a d the paper prints twice with two intensities: which is this line's is not for the tool to say (popugaevaite 2.834: I 5 and I 16)
+    ed = []; seen_d = {}
+    for r in e.refl:                                         # a multiply-indexed line is one line, however many rows carry its d
+        if _val(r[0]) and _val(r[1]):
+            seen_d.setdefault(_val(r[0]), set()).add(_val(r[1]))
+    for r in e.refl:
+        d = _val(r[0])
+        if d and _val(r[1]) and len(seen_d.get(d, ())) == 1 and not any(x[0] == d for x in ed):
+            ed.append((d, _val(r[1]), re.sub(r'\s+', '', r[0] or '')))   # a d the entry writes with two intensities is check36's finding, not a slip against the paper
     if len(obs) < 8 or len(ed) < 8:
         return out
-    tol = lambda v: 0.0015 * max(v, 1) + 0.0006
-    pairs = []
-    for d, i, raw in ed:
-        hit = [(pd, pi) for pd, pi in obs if abs(pd - d) <= tol(d)]
-        if len(hit) == 1:
-            pairs.append((d, i, hit[0][1], raw))
+    paired = _pair_lines([pd for pd, _ in obs], [d for d, _i, _r in ed])
+    pairs = [(ed[j][0], ed[j][1], obs[k][1], ed[j][2]) for k, j in sorted(paired.items(), key=lambda kv: kv[1])]
     if len(pairs) < 8 or len(pairs) < 0.9 * len(ed):
         return out
     ratios = sorted(i / pi for _d, i, pi, _r in pairs if pi)
@@ -4345,6 +4380,8 @@ def run_all(e, text, cif_data=None, dft_data=None, pdf_path=None):
     try:                                                 # reads the paper's TABLE (word positions), so it takes the file, not the text
         named = [float(x) for f in findings if f.code == 'reflections' and 'prints' in (f.msg or '')
                  for part in re.findall(r'the \.pdf prints ([^)]*?), one keystroke', f.msg) for x in re.findall(r'\d+\.\d+', part)]
+        named += [float(x) for f in findings if f.code == 'strongest_lines'                       # check15 has named the strongest line the list lacks: one finding, not two
+                  for x in re.findall(r'\.pdf lists (\d+\.\d+)', f.msg or '')]
         findings.extend(check34_lines_missing(e, pdf_path, skip=named))
     except Exception as ex:
         findings.append(Finding('lines_missing', 'note', 'check errored: %s' % ex, None))
