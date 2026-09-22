@@ -353,6 +353,28 @@ class CheckSheet(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_the_paper_checks_verdict_is_the_sheets(self):
+        import openpyxl
+        tmp = tempfile.mkdtemp(prefix='bvchk_')
+        try:
+            cif = _write(tmp, 'hydrate.cif', HYDRATE)
+            st = B.Structure(cif); P = B.Params(prefer='gh')
+            result, anion_sum, cells, hbonds = B.compute(st, P, hbond='none')
+            (an, cat) = next((a, c) for (a, c), segs in cells.items() if len(segs) == 1 and next(r[0] for r in result if r[0].label == c).element != 'H')
+            grid = self._grid(st, result, cells, anion_sum, spoil={(an, cat): 0.30})
+            out = os.path.join(tmp, 'k.xlsx')
+            verdicts = lambda: [c.value for c in openpyxl.load_workbook(out)['check']['I'] if c.value in ('agrees', 'differs', 'not compared', 'blank')]
+            B.write_xlsx(st, P, result, anion_sum, cells, hbonds, out, tables=[grid], params_label='GH')
+            self.assertIn('differs', verdicts())
+            # the paper check holds that cell (its line is among those kept): still red
+            B.write_xlsx(st, P, result, anion_sum, cells, hbonds, out, tables=[grid], params_label='GH', keep=['table 1: %s–%s 0.55 vs 0.25 computed' % (an, cat)])
+            self.assertIn('differs', verdicts())
+            # it does not (the column excused, the table doubted): shown, not red
+            B.write_xlsx(st, P, result, anion_sum, cells, hbonds, out, tables=[grid], params_label='GH', keep=['table 1: doubted as read'])
+            self.assertNotIn('differs', verdicts()); self.assertIn('not compared', verdicts())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_a_mistyped_valence_a_shifted_column_and_bad_arithmetic(self):
         tmp = tempfile.mkdtemp(prefix='bvchk_')
         try:

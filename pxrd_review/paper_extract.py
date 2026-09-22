@@ -4754,7 +4754,18 @@ def check_paper(pdf, cif=None, out_dir=None):
             out['bv'] = {k: bc[k] for k in ('tables', 'lines', 'params', 'u6', 'cited', 'compared', 'disagree')}
             out['bv'].update({k: bc.get(k) for k in ('cited_n', 'cited_bad', 'sums', 'table')})
             out['bv'].update({k: bc[k] for k in ('from_paper', 'from_bonds', 'gii') if k in bc})
+            if bc.get('workbook'):
+                out['bv']['held'] = bc['workbook']['held']
             out['lines'] += [bc['head']] + ['  ' + ln for ln in bc['lines']]
+            if out_dir and bc.get('workbook'):
+                # the table beside the structure, cell by cell, with THIS verdict on its check sheet (never another)
+                try:
+                    os.makedirs(out_dir, exist_ok=True)
+                    name_ = os.path.splitext(os.path.basename(pdf))[0] + ('_docx_' if pdf.lower().endswith('.docx') else '_paper_') + 'bv.xlsx'
+                    if write_bv_xlsx(bc, os.path.join(out_dir, name_), os.path.basename(pdf)):
+                        ex['bv_xlsx'] = name_
+                except Exception as e_:
+                    ex['notes'].append('the bond-valence workbook was not written (%s)' % str(e_)[:80])
     out['coords'] = coords_check(pdf, cif, text, out)      # the coordinates table on its own: a record, no lines
     out.pop('_ps_build', None)
     # the water the formula claims against the hydrogen the structure accounts for — note-grade, and
@@ -5426,13 +5437,20 @@ def bv_check_paper(path, cif, ex, text=None, structure=None, inferred=None, anio
                 kept.extend(tl)
                 if bad_i >= 3:
                     kept.append('table %d: the differences — %s' % (tno, _bv_pattern(tl, n_i, bad_i)))   # where they sit: one column throughout is a convention, scattered ones are slips
+        # what a workbook needs to show THIS verdict and no other (bv_check.write_xlsx): the structure with the paper's valences
+        # and site names, the set that won, the group of tables judged, and the finding lines that survived the excuses above
+        wbk = {'st': st, 'P': P, 'label': B.PARAM_NAMES[key], 'rows': [t['rows'] for t in groups[gi]], 'sites': sites, 'kept': list(kept), 'doubted': list(doubted),
+               'anion_sums': bool(structure is None and anion_sums), 'from_cif': structure is None,
+               # the disagreements the check HOLDS (a doubted table's are in `bad` but not findings): what the sheet's red cells must equal
+               'held': sum(1 for ln in kept if re.match(r'table \d+: (\S+–\S+ .* vs [\d.]+ computed|\S+–\S+ "[^"]*" — a missing decimal|\S+–\S+ [\d.()×x→↓, ]+ in the table but the|Σ for \S+(: the cation part| is [\d.]+ but its| [\d.]+ vs)|BVS of \S+ [\d.]+ in the table vs)', ln)
+                           and 'not compared' not in ln and 'not a difference' not in ln)}
         if not kept:                                                   # a doubt for the reviewer, never a list of findings
             head = 'bond valence: %s vs the .cif — %d of %d cells differ under every parameter set; not compared cell by cell [unverified]' % (where, bad, n)
-            return {'status': 'unmatched', 'head': head, 'lines': doubted + [ln for ln in st.notes if "from the paper's formula" in ln] + left_out, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad, 'sums': sites, 'table': tab_info}
+            return {'workbook': wbk, 'status': 'unmatched', 'head': head, 'lines': doubted + [ln for ln in st.notes if "from the paper's formula" in ln] + left_out, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad, 'sums': sites, 'table': tab_info}
         head = 'bond valence: %s vs the .cif — agrees best with %s%s' % (
             where, P.note(), '' if (key, u6) == cited else ' (the paper cites %s%s)' % (B.PARAM_NAMES.get(cited[0], cited[0]), ', U6+ from Burns' if cited[1] == 'burns' else ''))
         kept += [ln for ln in st.notes if "from the paper's formula" in ln] + left_out
-        return {'status': 'checked', 'head': head, 'lines': kept + doubted, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad, 'sums': sites, 'table': tab_info}
+        return {'workbook': wbk, 'status': 'checked', 'head': head, 'lines': kept + doubted, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad, 'sums': sites, 'table': tab_info}
     except Exception as ex_:
         import traceback
         tb = traceback.extract_tb(ex_.__traceback__)[-1]
@@ -6199,7 +6217,13 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
     wt = comp.get('wt') or {row['constituent']: row['mean'] for row in ((ex.get('epma') or {}).get('rows') or [])}
     stated, found = ex.get('basis'), (r.get('basis') or comp.get('basis'))
     found = tuple(found) if isinstance(found, list) else found
-    keep_stated = bool(stated and found and not _same_basis(stated, found) and not comp.get('basis_equiv'))
+    differs = bool(stated and found and not _same_basis(stated, found) and not comp.get('basis_equiv'))
+    # The sheet never says more than the check (statements gauntlet, round 1): where the check REPRODUCES the formula on
+    # another way of counting and holds no basis against the paper (`basis_flag` unset — water or OH counted, an ammonium
+    # or a group count), a sheet kept on the stated count turned every element red and read 'the BASIS is not the one
+    # used' on 45 verified papers. There it is reduced on the count that reproduces, and says which the paper states.
+    counted_otherwise = differs and bool(comp.get('ok')) and not comp.get('basis_flag') and not r.get('factor')
+    keep_stated = differs and not counted_otherwise
     basis = stated if keep_stated or not found else found
     cons, vals = [], []
     for c, v in wt.items():
@@ -6210,7 +6234,7 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
     ds = EP.Dataset(cons, [vals], ['mean'], {}, ex.get('name') or 'paper', None)
     unusable = ''
     try:
-        red = EP.reduce(ds, basis, water_oh=bool(r.get('water_oh')) and not keep_stated)
+        red = EP.reduce(ds, basis, water_oh=bool(r.get('water_oh')) and not keep_stated)   # (the found basis carries the check's OH convention)
         if not red.factor and keep_stated:                             # '16 Me': a basis the table has no row for — nothing to normalise on
             unusable = 'the stated basis (%s) names nothing in the table, so the sheet is reduced on the basis that reproduces the formula' % EP._basis_label(stated)
             keep_stated = False; basis = found
@@ -6228,6 +6252,7 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
     notes = ['%s — the analytical table of %s, reduced on %s' % (ex.get('name') or 'paper', ('page %d' % e['page']) if e.get('page') else 'the manuscript',
                                                                   EP._basis_label(basis) + (' (the basis the paper states)' if stated and _same_basis(stated, basis) else
                                                                                            (' (the paper states none: the basis that reproduces its formula)' if not stated else
+                                                                                            (' (the paper states %s; its formula follows on this count, which is the one applied — see below)' % EP._basis_label(stated)) if counted_otherwise else
                                                                                             (' (the %s the paper states, as the table can give it — see below)' % EP._basis_label(stated) if comp.get('basis_equiv') else ''))))]
     if ex.get('basis_sentence'):
         bs_ = ex['basis_sentence']
@@ -6248,10 +6273,12 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
         if comp.get('basis_flag'):
             notes.append('PROBLEM: the stated basis does not reproduce the formula; every coefficient follows from %s' % EP._basis_label(found))
         elif follows:
-            notes.append('note: the sheet keeps the stated basis; the coefficients follow from %s — another way of counting that the composition '
-                         'check does not hold against the paper (water or OH counted, an ammonium or a group count), so the differences on the check sheet are that basis, not misprints' % EP._basis_label(found))
+            notes.append('note: the sheet keeps the stated basis; the coefficients follow from %s, by one constant factor — see the common factor on the check sheet' % EP._basis_label(found))
         else:
             notes.append('note: the stated basis does not reproduce the formula, and no other basis reproduces all of it (the nearest: %s) — see what the composition check found, below' % EP._basis_label(found))
+    if counted_otherwise:
+        notes.append('note: the paper states %s; every coefficient follows on %s, which is how the sheet is reduced — another way of counting the same formula '
+                     '(water or OH in or out of the count, an ammonium or a group sum), which the composition check does not hold against the paper' % (EP._basis_label(stated), EP._basis_label(found)))
     notes += [''] + ['what the composition check found:'] + [l_.strip() for l_ in (comp.get('lines') or ['no empirical formula sentence was read: nothing to compare the apfu with'])]
     os.makedirs(out_dir, exist_ok=True)
     name = (stem or '') + 'epma.xlsx'
@@ -6268,8 +6295,39 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
             decimals[el] = 0
     # an element the formula prints in two valence states is read as ONE coefficient (the composition check leaves it out for that reason)
     not_judged = {el: 'not judged: printed in two valence states, read as one coefficient' for el, v in (comp.get('ox_paper') or {}).items() if len(v or ()) > 1}
-    EP.write_xlsx(red, None, os.path.join(out_dir, name), published=comp.get('counts') or None, notes=notes, single=True, decimals=decimals, not_judged=not_judged, table_total=e.get('total') if e.get('total') and 85 <= e['total'] <= 112 else None)   # an apfu sum read as the total is not one
+    hold = None
+    if comp.get('ok') and not keep_stated or comp.get('ok') and not comp.get('basis_flag'):
+        hold = ("the paper's own apfu column reproduces it — the reading of the wt% table is the tool's shortfall" if comp.get('apfu_vouches') else
+                'the coefficients are these by one constant factor (÷ %.3f): another count of the same formula' % r['factor'] if r.get('factor') else
+                'every coefficient is within the check’s tolerance (0.03 apfu or 5 %)')
+    elif comp.get('verified') and not comp.get('ok') and not comp.get('basis_flag'):
+        notes.insert(1, 'PROBLEM: the composition check FLAGS this formula — its lines are below (a second formula in the paper, or a coefficient the table does not give)')
+    EP.write_xlsx(red, None, os.path.join(out_dir, name), published=comp.get('counts') or None, notes=notes, single=True, decimals=decimals, not_judged=not_judged, hold=hold, table_total=e.get('total') if e.get('total') and 85 <= e['total'] <= 112 else None)   # an apfu sum read as the total is not one
     return name
+
+def write_bv_xlsx(bv, path, source=''):
+    """The bond-valence workbook of a PAPER, written from what `bv_check_paper` settled on — its structure (the paper's
+    valences and site names), the parameter set that won, the tables it judged — so that the check sheet shows that verdict
+    and no other. Built apart from it (the raw .cif, a set chosen on its own, every anion sum compared) the sheet was red on
+    52 papers whose table the check finds in agreement (statements gauntlet, round 3). -> the path, or None."""
+    from pxrd_review import bv_check as B
+    w = (bv or {}).get('workbook')
+    if not w:
+        return None
+    st, P = w['st'], w['P']; notes = list(st.notes)
+    if w.get('from_cif'):
+        result, anion_sum, cells, hbonds = B.compute(st, P, None, 'oo')
+    elif getattr(st, 'from_bonds', False):
+        # NO .cif (nine papers in ten): the structure is the bond distances the paper itself prints (`paper_bonds`) — cation,
+        # anion, R and ×n are all a bonds sheet needs; there are no multiplicities, so no anion sum is formed or compared
+        from pxrd_review import paper_bonds as PB
+        result, anion_sum, cells = PB.compute(st, P); hbonds = ()
+    else:
+        return None                                                     # the structure the paper prints (coordinates): note-grade, no workbook
+    st.notes[:] = notes
+    B.write_xlsx(st, P, result, anion_sum, cells, hbonds, path, tables=None if w['sites'] else w['rows'], site_tables=[list(r) for r in w['rows']] if w['sites'] else None,
+                 params_label=w['label'], source=source, keep=w['kept'] + w['doubted'], anion_sums=w['anion_sums'] and w.get('from_cif', False), head=bv.get('head') or '')
+    return path
 
 def basis_string(b):
     if not b:

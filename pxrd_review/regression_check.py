@@ -1110,6 +1110,12 @@ CASES = [
      lambda e, ds: X._paper_misprint(e, '3.834', ['3.843', '2.834'], ds,
                                      ['3.913', '3.913', '2.834', '2.834', '3.843', '3.843', '3.768']) is None)(
      type('S', (), {'cell': {}, 'refl': []})(), ['3.913', '3.768'])),
+ ("intensity_paper: the strongest line's 100 typed as 10 flags; the same list on another scale is silent", lambda: (
+     lambda ds, I: (X.set_powder_reader(lambda p: ([(d, str(i)) for d, i in zip(ds, I)], [])) or True) and
+     [f.sev for f in X.check37_intensity_vs_paper(type('E', (), {'refl': [(d, str(i), '1', '0', '0') for d, i in zip(ds, [10] + I[1:])], 'instr': {'spacing_instr': 'Diffractometer'}})(), 'x.pdf')] == ['flag']
+     and X.check37_intensity_vs_paper(type('E', (), {'refl': [(d, str(i * 0.5), '1', '0', '0') for d, i in zip(ds, I)], 'instr': {'spacing_instr': 'Diffractometer'}})(), 'x.pdf') == []
+     and (X.set_powder_reader(None) or True))(
+     ['9.120', '6.050', '4.560', '3.913', '3.843', '3.020', '2.910', '2.871', '2.601', '2.300'], [100, 45, 30, 22, 60, 15, 80, 12, 9, 25])),
  # --- the reflection list against the paper's table and against itself (checks 34–36) ---
  ("hkl_blank: one row of a multiply-indexed line has no hkl", lambda: [f.sev for f in X.check35_blank_hkl_in_group(
      type('S', (), {'raw_rows': [['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['1.7160', '20.000', '1', '8', '2', 'M', ''],

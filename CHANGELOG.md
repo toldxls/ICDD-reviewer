@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.11.2](#0112--2026-09-22) | 22 Sep | The statements gauntlet: what the workbooks SAY, measured against the checks and against seeded faults — contradictions 63 → 0 on the whole corpus, a 10 % wt% slip named 68 → 93 %, the tool's own bond-valence table no longer failing its own check, a bond-valence workbook for papers with no .cif (97 → 340), the colours tested, the paper's GD index one cell; the first recall numbers for the entry checks and check37 (a reflection's intensity is not the paper's); every GUI route walked |
 | [0.11.1](#0111--2026-09-21) | 21 Sep | An adversarial review of the day's three releases, every finding reproduced before it was fixed: the arithmetic held, what the tool SAID did not — check33 offered another mineral's density as "enter it"; the EPMA workbook wrote PROBLEM where the composition check flags nothing; a BVS column was judged by a bare ±0.08; the GD total left out O ≡ F,Cl; the folder guard's holes; ten GUI error paths that were a NameError; the sheet and the reduction brought into line on the edge inputs |
 | [0.11.0](#0110--2026-09-21) | 21 Sep | Workbooks that show their working: a paper's EPMA re-reduced on its stated basis, the bond-valence table as a paper prints it, and Gladstone–Dale from apfu to index — every number a live formula, each with a `check` sheet that colours what differs from the paper and says where the fault lies; a stated cation basis counts the measured cations; `pxrd gui` asks before opening a folder that is not a batch and starts on its chooser; `? look` crosses between the .pdf and the entry |
 | [0.10.1](#0101--2026-09-21) | 21 Sep | Three reflection-list checks (a paper line the list lacks, a blank hkl in a multiply-indexed group, one d with two intensities); an audit of the day's commits; `? look` finds a reflection line and lands on it; a microprobe line list no longer reads as a second radiation, and a calculated pattern has no powder radiation to verify; intensities all multiples of 5 are a note; every log says which version wrote it |
@@ -30,6 +31,87 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.11.2] — 2026-09-22
+
+**The statements gauntlet** — what the workbooks SAY, measured. The reader gauntlet made the numbers right; the 0.11.1 review
+found the sentences wrong, and no gate could see a sentence. Two dev tools now can, each against an oracle the sheets do not
+share: `tools/corpus_workbooks.py` writes every paper's workbooks (to a scratch folder), evaluates every formula, harvests every
+statement and sets it against the record layer — **C**, contradictions, target 0; `tools/seed_statements.py` seeds ONE fault of
+a known kind into papers that pass and reads what the check sheet NAMES — **D**, diagnosis accuracy, a confusion matrix per
+stratum, counted over the faults that are past the check's own tolerance. Whole corpus, 1,131 papers, ~1 min each:
+
+| | before | after |
+|---|---|---|
+| C — a sheet that contradicts the check (769 EPMA, 261 GD, 97 BV workbooks) | 63, + 52 bond-valence sheets red where the check agrees | **0** |
+| verified papers whose EPMA sheet shows no colour at all | 207 of 661 | **481 of 661** |
+| D — a 10 % wt% slip: the element named / read as "the basis" | 68 % / 11 % | **93 % / 0 %** |
+| D — the basis one off: named | 50 % | **94 %** |
+| D — an oxide reduced in another valence: named | 62 % (0 % with two majors) | **82 %** (79 %) |
+| D — two slips at once: said to be several, not one | 72 % | **98 %** |
+| GD sheets with an amber line on papers whose index is reproduced | 66 of 217 | **1** |
+
+### Changed — the sheet never says more than the check
+- **EPMA**: where the composition check reproduces the formula on another way of counting and holds no basis against the paper,
+  the sheet is reduced on THAT count and says which the paper states (45 verified papers had every element red and "the BASIS
+  is not the one used"). Where the check holds nothing against the formula — the paper's own apfu column vouches for it, or
+  the coefficients are these by one constant factor — what differs is said as a note with that reason, and nothing is red.
+  Where the check FLAGS a formula the sheet cannot show (a second formula in the abstract), the sheet says so.
+- **EPMA diagnostics**: an element stands alone only where some coefficient does not follow as it stands (a factor of 0.97
+  divided out of a formula that follows had named "the slip" on two verified papers) — and the gate is the sheet's, not the
+  row's, because the slipped element is often the one still inside the tolerance while its dilution puts every other outside.
+  Two majors that AGREE share a factor (a basis, a valence), so a molybdate is told as much as a silicate. The basis row says
+  whether the basis that would give the paper's numbers is a WHOLE number — one a paper would state — which is what tells a
+  basis from a valence; the valence line says "would explain", not "explains". Amber is for the upper half of the tolerance.
+- **Bond valence**: a paper's workbook is written FROM the paper check (`paper_extract.write_bv_xlsx`, `<paper>_paper_bv.xlsx`
+  beside the EPMA one) — its structure with the paper's valences and site names, the set that won, the tables it judged — and
+  the check sheet holds a cell red only where the check holds that finding (`write_xlsx(keep=)`); a column that follows
+  another reference, a table the check doubts as read, is shown, not red. `pxrd bv x.cif --table paper.pdf` reports and
+  writes the same (with the defaults; any option asked for keeps the plain path).
+- **Gladstone–Dale**: a total outside 98.5–101.5 is a note only where the paper's index is not reproduced.
+- `tests/xl_eval.py`: `ROUND`, `TRUE`/`FALSE`, and `MIN`/`MAX` of no numbers = 0, as Excel.
+
+**Second round — the other two sheets, the entries, the GUI's routes.** Three more dev tools: `tools/seed_statements_gd.py` and
+`tools/seed_statements_bv.py` (the D matrix for the Gladstone–Dale and bond-valence check sheets — the latter writes the table
+the tool itself would print for every corpus .cif, then spoils it in one known way) and `tools/entry_recall.py`, the first
+RECALL number the entry checks have had (one transcription slip seeded into each parsed entry, in memory).
+
+| | before | after |
+|---|---|---|
+| GD sheet: a variant constant / a normalised analysis / a category word one class off / n or D off — named | — | 88 % / 91 % / 100 % / 100 % (the rest: two explanations that both reproduce, both shown) |
+| BV: the tool's OWN table, written back, judged wrong by the table check | 35 % of 147 structures | **4 %** |
+| BV: a whole column scaled (another R0, another valence) — named as the column | 69 % | **82 %** |
+| BV: one cell off by 0.20 vu / one Σ mis-added — named | 95 % / 99 % | 94 % / 99 % |
+| entries: the strongest line's d with two digits swapped / left out / Dx blanked — flagged, where the paper prints the list | — | 100 % / 79 % / 81 % (where it does not: 2 % / 0 % / 43 %) |
+| entries: the strongest line's intensity 100 typed as 10 — flagged | **0 %** | **47 %** (66 % where the paper prints the list; 0 firings on the 368 paired corpus entries as they stand) |
+
+- **The table check's row arithmetic accepts an occupancy-weighted Σ** — how an anion's sum is formed over a split or partly
+  occupied cation site, and how this tool's own table adds its rows: written back, that table failed "its row adds to" on one
+  corpus structure in three.
+- **A ×n cell's per-bond value is judged on the per-bond tolerance.** The sum of the distinct bonds' values was offered as a
+  third "total" even for ONE bond ×n, on the total's tolerance (×n wider): `0.55×2↓` stood for 0.645, and a column scaled by
+  0.85 read "ok". Bonds to S, Se, Te and the halides keep the wider reading (the sets differ by that much there). Reader A/B,
+  1,130 papers: three bond-valence records moved, each to the conservative side (two `agrees` → `unverified`, one `disagrees` → `agrees`).
+- **The column reading**: three or more cells, four in ten, ALL OFF THE SAME WAY is a whole-column difference (a scaled column
+  leaves its small cells inside the tolerance, so "six in ten" missed it).
+- **check37 (a flag): a reflection's intensity is not the paper's** — compared only where the list plainly came from the
+  paper's table and the two intensity scales agree on four lines in five; then a line off by a factor of two and ten units.
+- **The colours are tested** (issue #11): `tests/xl_eval.py` evaluates every conditional format row by row (`Book.fills`), the
+  statements gauntlet holds every red fill to a red WORD on its row (0 of 1,127 workbooks differ), and the reduction rows are
+  coloured through a cell of their own sheet (column P, "does not follow (check sheet)") instead of a rule that names another
+  sheet — which Excel 2007 refuses and the later ones keep in an extension block openpyxl does not write. An element row that
+  follows as it stands but stands out once the common factor is divided out now SAYS so (the red on those two columns had no word).
+  The evaluator's SUMIF / COUNTIFS criteria are Excel's: case-insensitive, `*` and `?` wildcards.
+- **A bond-valence workbook for a paper with NO .cif** (issue #18 — nine papers in ten): written from the bond distances the
+  paper itself prints (`paper_bonds`), `<paper>_paper_bv.xlsx` beside the EPMA one, every valence a live `EXP((R0−R)/b)` of the
+  paper's own distance; the bonds sheet says whose distances they are, and no anion sum is formed or compared (a bond table
+  prints no multiplicities). Workbooks on the corpus: 97 → 340. The check sheet's red cells equal the disagreements the paper
+  check HOLDS (`bv['held']`, per table — a doubted table's cells are shown, not red), 0 of 340 differ.
+- **Gladstone–Dale: the paper's index is ONE cell the rest refer to** (issue #12): it was pasted into every formula as a literal,
+  so a reviewer editing it moved nothing; the 'needed' K_C / n / D, the explanations and the category line now follow it, and
+  an index of exactly 1 no longer divides by zero.
+- **`tests/test_gui_routes.py` — the route gauntlet**: every one of the GUI's 50 routes, with no folder open (no 5xx, no process
+  launched) and from a foreign host (403 from each). A new route is covered the day it is added.
 
 ## [0.11.1] — 2026-09-21
 

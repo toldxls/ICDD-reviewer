@@ -270,13 +270,17 @@ def _write_gd_check(wb, res, paper, A, cat):
     wc.cell(1, 1, "The compatibility the paper states against the one its numbers give%s — green: reproduces the paper's; amber: differs; red: arithmetic" % (' (%s)' % paper['source'] if paper.get('source') else '')).font = bold
     for c_, h in enumerate(['', 'value', "paper's", 'difference', 'reading'], 1):
         wc.cell(3, c_, h).font = bold
-    row = 3; ci_p = paper.get('ci'); r_ci = {}
+    row = 3; ci_p = paper.get('ci'); r_ci = {}; c_ci = None                  # c_ci: THE cell that holds the paper's index — edit it and everything follows
     dens = [(k, lab) for k, lab in (('meas', 'measured density'), ('calc', 'calculated density')) if k in A]
     for k, lab in dens:
         row += 1; r_ci[k] = row
         wc.cell(row, 1, '1 − K_P/K_C, %s' % lab); wc.cell(row, 2, '=' + g(A[k]['CI']))
         if ci_p is not None:
-            wc.cell(row, 3, ci_p); wc.cell(row, 4, '=B%d-C%d' % (row, row))
+            if c_ci is None:
+                wc.cell(row, 3, ci_p); c_ci = '$C$%d' % row
+            else:
+                wc.cell(row, 3, '=' + c_ci)
+            wc.cell(row, 4, '=B%d-C%d' % (row, row))
             wc.cell(row, 5, '=IF(ABS(D%d)<=0.005,"ok — reproduces the paper\'s index",IF(ABS(D%d)<=0.03,"ok — within what the constants allow (0.03)","note — differs by "&TEXT(D%d,"+0.000;-0.000")&": see what would explain it, below"))' % (row, row, row))
         for c_ in (2, 3, 4):
             wc.cell(row, c_).number_format = '+0.000;-0.000'
@@ -285,7 +289,7 @@ def _write_gd_check(wb, res, paper, A, cat):
         wc.cell(row, 1, 'the density the paper used'); wc.cell(row, 5, '=IF(ABS(D%d)<=ABS(D%d),"its index is nearer the MEASURED density\'s","its index is nearer the CALCULATED density\'s")' % (r_ci['meas'], r_ci['calc']))
     if ci_p is not None and not dens:
         row += 1; r_ci['paper'] = row                                   # no density given: the paper's number still stands beside its word
-        wc.cell(row, 1, "1 − K_P/K_C as the paper states it (no density given here: none computed)"); wc.cell(row, 3, ci_p); wc.cell(row, 3).number_format = '+0.000;-0.000'
+        wc.cell(row, 1, "1 − K_P/K_C as the paper states it (no density given here: none computed)"); wc.cell(row, 3, ci_p); wc.cell(row, 3).number_format = '+0.000;-0.000'; c_ci = '$C$%d' % row
     if paper.get('category'):
         row += 1
         wc.cell(row, 1, 'category'); wc.cell(row, 3, paper['category'])
@@ -295,8 +299,8 @@ def _write_gd_check(wb, res, paper, A, cat):
         if ci_p is not None:
             # the paper's word against the paper's own number: no constant and no density enters into that
             own = cat('C%d' % (best or r_ci['paper']))[1:]
-            wc.cell(row, 5, '=IF(%s="%s","ok — the paper\'s word is the category of its own number","PROBLEM — the paper calls %s a ‘%s’ compatibility; Mandarino\'s category for that number is "&%s)' % (
-                own, paper['category'], '%+.3f' % ci_p, paper['category'], own))
+            wc.cell(row, 5, '=IF(%s="%s","ok — the paper\'s word is the category of its own number","PROBLEM — the paper calls "&TEXT(%s,"+0.000;-0.000")&" a ‘%s’ compatibility; Mandarino\'s category for that number is "&%s)' % (
+                own, paper['category'], c_ci, paper['category'], own))
     if paper.get('D_calc') and 'calc' in A:
         row += 1
         wc.cell(row, 1, 'D calculated = Z·FW/(V·0.602214)'); wc.cell(row, 2, '=' + g(A['calc']['D'])); wc.cell(row, 3, paper['D_calc']); wc.cell(row, 4, '=B%d-C%d' % (row, row))
@@ -306,7 +310,11 @@ def _write_gd_check(wb, res, paper, A, cat):
         wc.cell(row, 2).number_format = wc.cell(row, 4).number_format = '0.000'
     row += 1
     wc.cell(row, 1, 'Σ wt% of the analysis'); wc.cell(row, 2, '=' + g(A['sum']))
-    wc.cell(row, 5, '=IF(AND(B%d>=98.5,B%d<=101.5),"ok","note — K_C is a mean over the WHOLE analysis: a total of "&TEXT(B%d,"0.00")&" moves K_C, and the index, by about that proportion")' % (row, row, row))
+    # said as a note only where the index is NOT reproduced: on 62 corpus papers whose stated index the check reproduces the
+    # total was outside 98.5–101.5 all the same (water by difference, a trace left out) and the amber line said nothing
+    ok_rows = [r_ci[k] for k, _l in dens] if ci_p is not None else []
+    reproduced = ('OR(%s)' % ','.join('LEFT(E%d,2)="ok"' % r_ for r_ in ok_rows)) if ok_rows else 'FALSE'
+    wc.cell(row, 5, '=IF(AND(B%d>=98.5,B%d<=101.5),"ok",IF(%s,"ok — a total of "&TEXT(B%d,"0.00")&", and the paper\'s index is reproduced all the same","note — K_C is a mean over the WHOLE analysis: a total of "&TEXT(B%d,"0.00")&" moves K_C, and the index, by about that proportion"))' % (row, row, reproduced, row, row))
     r_sum = row
     missing = [r[0] for r in res['rows'] if r[2] is None]
     for m in missing:
@@ -321,7 +329,7 @@ def _write_gd_check(wb, res, paper, A, cat):
             base = r_ci[k]; kp = g(A[k]['KP'])
             row += 1
             wc.cell(row, 1, 'the analysis normalised to 100 %% (%s)' % lab)
-            wc.cell(row, 2, '=1-%s/(%s*100/%s)' % (kp, g(A['kc']), g(A['sum']))); wc.cell(row, 3, ci_p); wc.cell(row, 4, '=B%d-C%d' % (row, row))
+            wc.cell(row, 2, '=1-%s/(%s*100/%s)' % (kp, g(A['kc']), g(A['sum']))); wc.cell(row, 3, '=' + c_ci); wc.cell(row, 4, '=B%d-C%d' % (row, row))
             wc.cell(row, 5, expl % (row, base, 'the paper normalised its analysis to 100 % before taking K_C'))
             K = constants()
             for i, (key, w, kk, c, src) in enumerate(res['rows']):
@@ -331,7 +339,7 @@ def _write_gd_check(wb, res, paper, A, cat):
                     row += 1
                     wc.cell(row, 1, '%s with k = %g (%s) — %s' % (key, var['k'], ILLEGAL_CHARACTERS_RE.sub(' ', str(var.get('for', '')))[:60], lab))
                     wc.cell(row, 2, '=1-%s/(%s+(%r-GD!$C$%d)*GD!$B$%d/100)' % (kp, g(A['kc']), var['k'], A['first'] + i, A['first'] + i))
-                    wc.cell(row, 3, ci_p); wc.cell(row, 4, '=B%d-C%d' % (row, row))
+                    wc.cell(row, 3, '=' + c_ci); wc.cell(row, 4, '=B%d-C%d' % (row, row))
                     wc.cell(row, 5, expl % (row, base, "the paper took Mandarino's other constant for %s" % key))
         row += 2
         wc.cell(row, 1, "WHAT WOULD GIVE THE PAPER'S INDEX").font = bold
@@ -339,9 +347,11 @@ def _write_gd_check(wb, res, paper, A, cat):
             wc.cell(row, c_, h).font = bold
         for k, lab in dens:
             D = g(A[k]['D'])
-            for what, need, used in (('K_C (%s)' % lab, '=%s/(1-%r)' % (g(A[k]['KP']), ci_p), g(A['kc'])),
-                                     ('n (%s)' % lab, '=1+%s*%s*(1-%r)' % (D, g(A['kc']), ci_p), g(A['n'])),
-                                     ('D (%s)' % lab, '=(%s-1)/(%s*(1-%r))' % (g(A['n']), g(A['kc']), ci_p), D)):
+            # (the paper's index by reference, never pasted: edited in its cell, the 'needed' values follow — and an index of
+            # exactly 1 no longer divides by zero silently: IF guards it)
+            for what, need, used in (('K_C (%s)' % lab, '=IF(%s=1,"",%s/(1-%s))' % (c_ci, g(A[k]['KP']), c_ci), g(A['kc'])),
+                                     ('n (%s)' % lab, '=1+%s*%s*(1-%s)' % (D, g(A['kc']), c_ci), g(A['n'])),
+                                     ('D (%s)' % lab, '=IF(%s=1,"",(%s-1)/(%s*(1-%s)))' % (c_ci, g(A['n']), g(A['kc']), c_ci), D)):
                 row += 1
                 wc.cell(row, 1, what); wc.cell(row, 2, need); wc.cell(row, 3, '=' + used); wc.cell(row, 4, '=B%d-C%d' % (row, row))
                 for c_ in (2, 3, 4):

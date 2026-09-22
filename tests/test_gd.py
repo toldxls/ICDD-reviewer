@@ -126,11 +126,31 @@ class CheckSheet(unittest.TestCase):
             res, b, lab, read = self._book(tmp, {'ci': round(norm, 4)})
             self.assertIn('EXPLAINS IT — the paper normalised its analysis to 100 %', read('the analysis normalised to 100 %'))
             self.assertTrue(read('Σ wt% of the analysis').startswith('note'), read('Σ wt% of the analysis'))
+            # … and where the index IS reproduced, the same short total is no note
+            res0, b0, lab0, read0 = self._book(tmp, {'ci': round(ci, 3)}, name='t.xlsx')
+            self.assertTrue(read0('Σ wt% of the analysis').startswith('ok — a total of'), read0('Σ wt% of the analysis'))
             # what would give the paper's index: the K_C needed is the normalised one
             self.assertAlmostEqual(b.value('check', 'B%d' % lab['K_C (measured density)']), res['KC'] * 100 / 92.0, places=3)
             # arithmetic is red: a category word that is not the category of the paper's own number
             res, b, lab, read = self._book(tmp, {'ci': 0.075, 'category': 'superior'})
             self.assertTrue(read('category').startswith('PROBLEM') and 'fair' in read('category'), read('category'))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_the_papers_index_is_one_cell_the_rest_refer_to(self):
+        import openpyxl
+        from tests.xl_eval import Book
+        tmp = tempfile.mkdtemp(prefix='gdchk_')
+        try:
+            res = G.prepare(wt='SiO2=60,Al2O3=25,CaO=15', n=1.60, density=2.7)
+            p = G.write_xlsx(res, os.path.join(tmp, 'a.xlsx'), 'q', {'ci': 0.05, 'category': 'good'}); b = Book(p)
+            lab = {c.value: c.row for c in b.wb['check']['A'] if isinstance(c.value, str)}
+            n0 = b.value('check', 'B%d' % lab['n (measured density)'])
+            wb = openpyxl.load_workbook(p); wb['check'].cell(4, 3, 0.10); wb.save(p); b = Book(p)      # a reviewer edits the paper's index
+            self.assertNotAlmostEqual(b.value('check', 'B%d' % lab['n (measured density)']), n0, places=4)   # … and the 'needed' n follows
+            self.assertIn('+0.100', b.value('check', 'E%d' % lab['category']))                            # … as does the category line
+            wb = openpyxl.load_workbook(p); wb['check'].cell(4, 3, 1.0); wb.save(p); b = Book(p)
+            self.assertEqual(b.value('check', 'B%d' % lab['K_C (measured density)']), '')                  # an index of 1: no #DIV/0!
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

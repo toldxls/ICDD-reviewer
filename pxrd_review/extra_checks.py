@@ -3004,6 +3004,48 @@ def check34_lines_missing(e, pdf_path, skip=()):
                        ', '.join('%g' % d for d, _ in miss), 'refl'))
     return out
 
+def check37_intensity_vs_paper(e, pdf_path):
+    """A line whose INTENSITY is not the paper's. Seeding the entries (tools/entry_recall.py, 2026-09-21) showed the one slip no
+    check could see: the strongest line's 100 typed as 10 was missed on 95 % of 172 entries — every reflection check reads the d.
+    Compared only where the list plainly came from the paper's table (nine in ten of its d values in it, as check34), at
+    least eight lines paired, and the two intensity scales agree on nearly all of them (the scale is the median ratio, and four
+    in five pairs must sit within 15 % or 2 units of it): then a line off by a factor of two AND ten units of the 100-scale is
+    named. A flag (owner, 2026-09-22): 0 firings on the 368 paired corpus entries as they stand, and the only check that sees this class."""
+    out = []
+    if not pdf_path or not e.refl or len(e.refl) < 8 or not _measured(e):
+        return out
+    def num(i):                                             # a table of visual estimates ('s', 'm', 'w') has no numbers: nothing to compare
+        try:
+            return float(i)
+        except (TypeError, ValueError):
+            return None
+    obs = [(d, num(i)) for d, i in _paper_obs(pdf_path) if num(i)]
+    ed = [(_val(r[0]), _val(r[1]), re.sub(r'\s+', '', r[0] or '')) for r in e.refl if _val(r[0]) and _val(r[1])]
+    if len(obs) < 8 or len(ed) < 8:
+        return out
+    tol = lambda v: 0.0015 * max(v, 1) + 0.0006
+    pairs = []
+    for d, i, raw in ed:
+        hit = [(pd, pi) for pd, pi in obs if abs(pd - d) <= tol(d)]
+        if len(hit) == 1:
+            pairs.append((d, i, hit[0][1], raw))
+    if len(pairs) < 8 or len(pairs) < 0.9 * len(ed):
+        return out
+    ratios = sorted(i / pi for _d, i, pi, _r in pairs if pi)
+    scale = ratios[len(ratios) // 2]
+    top = max(i for _d, i, _pi, _r in pairs) or 1.0
+    near = lambda i, pi: abs(i - pi * scale) <= max(0.15 * max(i, pi * scale), 2.0 * top / 100.0)
+    if sum(near(i, pi) for _d, i, pi, _r in pairs) < 0.8 * len(pairs):
+        return out                                          # another intensity column (calculated, another sample), or a re-scaled list: nothing to say
+    bad = [(raw, i, pi * scale) for _d, i, pi, raw in pairs
+           if max(i, pi * scale) >= 2 * max(min(i, pi * scale), 1e-9) and abs(i - pi * scale) >= 10.0 * top / 100.0]
+    if bad and len(bad) <= 3:
+        out.append(Finding('intensity_paper', 'flag',
+                           "Reflection list intensit%s not the .pdf table's: %s — the other %d lines agree with it on one scale; verify against the table."
+                           % ('y' if len(bad) == 1 else 'ies', '; '.join('d = %s has I %g, the table %g' % (raw, i, round(pi, 1)) for raw, i, pi in bad), len(pairs) - len(bad)),
+                           ', '.join(raw for raw, _i, _pi in bad), 'refl'))
+    return out
+
 def check35_blank_hkl_in_group(e, text=None):
     """Two rows share a d — a multiply-indexed line — and one of them has no indices: the second hkl of
     the pair was dropped (suenoite 1.716, argentopearceite 1.482, cloudite 2.236; 6 of 266 entries)."""
@@ -4194,6 +4236,10 @@ def run_all(e, text, cif_data=None, dft_data=None, pdf_path=None):
         findings.extend(check34_lines_missing(e, pdf_path, skip=named))
     except Exception as ex:
         findings.append(Finding('lines_missing', 'note', 'check errored: %s' % ex, None))
+    try:
+        findings.extend(check37_intensity_vs_paper(e, pdf_path))
+    except Exception as ex:
+        findings.append(Finding('intensity_paper', 'note', 'check errored: %s' % ex, None))
     try:
         findings.extend(check_cif(e, cif_data or {}))
     except Exception as ex:

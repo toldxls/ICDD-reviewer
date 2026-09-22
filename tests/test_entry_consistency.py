@@ -228,6 +228,27 @@ class ReflectionsAgainstPaper(unittest.TestCase):
         self.assertEqual(X.check15_strongest_lines(powder(rows), text), [])
 
 
+class IntensityAgainstThePaper(unittest.TestCase):
+    """check37: a line whose intensity is not the paper's — the slip no d-based check can see (entry recall, 2026-09-21)."""
+    def setUp(self):
+        self.ds = ['9.120', '6.050', '4.560', '3.913', '3.843', '3.020', '2.910', '2.871', '2.601', '2.300']
+        self.I = [100, 45, 30, 22, 60, 15, 80, 12, 9, 25]
+        X.set_powder_reader(lambda path: ([(d, str(i)) for d, i in zip(self.ds, self.I)], []))
+        self.addCleanup(lambda: X.set_powder_reader(None))
+
+    def _entry(self, ints):
+        return powder([(d, str(i), '1', '0', '0') for d, i in zip(self.ds, ints)])
+
+    def test_a_mistyped_intensity_is_named_and_a_rescaled_list_is_not(self):
+        self.assertEqual(X.check37_intensity_vs_paper(self._entry(self.I), 'x.pdf'), [])
+        slip = list(self.I); slip[0] = 10                                   # 100 typed as 10
+        f = X.check37_intensity_vs_paper(self._entry(slip), 'x.pdf')
+        self.assertEqual([(x.code, x.sev) for x in f], [('intensity_paper', 'flag')]); self.assertIn('d = 9.120 has I 10, the table 100', f[0].msg)
+        self.assertEqual(X.check37_intensity_vs_paper(self._entry([i * 0.5 for i in self.I]), 'x.pdf'), [])          # the same list on another scale
+        self.assertEqual(X.check37_intensity_vs_paper(self._entry([7, 90, 3, 66, 5, 80, 2, 40, 70, 1]), 'x.pdf'), [])   # another intensity column altogether: nothing to say
+        self.assertEqual(X.check37_intensity_vs_paper(powder([(d, str(i), '1', '0', '0') for d, i in zip(self.ds, slip)], spacing='Calculated'), 'x.pdf'), [])
+
+
 class AuditEdges(unittest.TestCase):
     """The edges an audit of the first commit found (2026-09-14)."""
 

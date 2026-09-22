@@ -2,7 +2,7 @@
 
     python3 -m unittest tests.test_epma -v
 """
-import os, shutil, tempfile, unittest, csv
+import os, re, shutil, tempfile, unittest, csv
 
 from pxrd_review import epma as E
 
@@ -157,8 +157,8 @@ class Reduction(unittest.TestCase):
         label = {c.value: c.row for c in ws['A'] if isinstance(c.value, str)}
         self.assertAlmostEqual(b.value('check', 'B%d' % label['Ca']), red.rows['CaO'].apfu, places=9)
         self.assertEqual(b.value('check', 'F%d' % label['Ca']), 'yes, within the rounding')   # a printed 5.00 is 4.995–5.005
-        self.assertEqual(b.value('check', 'F%d' % label['P']), 'does not follow from the table')   # 3.0 from the table, 2.5 printed
-        self.assertEqual(b.value('check', 'F%d' % label['F']), 'close: beyond rounding, within tolerance')
+        self.assertTrue(b.value('check', 'F%d' % label['P']).startswith('does not follow from the table'))   # 3.0 from the table, 2.5 printed
+        self.assertEqual(b.value('check', 'F%d' % label['F']), 'yes, well within the tolerance (0.03 apfu or 5 %)')
         self.assertIn('a note', label)
 
     def _check_book(self, wt, basis, published, total=None, edit=None):
@@ -207,6 +207,51 @@ class Reduction(unittest.TestCase):
         E.write_xlsx(E.reduce(ds, ('O', 3)), None, out, published={'Ca': 1.0, 'Si': 1.0, 'O': 3}, notes=['= 3 O apfu, as the paper writes it'], single=True)
         c = next(c for c in openpyxl.load_workbook(out)['check']['A'] if isinstance(c.value, str) and '3 O apfu' in c.value)
         self.assertEqual(c.data_type, 's')
+
+    def test_the_sheet_never_says_more_than_the_check(self):
+        import openpyxl
+        from tests.xl_eval import Book
+        wt = {'CaO': 20.10, 'MgO': 14.50, 'FeO': 9.80, 'Al2O3': 6.20, 'SiO2': 47.10, 'Na2O': 1.90}
+        cons = [E.parse_constituent(k) for k in wt]; ds = E.Dataset(cons, [list(wt.values())], ['m'], {}, 'p', None)
+        red = E.reduce(ds, ('O', 6)); pub = {r.c.element: round(r.apfu * 1.11, 2) for r in red.rows.values()}; pub['O'] = 6   # the paper's coefficients: another count, one factor
+        out = os.path.join(self.tmp, 'hold.xlsx')
+        # as the sheet would read by itself: red, 'the BASIS is not the one used'
+        E.write_xlsx(red, None, out, published=pub, single=True); b = Book(out)
+        lab = {c.value: c.row for c in b.wb['check']['A'] if isinstance(c.value, str)}
+        self.assertTrue(b.value('check', 'C%d' % lab['common factor (median ratio of the major elements)']).startswith('PROBLEM'))
+        # the composition check reproduces the formula and holds nothing against it: the same numbers, said as notes, nothing red
+        E.write_xlsx(red, None, out, published=pub, single=True, hold='the coefficients are these by one constant factor'); b = Book(out)
+        said = [b.value('check', 'C%d' % r) for r in range(lab['common factor (median ratio of the major elements)'], b.wb['check'].max_row + 1) if isinstance(b.wb['check'].cell(r, 3).value, str)]
+        said += [b.value('check', 'F%d' % lab[el]) for el in ('Ca', 'Si')]
+        self.assertFalse(any(isinstance(v, str) and (v.startswith('PROBLEM') or v.startswith('does not follow')) for v in said), said)
+        self.assertTrue(any(isinstance(v, str) and v.startswith('note — differs on the wt% as read') for v in said), said)
+        # a slip of 10 % in the dominant oxide: itself inside the tolerance, every other outside it — named, not read as the basis
+        pub = {r.c.element: round(r.apfu, 2) for r in red.rows.values()}; pub['O'] = 6
+        b, lab, read, _ = self._check_book(dict(wt, SiO2=wt['SiO2'] * 1.10), ('O', 6), pub)
+        self.assertIn('ONE element stands alone: Si', read('elements left standing once it is divided out'))
+        # a basis one off gives a whole number, a valence does not
+        b, lab, read, _ = self._check_book(wt, ('O', 7), pub)
+        self.assertIn('a WHOLE number', read("the basis that would give the paper's coefficients"))
+
+    def test_the_colours_land_where_the_words_are(self):
+        """Every conditional format evaluated (xl_eval.Book.fills): red on the row whose element does not follow — on the check sheet
+        and, through column P, on the reduction sheet — amber on the notes, nothing on a clean sheet."""
+        wt = {'CaO': 20.10, 'MgO': 14.50, 'FeO': 9.80, 'Al2O3': 6.20, 'SiO2': 47.10, 'Na2O': 1.90}
+        red0 = E.reduce(E.Dataset([E.parse_constituent(k) for k in wt], [list(wt.values())], ['m'], {}, 'p', None), ('O', 6))
+        pub = {r.c.element: round(r.apfu, 2) for r in red0.rows.values()}; pub['O'] = 6
+        b, lab, read, red = self._check_book(wt, ('O', 6), pub)
+        self.assertEqual({k: v for k, v in b.fills('check').items() if 'FFC7CE' in v}, {})           # nothing red on a clean sheet
+        self.assertEqual({k: v for k, v in b.fills('reduction').items() if 'FFC7CE' in v}, {})
+        b, lab, read, red = self._check_book(dict(wt, SiO2=38.0), ('O', 6), pub)
+        red_rows = {int(re.sub(r'[A-Z]+', '', k)) for k, v in b.fills('check').items() if 'FFC7CE' in v}
+        does_not = {el for el in pub if el != 'O' and str(b.value('check', 'F%d' % lab[el])).startswith('does not')}
+        self.assertIn('Si', does_not)
+        self.assertEqual({el for el in pub if el != 'O' and lab[el] in red_rows}, does_not)         # red exactly where the words say so
+        self.assertIn(lab['elements left standing once it is divided out'], red_rows)              # the PROBLEM line
+        rrows = {int(re.sub(r'[A-Z]+', '', k)) for k, v in b.fills('reduction').items() if 'FFC7CE' in v}
+        by_row = {c.row: c.value for c in b.wb['reduction']['A'] if isinstance(c.value, str)}
+        self.assertEqual({E.parse_constituent(by_row[r]).element for r in rrows}, does_not)         # … and the reduction's rows follow the check sheet
+        self.assertNotIn('ERR', [x for v in b.fills('check').values() for x in v])
 
     def test_two_majors_no_factor_and_a_formula_of_other_elements(self):
         F = 'common factor (median ratio of the major elements)'; N = 'elements left standing once it is divided out'
@@ -260,7 +305,7 @@ class Reduction(unittest.TestCase):
         pub3 = {r.c.element: round(r.apfu, 3) for r in red3.rows.values()}; pub3['O'] = 6
         b, lab, read, red = self._check_book(wt, ('O', 6), pub3, tot)
         self.assertIn('every coefficient is shifted by ×1.026', read(F))            # 2.6 %: each within tolerance, so amber — the valence line is what names it
-        self.assertIn('this explains the common factor: the paper reduced FeO as Fe2O3', read('FeO as Fe2O3'))
+        self.assertIn('this WOULD explain the common factor: FeO reduced as Fe2O3', read('FeO as Fe2O3'))
 
 from pxrd_review import epma as EP
 

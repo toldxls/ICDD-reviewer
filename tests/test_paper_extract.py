@@ -339,7 +339,7 @@ class WorkbookBasisLine(unittest.TestCase):
         self.assertTrue(any(n.startswith('PROBLEM: the stated basis') for n in self._notes(ok=True, basis_flag=True)))
         conv = self._notes(ok=True, basis_flag=False)
         self.assertFalse(any(n.startswith('PROBLEM: the stated basis') for n in conv))
-        self.assertTrue(any(n.startswith('note: the sheet keeps the stated basis') for n in conv))
+        self.assertTrue(any(n.startswith('note: the paper states 7 anions') and 'which is how the sheet is reduced' in n for n in conv), conv)   # reduced on the count that reproduces
         none = self._notes(ok=False, basis_flag=False)
         self.assertTrue(any('no other basis reproduces all of it' in n for n in none))
         self.assertFalse(any('every coefficient follows' in n for n in none))
@@ -1694,6 +1694,24 @@ class GauntletRows(unittest.TestCase):
         self.assertIn('bond-valence table ✓ (p1)', r['lines'][0])
         self.assertIn('Bond-valence', F['bv.table']['source'])
         self.assertEqual(F['bv.table']['value']['cells'], 8)
+
+    def test_the_workbook_from_the_papers_own_bonds(self):
+        """No .cif: the bond-valence workbook is written from the bond distances the paper prints, and its check sheet carries
+        the paper check's verdict — the two cells the check holds red, no others, and no anion sum compared (no multiplicities)."""
+        import openpyxl
+        from tests.xl_eval import Book
+        pdf = self._paper({'O1': 0.25}); out = os.path.join(os.path.dirname(pdf), 'ro'); r = PE.check_paper(pdf, None, out)
+        fn = r['extract'].get('bv_xlsx'); self.assertTrue(fn, r['lines'])
+        b = Book(os.path.join(out, fn)); self.assertEqual(b.wb.sheetnames[:3], ['bonds', 'check', 'BV table'])
+        self.assertIn("THE DISTANCES ARE THE PAPER'S OWN", str(b.wb['bonds'].cell(1, 19).value))
+        wc = b.wb['check']
+        cells = {(wc.cell(i, 2).value, wc.cell(i, 3).value): wc.cell(i, 9).value for i in range(4, wc.max_row + 1) if isinstance(wc.cell(i, 1).value, int) and wc.cell(i, 2).value not in ('cation', 'anion')}
+        self.assertEqual({k for k, v in cells.items() if v == 'differs'}, {('O1', 'Ca1'), ('O1', 'Si1')})
+        self.assertEqual(r['bv']['held'], 2)
+        sums = [wc.cell(i, 8).value for i in range(4, wc.max_row + 1) if isinstance(wc.cell(i, 1).value, int) and wc.cell(i, 2).value == 'anion']
+        self.assertNotIn('differs', sums)                                # no anion sum judged: a bond table prints no multiplicities
+        for i in range(2, b.wb['bonds'].max_row + 1):                    # every valence a live exponential of the paper's distance
+            self.assertTrue(str(b.wb['bonds'].cell(i, 7).value).startswith('=EXP('))
 
     def test_bv_table_refuted_and_unmatched(self):
         r = PE.check_paper(self._paper({'O1': 0.25}), None, None)

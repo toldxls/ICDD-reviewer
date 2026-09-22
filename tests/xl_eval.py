@@ -21,19 +21,28 @@ def _sumif(rng, crit, vals):
     return sum(v for k, v in zip(rng, vals) if k == crit and isinstance(v, (int, float)))
 
 _FUNCS = {'SUM': lambda *a: sum(_nums(a)), 'AVERAGE': lambda *a: statistics.mean(_nums(a)), 'STDEV': lambda *a: statistics.stdev(_nums(a)),
-          'MIN': lambda *a: min(_nums(a)), 'MAX': lambda *a: max(_nums(a)), 'ABS': abs, 'EXP': math.exp, 'MEDIAN': lambda *a: statistics.median(_nums(a)) if _nums(a) else 0, 'COUNT': lambda *a: len(_nums(a)),
+          'MIN': lambda *a: min(_nums(a) or [0]), 'MAX': lambda *a: max(_nums(a) or [0]),   # of no numbers: 0, as Excel
+          'ABS': abs, 'EXP': math.exp, 'ROUND': lambda x, n=0: math.copysign(math.floor(abs(x) * 10 ** n + 0.5) / 10 ** n, x),   # half away from zero, as Excel
+          'MEDIAN': lambda *a: statistics.median(_nums(a)) if _nums(a) else 0, 'COUNT': lambda *a: len(_nums(a)),
           'LN': math.log, 'ISNUMBER': lambda v: isinstance(v, (int, float)) and not isinstance(v, bool), 'COUNTIFS': lambda *a: _countifs(a), 'SUMIFS': lambda vals, *a: _countifs(a, vals),
           'INDEX': lambda rng, i: rng[int(i) - 1] if i else '#N/A', 'MATCH': lambda v, rng, _t=0: (rng.index(v) + 1) if v in rng else 0,   # IF is eager here, lazy in Excel: an unused branch must not raise
-          'LEFT': lambda t, n_: str(t)[:int(n_)],
+          'LEFT': lambda t, n_: str(t)[:int(n_)], 'TRUE': True, 'FALSE': False,
           '_AND': lambda *a: all(a), '_OR': lambda *a: any(a), 'TEXT': lambda v, f: _text(v, f), 'IF': lambda c, a, b: a if c else b, 'SUMIF': _sumif,
           'SUMPRODUCT': lambda x, y: sum(p * q for p, q in zip(x, y) if isinstance(p, (int, float)) and isinstance(q, (int, float)))}
 
 def _countifs(pairs, vals=None):
     """COUNTIFS(range, criterion, ...) — or SUMIFS when `vals` is given. Criteria: a value, or "<>" (not blank)."""
     n = len(pairs[0]); keep = [True] * n
+    def hit(v, crit):
+        if crit == '<>':
+            return v not in (None, '')
+        if isinstance(crit, str) and isinstance(v, str):
+            # Excel matches text case-insensitively, '*' any run and '?' one character ("does not*")
+            return re.fullmatch(re.escape(crit).replace(r'\*', '.*').replace(r'\?', '.'), v, re.I | re.S) is not None
+        return v == crit
     for rng, crit in zip(pairs[0::2], pairs[1::2]):
         for i, v in enumerate(rng):
-            keep[i] = keep[i] and ((v not in (None, '')) if crit == '<>' else v == crit)
+            keep[i] = keep[i] and hit(v, crit)
     if vals is None:
         return sum(keep)
     return sum(v for v, k in zip(vals, keep) if k and isinstance(v, (int, float)))
@@ -56,6 +65,30 @@ class Book:
             v = self.wb[sheet][key[1]].value
             self.memo[key] = self._eval(sheet, v[1:]) if isinstance(v, str) and v.startswith('=') else v
         return self.memo[key]
+    def fills(self, sheet):
+        """{cell coordinate: [fill colours whose conditional-format rule is TRUE there]} — every FormulaRule of the sheet, its
+        formula shifted row by row as Excel shifts a relative reference from the range's top-left cell. The colours a reviewer
+        sees are otherwise untested (issue #11)."""
+        from openpyxl.utils import range_boundaries
+        ws = self.wb[sheet]; out = {}
+        for rng in ws.conditional_formatting:
+            for rule in rng.rules:
+                if rule.type != 'expression' or not rule.formula:
+                    continue
+                colour = rule.dxf.fill.fgColor.rgb if rule.dxf is not None and rule.dxf.fill is not None and rule.dxf.fill.fgColor is not None else '?'
+                for cr in str(rng.sqref).split():
+                    c1, r1, c2, r2 = range_boundaries(cr)
+                    for r in range(r1, r2 + 1):
+                        for c in range(c1, c2 + 1):
+                            f = re.sub(r'(?<![\$A-Za-z])([A-Z]{1,2})(\$?)(\d+)(?![\d(])', lambda m: '%s%s%d' % (m.group(1), m.group(2), int(m.group(3)) if m.group(2) else int(m.group(3)) + r - r1), rule.formula[0])
+                            f = re.sub(r'\$([A-Z]{1,2})(\d+)(?![\d(])', lambda m: '$%s%d' % (m.group(1), int(m.group(2)) + r - r1), f)   # $F4: the column fixed, the row relative
+                            try:
+                                if self._eval(sheet, f):
+                                    out.setdefault(ws.cell(r, c).coordinate, []).append(colour[-6:])
+                            except Exception:
+                                out.setdefault(ws.cell(r, c).coordinate, []).append('ERR')
+        return out
+
     def _eval(self, sheet, expr):
         env = dict(_FUNCS); n = [0]
         def sub(m):
