@@ -663,3 +663,111 @@ class EntryOpticsAndSettingsAfterTheAudit(unittest.TestCase):
         with mock.patch.object(X, 'mindat_struct', lambda n, exact=False: None if exact else hexa):
             f = [x for x in X.check22_cross_sources(e, cif, None) if x.code == 'mindat_fix']
         self.assertEqual([('another setting' in x.msg) for x in f], [True])
+
+
+class IMANumber(unittest.TestCase):
+    """check11 reads the number the .pdf writes BESIDE THE ENTRY'S OWN NAME (2026-09-22 corpus deep dive: the first
+    number in an approval sentence was another mineral's on 21 of 22 multi-mineral papers, and the hint told the
+    reviewer to add it), and compares a number the entry carries — a truncated '2011-07', the other mineral's."""
+    def e(self, name, ima=None):
+        comments = {'IMA Number': ima} if ima else {}
+        return type('E', (), {'name': name, 'comments': comments, 'formulas': {}, 'raw_rows': [], 'instr': {}})()
+
+    NEW = ' The new mineral and its name have been approved by the Commission on New Minerals, Nomenclature and Classification.'
+
+    def test_two_minerals_for_form_pairs_by_position(self):
+        t = ('Zhenruite and tianhuixinite are new minerals approved by the CNMNC of IMA (IMA 2022-050 and IMA 2022- 081 for '
+             'zhenruite and tianhuixinite, respectively).' + self.NEW.replace('The new mineral', 'The new mineral zhenruite'))
+        self.assertEqual(X._ima_numbers_for('zhenruite', t), ['2022-050'])
+        self.assertEqual(X._ima_numbers_for('tianhuixinite', t), ['2022-081'])
+        m = msgs(X.check11_ima(self.e('Zhenruite'), t))
+        self.assertEqual(len(m), 1); self.assertIn('(IMA 2022-050)', m[0])
+
+    def test_name_then_number_and_names_then_numbers(self):
+        t = 'Two hitherto unknown species, i.e. nannoniite (IMA 2024-010) and dacostaite (IMA 2024- 015), were found.'
+        self.assertEqual(X._ima_numbers_for('dacostaite', t), ['2024-015'])
+        self.assertEqual(X._ima_numbers_for('nannoniite', t), ['2024-010'])
+        t = ('Akasakaite-(Ce), akasakaite-(La), vanadoakasakaite-(Ce) and vanadoakasakaite-(La) were approved by the '
+             'Commission on New Minerals, Nomenclature and Classification (CNMNC) (IMA2025–001, 2025–002, 2024–044, and 2025–003).')
+        self.assertEqual(X._ima_numbers_for('vanadoakasakaite-(ce)', t), ['2024-044'])
+        self.assertEqual(X._ima_numbers_for('akasakaite-(la)', t), ['2025-002'])
+
+    def test_number_then_name_never_across_a_semicolon(self):
+        t = 'Approved by the IMA Commission on New Minerals, Nomenclature and Classification (arsmirandite: IMA2014–081; lehmannite: IMA2017–057a).'
+        self.assertEqual(X._ima_numbers_for('lehmannite', t), ['2017-057a'])
+        self.assertEqual(X._ima_numbers_for('arsmirandite', t), ['2014-081'])
+        t = 'CNMNC: IMA2019– 081 [alexkuznetsovite-(La), Kasatkin et al., 2019c], IMA2019–118 [alexkuznetsovite-(Ce), Kasatkin et al., 2020d].'
+        self.assertEqual(X._ima_numbers_for('alexkuznetsovite-(ce)', t), ['2019-118'])
+
+    def test_a_sibling_species_and_a_neighbouring_name_are_not_the_entry(self):
+        t = 'Momma, K., Shimizu, M.: Tetrahedrite-(Mn), IMA 2021-098, in: CNMNC Newsletter 65.'
+        self.assertEqual(X._ima_numbers_for('tetrahedrite-(cd)', t), [])
+        t = 'Description of clino-ferro-suenoite to suenoite (IMA 2019-075) and clino-suenoite (Oberti et al., 2018).'
+        self.assertEqual(X._ima_numbers_for('clino-ferro-suenoite', t), [])
+        t = 'The description of new members pleysteinite (Grey et al., 2023), hochleitnerite and rewitzerite (IMA 2023-005).'
+        self.assertEqual(X._ima_numbers_for('hochleitnerite', t), [])
+
+    def test_an_approval_sentence_naming_no_other_mineral(self):
+        t = 'The new mineral and its name have been approved by the IMA CNMNC (IMA No. 2016-104). The type specimen is deposited.'
+        self.assertEqual(X._ima_numbers_for('cesiokenopyrochlore', t), ['2016-104'])
+        t = 'The minerals and their names have been approved by the IMA CNMNC (IMA2019-105 and IMA2019-122, respectively).'
+        self.assertEqual(X._ima_numbers_for('niasite', t), [])          # two numbers: the sentence names neither
+
+    def test_a_number_the_entry_carries_is_compared(self):
+        t = ('The six new minerals, betpakdalite-CaMg (IMA2011-034), obradovicite-NaNa (IMA-2011- 046), and obradovicite-NaCu '
+             '(IMA-2011-079), described here have been approved.')
+        m = msgs(X.check11_ima(self.e('Obradovicite-NaCu', '2011-07'), t))
+        self.assertEqual(len(m), 1); self.assertIn("'2011-07'", m[0]); self.assertIn('IMA 2011-079', m[0])
+        self.assertEqual(msgs(X.check11_ima(self.e('Obradovicite-NaNa', '2011-046'), t)), [])
+        # a letter marks a revised proposal — '2023-003' and '2023-003a' are one number
+        t = 'A proposal under the name touretite (IMA # 2023-003) was accepted under number IMA 2023-003a.'
+        self.assertEqual(msgs(X.check11_ima(self.e('Touretite', '2023-003a'), t)), [])
+        # a paper that contradicts itself is no evidence
+        t = 'Michalskiite (IMA2019-162) is a new mineral. The mineral and the name have been approved by the IMA (IMA2019- 062).'
+        self.assertEqual(msgs(X.check11_ima(self.e('Michalskiite', '2019-162'), t)), [])
+
+    def test_no_hint_when_the_paper_has_several_numbers_and_none_is_the_entrys(self):
+        t = ('Xuite formed together with luogufengite (IMA2016-005) and valleyite (IMA2017-026). The new mineral xuite was '
+             'approved by the CNMNC (IMA 2018-135a) (Lee and Guo 2021).')
+        m = msgs(X.check11_ima(self.e('Xuite'), t))
+        self.assertEqual(len(m), 1); self.assertIn('(IMA 2018-135a)', m[0])
+        t = 'Xuite formed together with luogufengite (IMA2016-005) and valleyite (IMA2017-026). Xuite is a new mineral approved by the CNMNC.'
+        m = msgs(X.check11_ima(self.e('Xuite'), t))
+        self.assertEqual(len(m), 1); self.assertTrue(m[0].endswith('add it.'), m[0])
+
+    def test_comment_label_typed_in_another_case_is_read(self):
+        import tempfile, os
+        from docx import Document
+        d = Document(); tb = d.add_table(rows=0, cols=2)
+        r = tb.add_row(); r.cells[0].merge(r.cells[1]).text = 'Comments'
+        r = tb.add_row(); r.cells[0].text = 'IMA number'; r.cells[1].text = '2024-015'
+        r = tb.add_row(); r.cells[0].text = 'Analysis'; r.cells[1].text = 'Microprobe analysis, average of 10 (wt.%): P2O5 0.4'
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, 'I000001(Testite).docx'); d.save(p)
+            e = X.parse_entry(p)
+        self.assertEqual(e.comments.get('IMA Number'), '2024-015')
+        self.assertIn('Analysis', e.comments)
+        self.assertEqual(msgs(X.check11_ima(e, 'Testite is a new mineral approved by the CNMNC (IMA 2024-015).')), [])
+
+
+class IsotropicIndex(unittest.TestCase):
+    """check31 reads an isotropic entry's one index from 'Refraction Index' (16 corpus entries write it there, none under
+    Optical Data) and compares it with the .pdf's; a calculated index and a reflectance list are left alone."""
+    def e(self, ri):
+        return type('E', (), {'name': 'testite', 'comments': {'Refraction Index': ri}, 'formulas': {}, 'raw_rows': [], 'instr': {}})()
+
+    def test_forms(self):
+        self.assertEqual(X._entry_iso_n('n=1.6952(5) (589nm).'), 1.6952)
+        self.assertEqual(X._entry_iso_n('N=1.88.'), 1.88)
+        self.assertEqual(X._entry_iso_n('N#D= 1.507 (590 nm).'), 1.507)
+        self.assertEqual(X._entry_iso_n('1.737.'), 1.737)
+        self.assertIsNone(X._entry_iso_n('1.578 (calculated using the Gladstone-Dale relationship).'))
+        self.assertIsNone(X._entry_iso_n('R%(air): 34.4 (470nm); 33.9 (546nm).'))
+        self.assertIsNone(X._entry_iso_n(''))
+
+    def test_index_against_the_pdf(self):
+        t = 'Testite is optically isotropic, n = 1.952(3) (589 nm). The density is 3.06 g/cm3.'
+        m = msgs(X.check31_gd_entry(self.e('n=1.925(3) (589nm).'), t))
+        self.assertEqual(len(m), 1); self.assertIn('Refraction Index', m[0]); self.assertIn('1.9250', m[0]); self.assertIn('1.9520', m[0])
+        self.assertEqual(msgs(X.check31_gd_entry(self.e('n=1.952(3) (589nm).'), t)), [])
+        self.assertEqual(msgs(X.check31_gd_entry(self.e('1.95 (calculated using the Gladstone-Dale relationship).'), t)), [])

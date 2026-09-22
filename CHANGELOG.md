@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.11.3](#0113--2026-09-22) | 22 Sep | A deep-dive bug check over the whole corpus: no crash, no errored check, every A/B explained — the defects were in what the flags SAID: check11 hinted the OTHER mineral's IMA number on multi-mineral papers (21 of 22), now the number beside the entry's own name, and a number the entry carries is compared (two real slips on the corpus); a comment label typed in another case read as blank; an isotropic entry's index under 'Refraction Index' never checked; `pxrd paper` on an empty .pdf; the GUI's 'no .pdf' badge on an entry that has one |
 | [0.11.2](#0112--2026-09-22) | 22 Sep | The statements gauntlet: what the workbooks SAY, measured against the checks and against seeded faults — contradictions 63 → 0 on the whole corpus, a 10 % wt% slip named 68 → 93 %, the tool's own bond-valence table no longer failing its own check, a bond-valence workbook for papers with no .cif (97 → 340), the colours tested, the paper's GD index one cell; the first recall numbers for the entry checks and check37 (a reflection's intensity is not the paper's); every GUI route walked |
 | [0.11.1](#0111--2026-09-21) | 21 Sep | An adversarial review of the day's three releases, every finding reproduced before it was fixed: the arithmetic held, what the tool SAID did not — check33 offered another mineral's density as "enter it"; the EPMA workbook wrote PROBLEM where the composition check flags nothing; a BVS column was judged by a bare ±0.08; the GD total left out O ≡ F,Cl; the folder guard's holes; ten GUI error paths that were a NameError; the sheet and the reduction brought into line on the edge inputs |
 | [0.11.0](#0110--2026-09-21) | 21 Sep | Workbooks that show their working: a paper's EPMA re-reduced on its stated basis, the bond-valence table as a paper prints it, and Gladstone–Dale from apfu to index — every number a live formula, each with a `check` sheet that colours what differs from the paper and says where the fault lies; a stated cation basis counts the measured cations; `pxrd gui` asks before opening a folder that is not a batch and starts on its chooser; `? look` crosses between the .pdf and the entry |
@@ -31,6 +32,41 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.11.3] — 2026-09-22
+
+**A deep-dive bug check over the whole corpus (2026-09-22)** — every paper (1,130) through the paper checks against the
+last full baseline, every docx copy in the tree (1,727) through `analyze()`, the statements gauntlet, the entry-recall
+harness, the unit and regression suites. No crash, no errored check, no reader status moved that the gauntlet log had
+not already explained; the workbook contradictions stayed at 0. What the hand-check of the findings turned up:
+
+- **check11 (IMA number) named the wrong number to add.** The hint took the FIRST proposal number in an approval
+  sentence, which on a multi-mineral paper is the other mineral's: of the 22 corpus entries whose number "disagreed"
+  with the hint, 21 were the tool's misreading (`IMA 2022-050 and IMA 2022-081 for zhenruite and tianhuixinite`;
+  `nannoniite (IMA 2024-010) and dacostaite (IMA 2024-015)`; `arsmirandite: IMA2014-081; lehmannite: IMA2017-057a`).
+  The number is now read BESIDE THE ENTRY'S OWN NAME (`_ima_numbers_for`: name-then-number, number-then-name, two
+  list forms paired by position, an approval sentence naming no other mineral; the Levinson/group suffix is part of
+  the name — `tetrahedrite` alone read `Tetrahedrite-(Mn), IMA 2021-098` from a reference list), and the hint is
+  omitted when the paper is ambiguous. 23 corpus hints changed, every one read against its paper: 12 wrong numbers
+  corrected, 8 hints gained, 3 dropped as unsupported. **A number the entry carries is now compared too** — two
+  real slips on the corpus and nothing else: paulrobinsonite carrying maurogemmiite's `2022-098a` (the paper gives
+  `2022-099a`), obradovicite-NaCu's `2011-07` truncated from `2011-079`. A letter suffix alone is not a difference.
+- **A comment label typed in another case was a blank field.** `comments.get('IMA Number')` on an entry whose row
+  reads `IMA number` — dacostaite: the field held `2024-015` and the tool asked for it to be added, with nannoniite's
+  number. The labels the checks read are canonicalised on parse (`_COMMENT_LABELS`); the annotator's IMA anchor is
+  case-insensitive to match.
+- **An isotropic entry's index was never checked.** Sixteen corpus entries write their one index under `Refraction
+  Index` (`n=1.6952(5) (589nm).`, `N=1.88.`, a bare `1.737.`), a label check31 did not read — `_entry_iso_n` reads
+  it, the index is held to the .pdf's on the biaxial tolerance, a calculated index and a reflectance list are left
+  alone. No corpus entry flags; touretite's field now feeds its Gladstone–Dale note.
+- **`pxrd paper` on an empty or truncated .pdf** was a MuPDF traceback; it is one line naming the file (the batch
+  and the GUI already skipped such a file with the same explanation).
+- **The GUI wore a 'no .pdf' badge on an entry that HAS one** when the docx carries no Author's Cell row (the older
+  template, a supplementary docx): the badge and the cell line now say what is missing.
+
+Measured, not changed (for the record): the old two-column template is 663 of the 1,727 docx copies and still fires
+2.2 flags an entry, most of them "field is empty" on data the parser does not read — the owner's 2026-09-07 call
+stands; the corpus holds one zero-byte .pdf and one corrupt .docx, both skipped with a named reason.
 
 ## [0.11.2] — 2026-09-22
 

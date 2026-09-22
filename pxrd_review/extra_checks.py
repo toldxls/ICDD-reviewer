@@ -91,6 +91,15 @@ def _ns(s):                       # no spaces (for label matching)
 Entry = namedtuple('Entry', 'name primary subfiles formulas crystal_system space_group '
                             'cell instr comments refl raw_rows')
 
+# The comment labels the checks read, by their exact ICDD spelling. A transcriber who types the label
+# ('IMA number' on dacostaite, 2026-09-22) leaves a field every `comments.get('IMA Number')` reads as
+# blank — and check11 then told the reviewer to ADD a number the entry already carried. Labels are
+# canonicalised on parse, case-insensitively, for this set only; an unknown label keeps its spelling.
+_COMMENT_LABELS = {k.lower(): k for k in (
+    'Analysis', 'Color', 'Habit', 'Physical Properties', 'Optical Data', 'Smpl.Src.Local.', 'Wyckoff', 'DC', 'GC',
+    'IMA Number', 'Mohs Hardness', 'Strunz-mindat classification', 'Warning', 'Temperature', 'Structure',
+    'Refraction Index', 'Reflectance', 'Sample Prep', 'Absolute Configuration', 'Unit Cell')}
+
 def parse_entry(path):
     rows = _rows(path)
     name = primary = None
@@ -155,7 +164,7 @@ def parse_entry(path):
                 instr['camera'] = _field_value(x, r, i)
         # --- comments section: Desc code -> text
         if section == 'Comments' and len(r) >= 2 and h and h != 'Desc.':
-            comments[h] = _sq(r[1])
+            comments[_COMMENT_LABELS.get(h.lower(), h)] = _sq(r[1])
         # --- reflection list (two side-by-side d/I/h/k/l triples per row)
         if section == 'ReflectionList' and len(r) >= 5 and _ns(r[0]) not in ('d(A)', 'd(Å)'):
             for base in (0, 8):
@@ -1386,26 +1395,101 @@ def check25_reflection_geometry(e, text=None):
     return out
 
 # ----------------------------------------------------------------------------- 11. IMA number missing on a new mineral
+_IMA_NUM = r'(?:19|20)\d{2}\s*[-‐-―−–—]\s*\d{2,3}[A-Za-z]?'
+_IMA_LEAD = r'ima\s*[-–]?\s*(?:no\.?|number|n[°o]\.?|proposal)?\s*#?\s*'
+_IMA_NAME = r"[a-zß-ÿ][\w'’\-–]*ite[\w\-–()]*"                      # a mineral name as the text writes it, Levinson suffix and all
+
+def _ima_canon(s):
+    """'IMA 2012-83', '2022- 081', '2023-020A' -> '2012-083', '2022-081', '2023-020a'; None when no number."""
+    m = re.search(r'((?:19|20)\d{2})\D{0,3}?(\d{2,3})([A-Za-z]?)', s or '')
+    return '%s-%03d%s' % (m.group(1), int(m.group(2)), m.group(3).lower()) if m else None
+
+def _ima_numbers_for(name_root, flat):
+    """The IMA proposal numbers the .pdf gives for the entry's OWN mineral — the ones written beside its
+    name — as canonical strings. Measured on the 223 corpus entries that carry a number (2026-09-22):
+    the first number in an approval sentence, which the hint used to take, belongs to ANOTHER mineral
+    on 21 of the 22 multi-mineral papers ('IMA 2022-050 and IMA 2022-081 for zhenruite and tianhuixinite';
+    'nannoniite (IMA 2024-010) and dacostaite (IMA 2024-015)'). Five forms, all name-anchored:
+      * name then number: 'plumbojohntomaite (IMA 2023-119)', 'lehmannite: IMA2017-057a', 'Paulrobinsonite,
+        IMA 2022-099a. CNMNC Newsletter' (a self-citation names the mineral, so it counts) — with nothing
+        between them that hands the number to another mineral: no 'and'/'for', no ';', no other name
+        ('clino-ferro-suenoite to suenoite (IMA 2019-075)' gives clino-ferro-suenoite nothing);
+      * number then name: 'IMA 2023-119, plumbojohntomaite', 'IMA2019-081 [alexkuznetsovite-(La)',
+        '(IMA-2011-079) obradovicite-NaCu' — never across a ';' ('IMA2014-081; lehmannite: IMA2017-057a');
+      * a list of numbers FOR a list of names, paired by position; and a list of names followed by a
+        parenthesised list of numbers, paired by position — a number a list pairs is not read again by
+        the two-name forms ('IMA 2022-081 for zhenruite and tianhuixinite' gives zhenruite nothing there);
+      * an approval sentence that names no other mineral: 'The new mineral and its name have been approved
+        by the IMA CNMNC (IMA No. 2016-104)'.
+    The name's Levinson or group suffix is part of the pattern — 'tetrahedrite' alone would read
+    'Tetrahedrite-(Mn), IMA 2021-098' from the reference list of tetrahedrite-(Cd)'s paper. Empty when the
+    name is written beside no number; several when the text is not consistent."""
+    low = flat.lower()
+    m = re.match(r'^(.*?)\s*-?\s*\(([^)]+)\)\s*$', name_root)
+    nr = r'(?<![a-z])' + ((re.escape(m.group(1)) + r'\s*[-–‐]?\s*\(?' + re.escape(m.group(2)) + r'\)?') if m else re.escape(name_root))   # a whole word: 'akasakaite-(La)' is not 'vanadoakasakaite-(La)'
+    mine = lambda nm: bool(re.search(nr, nm))
+    other_name = lambda seg: any(not mine(w) for w in re.findall(_IMA_NAME, seg))
+    found = set(); listed = []                                   # listed: spans of numbers a list has paired
+    name_or = r'(?:%s[\w\-–()]*|%s)' % (nr, _IMA_NAME)
+    sep = r'\s*(?:,\s*and|,|and|;|&)\s*'                          # ', and' is one separator (an Oxford comma is not an empty item)
+    nums_list = r'(?:%s)?%s(?:%s(?:%s)?%s)+' % (_IMA_LEAD, _IMA_NUM, sep, _IMA_LEAD, _IMA_NUM)
+    names_list = r'%s(?:%s%s)+' % (name_or, sep, name_or)
+    for m in re.finditer(r'(%s)\)?\s*(?:for|to)\s+(?:the\s+)?(%s)' % (nums_list, names_list), low):
+        nums = re.findall(_IMA_NUM, m.group(1)); names = re.findall(name_or, m.group(2))
+        listed.append((m.start(1), m.end(1)))
+        if len(nums) == len(names):
+            found.update(_ima_canon(n) for n, nm in zip(nums, names) if mine(nm))
+    for m in re.finditer(r'(%s)[^.;]{0,120}?\(\s*(%s)' % (names_list, nums_list), low):
+        nums = re.findall(_IMA_NUM, m.group(2)); names = re.findall(name_or, m.group(1))
+        listed.append((m.start(2), m.end(2)))
+        if len(nums) == len(names):
+            found.update(_ima_canon(n) for n, nm in zip(nums, names) if mine(nm))
+    def free(pos):
+        return not any(a <= pos < b for a, b in listed)
+    for m in re.finditer(nr + r"[\w\-–()]*", low):                      # name, then the number within the clause
+        seg = low[m.end(): m.end() + 70]
+        n = re.search(r'^([^.;]{0,60}?)\(?\s*' + _IMA_LEAD + '(' + _IMA_NUM + ')', seg)
+        if n and free(m.end() + n.start(2)) and not re.search(r'\b(?:and|for|to|respectively)\b', n.group(1)) and not other_name(n.group(1)):
+            found.add(_ima_canon(n.group(2)))
+    for m in re.finditer(_IMA_LEAD + '(' + _IMA_NUM + r')\)?\s*[,:\[(]?\s*(?:for\s+)?(?:the\s+)?(?:new\s+minerals?\s+)?' + nr, low):
+        if free(m.start(1)):
+            found.add(_ima_canon(m.group(1)))
+    for m in re.finditer(_IMA_LEAD + '(' + _IMA_NUM + ')', low):        # an approval sentence naming no other mineral
+        if not free(m.start(1)):
+            continue
+        a = max(low.rfind('. ', 0, m.start()), low.rfind('; ', 0, m.start())) + 1
+        b = min(x for x in (low.find('. ', m.end()), low.find('; ', m.end()), len(low)) if x >= 0)
+        sent = low[a:b]
+        if re.search(r'approved|accepted|cnmnc|commission on new minerals', sent) and not other_name(sent) \
+                and not re.search(r'\(\d{4}[a-z]?\)|newsletter|et al', sent) and len(re.findall(_IMA_NUM, sent)) == 1:
+            found.add(_ima_canon(m.group(1)))                       # one number: 'IMA2019-105 and IMA2019-122, respectively' names neither
+    return sorted(x for x in found if x)
+
 def check11_ima(e, text):
+    """The IMA Number field against the .pdf: blank on a NEW mineral (the flag with, when the paper gives
+    one, the number to add), or carrying a number that is not the one the paper writes beside the
+    entry's own name — three on the corpus, all real (a truncated '2011-07'; the other mineral's number
+    on a two-mineral paper; a number the paper's own text and its reference list disagree on)."""
     out = []
     ima = (e.comments.get('IMA Number') or '').strip()
     ima_given = bool(re.search(r'(?:19|20)\d{2}\D{1,3}\d', ima))   # 2018-131; sep may be any dash glyph
-    if ima_given or not text:
+    if not text:
         return out
-    # Trigger only when the paper describes THIS mineral as NEW. A bare
-    # 'IMA YYYY-NNN' is usually a REFERENCE citation for a different species
-    # (e.g. 'Author… (year) Othername, IMA 20XX-XXX. CNMNC …'), and structural
-    # reinvestigations of established minerals carry no proposal number — so keying
-    # on the number alone both false-flags reinvestigations and
-    # misses new minerals whose number is bracketed/odd-formatted.
-    # The reliable signal: the entry's OWN name sits next to a new-mineral/approval
-    # cue (and not merely in a reference to some other 'new mineral species').
     flat = re.sub(r'\s+', ' ', text)
     low = flat.lower()
     name = (e.name or '').strip().lower()
     name_root = re.sub(r'-?\([^)]*\)\s*$', '', name)        # drop '-(Y)' / '(Ce)'
     name_root = re.sub(r'-syn(thetic)?$', '', name_root).strip()
     if len(name_root) < 4:
+        return out
+    own = _ima_numbers_for(re.sub(r'-syn(thetic)?$', '', name).strip(), flat)   # the suffix kept: it is what tells sibling species apart
+    if ima_given:
+        # the number is compared only when the paper writes ONE number beside this mineral's name — a
+        # paper that contradicts itself, or one whose name-list pairing failed, is not evidence
+        if len(own) == 1 and _ima_canon(ima).rstrip('abcdefghijklmnopqrstuvwxyz') != own[0].rstrip('abcdefghijklmnopqrstuvwxyz'):   # a letter marks a revised proposal: '2023-003' and '2023-003a' are one number
+            out.append(Finding('ima', 'flag',
+                               "IMA Number '%s' does not match the .pdf, which gives IMA %s for %s — verify."
+                               % (ima, own[0], e.name or name_root), ima, 'ima'))
         return out
     # A REDEFINITION / re-investigation of an EXISTING mineral is not 'new' — its blank
     # IMA-Number field is correct (the proposal is a redefinition, e.g. '22-F', not a new
@@ -1433,14 +1517,19 @@ def check11_ima(e, text):
             break
     if not is_new:
         return out
-    # best-effort: pull the proposal number from an approval (non-reference) context
-    NUM = r'((?:19|20)\d{2}\s*[-‐-―−–—]\s*\d{2,3}[A-Za-z]?)'
-    num = None
-    for m in re.finditer(r'IMA\s*(?:No\.?|Number|n[°o]\.?)?\s*' + NUM, flat):
-        ctx = low[max(0, m.start() - 110): m.end() + 20]
-        if re.search(r'\.\s*cnmnc|newsletter|\(\d{4}\)\s+[a-zü-]+,?\s*ima', ctx):
-            continue                                        # reference citation
-        num = re.sub(r'\s+', '', m.group(1)); break
+    # the number to add: the one the paper writes beside this mineral's name; failing that, the paper's
+    # one approval-context number — and NO hint when the paper carries several and none is the entry's
+    # (the first of them was the other mineral's on 21 of 22 multi-mineral corpus papers)
+    num = own[0] if len(own) == 1 else None
+    if num is None:
+        approved = []
+        for m in re.finditer(r'IMA\s*(?:No\.?|Number|n[°o]\.?)?\s*(' + _IMA_NUM + ')', flat):
+            ctx = low[max(0, m.start() - 110): m.end() + 20]
+            if re.search(r'\.\s*cnmnc|newsletter|\(\d{4}\)\s+[a-zü-]+,?\s*ima', ctx):
+                continue                                        # reference citation
+            approved.append(_ima_canon(m.group(1)))
+        if len(set(approved)) == 1 and not own:
+            num = approved[0]
     msg = (".pdf describes this as a new mineral but the docx IMA Number field is blank — add it"
            + (" (IMA %s)" % num if num else ""))
     out.append(Finding('ima', 'flag', msg + ".", None, 'ima'))
@@ -4105,6 +4194,19 @@ def _entry_mean_n(od):
     return (2 * w + e) / 3.0
 
 
+def _entry_iso_n(ri):
+    """The index of an isotropic entry, written in the 'Refraction Index' comment ('n=1.6952(5) (589nm).',
+    'N=1.88.', 'N#D= 1.507 (590 nm).', a bare '1.737.'); None for a reflectance list ('R%(air): 34.4 …')
+    and for an index the entry says was calculated (Gladstone–Dale) — nothing measured to compare."""
+    ri = (ri or '').strip()
+    if not ri or re.search(r'calc|gladstone|R\s*%', ri, re.I):
+        return None
+    m = re.match(r'^(?:n|N)\s*[#\w]*\s*[=:]\s*(\d\.\d{2,4})|^(\d\.\d{2,4})\b', ri)
+    try:
+        return float(m.group(1) or m.group(2)) if m else None
+    except (TypeError, ValueError):
+        return None
+
 def check31_gd_entry(e, text=None):
     """The entry's optical indices against the .pdf's, and the Gladstone–Dale compatibility of the
     ENTRY's own fields — its Optical Data, its Dx/Dm and its Analysis wt%. Two findings:
@@ -4118,6 +4220,11 @@ def check31_gd_entry(e, text=None):
         and a note when it is 'poor' and the paper states no index."""
     od = e.comments.get('Optical Data') or ''
     n = _entry_mean_n(od)
+    iso = None
+    if not n:                                                 # an isotropic entry writes its one index under 'Refraction Index'
+        iso = _entry_iso_n(e.comments.get('Refraction Index'))
+        n = iso
+        od = od or (e.comments.get('Refraction Index') or '')
     if not n or not 1.3 <= n <= 3.5:
         return []
     out = []
@@ -4138,12 +4245,17 @@ def check31_gd_entry(e, text=None):
     if n_paper and not (opt or {}).get('n_calc') and one_set:
         QUAL = r'(?:\([^)]*\))?'
         n_idx = len(re.findall(r'\b([ABQ])' + QUAL + r'\s*=\s*\d+\.\d+', od))
-        tol = 0.006 if n_idx == 3 or 'Q' in re.findall(r'\b([ABQ])' + QUAL + r'\s*=', od) else 0.02   # A and B without Q: no ε, the plain mean may be off by (ε−ω)/6
+        tol = 0.006 if n_idx == 3 or iso or 'Q' in re.findall(r'\b([ABQ])' + QUAL + r'\s*=', od) else 0.02   # A and B without Q: no ε, the plain mean may be off by (ε−ω)/6
         n_agrees = abs(n - n_paper) <= tol
         if not n_agrees and abs(n - n_paper) > 2 * tol:
-            out.append(Finding('optical', 'flag',
-                               "Optical Data: the entry's indices give a mean n of %.4f, the .pdf's %.4f (%s) — an index is mistranscribed; verify A/B/Q against the .pdf."
-                               % (n, n_paper, (opt.get('n_from') or '')[:80]), od[:120], 'optical'))
+            if iso:
+                out.append(Finding('optical', 'flag',
+                                   "Refraction Index: the entry gives n = %.4f, the .pdf %.4f (%s) — the index is mistranscribed; verify it against the .pdf."
+                                   % (n, n_paper, (opt.get('n_from') or '')[:80]), od[:120], 'optical'))
+            else:
+                out.append(Finding('optical', 'flag',
+                                   "Optical Data: the entry's indices give a mean n of %.4f, the .pdf's %.4f (%s) — an index is mistranscribed; verify A/B/Q against the .pdf."
+                                   % (n, n_paper, (opt.get('n_from') or '')[:80]), od[:120], 'optical'))
             return out
     dens = _density_row(e)
     analysis = (e.comments.get('Analysis') or '').strip()
@@ -4180,7 +4292,7 @@ def check31_gd_entry(e, text=None):
         s_cat = GD.category(stated['ci'])
     elif stated and stated.get('category') in cats:
         s_cat = stated['category']
-    how = "n=%.4f from the Optical Data, K_C=%.4f from the Analysis wt%%, %s=%.3f" % (n, KC, best_key, dens[best_key])
+    how = "n=%.4f from the %s, K_C=%.4f from the Analysis wt%%, %s=%.3f" % (n, 'Refraction Index' if iso else 'Optical Data', KC, best_key, dens[best_key])
     if s_cat and cats.index(cat) - cats.index(s_cat) >= 2 and n_agrees is not False:
         out.append(Finding('gd_entry', 'note',
                            "Gladstone–Dale from the entry's own fields gives 1 − K_P/K_C = %+.3f (%s; %s) while the .pdf states %s%s — "

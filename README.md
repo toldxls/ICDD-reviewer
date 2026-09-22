@@ -672,9 +672,14 @@ confidence). The ten:
    reflection from the stated cell via the general (triclinic) reciprocal metric
    and flags any indexed line off by >1 %. Catches transcription/indexing errors
    and doubled axes. Signed indices handled.
-10. **IMA number** — flags only when the **PDF carries an IMA proposal id** (e.g.
-    `IMA 20XX-XXX`) but the docx IMA Number field is blank, and prints the number
-    to add (avoids false-flagging established minerals).
+10. **IMA number** — flags when the **.pdf describes the entry's mineral as new** but the
+    docx IMA Number field is blank, and prints the number to add — the one the paper writes
+    **beside the entry's own name** (a two-mineral paper prints two; the first in the approval
+    sentence was the other mineral's on 21 of 22 corpus papers), or none when the paper is
+    ambiguous. A number the entry carries is compared the same way: a flag when the paper
+    gives exactly one number for this mineral and it differs (a truncated `2011-07`, the
+    other mineral's number copied); a letter suffix alone (`2023-003` / `2023-003a`) is not a
+    difference. Comment labels are read case-insensitively (`IMA number`).
 
 (Checks 11–15 add optical-sign, IMA-section, analysis-total/count, non-ambient
 temperature, and strongest-line cross-checks.)

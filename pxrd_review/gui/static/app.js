@@ -491,7 +491,8 @@ function renderFindings() {
     cellMsg = 'no cell parsed from the .pdf (table-only?) — “No matching .pdf cell found.” is written';
     cellLevel = 'flag'; cellWritten = true;
   } else if (cs === 'nopdf') {
-    cellMsg = 'no .pdf paired — the cell cannot be validated';
+    cellMsg = (a.files && a.files.pdf) ? "the entry has no Author's Cell row to compare (older template or supplementary docx) — the cell cannot be validated"
+                                        : 'no .pdf paired — the cell cannot be validated';
     cellLevel = 'flag'; cellWritten = true;
   } else if (cs === 'notext') {
     cellMsg = '.pdf has no text layer (scanned image?) — cell/λ not checked';

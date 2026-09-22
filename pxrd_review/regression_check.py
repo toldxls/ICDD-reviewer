@@ -1459,6 +1459,11 @@ CASES = [
  ("candidate_groups: volume carries the angle term; γ=0 (Mindat uniaxial) reads as 90°",
   lambda: G._vol({'a': 10, 'b': 10, 'c': 10, 'be': 125}) < G._vol({'a': 9.8, 'b': 9.8, 'c': 9.8, 'be': 91})
           and G._vol({'a': 5, 'b': 5, 'c': 5, 'ga': 0}) == G._vol({'a': 5, 'b': 5, 'c': 5})),
+ # --- 2026-09-22 corpus deep dive: the IMA number the .pdf writes beside the ENTRY'S name ---
+ ("check11: an IMA number that is the other mineral's (paulrobinsonite carries maurogemmiite's 2022-098a; the .pdf gives 2022-099a)",
+  lambda: [f for f in _extras_of('I003749') if f.code == 'ima' and f.sev == 'flag' and 'IMA 2022-099a' in f.msg and "'2022-098a'" in f.msg]),
+ ("check11: the number beside the entry's own name, not the first in the sentence (plumbojohntomaite 2023-119, nigelcookite 2023-113)",
+  lambda: not [f for f in (_extras_of('I003563') or []) if f.code == 'ima'] and not [f for f in (_extras_of('I003562') or []) if f.code == 'ima']),
  # --- corpus-wide: no check may error on any fixture entry (kept LAST so it reuses
  #     the analyses the pointwise cases already cached) ---
  ("No errored checks across the fixture corpus", _no_errored_checks),

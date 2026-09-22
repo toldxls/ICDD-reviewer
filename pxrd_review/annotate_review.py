@@ -623,7 +623,7 @@ def _anchor_cell(doc, ac_row, anchor):
         # IMA numbers are reported in the Comments section. When this entry has no
         # 'IMA Number' row, anchor to the Comments-section header rather than letting
         # it fall through to the Author's Cell label (the generic fallback).
-        return (_find_value(doc, lambda t: t.strip() == 'IMA Number')
+        return (_find_value(doc, lambda t: t.strip().lower() == 'ima number')   # 'IMA number' as one transcriber typed it
                 or _find_cell(doc, lambda t: t.strip() == 'Comments'))
     if anchor == 'formula':
         return (_find_value(doc, lambda t: t.strip() == 'Empirical')

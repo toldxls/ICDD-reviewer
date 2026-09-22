@@ -530,8 +530,10 @@ def _badges(s):
         add('fixes', '%d fix%s' % (s['fixes'], '' if s['fixes'] == 1 else 'es'), 'fix')
 
     status = s['cell']['status']
-    if status == 'nopdf' or not s['files']['pdf']:
+    if not s['files']['pdf']:
         add('no-pdf', 'no .pdf', 'danger')
+    elif status == 'nopdf':                                    # a .pdf IS paired: the entry has no Author's Cell row to compare (the older
+        add('no-cell', "no Author's Cell", 'danger')          # template, a supplementary docx) — it used to wear the 'no .pdf' badge
     if status == 'notext':
         add('no-text', '.pdf: no text layer', 'danger')   # scanned image — cell/λ not checked
     if (s.get('pdf') or {}).get('unreadable'):

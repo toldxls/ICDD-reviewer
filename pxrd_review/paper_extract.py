@@ -6347,6 +6347,12 @@ def main(argv=None):
     ap.add_argument('--log-failures', nargs='?', const='', metavar='FILE',
                     help="after the check, append one JSON line per reader that did not verify — what it read, from where, and what the oracle said — to FILE (default <pdf dir>/review_out/reader_failures.jsonl); tools/failure_classes.py groups them")
     a = ap.parse_args(argv)
+    try:                                                                 # an empty or truncated .pdf: one line that names the file, not a MuPDF traceback
+        text_of(a.pdf) if a.pdf.lower().endswith('.pdf') else None
+    except Exception as e_:
+        from pxrd_review import errors as E
+        print('cannot read %s — %s' % (a.pdf, E.explain(e_, a.pdf)))
+        return 2
     if a.check:
         r = check_paper(a.pdf, a.cif, None)
         print('\n'.join(r['lines']) or 'nothing to check: no analytical table or formula sentence found')
