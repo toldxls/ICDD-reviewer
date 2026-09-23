@@ -56,6 +56,13 @@ the paper's 3.302 = the entry's Xtl Dx); entry recall unchanged.
 - No index read, the record says why (`nooracle`, never a value): a multi-column optics table (six new minerals in one
   paper, or a comparison with the literature — no column is picked), an index given by presumption or analogy, an
   opaque mineral with reflectance values only.
+- An adversarial read of the round and of the two reader commits before it (the same day): a table's density row
+  broken one value per line had escaped the column rule (rathite's five phases); a powder table's 'd(calc)' column
+  was a density (proudite) — the symbols are now capital D, a lowercase 'd (calc)' or an old paper's 'dx =' / 'dm ='
+  needs its lead word; a cell edge under 'Calculated densities' (cupropavonite); an own density after 'according to'
+  in an earlier clause was the literature's (shiranuiite) — the guard reads its own clause; 'density 3.266 obtained
+  from SC-XRD unit-cell parameters' is not a measurement. Checks 34 and 37, when the table prints no observed column
+  and the calculated pattern stands in, now say so in the finding instead of calling a calculated line observed.
 
 **Bond-valence readers, first batch (2026-09-22 evening; plan block 1, item 2).** The 32 papers whose table the crude scan
 sees and no finder read, and the 85 whose parameter set had no oracle, traced one by one. Whole corpus, bond-valence tables

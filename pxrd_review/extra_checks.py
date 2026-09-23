@@ -3041,7 +3041,7 @@ def set_powder_reader(fn):
     global _POWDER_READER
     _POWDER_READER = fn
 
-def _paper_obs(pdf_path):
+def _paper_obs(pdf_path, with_source=False):
     """The paper's powder lines as (d, I): its observed column — or, when the table prints none, its
     calculated one (a simulated pattern is what such an entry's list was typed from: letnikovite-(Ce),
     2026-09-22, 74 calculated lines and no observed column; the seeded slips were invisible)."""
@@ -3051,10 +3051,10 @@ def _paper_obs(pdf_path):
         from pxrd_review import paper_extract as PE
         r = PE.pxrd_table(pdf_path)
     r = r or ([], [])
-    obs = [(float(x[0]), x[1]) for x in (r[0] or []) if x and x[0]]
+    obs = [(float(x[0]), x[1]) for x in (r[0] or []) if x and x[0]]; src = 'observed'
     if not obs and len(r) > 1:
-        obs = [(float(x[0]), x[1]) for x in (r[1] or []) if x and x[0]]
-    return obs
+        obs = [(float(x[0]), x[1]) for x in (r[1] or []) if x and x[0]]; src = 'calculated'
+    return (obs, src) if with_source else obs
 
 def _pair_lines(pds, eds):
     """The paper's d values paired ONE-TO-ONE with the entry's, closest first, within 0.15 % + 0.0006 Å
@@ -3080,7 +3080,7 @@ def check34_lines_missing(e, pdf_path, skip=()):
     out = []
     if not pdf_path or not e.refl or len(e.refl) < 8 or not _measured(e):
         return out
-    obs = _paper_obs(pdf_path)
+    obs, src = _paper_obs(pdf_path, with_source=True)
     if any(i for _, i in obs):                           # a table of visual estimates ('s', 'm', 'w') has no numbers at all: kept whole
         obs = [(d, i) for d, i in obs if i]
     seen_pd = {}
@@ -3117,9 +3117,10 @@ def check34_lines_missing(e, pdf_path, skip=()):
         parts.append('%g%s%s' % (d, ' (I %g)' % i if i else '', ' — the entry has %g at that intensity, which the table does not print: a mistyped d'
                                      % twin if twin else ''))
     out.append(Finding('lines_missing', 'flag',
-                       "The .pdf's powder table observes %s absent from the reflection list: %s — the other %d of "
+                       "The .pdf's powder table %s %s absent from the reflection list: %s — the other %d of "
                        "its lines are there; verify against the table."
-                       % ('a line' if len(miss) == 1 else '%d lines' % len(miss), '; '.join(parts), len(obs) - len(miss)),
+                       % ('observes' if src == 'observed' else 'lists (in its calculated pattern — the table prints no observed column)',   # the words say which column was read: a calculated line is not an observation
+                          'a line' if len(miss) == 1 else '%d lines' % len(miss), '; '.join(parts), len(obs) - len(miss)),
                        ', '.join('%g' % d for d, _ in miss), 'refl'))
     return out
 
@@ -3138,7 +3139,8 @@ def check37_intensity_vs_paper(e, pdf_path):
             return float(i)
         except (TypeError, ValueError):
             return None
-    obs = [(d, num(i)) for d, i in _paper_obs(pdf_path) if num(i)]
+    obs, src = _paper_obs(pdf_path, with_source=True)
+    obs = [(d, num(i)) for d, i in obs if num(i)]
     dup = {d for k, (d, _) in enumerate(obs) if any(abs(d - d2) < 1e-6 for d2, _ in obs[:k])}
     obs = [(d, i) for d, i in obs if d not in dup]           # a d the paper prints twice with two intensities: which is this line's is not for the tool to say (popugaevaite 2.834: I 5 and I 16)
     ed = []; seen_d = {}
@@ -3165,8 +3167,8 @@ def check37_intensity_vs_paper(e, pdf_path):
            if max(i, pi * scale) >= 2 * max(min(i, pi * scale), 1e-9) and abs(i - pi * scale) >= 10.0 * top / 100.0]
     if bad and len(bad) <= 3:
         out.append(Finding('intensity_paper', 'flag',
-                           "Reflection list intensit%s not the .pdf table's: %s — the other %d lines agree with it on one scale; verify against the table."
-                           % ('y' if len(bad) == 1 else 'ies', '; '.join('d = %s has I %g, the table %g' % (raw, i, round(pi, 1)) for raw, i, pi in bad), len(pairs) - len(bad)),
+                           "Reflection list intensit%s not the .pdf table's%s: %s — the other %d lines agree with it on one scale; verify against the table."
+                           % ('y' if len(bad) == 1 else 'ies', '' if src == 'observed' else ' (its calculated pattern — the table prints no observed column)', '; '.join('d = %s has I %g, the table %g' % (raw, i, round(pi, 1)) for raw, i, pi in bad), len(pairs) - len(bad)),
                            ', '.join(raw for raw, _i, _pi in bad), 'refl'))
     return out
 

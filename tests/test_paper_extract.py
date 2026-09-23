@@ -1978,6 +1978,20 @@ class DensityForms(unittest.TestCase):
         o = PE.optics('The density of synthetic material is 2.07(2) g cm-3; the calculated density is 2.04 g cm-3.'); self.assertEqual((o['D_meas'], o['D_calc']), (None, 2.04))
         o = PE.optics('The calculated density of goryainovite is 2.98 g·cm-3; the measured density of synthetic Ca2PO4Cl is 3.03 g·cm-3 (Mackay 1953).', 'goryainovite'); self.assertEqual((o['D_meas'], o['D_calc']), (None, 2.98))
 
+    def test_the_review_of_round_11(self):
+        """What an adversarial read of the round found (2026-09-23): a table's row broken one value per
+        line; a powder table's 'd(calc)' column; a cell edge under 'Calculated densities'; an own density
+        after 'according to' in an earlier clause; 'obtained from SC-XRD' is not a measurement."""
+        o = PE.optics('space groups P21/c (no. 14)\nDx (g·cm−3)\n5.446\n5.373\n5.286\n5.153\n4.986\nNo. of reflections', 'rathite')
+        self.assertIsNone(o['D_calc'])                                                                               # five phases, one per column
+        self.assertIsNone(PE.optics('2 . 0 6 6 2.059 d(calc) 3.049 3. 059 3. 009 2 . 9 5 8 Z .')['D_calc'])            # proudite's powder table
+        self.assertEqual(PE.optics('(molecular weight 1957.795), Z = 2, d (calc) of 3.012 fully corresponds to d (exp)')['D_calc'], 3.012)   # a lowercase d with its lead word
+        self.assertIsNone(PE.optics('Z Space groups Calculated densities a = 13.3551(6), b = 4.0064(2) c = 32.7835')['D_calc'])              # cupropavonite's cell edge
+        self.assertEqual(PE.optics('The Mohs hardness was estimated to be 5 according to the analogous thiospinel-group minerals, and a density of 5.78 g·cm−3 was calculated from the empirical formula.')['D_calc'], 5.78)
+        o = PE.optics('Superior (calculated from the density 3.266 g/cm3 obtained from SC-XRD unit-cell parameters).'); self.assertEqual((o['D_meas'], o['D_calc']), (None, None))
+        self.assertEqual(PE.optics('The density, 3.70 g/cm3, was determined by the sink-float method.')['D_meas'], 3.70)
+        self.assertIsNone(PE.optics('A density of 2.79 g/cm3 was determined from the empirical formula and unit-cell parameters.')['D_meas'])
+
     def test_still_not_a_density(self):
         for s in ('Density was not measured owing to the small amount of material. 2V(calc) = 51.68°.',
                   'The maximum and minimum electron-densities in the final cycle of refinement were +0.93 and –0.58 e–/Å3.',

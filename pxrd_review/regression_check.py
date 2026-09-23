@@ -1110,7 +1110,11 @@ CASES = [
      lambda e, ds: X._paper_misprint(e, '3.834', ['3.843', '2.834'], ds,
                                      ['3.913', '3.913', '2.834', '2.834', '3.843', '3.843', '3.768']) is None)(
      type('S', (), {'cell': {}, 'refl': []})(), ['3.913', '3.768'])),
- ("intensity_paper: the strongest line's 100 typed as 10 flags; the same list on another scale is silent", lambda: (
+ ("lines_missing: on a table with no observed column the finding says it read the calculated pattern", lambda: (
+    lambda rows: (X.set_powder_reader(lambda p: ([], [(d, i, (1, 0, 0)) for d, i in rows] + [(2.1, 40.0, (1, 1, 0))])) or True) and
+    all('calculated pattern' in f.msg for f in X.check34_lines_missing(type('E', (), {'refl': [(str(d), str(int(i)), '1', '0', '0') for d, i in rows], 'instr': {'spacing_instr': 'Diffractometer'}})(), 'x.pdf')) and
+    (X.set_powder_reader(None) or True))([(3.1, 100.0), (2.9, 50.0), (2.8, 30.0), (2.7, 20.0), (2.6, 10.0), (2.5, 9.0), (2.4, 8.0), (2.3, 7.0), (2.2, 6.0)])),
+("intensity_paper: the strongest line's 100 typed as 10 flags; the same list on another scale is silent", lambda: (
      lambda ds, I: (X.set_powder_reader(lambda p: ([(d, str(i)) for d, i in zip(ds, I)], [])) or True) and
      [f.sev for f in X.check37_intensity_vs_paper(type('E', (), {'refl': [(d, str(i), '1', '0', '0') for d, i in zip(ds, [10] + I[1:])], 'instr': {'spacing_instr': 'Diffractometer'}})(), 'x.pdf')] == ['flag']
      and X.check37_intensity_vs_paper(type('E', (), {'refl': [(d, str(i * 0.5), '1', '0', '0') for d, i in zip(ds, I)], 'instr': {'spacing_instr': 'Diffractometer'}})(), 'x.pdf') == []

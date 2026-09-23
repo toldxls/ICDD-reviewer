@@ -1354,20 +1354,23 @@ def optics(text, name=None):
             if out[key] is None:
                 out[key] = float(v); out['sentences'].append(t[max(0, m_.start() - 40): m_.end() + 30].strip())
         break
-    for key, pat in (('D_meas', r'(?:D\s*meas\.?|Dmeas|\bDm\b|measured densit(?:y|ies)' + W + r'{0,100}?|densit(?:y|ies)' + W + r'{0,80}?(?:measured|floatation|flotation|pycnomet|Clerici|Berman|hydrostatic|torsion)(?!\s+(?:ind|refract))' + W + r'{0,100}?)' + lead + D +
+    for key, pat in (('D_meas', r'(?:(?-i:D)\s*meas\.?|(?-i:Dmeas)|\b(?-i:Dm)\b|\b(?-i:dm)\s*=|measured densit(?:y|ies)' + W + r'{0,100}?|densit(?:y|ies)' + W + r'{0,80}?(?:measured|floatation|flotation|pycnomet|Clerici|Berman|hydrostatic|torsion)(?!\s+(?:ind|refract))' + W + r'{0,100}?)' + lead + D +
                                 r'|\bdensity\s*(?:=|is|of|:)\s*' + D + r'\(\d+\)'
-                                r'|\bdensit(?:y|ies)(?:\s+of)?,?\s*' + U + r'\s*' + D + ESD + U + r',?\s*(?:was|were|is|are)?\s*(?:measured|determined|obtained)\b'),      # 'A density of 3.21 g/cm3 was measured by flotation'
-                     ('D_calc', r'(?:D\s*\(?\s*calc\.?\)?|Dcalc|\bDx\b|calculated densit(?:y|ies)' + W + r'{0,120}?|densit(?:y|ies)' + W + r'{0,160}?(?:calculated|computed)' + W + r'{0,120}?)' + lead + D +
+                                r'|\bdensit(?:y|ies)(?:\s+of)?,?\s*' + U + r'\s*' + D + ESD + U + r',?\s*(?:was|were|is|are)?\s*(?:measured\b|determined\b' + W + r'{0,60}?(?:flotation|floatation|float|pycnomet|Clerici|sink|heavy|Berman|hydrostatic|torsion|iodide|toluene|bromoform))'),      # 'A density of 3.21 g/cm3 was measured by flotation'; 'determined' only by a method — 'density 3.266 obtained from SC-XRD unit-cell parameters' is a calculated one
+                     ('D_calc', r'(?:(?-i:D)\s*\(?\s*calc\.?\)?|(?-i:d)\s*\(?\s*calc\.?\)?(?=\s*(?:of|is|=|:)\s*[0-9])|(?-i:Dcalc)|\b(?-i:D[Xx])\b|\b(?-i:dx)\s*=|calculated densit(?:y|ies)' + W + r'{0,120}?|densit(?:y|ies)' + W + r'{0,160}?(?:calculated|computed)' + W + r'{0,120}?)' + lead + D +      # a capital D: 'd(calc) 3.049 3.059' is a powder table's calculated d column (proudite); a lowercase 'd (calc) of 3.012' (caryochroite) needs its lead word
                                 r'|\bdensit(?:y|ies)(?:\s+of)?,?\s*' + U + r'\s*' + D + ESD + U + r',?\s*(?:was|were|is|are)?\s*(?:calculated|computed)\b')):      # 'The density, 4.324 g cm−3, was calculated based on'; 'A density of 2.79 g/cm3 was calculated'
         if out[key] is not None:
             continue
         for mm in re.finditer(pat, t, re.I):
-            before = re.split(r'(?<=[.;])\s+(?=[A-Z])', t[max(0, mm.start() - 100): mm.start() + 1])[-1][:-1]     # its own sentence only
+            before = re.split(r'(?<=[.;])\s+(?=[A-Z])|,\s+(?:and|while|whereas)\s+|;\s+', t[max(0, mm.start() - 100): mm.start() + 1])[-1][:-1]     # its own clause only: 'estimated to be 5 according to the analogous minerals, and a density of 5.78 was calculated' (shiranuiite)
             own = before + mm.group(0)
+            v_at = next(i_ for i_ in range(1, len(mm.groups()) + 1) if mm.group(i_))
+            if re.search(r'(?<![A-Za-z])[abcV]\s*[=:]\s*$', t[max(0, mm.start(v_at) - 12): mm.start(v_at)]):
+                continue                                                     # 'Calculated densities a = 13.3551(6)': a cell edge under a crystal-data label (cupropavonite)
             if re.search(r'reported|according to|literature' + (r'|synthetic' if key == 'D_meas' else ''), own, re.I) and not re.search(r'\b(?:not|never) (?:been )?reported', own, re.I):
                 continue                                                     # 'Nevitt (1960) reported measured densities of 5.62 and 5.74 for synthetic …': the literature's, not this paper's; a density CALCULATED for synthetic material is still the paper's own
             after = t[mm.end(): mm.end() + 60]
-            run = re.match(r'(?:\s*(?:\(\d+\))?' + U + r'\s*[/ ]\s*' + DN + r'){1,8}', after)
+            run = re.match(r'(?:\s*(?:\(\d+\))?' + U + r'(?:\s*/\s*|\s+)' + DN + r'){1,8}', after)      # the values one per line as the text layer prints a table's row (rathite's 'Dx' over five columns)
             if run and not (name and re.search(r'\bfor\b', after)):
                 v0 = float(next(g_ for g_ in mm.groups() if g_)); others = [float(x) for x in re.findall(r'\d+\.\d+', run.group(0)) if 1 <= float(x) < 26]
                 if any(abs(x - v0) / v0 > 0.03 for x in others):
