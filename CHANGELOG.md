@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.12.1](#0121--2026-09-23) | 23 Sep | Mineral groups on the .pdf page (members with formulas on the card, a large group listed in the Mindat pane while hovered, supergroups through their subgroups — the snapshot now stores each group's parent); a review of 0.12.0: names broken at their own hyphen at a line end are read (1,270 → 281 lost on the corpus), 89 species with long suffixes, apostrophes or two-word names now found, series ('bismuthinite–aikinite') and polytypes marked, a title word's tint kept inside its box |
 | [0.12.0](#0120--2026-09-23) | 23 Sep | Mineral names on the .pdf page: every IMA species the paper names is tinted and a hover opens its Mindat formula, group, Strunz code, cell and type locality; a word one slip from a species name is underlined with the name it is nearest; the entry's own mineral tinted once a page; matched against the local Mindat snapshot, so a paper's words never leave the machine — a reading aid, no new check |
 | [0.11.4](#0114--2026-09-23) | 23 Sep | Three reader rounds from the plan's block 1, each gated on the whole corpus: the powder-table reader rebuilt from the entry-recall worklist (printed-list recall of a dropped line 78 → 92 %, an intensity slip 66 → 88 %; checks 34/37 pair lines one-to-one), the bond-valence readers' first batch (tables no finder read, parameter sets cited by number), the optics and density readers (27 papers' densities read for the first time, a reason where no index is read), and an adversarial read of all three that found five density misreads — no new check |
 | [0.11.3](#0113--2026-09-22) | 22 Sep | A deep-dive bug check over the whole corpus: no crash, no errored check, every A/B explained — the defects were in what the flags SAID: check11 hinted the OTHER mineral's IMA number on multi-mineral papers (21 of 22), now the number beside the entry's own name, and a number the entry carries is compared (two real slips on the corpus); a comment label typed in another case read as blank; an isotropic entry's index under 'Refraction Index' never checked; `pxrd paper` on an empty .pdf; the GUI's 'no .pdf' badge on an entry that has one |
@@ -34,6 +35,39 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.12.1] — 2026-09-23
+
+**Mineral groups on the .pdf page, and a review of 0.12.0's name layer.** Still a reading aid: no new check, nothing
+written into a docx, a log or a finding; the words are matched against the local Mindat snapshot only.
+
+### Groups
+- '<name>-group', '<name> group', 'Apatite Supergroup', 'crichtonite–group', and a group name that is no species
+  ('tourmaline', 'garnet', 'hornblende') open the GROUP, not the species it is named after; groups get their own tint.
+- A group of up to 12 species lists every member with its formula on the hover card. A larger one is listed, by
+  subgroup, in the Mindat pane while the name is hovered; a click keeps the list there until its ✕. With the Mindat
+  pane collapsed, the card lists them.
+- A supergroup lists its members through its groups and subgroups (Apatite Supergroup 48 species, Amphibole Supergroup
+  120), and each card says where the group sits ('in … › Amphibole Supergroup'). This needs each group's parent, which
+  the Mindat snapshot now stores (`mindat._group_names`); the bundled snapshot is rebuilt with it. Nothing a check reads
+  changed: the species and structural records are identical, 42 parent groups were added.
+- Everyday words that are also group names (iron, copper, silica, alum …) are a group only before 'group'.
+
+### Fixed, from a review of 0.12.0
+- A name broken at a line end on its OWN hyphen was dropped: 'crichtonite-' / 'group', 'Åsgruvanite-' / '(Ce)',
+  'sphalerite- and galena-bearing'. On the corpus 1,270 names were lost this way; 281 remain unmarked, nearly all
+  rightly ('graphite-monochromatized', 'lime-stone').
+- 89 species were not found even printed correctly: suffixes longer than two letters ('jahnsite-(CaMnMg)',
+  'julgoldite-(Fe2+)'), apostrophes ("d'ansite"), two-word names ('native gold', 'baumhauerite II'). Every snapshot
+  species is now found from its own name (a test runs all 6,239), bar one malformed Mindat record.
+- A series written with a hyphen ('bismuthinite-aikinite', 'uraninite-montroseite-corvusite') and a polytype the
+  snapshot does not list ('dioskouriite-2M', 'muscovite-2M1') are marked.
+- One word box holding two names ('enargite/luzonite') showed only the second; the card now shows both.
+- A title word's tint ran on over the next word (the browser's font is wider than the paper's); a marked word is
+  clipped to its box on the page.
+- A synthetic entry's own mineral ('Okruginite-syn') was not recognised as the headline, so every mention was tinted.
+- A digit inside a word ('jask6lskiite', a scan's misreading) is not read as a name; digits belong only to suffixes.
+- Corpus (1,264 papers): misspelling marks 1,583 → 1,544, group mentions 12,581, ~16 ms a page.
 
 ## [0.12.0] — 2026-09-23
 
