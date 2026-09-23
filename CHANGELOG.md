@@ -36,6 +36,14 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+- **`pxrd update` / the chip's Pull now restarted the tool although nothing had changed.** On a git
+  checkout the pull ran and the server relaunched itself on every click, even when git answered
+  "Already up to date". Both now compare HEAD before and after the pull: unchanged → the GUI says so
+  and keeps running (`state: current`), the CLI prints "nothing to restart" instead of asking for a
+  restart. A pull that moves HEAD restarts as before; the pip path was already refused when GitHub
+  holds nothing newer. Test: `tests.test_update`.
+
 ## [0.12.1] — 2026-09-23
 
 **Mineral groups on the .pdf page, and a review of 0.12.0's name layer.** Still a reading aid: no new check, nothing

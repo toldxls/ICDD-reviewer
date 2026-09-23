@@ -64,6 +64,55 @@ class Versions(unittest.TestCase):
         finally:
             U.check, U.subprocess.call = saved
 
+    def test_gui_pull_that_changes_nothing_does_not_restart(self):
+        # a checkout already at its upstream: git pull says "Already up to date", HEAD stays put —
+        # the server must NOT relaunch itself (it once restarted on every Pull now)
+        import types
+        popens, exits = [], []
+        saved = (U.subprocess.run, U.subprocess.Popen, U.os._exit, U.time.sleep)
+        wait = saved[3]                                        # the real sleep, for polling the worker thread
+        try:
+            def run(cmd, **kw):
+                if cmd[-1] == 'HEAD':
+                    return types.SimpleNamespace(returncode=0, stdout='abc123\n', stderr='')
+                return types.SimpleNamespace(returncode=0, stdout='Already up to date.\n', stderr='')
+            U.subprocess.run = run
+            U.subprocess.Popen = lambda *a, **k: popens.append(a)
+            U.os._exit = lambda rc: exits.append(rc)
+            U.time.sleep = lambda s: None
+            with U._run_lock:
+                U._run.update(state='idle', log='', rc=None, how=None)
+            U.gui_update([], {})
+            for _ in range(200):
+                st = U.run_status()
+                if st['state'] not in ('running', 'idle'):
+                    break
+                wait(0.01)
+            self.assertEqual((st['state'], st['how'], st['rc']), ('current', 'git pull', 0))
+            self.assertIn('Already up to date', st['log'])
+            self.assertEqual((popens, exits), ([], []))
+            # and a pull that moves HEAD restarts (the helper is started, the process exits)
+            heads = iter(['abc123\n', 'def456\n'])
+            def run2(cmd, **kw):
+                if cmd[-1] == 'HEAD':
+                    return types.SimpleNamespace(returncode=0, stdout=next(heads), stderr='')
+                return types.SimpleNamespace(returncode=0, stdout='Updating abc123..def456\n', stderr='')
+            U.subprocess.run = run2
+            with U._run_lock:
+                U._run.update(state='idle', log='', rc=None, how=None)
+            U.gui_update([], {})
+            for _ in range(200):
+                st = U.run_status()
+                if st['state'] not in ('running', 'idle'):
+                    break
+                wait(0.01)
+            self.assertEqual(st['state'], 'restarting')
+            self.assertEqual((len(popens), exits), (1, [0]))
+        finally:
+            U.subprocess.run, U.subprocess.Popen, U.os._exit, U.time.sleep = saved
+            with U._run_lock:
+                U._run.update(state='idle', log='', rc=None, how=None)
+
     def test_checkout_is_recognised(self):
         # this test runs from the repository: update must point at git pull, not pip
         self.assertTrue(U.checkout() and U.checkout().endswith('review_tool'))

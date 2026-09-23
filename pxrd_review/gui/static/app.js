@@ -190,6 +190,11 @@ async function runUpdate() {
       log.textContent = 'FAILED (' + (s.how || '') + ', exit ' + s.rc + ')\n' + (s.log || '') + '\n\nRun it by hand:\n  ' + (UPD ? UPD.pip : '');
       btn.disabled = false; btn.textContent = 'Update now'; return;
     }
+    if (s.state === 'current') {
+      // the pull changed nothing: the running code is already the current code — no restart, no reload
+      log.textContent = 'already up to date — nothing changed, the tool keeps running.\n' + (s.log || '');
+      btn.disabled = false; btn.textContent = UPD && UPD.checkout ? 'Pull now' : 'Update now'; return;
+    }
     // restarting: the server relaunches itself with this tab's token and port — wait for it, then reload
     log.textContent = 'installed — the tool is restarting; this page reloads by itself…\n' + (s.log || '');
     let tries = 0;

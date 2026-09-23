@@ -110,6 +110,15 @@ def checkout():
     # live checkouts that `git pull` serves and a pip install would wrongly paper over.
     return root if os.path.exists(os.path.join(root, '.git')) and os.path.exists(os.path.join(root, 'pyproject.toml')) else None
 
+def head(co):
+    """The checkout's HEAD commit, or None. A pull that leaves it where it was installed nothing,
+    so there is nothing to restart for."""
+    try:
+        p = subprocess.run(['git', '-C', co, 'rev-parse', 'HEAD'], capture_output=True, text=True)
+        return p.stdout.strip() or None if p.returncode == 0 else None
+    except OSError:
+        return None
+
 # ------------------------------------------------------------------ the GUI's background check
 _state = {'status': 'idle', 'result': None}
 _lock = threading.Lock()
@@ -160,6 +169,7 @@ def gui_update(gui_argv, env_extra):
         if '--no-browser' not in relaunch:
             relaunch.append('--no-browser')                   # the open tab reloads; no second tab
         cmd, how = (['git', '-C', co, 'pull', '--ff-only'], 'git pull') if co else (pip_command(), 'pip')
+        before = head(co) if co else None
         q = lambda c: '"%s"' % c if ' ' in c else c
         if os.name == 'nt' and not co:
             from pxrd_review import paths as P
@@ -188,6 +198,11 @@ def gui_update(gui_argv, env_extra):
         if rc != 0:
             with _run_lock:
                 _run.update(state='failed', rc=rc, log=log, how=how)
+            return
+        if co and before and head(co) == before:
+            # the pull changed nothing: the running code IS the current code — no restart
+            with _run_lock:
+                _run.update(state='current', rc=0, how=how, log=log.strip() or 'Already up to date.')
             return
         # restart: never exec from this (threaded) process — a detached helper waits for it to
         # exit, which frees the port, then starts a fresh server with the same token and port
@@ -229,12 +244,15 @@ def main(argv=None):
             print('a git checkout: `pxrd update` pulls it (git pull --ff-only)')
             return 1 if info['newer'] else 0
         print('pulling the checkout (git pull --ff-only) …', flush=True)
+        before = head(co)
         try:
             rc = subprocess.call(['git', '-C', co, 'pull', '--ff-only'])
         except OSError as ex:
             print('git is not available (%s); pull the checkout by hand, or --force to pip-install a copy' % ex)
             return 3
-        if rc == 0:
+        if rc == 0 and before and head(co) == before:
+            print('already up to date — nothing changed, nothing to restart.')
+        elif rc == 0:
             print('done — restart the tool to use the pulled code.')
         else:
             print('git pull failed (exit %d): resolve it in the checkout (local changes? not fast-forward?), or --force to pip-install a copy' % rc)
