@@ -1932,6 +1932,91 @@ class OpticsForms2(unittest.TestCase):
         self.assertEqual(o['n'], round((2 * 1.585 + 1.600) / 3, 4))
 
 
+class DensityForms(unittest.TestCase):
+    """The density sentences the 2026-09-23 worklist found unread: 27 corpus papers printed an index
+    and no density the reader could see. Each form has a corpus paper behind it."""
+
+    def test_measured_and_calculated_in_one_sentence(self):
+        o = PE.optics('The measured and calculated densities are 3.63(2) and 3.62 g/cm3, respectively. Optically, zhanghuifenite is biaxial (+).')
+        self.assertEqual((o['D_meas'], o['D_calc']), (3.63, 3.62))
+        o = PE.optics('The calculated and measured densities are 3.62 and 3.63(2) g/cm3, respectively.')
+        self.assertEqual((o['D_meas'], o['D_calc']), (3.63, 3.62))
+
+    def test_one_value_per_mineral(self):
+        s = 'The measured and calculated densities are 2.12(2) and 2.138 g/cm3, respectively, for lazaraskeite-M1 and 2.10(2) and 2.086 g/cm3 for lazaraskeite-M2.'
+        self.assertEqual((PE.optics(s, 'lazaraskeite-M2')['D_meas'], PE.optics(s, 'lazaraskeite-M2')['D_calc']), (2.10, 2.086))
+        self.assertEqual((PE.optics(s, 'lazaraskeite-M1')['D_meas'], PE.optics(s, 'lazaraskeite-M1')['D_calc']), (2.12, 2.138))   # the whole name, not its stem
+        self.assertEqual(PE.optics(s)['D_meas'], 2.12)                                                                             # no name: the first
+        s = 'The calculated densities are 3.503 g cm −3 for zadovite and 3.509 g cm −3 for aradite.'
+        self.assertEqual((PE.optics(s, 'aradite')['D_calc'], PE.optics(s, 'zadovite')['D_calc'], PE.optics(s)['D_meas']), (3.509, 3.503, None))
+        s = 'The density could be determined by floatation of a Fianel sample in diiodomethane (23◦C) and was found to be 3.28(2) g·cm−3. Based on the empirical formulae, the calculated densities are 3.298 g·cm−3 for the Fianel sample and 3.322 g·cm−3 for the Valletta sample.'
+        o = PE.optics(s, 'rüdlingerite'); self.assertEqual((o['D_meas'], o['D_calc']), (3.28, 3.298))
+
+    def test_qualifier_after_the_value(self):
+        for s, dm, dc in (('The density, 4.324 g cm−3, was calculated based on the empirical formula and unit-cell parameters.', None, 4.324),
+                          ('A density of 2.79 g/cm3 was calculated using the empirical chemical formula.', None, 2.79),
+                          ('the unit-cell volume V 825 Å3 and density of 4.042 g . cm–3 (measured) and 4.111 g . cm–3 (calculated).', 4.042, 4.111),
+                          ('The theoretical value of density 2.85 g/cm3 calculated for this composition is similar to 2.9', None, 2.85),
+                          ('A density of 3.21(2) g/cm3 was measured by flotation in Clerici solution.', 3.21, None)):
+            o = PE.optics(s); self.assertEqual((o['D_meas'], o['D_calc']), (dm, dc), s)
+
+    def test_crystal_data_row_with_the_unit_digit(self):
+        for s, dc in (('Z 4 Dx (g cm−3) 4.338 Data collection', 4.338), ('V (Å3) 3990.75(2) Dcalc (g/cm3) 4.02 Radiation MoKα', 4.02),
+                      ('Z 4 D (calc) g/cm3 3.842 m mm−1 11.158', 3.842), ('Z 2 Dcalc (g/cm–3) 2.79 Crystal size', 2.79)):
+            self.assertEqual(PE.optics(s)['D_calc'], dc, s)
+
+    def test_the_literature_and_a_column_per_mineral(self):
+        s = 'Nevitt (1960) reported measured densities of 5.62 and 5.74 g cm–3 for synthetic PbTe. Densities of maurogemmiite and paulrobinsonite calculated from the empirical formulae are 5.355 and 6.095 g cm–3, respectively.'
+        o = PE.optics(s, 'maurogemmiite'); self.assertEqual((o['D_meas'], o['D_calc']), (None, 5.355))                 # the literature's measured density is not this paper's
+        s = 'The measured density is reported to be 4.32 g/cm-3 for end-member Ti5Si3. The densities calculated from cell parameters are 4.762 g/cm-3 for wenjiite and 4.538 g/cm-3 for kangjinlaite.'
+        o = PE.optics(s, 'wenjiite'); self.assertEqual((o['D_meas'], o['D_calc']), (None, 4.762))
+        o = PE.optics('Z 1 1 1 16 Dcalc. (g cm−3) 3.39 3.42 3.59 3.12 Strongest reflections', 'rhabdoborite')
+        self.assertIsNone(o['D_calc'])                                                                                 # a crystal-data table with a column per mineral: whose the first is, is not known
+        o = PE.optics('Dcalc. (g/cm3) 3.298/3.322 3.217 2.744 Dmeas. (g/cm3) 3.21(1) 2.74(1)'); self.assertEqual((o['D_meas'], o['D_calc']), (None, None))
+        self.assertEqual(PE.optics('Z 3 3 Calculated density (g cm3) 6.84 6.83 Absorption')['D_calc'], 6.84)          # two refinements of ONE structure: within the check's tolerance, the first
+        o = PE.optics('Density is 3.68(2)/3.682 g/cm3 (measured/ calculated).'); self.assertEqual((o['D_meas'], o['D_calc']), (3.68, 3.682))
+        o = PE.optics('The density of synthetic material is 2.07(2) g cm-3; the calculated density is 2.04 g cm-3.'); self.assertEqual((o['D_meas'], o['D_calc']), (None, 2.04))
+        o = PE.optics('The calculated density of goryainovite is 2.98 g·cm-3; the measured density of synthetic Ca2PO4Cl is 3.03 g·cm-3 (Mackay 1953).', 'goryainovite'); self.assertEqual((o['D_meas'], o['D_calc']), (None, 2.98))
+
+    def test_still_not_a_density(self):
+        for s in ('Density was not measured owing to the small amount of material. 2V(calc) = 51.68°.',
+                  'The maximum and minimum electron-densities in the final cycle of refinement were +0.93 and –0.58 e–/Å3.',
+                  'Optically biaxial (+); pleochroism: O = green, E = light yellow. The cell is a = 10.2, b = 1.95, c = 12.1 Å.'):
+            o = PE.optics(s); self.assertEqual((o['D_meas'], o['D_calc']), (None, None), s)
+
+
+class OpticsReasons(unittest.TestCase):
+    """No index read, and the record says why instead of standing blank: a multi-column table (the
+    reader does not pick a column — 6 columns for six new minerals in one paper, or a comparison with
+    the literature), an index given by presumption, an opaque mineral with reflectance only."""
+
+    def test_table_of_several_columns(self):
+        o = PE.optics('Optical class biaxial (+) biaxial (+) biaxial (–) α 1.647(2) 1.546(2) 1.531(1) 1.588(2) β 1.656(2) 1.560(2) 1.568(1) 1.599(2) γ 1.685(2) 1.578(2) 1.574(1) 1.622(2) 2Vmeas (°) 60')
+        self.assertIsNone(o['n']); self.assertIn('table with 4 columns', o['n_why'])
+        o = PE.optics('D calc. g/cm3 2.57 2.74 2.59 a 1.562 1.576 1.560 b 1.567 1.582 1.567 g 1.571 1.584 1.576 2V calc. (°) –83')
+        self.assertIsNone(o['n']); self.assertIn('table with 3 columns', o['n_why'])
+        o = PE.optics('Optically, smamite is biaxial (-), a = 1.556(1), b = 1.581(1), g = 1.588(1) (white light).')
+        self.assertEqual(o['n'], round((1.556 + 1.581 + 1.588) / 3, 4)); self.assertNotIn('n_why', o)     # a sentence is read, not excused
+
+    def test_a_symbol_repeated_across_columns(self):
+        o = PE.optics('Optical data (λ = 589 nm) Uniaxial ( +) Uniaxial ( +) Uniaxial ( +) Biaxial ( +) ω = 1.696(3) ω = 1.703(4) ω = 1.720(5) α = 1.609, β = 1.620 ε = 1.740(4) ε = 1.750(5) ε = 1.750(5) γ = 1.642, 2Vmeas = 65º')
+        self.assertIsNone(o['n']); self.assertIn('table with 3 columns', o['n_why'])                                   # three uniaxial minerals and a biaxial relative: the α β γ were the relative's
+
+    def test_presumed_and_opaque(self):
+        o = PE.optics('presumably transparent, uniaxial (+) with birefringence ≈0.005 and refractive indices ≈1.57–1.59; colour presumably whitish')
+        self.assertIsNone(o['n']); self.assertIn('presumption', o['n_why'])
+        o = PE.optics('gaildunningite is expected to have a comparable refractive index, as the chemical composition is similar.')
+        self.assertIn('presumption', o['n_why'])
+        o = PE.optics('Reflectance values in air and oil (WTiC standard, refractive index of oil: 1.515 at 23°C) are given in Table 1. λ (nm) Rmin Rmax 400 41.6 44.4')
+        self.assertIsNone(o['n']); self.assertIn('opaque', o['n_why'])
+        o = PE.optics('Because of the microscopic twinning, the 2V value and optic sign could not be determined. In reflected light, letnikovite-(Ce) is grey. Bireflectance is weak, ΔR = 0.8% (589 nm). Reflectance values are listed in Table 2.')
+        self.assertIn('opaque', o['n_why'])
+        o = PE.optics('In reflected light, the mineral is grey. Reflectance values are listed in Table 2. Rmin Rmax 400 41.6 44.4')
+        self.assertNotIn('n_why', o)                                           # nothing about an index or 2V: nothing to excuse
+        o = PE.optics('The cell is a = 10.2, b = 1.95, c = 12.1 Å.')
+        self.assertIsNone(o['n']); self.assertNotIn('n_why', o)
+
+
 class ProseAnalyses(unittest.TestCase):
     def test_three_constituents_with_a_total_and_decorated_values(self):
         pt = PE.prose_table('The composition (electron microprobe, H2O by gas chromatography) is (in wt.%): Al2O3 24.36, SO3 40.69, H2O 34(2), total 99.05. The empirical formula is')

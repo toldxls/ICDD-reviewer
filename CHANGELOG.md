@@ -33,6 +33,30 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+**The optics and density readers, from the silent classes (2026-09-23; plan block 1, item 3).** Of the 46 papers whose text
+prints optics and whose index the reader could not see, most were the crude scan's (a modulation 'γ = 1.8', a physics
+paper's refractive index, '2V' in a petrology paper); the readable classes were the DENSITY sentences — 27 corpus papers
+printed an index and no density the reader saw, so their index had no Gladstone–Dale oracle — and four multi-column optics
+tables. Whole corpus: measured densities verified 180 → 192, calculated 610 → 640 (every record that moved read against its
+paper: the ones lost were the literature's, a synthetic analogue's, or a column of a multi-phase table); indices verified
+359 → 366, silent 46 → 34; the remainder carries a reason. Entries: one new flag over 1,678 copies (uramphite's blank Dx,
+the paper's 3.302 = the entry's Xtl Dx); entry recall unchanged.
+- `optics()` reads 'The measured and calculated densities are 3.63(2) and 3.62 g/cm3, respectively' as the pair it is;
+  one value per mineral ('3.503 g cm−3 for zadovite and 3.509 for aradite') by the paper's own name, the whole name
+  ('lazaraskeite-M2' is not '-M1'); the qualifier after the value ('4.042 (measured) and 4.111 (calculated)',
+  '3.68(2)/3.682 g/cm3 (measured/calculated)', 'The density, 4.324 g cm−3, was calculated'); a crystal-data row whose
+  unit carries a digit ('Dx (g cm−3) 4.338'); 'was found to be'.
+- Guards, each from a corpus record: a density the paper 'reported' from the literature is not its own; a density
+  measured on synthetic material is not the mineral's, but one CALCULATED for it is the paper's own; a crystal-data row
+  followed by a run of values is a column per phase and is not read unless the run agrees within 3 % (two refinements
+  of one structure), because whose the first column is, is not known.
+- A cluster of indices in which a symbol repeats ('ω = 1.696(3) ω = 1.703(4) ω = 1.720(5) α = 1.609 …') is a table's row
+  of columns and is not read as a sentence: rhabdoborite's index had been its biaxial relative's, and the compatibility
+  check called the paper's 'superior' poor.
+- No index read, the record says why (`nooracle`, never a value): a multi-column optics table (six new minerals in one
+  paper, or a comparison with the literature — no column is picked), an index given by presumption or analogy, an
+  opaque mineral with reflectance values only.
+
 **Bond-valence readers, first batch (2026-09-22 evening; plan block 1, item 2).** The 32 papers whose table the crude scan
 sees and no finder read, and the 85 whose parameter set had no oracle, traced one by one. Whole corpus, bond-valence tables
 verified 236 → 238 of 332 (the denominator now excludes tables the paper sends to its online materials — those were

@@ -1208,6 +1208,9 @@ def _index_cluster(t):
         span = t[hits[i][0]: hits[j - 1][0] + 12]
         if len(re.findall(r'[12]\.\d{2,4}', span)) - (j - i) > 1:
             i = j; continue
+        syms = [h[1] for h in hits[i:j]]
+        if len(syms) != len(set(syms)):
+            i = j; continue                                                  # 'ω = 1.696(3) ω = 1.703(4) ω = 1.720(5) α = 1.609 …': a table's row of columns, one mineral each — not a sentence
         # 'β = γ = 1.567' — the pattern above binds the value to β; give γ the same
         if 'β' in vals and 'γ' not in vals and re.search(r'β[′´`\']?\s*=\s*γ', t[hits[i][0]: hits[j - 1][0] + 30]):
             vals['γ'] = vals['β']
@@ -1225,9 +1228,26 @@ def _index_cluster(t):
         i = j
     return None
 
-def optics(text):
+def _for_name(matches, group, name):
+    """Of the 'value for <mineral>' matches, the one naming `name`: the whole name first
+    ('lazaraskeite-M2' is not 'lazaraskeite-M1'), then a name the token begins with."""
+    ms = list(matches)
+    if not name:
+        return []
+    toks = [m.group(group) for m in ms]
+    for m, tok in zip(ms, toks):
+        if tok.lower().rstrip('.,;') == name.lower():
+            return [m]
+    for m, tok in zip(ms, toks):
+        if tok.lower().startswith(name.lower()[:6]) and not any(t_.lower() == name.lower() for t_ in toks):
+            return [m]
+    return []
+
+def optics(text, name=None):
     """{'n': mean refractive index or None, 'n_from': how, 'n_calc': the paper computed it (from
-    Gladstone–Dale) rather than measuring it, 'D_meas', 'D_calc', 'sentences'}"""
+    Gladstone–Dale) rather than measuring it, 'D_meas', 'D_calc', 'sentences'}; 'n_unmeasured' + 'n_why'
+    when the paper prints no index and says (or shows) why. `name` = the paper's mineral, for a sentence
+    that gives one density per mineral ('3.503 g cm−3 for zadovite and 3.509 g cm−3 for aradite')."""
     out = {'n': None, 'n_from': '', 'n_calc': False, 'D_meas': None, 'D_calc': None, 'sentences': []}
     t = _optics_font(text.replace('−', '-'))
     m = re.search(r'\b(?:n\s*=|n\s*\(?\s*(?:mean|average|calc)\s*\)?\s*=|nmean\s*=|n\s*≈)\s*' + _F, t) or \
@@ -1293,14 +1313,92 @@ def optics(text):
     # table's 'Calculated density (g cm–3) 2.880'; and a plain 'The density is 3.05(2) g/cm3', measured
     # because it carries an esd. A window runs to the sentence's end, a decimal point allowed.
     W = r'(?:[^.;]|\.(?=\d))'
-    lead = r'(?:\s*(?:=|is|of|was|:|to\s+be|as|equal\s+to)){0,3}\s*(?:D\s?[a-z]{0,5}\.?\s*[=:]\s*)?(?:\(?\s*(?:in\s+)?g\s?[/·⋅]?\s?cm[^)\d]{0,6}\)?\s*)?'
+    U = r'(?:\s*\(?\s*(?:in\s+)?g\s?[/·⋅.]?\s?cm(?:\s?[-–−]?\s?3|[^)\d]{0,6})\)?)?'    # the unit, its 3 a digit ('g cm−3', 'g/cm3', '(g cm–3)', 'g . cm–3')
+    lead = r'(?:\s*(?:=|is|are|of|was|were|:|to\s+be|as|equal\s+to|found|determined)){0,4}\s*(?:D\s?[a-z]{0,5}\.?\s*[=:]\s*)?' + U + r'\s*'
     D = r'(?<![\d.])((?:[1-9]|1\d|2[0-5])\.\d{2,4})'                   # a density: 1–25.9 g/cm³, so a compatibility index of 0.021 in the same sentence is never one
-    for key, pat in (('D_meas', r'(?:D\s*meas\.?|Dmeas|\bDm\b|measured density' + W + r'{0,100}?|density' + W + r'{0,80}?(?:measured|floatation|flotation|pycnomet|Clerici|Berman|hydrostatic|torsion)(?!\s+(?:ind|refract))' + W + r'{0,100}?)' + lead + D +
-                                r'|\bdensity\s*(?:=|is|of|:)\s*' + D + r'\(\d+\)'),
-                     ('D_calc', r'(?:D\s*calc\.?|Dcalc|\bDx\b|calculated density' + W + r'{0,120}?|density' + W + r'{0,160}?(?:calculated|computed)' + W + r'{0,120}?)' + lead + D)):
-        mm = re.search(pat, t, re.I)
-        if mm:
-            out[key] = float(mm.group(1) or mm.group(2)); out['sentences'].append(t[max(0, mm.start() - 40): mm.end() + 30].strip())
+    DN = r'(?<![\d.])(?:(?:[1-9]|1\d|2[0-5])\.\d{2,4})'                # the same, not captured
+    ESD = r'(?:\(\d+\))?'
+    def pick(mm, key):
+        """The value of `mm` — or, when the sentence gives one value per mineral ('3.503 g cm−3 for
+        zadovite and 3.509 g cm−3 for aradite'), the one given for `name`."""
+        v = float(next(g_ for g_ in mm.groups() if g_))
+        if name:
+            sent = t[mm.start(): mm.start() + 260]; sent = sent[: sent.find('. ') + 1 if '. ' in sent else len(sent)]
+            for m_ in _for_name(re.finditer(D + ESD + U + r'(?:,?\s+(?:respectively,?\s+)?)?\s*for\s+(?:the\s+)?([\w-]+)', sent, re.I), 2, name):
+                v = float(m_.group(1)); break
+        out[key] = v; out['sentences'].append(t[max(0, mm.start() - 40): mm.end() + 30].strip())
+    # one sentence carrying both: 'The measured and calculated densities are 3.63(2) and 3.62 g/cm3,
+    # respectively' (the commonest form in the recent corpus) — and 'for X and … for Y' when it gives a pair per mineral
+    both = re.search(r'\b(measured|calculated) and (measured|calculated) densit(?:y|ies)(?:\s+(?:are|were|of|:|is))?\s*' + D + ESD + U + r'\s+and\s+' + D, t, re.I)
+    if both and both.group(1).lower() != both.group(2).lower():
+        keys = ('D_' + both.group(1).lower()[:4], 'D_' + both.group(2).lower()[:4]); vals = [float(both.group(3)), float(both.group(4))]
+        if name:
+            sent = t[both.start(): both.start() + 300]
+            for m_ in _for_name(re.finditer(D + ESD + U + r'\s+and\s+' + D + ESD + U + r'(?:,?\s+respectively)?,?\s+for\s+(?:the\s+)?([\w-]+)', sent, re.I), 3, name):
+                vals = [float(m_.group(1)), float(m_.group(2))]; break
+        for k, v in zip(keys, vals):
+            out[k] = v
+        out['sentences'].append(t[max(0, both.start() - 40): both.end() + 30].strip())
+    # a pair with its qualifiers after: 'Density is 3.68(2)/3.682 g/cm3 (measured/calculated)'
+    pair = re.search(r'\bdensit(?:y|ies)(?:\s+(?:is|are|of|:|=))?\s*' + D + ESD + r'\s*/\s*' + D + ESD + U + r'\s*\(\s*(measured|calculated|meas|calc)\.?\s*/\s*(measured|calculated|meas|calc)\.?\s*\)', t, re.I)
+    if pair and pair.group(3).lower()[:4] != pair.group(4).lower()[:4]:
+        for v, q in ((pair.group(1), pair.group(3)), (pair.group(2), pair.group(4))):
+            k_ = 'D_meas' if q.lower().startswith('meas') else 'D_calc'
+            if out[k_] is None:
+                out[k_] = float(v)
+        out['sentences'].append(t[max(0, pair.start() - 40): pair.end() + 30].strip())
+    # the qualifier AFTER the value: 'density of 4.042 g·cm–3 (measured) and 4.111 g·cm–3 (calculated)'
+    for m_ in re.finditer(r'\bdensit(?:y|ies)(?:\s+of)?,?\s*(?:' + DN + ESD + U + r'\s*\((?:measured|calculated|meas\.?|calc\.?)\)(?:\s+and\s+)?){1,2}', t, re.I):
+        for v, q in re.findall(D + ESD + U + r'\s*\((measured|calculated|meas|calc)\.?\)', m_.group(0), re.I):
+            key = 'D_meas' if q.lower().startswith('meas') else 'D_calc'
+            if out[key] is None:
+                out[key] = float(v); out['sentences'].append(t[max(0, m_.start() - 40): m_.end() + 30].strip())
+        break
+    for key, pat in (('D_meas', r'(?:D\s*meas\.?|Dmeas|\bDm\b|measured densit(?:y|ies)' + W + r'{0,100}?|densit(?:y|ies)' + W + r'{0,80}?(?:measured|floatation|flotation|pycnomet|Clerici|Berman|hydrostatic|torsion)(?!\s+(?:ind|refract))' + W + r'{0,100}?)' + lead + D +
+                                r'|\bdensity\s*(?:=|is|of|:)\s*' + D + r'\(\d+\)'
+                                r'|\bdensit(?:y|ies)(?:\s+of)?,?\s*' + U + r'\s*' + D + ESD + U + r',?\s*(?:was|were|is|are)?\s*(?:measured|determined|obtained)\b'),      # 'A density of 3.21 g/cm3 was measured by flotation'
+                     ('D_calc', r'(?:D\s*\(?\s*calc\.?\)?|Dcalc|\bDx\b|calculated densit(?:y|ies)' + W + r'{0,120}?|densit(?:y|ies)' + W + r'{0,160}?(?:calculated|computed)' + W + r'{0,120}?)' + lead + D +
+                                r'|\bdensit(?:y|ies)(?:\s+of)?,?\s*' + U + r'\s*' + D + ESD + U + r',?\s*(?:was|were|is|are)?\s*(?:calculated|computed)\b')):      # 'The density, 4.324 g cm−3, was calculated based on'; 'A density of 2.79 g/cm3 was calculated'
+        if out[key] is not None:
+            continue
+        for mm in re.finditer(pat, t, re.I):
+            before = re.split(r'(?<=[.;])\s+(?=[A-Z])', t[max(0, mm.start() - 100): mm.start() + 1])[-1][:-1]     # its own sentence only
+            own = before + mm.group(0)
+            if re.search(r'reported|according to|literature' + (r'|synthetic' if key == 'D_meas' else ''), own, re.I) and not re.search(r'\b(?:not|never) (?:been )?reported', own, re.I):
+                continue                                                     # 'Nevitt (1960) reported measured densities of 5.62 and 5.74 for synthetic …': the literature's, not this paper's; a density CALCULATED for synthetic material is still the paper's own
+            after = t[mm.end(): mm.end() + 60]
+            run = re.match(r'(?:\s*(?:\(\d+\))?' + U + r'\s*[/ ]\s*' + DN + r'){1,8}', after)
+            if run and not (name and re.search(r'\bfor\b', after)):
+                v0 = float(next(g_ for g_ in mm.groups() if g_)); others = [float(x) for x in re.findall(r'\d+\.\d+', run.group(0)) if 1 <= float(x) < 26]
+                if any(abs(x - v0) / v0 > 0.03 for x in others):
+                    continue                                                 # 'Dcalc. (g cm−3) 3.39 3.42 3.59 3.12': a crystal-data table with a column per phase — whose the first is, is not known; two refinements of ONE structure ('6.84 6.83') agree within the density check's tolerance, and the first is taken
+            pick(mm, key); break
+    # no index read: what the paper prints instead, so the record carries the reason and not a blank
+    if out['n'] is None and not out.get('n_unmeasured'):
+        why = None
+        rows = {}
+        for sym, pat in (('α', r'(?:n?α|nα)'), ('β', r'(?:n?β|nβ)'), ('γ', r'(?:n?γ|nγ)'), ('ω', r'(?:n?ω|nω)'), ('ε', r'(?:n?ε|nε)'), ('a', r'a'), ('b', r'b'), ('g', r'[gc]')):
+            m_ = re.search(r'(?<![A-Za-z0-9])' + pat + r'\s*[=≈]?\s*((?:(?:[12]\.\d{2,4}(?:[–-][12]\.\d{2,4})?\s?(?:\(\d+\))?|n\.d\.)\s+){2,}(?:[12]\.\d{2,4}(?:\(\d+\))?|n\.d\.))', t)
+            if m_:
+                rows[sym] = len(m_.group(1).split())
+        cols = None
+        for sym in 'αβγωε':
+            reps = re.findall(r'(?<![A-Za-z0-9])n?' + sym + r'\s*[=≈]\s*[12]\.\d{2,4}(?:\(\d+\))?(?=\s+n?' + sym + r'\s*[=≈]\s*[12]\.\d)', t)
+            if reps:
+                rows[sym] = max(rows.get(sym, 0), len(reps) + 1)          # 'ω = 1.696(3) ω = 1.703(4) ω = 1.720(5)': a column per mineral
+        if all(k in rows for k in 'αβγ') or all(k in rows for k in 'ωε'):
+            cols = max(rows[k] for k in rows if k in 'αβγωε')
+        elif all(k in rows for k in 'abg') and len({rows[k] for k in 'abg'}) == 1:
+            cols = rows['a']
+        if cols:
+            why = 'the paper prints its indices as a table with %d columns (several minerals or a comparison), which is not read' % cols
+        elif re.search(r'(?:refractive ind(?:ex|ices)|ind(?:ex|ices) of refraction)' + W + r'{0,80}?(?:presumably|expected|by analogy|inferred|assumed)|(?:presumably|expected to have|by analogy|inferred)' + W + r'{0,80}?refractive ind', t, re.I):
+            why = 'the paper gives its index only by presumption or analogy, not measured'
+        elif re.search(r'refractive ind|ind(?:ex|ices) of refraction|\b2V\b', t, re.I) and re.search(r'\breflectance\b', t, re.I) and re.search(r'reflected light|\bR\s?\(?%|\bRmin\b|\bRmax\b|reflectance (?:values|data|spectra)', t, re.I) \
+                and not re.search(r'(?:refractive ind(?:ex|ices)|ind(?:ex|ices) of refraction)[^.;]{0,40}?[12]\.\d{2,4}', re.sub(r'refractive index of (?:the )?(?:oil|immersion)[^.;]{0,40}', '', t), re.I):
+            why = 'the mineral is opaque: the paper gives reflectance values and no refractive index'
+        if why:
+            out['n_why'] = why
     if out['n'] and out['n_from']:
         out['sentences'].append(out['n_from'])
     return out
@@ -4336,6 +4434,8 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None, coords=None):
     if not o.get('n') and o.get('n_unmeasured'):
         f['optics.n']['status'] = 'nooracle'; f['optics.n']['detail'] = ('the paper gives its index only as a bound (%s)' % o['n_bound']) if o.get('n_bound') else 'the paper says its refractive indices could not be measured'
         f['optics.n']['source'] = o['n_unmeasured'][:200]
+    elif not o.get('n') and o.get('n_why'):
+        f['optics.n']['status'] = 'nooracle'; f['optics.n']['detail'] = o['n_why']
     # the compatibility index the paper STATES: the same verdict as the n it was formed from, or the
     # reason nothing could reproduce it (no n read, no K_C)
     if f.get('gd', {}).get('status') != 'none':
@@ -6322,7 +6422,7 @@ def extract(pdf, out_dir=None, stem=None, write=True):
     text = text_of(pdf)
     stem = (stem or os.path.splitext(os.path.basename(pdf))[0]) + ('_docx_' if pdf.lower().endswith('.docx') else '_paper_')
     name = mineral_name(text)
-    out = {'name': name, 'epma': epma_table(pdf, name), 'method': method_statements(text), 'optics': optics(text),
+    out = {'name': name, 'epma': epma_table(pdf, name), 'method': method_statements(text), 'optics': optics(text, name),
            'bv': bv_statement(text), 'files': {}, 'notes': []}
     out['basis'], out['basis_sentence'] = basis_statement(text)
     o, c, hit = pxrd_table(pdf, with_pages=True)
