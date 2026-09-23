@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.12.0](#0120--2026-09-23) | 23 Sep | Mineral names on the .pdf page: every IMA species the paper names is tinted and a hover opens its Mindat formula, group, Strunz code, cell and type locality; a word one slip from a species name is underlined with the name it is nearest; the entry's own mineral tinted once a page; matched against the local Mindat snapshot, so a paper's words never leave the machine — a reading aid, no new check |
 | [0.11.4](#0114--2026-09-23) | 23 Sep | Three reader rounds from the plan's block 1, each gated on the whole corpus: the powder-table reader rebuilt from the entry-recall worklist (printed-list recall of a dropped line 78 → 92 %, an intensity slip 66 → 88 %; checks 34/37 pair lines one-to-one), the bond-valence readers' first batch (tables no finder read, parameter sets cited by number), the optics and density readers (27 papers' densities read for the first time, a reason where no index is read), and an adversarial read of all three that found five density misreads — no new check |
 | [0.11.3](#0113--2026-09-22) | 22 Sep | A deep-dive bug check over the whole corpus: no crash, no errored check, every A/B explained — the defects were in what the flags SAID: check11 hinted the OTHER mineral's IMA number on multi-mineral papers (21 of 22), now the number beside the entry's own name, and a number the entry carries is compared (two real slips on the corpus); a comment label typed in another case read as blank; an isotropic entry's index under 'Refraction Index' never checked; `pxrd paper` on an empty .pdf; the GUI's 'no .pdf' badge on an entry that has one |
 | [0.11.2](#0112--2026-09-22) | 22 Sep | The statements gauntlet: what the workbooks SAY, measured against the checks and against seeded faults — contradictions 63 → 0 on the whole corpus, a 10 % wt% slip named 68 → 93 %, the tool's own bond-valence table no longer failing its own check, a bond-valence workbook for papers with no .cif (97 → 340), the colours tested, the paper's GD index one cell; the first recall numbers for the entry checks and check37 (a reflection's intensity is not the paper's); every GUI route walked |
@@ -33,6 +34,31 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.12.0] — 2026-09-23
+
+**Mineral names on the .pdf page.** The .pdf pane's text layer now knows which of its words name a mineral. Every IMA
+species is tinted; hovering one opens a card with its IMA formula (sub- and superscripts), group, Strunz code, IMA status,
+Mindat cell and type locality. A word that looks like a misspelt species — the shape of a name, one edit from one (two
+for a long name), first letter kept — is underlined, and its card names the nearest IMA species with that species' formula,
+worded neutrally: a misspelling, an older or non-IMA name, or a scan's misreading of the page (ö read as 'd' or 'ii').
+A reading aid only: nothing is written into a docx, a log or a finding.
+- Recognised as the species, not flagged: the IMA name written without its hyphens ('magnesiohastingsite' →
+  Magnesio-hastingsite) or transliterated ('bastnaesite', 'boehmite', 'nyboite'); a root whose species all carry a suffix
+  ('davidite' → Davidite-(La), Davidite-(Ce)); a name broken across a line ('tobermo-' / 'rite'); ligatures ('ﬂuorapatite');
+  pairs ('jarosite–alunite'); '-group', '-type' and the like.
+- The spelling rules were set on the whole corpus (1,264 papers, 14,034 pages): the first pass underlined 2,152 words;
+  rocks and varieties built on a species ('chromitite', 'sanidinite', 'titanomagnetite'), chemistry words ('chalcogenide',
+  'lanthanide') and a name spelt right in another script were the false positives, each class now a rule. 1,583 remain —
+  about one every nine pages — nearly all older names (zinckenite, celestite, covelline), typos (brackenbuschite,
+  rhodocrosite) or scan slips (lindstrdmite). About 159,000 species names recognised, ~14 ms a page.
+- The entry's own mineral, named on nearly every line of its paper, is tinted at its first mention on each page only;
+  the repeats stay hoverable.
+- **Local only.** The words are matched in the GUI's own process against the Mindat snapshot on disk (the bundled seed or
+  the user's own pull); no word read from a paper is sent to Mindat or anywhere else.
+- On by default; the **minerals** button above the page, or ⚙ → Mineral names, turns it off (remembered).
+- `pxrd_review/mineral_names.py` (`classify`, `suggest`, `card`, `page`); `/api/pdf/<key>/words/<n>.json` carries
+  `minerals`. Tests: `tests.test_mineral_names`.
 
 ## [0.11.4] — 2026-09-23
 
