@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.11.4](#0114--2026-09-23) | 23 Sep | Three reader rounds from the plan's block 1, each gated on the whole corpus: the powder-table reader rebuilt from the entry-recall worklist (printed-list recall of a dropped line 78 → 92 %, an intensity slip 66 → 88 %; checks 34/37 pair lines one-to-one), the bond-valence readers' first batch (tables no finder read, parameter sets cited by number), the optics and density readers (27 papers' densities read for the first time, a reason where no index is read), and an adversarial read of all three that found five density misreads — no new check |
 | [0.11.3](#0113--2026-09-22) | 22 Sep | A deep-dive bug check over the whole corpus: no crash, no errored check, every A/B explained — the defects were in what the flags SAID: check11 hinted the OTHER mineral's IMA number on multi-mineral papers (21 of 22), now the number beside the entry's own name, and a number the entry carries is compared (two real slips on the corpus); a comment label typed in another case read as blank; an isotropic entry's index under 'Refraction Index' never checked; `pxrd paper` on an empty .pdf; the GUI's 'no .pdf' badge on an entry that has one |
 | [0.11.2](#0112--2026-09-22) | 22 Sep | The statements gauntlet: what the workbooks SAY, measured against the checks and against seeded faults — contradictions 63 → 0 on the whole corpus, a 10 % wt% slip named 68 → 93 %, the tool's own bond-valence table no longer failing its own check, a bond-valence workbook for papers with no .cif (97 → 340), the colours tested, the paper's GD index one cell; the first recall numbers for the entry checks and check37 (a reflection's intensity is not the paper's); every GUI route walked |
 | [0.11.1](#0111--2026-09-21) | 21 Sep | An adversarial review of the day's three releases, every finding reproduced before it was fixed: the arithmetic held, what the tool SAID did not — check33 offered another mineral's density as "enter it"; the EPMA workbook wrote PROBLEM where the composition check flags nothing; a BVS column was judged by a bare ±0.08; the GD total left out O ≡ F,Cl; the folder guard's holes; ten GUI error paths that were a NameError; the sheet and the reduction brought into line on the edge inputs |
@@ -32,6 +33,8 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.11.4] — 2026-09-23
 
 **The optics and density readers, from the silent classes (2026-09-23; plan block 1, item 3).** Of the 46 papers whose text
 prints optics and whose index the reader could not see, most were the crude scan's (a modulation 'γ = 1.8', a physics
