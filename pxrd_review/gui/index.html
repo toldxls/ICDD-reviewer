@@ -67,6 +67,9 @@
       <input type="range" id="fontsize" min="11" max="16" step="1" value="13">
       <span id="fontsize-val" class="muted"></span>
     </div>
+    <div class="set-row"><span class="set-label">Mineral names</span>
+      <label class="chk mini" title="tint IMA species names on the .pdf page, underline a likely misspelling; hover one for its Mindat formula (the same switch as the minerals button above the page)"><input type="checkbox" id="set-names"> highlight on the .pdf</label>
+    </div>
     <div class="set-row">
       <button id="reset-layout" class="ghost">Reset layout &amp; theme</button>
     </div>
@@ -425,6 +428,7 @@
               <span id="pdf-hits" class="muted"></span>
               <span class="spacer"></span>
               <div class="zoomctl">
+                <button id="names-tog" class="on" title="mineral names: tint IMA species on the page, underline a likely misspelling; hover one for its Mindat formula (local snapshot — nothing leaves this machine)">minerals</button>
                 <button id="zoom-hit" title="tight zoom-crop of the evidence (? look lands in the live page instead)">⊕ crop</button>
                 <button id="zoom-page" class="on" title="fit the whole page">page</button>
                 <button id="zoom-out" title="zoom out">−</button>

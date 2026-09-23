@@ -1195,10 +1195,11 @@ async function buildTextLayer(a, i, slot) {
   try {
     const d = await fetch(`/api/pdf/${enc(a.key)}/words/${i}.json`).then(x => x.json());
     if (!d.w || !d.h || !d.words) return;
-    const frag = document.createDocumentFragment();
+    const frag = document.createDocumentFragment(), spans = [];
     for (const w of d.words) {
       const [x0, y0, x1, y1, word] = w;
       const s = document.createElement('span');
+      spans.push(s);
       // Trailing space so copy/paste keeps word separators: get_text('words')
       // yields one box per word with no whitespace, and adjacent inline spans
       // serialize as 'wordword'. The span is color:transparent, so it stays invisible.
@@ -1208,8 +1209,94 @@ async function buildTextLayer(a, i, slot) {
       s.style.fontSize = ((y1 - y0) / d.h * 100 * 0.82) + 'cqh';
       frag.append(s);
     }
+    markNames(spans, d.minerals);
     tl.append(frag);
   } catch (e) { /* no text layer for this page */ }
+}
+
+// ---- name layer: mineral names on the .pdf page -----------------------------------------------
+// The server classifies the page's words against the LOCAL Mindat snapshot (mineral_names.page):
+// a species gets a tint, a word that looks like a misspelt species a wavy underline; hovering either
+// opens a card with the Mindat formula. Reading aid only — nothing is written anywhere.
+// The entry's OWN mineral is named on nearly every line of its paper, so it is tinted at its first
+// mention on each page only; the repeats stay hoverable (the card still opens) but carry no tint.
+const mnFold = s => (s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[\s\-‐]/g, '');
+function markNames(spans, mn) {
+  if (!mn || !mn.hits) return;
+  const own = mnFold(S.a && S.a.name);
+  let ownSeen = false;
+  for (const h of mn.hits) {
+    const isOwn = !!own && h.kind === 'species' && (h.keys || []).some(k => mnFold(k) === own);
+    const quiet = isOwn && ownSeen;
+    if (isOwn) ownSeen = true;
+    for (const i of h.i) {
+      const s = spans[i];
+      if (!s) continue;
+      s.classList.add('mn', quiet ? 'mn-quiet' : h.kind === 'spell' ? 'mn-spell' : 'mn-sp');
+      s._mn = { hit: h, species: mn.species };
+    }
+  }
+}
+
+let mnHideT = null;
+function mnPop() {
+  let p = document.getElementById('mn-pop');
+  if (!p) {
+    p = el('div', { id: 'mn-pop', class: 'mn-pop hidden' });
+    p.addEventListener('mouseenter', () => clearTimeout(mnHideT));
+    p.addEventListener('mouseleave', mnHide);
+    document.body.append(p);
+  }
+  return p;
+}
+function mnHide() { clearTimeout(mnHideT); mnHideT = setTimeout(() => mnPop().classList.add('hidden'), 180); }
+
+function mnCard(c) {
+  if (!c) return el('div', { class: 'muted' }, 'not in the Mindat snapshot');
+  const box = el('div', { class: 'mn-card' });
+  box.append(el('div', { class: 'mn-name' }, c.name));
+  if (c.formula) box.append(el('div', { class: 'mn-formula' }, fmtFormula(c.formula)));
+  const meta = [c.group, c.strunz && ('Strunz ' + c.strunz), c.status && c.status.toLowerCase()].filter(Boolean);
+  if (meta.length) box.append(el('div', { class: 'mn-meta muted' }, meta.join(' · ')));
+  if (c.cell && c.cell.length) {
+    const lab = ['a', 'b', 'c', 'α', 'β', 'γ'];
+    const parts = c.cell.map((v, k) => v ? `${lab[k]} ${v}` : '').filter(Boolean);
+    if (parts.length) box.append(el('div', { class: 'mn-meta muted' }, parts.join('  ')));
+  }
+  if (c.locality) box.append(el('div', { class: 'mn-meta muted' }, 'type locality: ' + c.locality));
+  return box;
+}
+
+function mnShow(span) {
+  const { hit, species } = span._mn, p = mnPop();
+  clearTimeout(mnHideT);
+  p.replaceChildren();
+  if (hit.kind === 'spell') {
+    p.append(el('div', { class: 'mn-head mn-warn' }, `“${hit.token}” is not an IMA species name`));
+    p.append(el('div', { class: 'mn-note muted' }, 'A misspelling, an older or non-IMA name, or a misread of the page text (a scan can read ö as “d” or “ii”). Closest IMA name' + (hit.suggest.length > 1 ? 's' : '') + ':'));
+    hit.suggest.forEach(k => p.append(mnCard(species[k])));
+  } else {
+    if (hit.how === 'spelling') p.append(el('div', { class: 'mn-head mn-warn' }, `IMA spelling: ${(species[hit.keys[0]] || {}).name || hit.keys[0]}`));
+    if (hit.how === 'root') p.append(el('div', { class: 'mn-head' }, `“${hit.token}” — ${hit.keys.length} IMA species share this root`));
+    hit.keys.slice(0, 6).forEach(k => p.append(mnCard(species[k])));
+    if (hit.keys.length > 6) p.append(el('div', { class: 'mn-note muted' }, `… and ${hit.keys.length - 6} more`));
+  }
+  p.append(el('div', { class: 'mn-foot muted' }, 'Mindat snapshot on this machine'));
+  p.classList.remove('hidden');
+  const r = span.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight;
+  const pw = p.offsetWidth, ph = p.offsetHeight;
+  let x = Math.min(Math.max(8, r.left), W - pw - 8);
+  let y = r.bottom + 6;
+  if (y + ph > H - 8) y = Math.max(8, r.top - ph - 6);       // no room below: open above the word
+  p.style.left = x + 'px'; p.style.top = y + 'px';
+}
+
+function syncNamesUI() {
+  const on = CFG.names !== false;
+  $('#pdf-view').classList.toggle('names-off', !on);
+  $('#names-tog').classList.toggle('on', on);
+  $('#set-names').checked = on;
+  if (!on) mnPop().classList.add('hidden');
 }
 
 function syncZoomUI() {
@@ -1636,6 +1723,15 @@ $('#pdf-q').addEventListener('keydown', e => {
   else pdfSearch(v);
 });
 $('#zoom-in').addEventListener('click', () => setZoom(S.pdfZoom + 0.25));
+$('#names-tog').addEventListener('click', () => { CFG.names = CFG.names === false; saveCfg(); syncNamesUI(); });
+$('#pdf-view').addEventListener('mouseover', e => {
+  const s = e.target.closest && e.target.closest('.text-layer > span.mn');
+  if (s && s._mn && CFG.names !== false) mnShow(s);
+});
+$('#pdf-view').addEventListener('mouseout', e => {
+  if (e.target.closest && e.target.closest('.text-layer > span.mn')) mnHide();
+});
+$('#pdf-view').addEventListener('scroll', () => mnPop().classList.add('hidden'), { passive: true });
 $('#zoom-out').addEventListener('click', () => setZoom(S.pdfZoom - 0.25));
 // trackpad two-finger pinch (and ctrl+scroll) over the .pdf pane zooms the PDF ONLY, not the
 // whole window: browsers deliver a pinch as a wheel event with ctrlKey set, so we take it on a
@@ -1715,6 +1811,7 @@ const DEFAULTS = {
   wSidebar: 320, wFind: 360, wSide: 380, hDocx: 300,
   collapsed: { findings: false, docx: false, mindat: false },
   hideNotes: false,
+  names: true,        // the .pdf pane's name layer (mineral names tinted, hover → Mindat formula)
 };
 // switching theme applies its natural translucency (Solid Dark = opaque, no blur)
 const THEME_PRESETS = {
@@ -1835,7 +1932,7 @@ function initAppearance() {
     $('#fontsize-val').textContent = CFG.fontsize + 'px'; saveCfg();
   });
   $('#reset-layout').addEventListener('click', () => {
-    CFG = JSON.parse(JSON.stringify(DEFAULTS)); saveCfg(); applyCfg();
+    CFG = JSON.parse(JSON.stringify(DEFAULTS)); saveCfg(); applyCfg(); syncNamesUI();
   });
   document.querySelectorAll('.pane .collapse').forEach(btn => btn.addEventListener('click', () => {
     const id = btn.closest('.pane').id;       // findings / docx / mindat
@@ -1844,9 +1941,11 @@ function initAppearance() {
   const hn = $('#hide-notes');
   hn.checked = !!CFG.hideNotes;
   hn.addEventListener('change', () => { CFG.hideNotes = hn.checked; saveCfg(); if (S.a) renderFindings(); });
+  $('#set-names').addEventListener('change', e => { CFG.names = e.target.checked; saveCfg(); syncNamesUI(); });
 }
 
 initAppearance();
+syncNamesUI();                    // the .pdf pane's name layer toggle (CFG.names)
 loadEntries();
 loadVersion();
 

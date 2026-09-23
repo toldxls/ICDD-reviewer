@@ -38,6 +38,7 @@ from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
 from pxrd_review import annotate_review as A
 from pxrd_review import paths as P
+from pxrd_review import mineral_names as MN   # the .pdf pane's name layer (local snapshot only)
 from pxrd_review.gui import _pdf_worker as PW   # MuPDF ops run in a subprocess (crash isolation)
 
 # analyze()'s PDF text parse uses PyMuPDF, which (a) is NOT thread-safe and (b) interprets the page
@@ -1469,6 +1470,13 @@ def api_pdf_words(key, n):
     out = PW.run(PW.words, pdf, n, default=None)
     if out is None:
         abort(404)
+    # the name layer: which words are IMA species (hover → Mindat formula) or look like a misspelt
+    # one. Matched against the LOCAL Mindat snapshot in this process — a paper's words never leave
+    # the machine. A failure here costs the layer, never the page's text.
+    try:
+        out['minerals'] = MN.page(out['words'])
+    except Exception:
+        out['minerals'] = {'hits': [], 'species': {}}
     return jsonify(out)
 
 @app.route('/api/pdf/<key>/page/<int:n>.png')
