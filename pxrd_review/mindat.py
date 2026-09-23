@@ -314,10 +314,21 @@ def _group_names(key, referenced, verbose=False):
         if verbose: print('  pulling entrytype=0 group parents…')
         for g in _pull(key, entrytype=0, name__icontains='group', fields=FIELDS):
             gid = str(g['id'])
-            if gid in referenced and gid not in lut:
+            if gid not in lut:
                 lut[gid] = g
-    return {gid: {'name': lut[gid].get('name', ''), 'strunz': _strunz(lut[gid])}
-            for gid in referenced if gid in lut}
+    # A group's own `groupid` is its PARENT (a subgroup's group, a group's supergroup). A supergroup is
+    # referenced by its groups, never by a species, so close the set over parents — the GUI's name
+    # layer lists a supergroup's members through its groups.
+    want, frontier = set(referenced), set(referenced)
+    while frontier:
+        frontier = {_parent(lut[g]) for g in frontier if g in lut} - {''} - want
+        want |= frontier
+    return {gid: {'name': lut[gid].get('name', ''), 'strunz': _strunz(lut[gid]), 'parent': _parent(lut[gid])}
+            for gid in want if gid in lut}
+
+def _parent(g):
+    p = str(g.get('groupid') or '')
+    return '' if p in ('0', 'None', str(g.get('id'))) else p
 
 def refresh(verbose=True, localities=True):
     """Single network pull of all IMA minerals → writes BOTH the group cache
@@ -346,13 +357,20 @@ def refresh(verbose=True, localities=True):
     if verbose: print('resolving %d group containers…' % len(referenced))
     groups = _group_names(key, referenced, verbose)
     # rare straggler a referenced id neither slice returned: one-off fallback
-    for gid in sorted(referenced - set(groups)):
+    # (a parent is chased the same way, so a supergroup filed where neither slice looked is still found)
+    todo = sorted(referenced - set(groups)) + sorted({g['parent'] for g in groups.values() if g.get('parent')} - set(groups))
+    while todo:
+        gid = todo.pop()
+        if gid in groups:
+            continue
         try:
-            d = _fetch('%s/geomaterials/%s/?fields=id,name,strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4'
+            d = _fetch('%s/geomaterials/%s/?fields=id,name,groupid,strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4'
                        % (BASE, gid), key)
-            groups[gid] = {'name': d.get('name', ''), 'strunz': _strunz(d)}
+            groups[gid] = {'name': d.get('name', ''), 'strunz': _strunz(d), 'parent': _parent(d)}
+            if groups[gid]['parent'] and groups[gid]['parent'] not in groups:
+                todo.append(groups[gid]['parent'])
         except Exception:
-            groups[gid] = {'name': '', 'strunz': ''}
+            groups[gid] = {'name': '', 'strunz': '', 'parent': ''}
     index = {}
     for m in minerals:
         index[_norm(m.get('name', ''))] = {

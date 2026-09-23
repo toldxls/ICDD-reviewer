@@ -1207,6 +1207,7 @@ async function buildTextLayer(a, i, slot) {
       s.style.left = (x0 / d.w * 100) + '%';
       s.style.top = (y0 / d.h * 100) + '%';
       s.style.fontSize = ((y1 - y0) / d.h * 100 * 0.82) + 'cqh';
+      s._box = [(x1 - x0) / d.w * 100, (y1 - y0) / d.h * 100];   // the word's own box: a name's tint stays inside it
       frag.append(s);
     }
     markNames(spans, d.minerals);
@@ -1220,7 +1221,8 @@ async function buildTextLayer(a, i, slot) {
 // opens a card with the Mindat formula. Reading aid only — nothing is written anywhere.
 // The entry's OWN mineral is named on nearly every line of its paper, so it is tinted at its first
 // mention on each page only; the repeats stay hoverable (the card still opens) but carry no tint.
-const mnFold = s => (s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[\s\-‐]/g, '');
+const mnFold = s => (s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  .replace(/[\s,\-‐]*\bsyn\b\.?$/, '').replace(/[\s\-‐]/g, '');   // 'Fluorapatite-syn' is fluorapatite
 function markNames(spans, mn) {
   if (!mn || !mn.hits) return;
   const own = mnFold(S.a && S.a.name);
@@ -1232,8 +1234,14 @@ function markNames(spans, mn) {
     for (const i of h.i) {
       const s = spans[i];
       if (!s) continue;
-      s.classList.add('mn', quiet ? 'mn-quiet' : h.kind === 'spell' ? 'mn-spell' : 'mn-sp');
-      s._mn = { hit: h, species: mn.species };
+      // one box can hold two names ('jarosite–alunite'): the card shows each; the tint is the first's
+      if (!s._mn) {
+        s.classList.add('mn', quiet ? 'mn-quiet' : h.kind === 'spell' ? 'mn-spell' : h.kind === 'group' ? 'mn-grp' : 'mn-sp');
+        // the browser's font is not the paper's: sized by its text, a title word's tint ran on over the next word
+        if (s._box) { s.style.width = s._box[0] + '%'; s.style.height = s._box[1] + '%'; }
+        s._mn = { hits: [], species: mn.species, groups: mn.groups || {} };
+      }
+      s._mn.hits.push(h);
     }
   }
 }
@@ -1249,7 +1257,56 @@ function mnPop() {
   }
   return p;
 }
-function mnHide() { clearTimeout(mnHideT); mnHideT = setTimeout(() => mnPop().classList.add('hidden'), 180); }
+function mnHideNow() { clearTimeout(mnHideT); mnPop().classList.add('hidden'); mnPaneRestore(); }
+function mnHide() { clearTimeout(mnHideT); mnHideT = setTimeout(mnHideNow, 180); }
+
+// A group too large for the hover card is listed in the Mindat pane instead, while the name is hovered;
+// a click on the name keeps the list there until its ✕. The pane's own content is kept and put back.
+const SMALL_GROUP = 12;
+let mnPaneSaved = null, mnPinned = false;
+function mnPaneUsable() { return !(CFG.collapsed && CFG.collapsed.mindat) && document.getElementById('mindat-body'); }
+function mnGroupList(g, pinned) {
+  const box = el('div', { class: 'mn-pane' });
+  const head = el('div', { class: 'sub mn-pane-head' }, `${g.name} — ${g.n} species`);
+  if (pinned) {
+    const x = el('button', { class: 'ghost mini', title: 'back to the entry\'s Mindat record' }, '✕');
+    x.addEventListener('click', () => { mnPinned = false; mnPaneRestore(); });
+    head.append(x);
+  }
+  box.append(head);
+  if (g.above && g.above.length) box.append(el('div', { class: 'note-line' }, 'in ' + g.above.join(' › ')));
+  if (!pinned) box.append(el('div', { class: 'note-line' }, 'click the name on the page to keep this list here'));
+  for (const sec of g.sections) {
+    if (g.sections.length > 1 || sec.name !== g.name) box.append(el('div', { class: 'sub' }, sec.name));
+    box.append(kvTable(sec.members.map(m => [m.name, fmtFormula(m.formula)])));
+  }
+  return box;
+}
+function mnPaneShow(g, pinned) {
+  const body = mnPaneUsable();
+  if (!body) return false;
+  if (!mnPaneSaved) mnPaneSaved = [...body.childNodes];
+  body.replaceChildren(mnGroupList(g, pinned));
+  body.scrollTop = 0;
+  return true;
+}
+function mnPaneRestore() {
+  if (mnPinned || !mnPaneSaved) return;
+  const body = document.getElementById('mindat-body');
+  if (body) body.replaceChildren(...mnPaneSaved);
+  mnPaneSaved = null;
+}
+function mnPaneForget() { mnPaneSaved = null; mnPinned = false; }   // the pane was rebuilt (another entry)
+
+function mnGroupRows(g) {
+  const box = el('div', { class: 'mn-card' });
+  for (const sec of g.sections) {
+    if (g.sections.length > 1) box.append(el('div', { class: 'mn-meta muted' }, sec.name));
+    for (const m of sec.members)
+      box.append(el('div', { class: 'mn-row' }, el('span', { class: 'mn-name' }, m.name), ' ', fmtFormula(m.formula)));
+  }
+  return box;
+}
 
 function mnCard(c) {
   if (!c) return el('div', { class: 'muted' }, 'not in the Mindat snapshot');
@@ -1268,19 +1325,33 @@ function mnCard(c) {
 }
 
 function mnShow(span) {
-  const { hit, species } = span._mn, p = mnPop();
+  const { hits, species, groups } = span._mn, p = mnPop();
   clearTimeout(mnHideT);
   p.replaceChildren();
-  if (hit.kind === 'spell') {
-    p.append(el('div', { class: 'mn-head mn-warn' }, `“${hit.token}” is not an IMA species name`));
-    p.append(el('div', { class: 'mn-note muted' }, 'A misspelling, an older or non-IMA name, or a misread of the page text (a scan can read ö as “d” or “ii”). Closest IMA name' + (hit.suggest.length > 1 ? 's' : '') + ':'));
-    hit.suggest.forEach(k => p.append(mnCard(species[k])));
-  } else {
-    if (hit.how === 'spelling') p.append(el('div', { class: 'mn-head mn-warn' }, `IMA spelling: ${(species[hit.keys[0]] || {}).name || hit.keys[0]}`));
-    if (hit.how === 'root') p.append(el('div', { class: 'mn-head' }, `“${hit.token}” — ${hit.keys.length} IMA species share this root`));
-    hit.keys.slice(0, 6).forEach(k => p.append(mnCard(species[k])));
-    if (hit.keys.length > 6) p.append(el('div', { class: 'mn-note muted' }, `… and ${hit.keys.length - 6} more`));
-  }
+  let paneUsed = false;
+  hits.forEach((hit, k) => {
+    if (k) p.append(el('div', { class: 'mn-sep' }));
+    if (hit.kind === 'group') {
+      const g = groups[hit.gid];
+      if (!g) return;
+      p.append(el('div', { class: 'mn-head mn-grp-head' }, `${g.name} — ${g.n} IMA species`));
+      if (g.above && g.above.length) p.append(el('div', { class: 'mn-note muted' }, 'in ' + g.above.join(' › ')));
+      if (g.n <= SMALL_GROUP) p.append(mnGroupRows(g));
+      else if (!mnPinned && !paneUsed && mnPaneShow(g, false)) { paneUsed = true; p.append(el('div', { class: 'mn-note muted' }, 'Listed in the Mindat pane → (click the name to keep it there)')); }
+      else if (mnPinned) p.append(el('div', { class: 'mn-note muted' }, 'A list is kept in the Mindat pane — click this name to show this group there instead.'));
+      else p.append(mnGroupRows(g));                        // the pane is collapsed (or holds another list): the card lists them
+    } else if (hit.kind === 'spell') {
+      p.append(el('div', { class: 'mn-head mn-warn' }, `“${hit.token}” is not an IMA species name`));
+      p.append(el('div', { class: 'mn-note muted' }, 'A misspelling, an older or non-IMA name, or a misread of the page text (a scan can read ö as “d” or “ii”). Closest IMA name' + (hit.suggest.length > 1 ? 's' : '') + ':'));
+      hit.suggest.forEach(k => p.append(mnCard(species[k])));
+    } else {
+      if (hit.how === 'spelling') p.append(el('div', { class: 'mn-head mn-warn' }, `IMA spelling: ${(species[hit.keys[0]] || {}).name || hit.keys[0]}`));
+      if (hit.how === 'root') p.append(el('div', { class: 'mn-head' }, `“${hit.token}” — ${hit.keys.length} IMA species share this root`));
+      hit.keys.slice(0, 6).forEach(k => p.append(mnCard(species[k])));
+      if (hit.keys.length > 6) p.append(el('div', { class: 'mn-note muted' }, `… and ${hit.keys.length - 6} more`));
+    }
+  });
+  if (!paneUsed && !mnPinned) mnPaneRestore();              // a previous hover's list goes when this word has none
   p.append(el('div', { class: 'mn-foot muted' }, 'Mindat snapshot on this machine'));
   p.classList.remove('hidden');
   const r = span.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight;
@@ -1296,7 +1367,7 @@ function syncNamesUI() {
   $('#pdf-view').classList.toggle('names-off', !on);
   $('#names-tog').classList.toggle('on', on);
   $('#set-names').checked = on;
-  if (!on) mnPop().classList.add('hidden');
+  if (!on) { mnPinned = false; mnHideNow(); }
 }
 
 function syncZoomUI() {
@@ -1574,6 +1645,7 @@ function fmtFormula(s) {
 
 // ---- mindat / cross-source pane -------------------------------------------
 function renderMindat() {
+  mnPaneForget();                                  // a group list the name layer put here goes with the old entry
   const a = S.a, body = $('#mindat-body'); body.innerHTML = '';
   const M = a.mindat;
   body.append(el('div', { class: 'sub' }, 'Mindat (IMA structural record)'));
@@ -1731,7 +1803,15 @@ $('#pdf-view').addEventListener('mouseover', e => {
 $('#pdf-view').addEventListener('mouseout', e => {
   if (e.target.closest && e.target.closest('.text-layer > span.mn')) mnHide();
 });
-$('#pdf-view').addEventListener('scroll', () => mnPop().classList.add('hidden'), { passive: true });
+$('#pdf-view').addEventListener('scroll', mnHideNow, { passive: true });
+$('#pdf-view').addEventListener('click', e => {
+  const s = e.target.closest && e.target.closest('.text-layer > span.mn-grp');
+  if (!s || !s._mn || CFG.names === false || window.getSelection().toString()) return;
+  const g = s._mn.hits.map(h => h.kind === 'group' && s._mn.groups[h.gid]).find(g => g && g.n > SMALL_GROUP);
+  if (!g) return;
+  mnPinned = false; mnPaneRestore();
+  if (mnPaneShow(g, true)) mnPinned = true;
+});
 $('#zoom-out').addEventListener('click', () => setZoom(S.pdfZoom - 0.25));
 // trackpad two-finger pinch (and ctrl+scroll) over the .pdf pane zooms the PDF ONLY, not the
 // whole window: browsers deliver a pinch as a wheel event with ctrlKey set, so we take it on a

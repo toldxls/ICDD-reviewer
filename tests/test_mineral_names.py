@@ -68,5 +68,92 @@ class Page(unittest.TestCase):
         self.assertTrue(c['elements'])
 
 
+def _has_parents():
+    from pxrd_review import mindat
+    return any(g.get('parent') for g in (mindat._db() or {}).get('groups', {}).values())
+
+
+class LineBreaks(unittest.TestCase):
+    """A name the line broke is read whole, whichever hyphen the break fell on (1,270 names on the corpus
+    were lost at a line-end hyphen that was the name's own, before 0.12.1)."""
+    def test_break_at_the_names_own_hyphen(self):
+        for texts, kind, tok in ((('crichtonite-', 'group', 'minerals'), 'group', 'crichtonite'),
+                                 (('Åsgruvanite-', '(Ce)'), 'species', 'asgruvanite-(ce)'),
+                                 (('jahnsite-', '(CaMnMg)'), 'species', 'jahnsite-(camnmg)'),
+                                 (('jarosite-', 'type'), 'species', 'jarosite')):
+            hits = M.classify(_words(*texts))
+            self.assertEqual([(h['kind'], h['i'], h['token']) for h in hits], [(kind, [0, 1], tok)], texts)
+
+    def test_suspended_hyphen_reads_the_name_alone(self):
+        hits = M.classify(_words('sphalerite-', 'and', 'galena-bearing'))
+        self.assertEqual([(h['token'], h['i']) for h in hits], [('sphalerite', [0]), ('galena', [2])])
+
+    def test_a_compound_that_names_nothing_stays_unmarked(self):
+        self.assertEqual(M.classify(_words('graphite-', 'monochromatized')), [])   # as on one line
+
+
+class Names(unittest.TestCase):
+    def test_every_species_is_found_from_its_own_name(self):
+        recs = M._index()[0]
+        missed = []
+        for key, r in recs.items():
+            texts = r['name'].split()
+            hits = M.classify(_words(*texts))
+            if not any(key in (h.get('keys') or []) for h in hits):
+                missed.append(r['name'])
+        self.assertLessEqual(len(missed), 2, missed)        # Mindat's own odd records ('Nioboixiolite-([])')
+
+    def test_two_names_in_one_box(self):
+        for text in ('jarosite–alunite', 'jarosite-alunite'):
+            hits = M.classify(_words(text))
+            self.assertEqual([(h['token'], h['i']) for h in hits], [('jarosite', [0]), ('alunite', [0])], text)
+        hits = M.classify(_words('bismuthinite-', 'aikinite', 'series'))
+        self.assertEqual([(h['token'], h['i']) for h in hits], [('bismuthinite', [0, 1]), ('aikinite', [0, 1])])
+
+    def test_polytype_suffix_is_the_species(self):
+        self.assertEqual(M.lookup('dioskouriite-2m'), ('polytype', ['dioskouriite']))
+        self.assertEqual(M.lookup('magnesio-hastingsite')[0], 'exact')      # a hyphenated IMA name is no pair
+
+
+class Groups(unittest.TestCase):
+    """A group named in the paper is the group, not the species it is named after; its card lists
+    every member, its subgroups' included (the snapshot's groups carry their parent since 0.12.1)."""
+    def _one(self, *texts):
+        hits = M.classify(_words(*texts))
+        self.assertEqual(len(hits), 1, hits)
+        return hits[0]
+
+    def test_affix_and_following_word_name_the_group(self):
+        for texts, idx in ((('crichtonite-group',), [0]), (('crichtonite', 'group.'), [0, 1]),
+                           (('Crichtonite', 'Group'), [0, 1]), (('crichtonite–group',), [0])):
+            h = self._one(*texts)
+            self.assertEqual((h['kind'], h['i']), ('group', idx), texts)
+            self.assertEqual(M.group_card(h['gid'])['name'], 'Crichtonite Group')
+
+    def test_species_stays_a_species(self):
+        self.assertEqual(self._one('crichtonite')['kind'], 'species')
+        self.assertEqual(self._one('crichtonite,', 'group')['kind'], 'species')   # punctuation between
+
+    def test_bare_group_names_and_prose_words(self):
+        self.assertEqual(M.group_card(self._one('tourmaline,')['gid'])['name'], 'Tourmaline')
+        self.assertEqual(M.classify(_words('iron', 'oxide')), [])
+        self.assertEqual(self._one('iron', 'group')['kind'], 'group')     # named as a group before 'group'
+
+    @unittest.skipUnless(_has_parents(), 'this Mindat cache predates group parents (refresh it)')
+    def test_supergroup_lists_its_subgroups_members(self):
+        h = self._one('Apatite', 'Supergroup')
+        c = M.group_card(h['gid'])
+        self.assertEqual(c['name'], 'Apatite Supergroup')
+        names = {m['name'] for sec in c['sections'] for m in sec['members']}
+        self.assertIn('Fluorapatite', names)                    # a member of the Apatite GROUP below it
+        self.assertEqual(c['n'], len(names))
+
+    @unittest.skipUnless(_has_parents(), 'this Mindat cache predates group parents (refresh it)')
+    def test_root_name_group(self):
+        c = M.group_card(M.pick_group('hornblende'))
+        self.assertIn('Magnesio-hornblende', [m['name'] for sec in c['sections'] for m in sec['members']])
+        self.assertIn('Amphibole Supergroup', c['above'])
+
+
 if __name__ == '__main__':
     unittest.main()
