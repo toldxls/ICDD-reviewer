@@ -2360,3 +2360,111 @@ class PowderTableLayouts(unittest.TestCase):
         self.pages(page)
         o, c = PE.pxrd_table('x.pdf')
         self.assertEqual([x[0] for x in c], [7.317, 5.174, 4.224, 1.679]); self.assertEqual(c[0][2], (0, 1, 1))
+
+
+class BvsColumnLabels(unittest.TestCase):
+    """bvs_site_tables (2026-09-22, block 1 item 2): a site label the font split from its number, and a footnote
+    letter past 'c' on the BVS head ('BVSe', yakubovichite)."""
+
+    def pages(self, *pages):
+        saved = PE._pages
+        PE._pages = lambda _pdf, **kw: list(pages)
+        self.addCleanup(lambda: setattr(PE, '_pages', saved))
+
+    def test_split_label_and_footnote_letter(self):
+        st = _Fake(['V1', 'V2', 'P1', 'P2'], ['O1', 'O2'])
+        page = [_line(30, (40, 'Table'), (70, '4.'), (90, 'Refined'), (140, 'atomic'), (190, 'coordinates,'), (280, 'bond'), (310, 'valence'), (360, 'sums')),
+                _line(44, (40, 'Atom'), (90, 'x/a'), (140, 'y/b'), (190, 'z/c'), (240, 'Uiso(Å2)'), (300, 'BVSe')),
+                _line(58, (40, 'V'), (55, '1'), (90, '0.3389(10)'), (140, '0.8638(11)'), (190, '0.9428(9)'), (240, '0.0171(8)'), (300, '3.97(10)')),
+                _line(72, (40, 'V'), (55, '2'), (90, '0.8486(10)'), (140, '0.4300(11)'), (190, '0.1265(9)'), (240, '0.0199(8)'), (300, '4.18(10)')),
+                _line(86, (40, 'P'), (55, '1'), (90, '0.3425(12)'), (140, '0.3983(12)'), (190, '0.0328(11)'), (240, '0.0158(11)'), (300, '4.89(13)')),
+                _line(100, (40, 'P2'), (90, '0.8425(12)'), (140, '0.8983(12)'), (190, '0.5328(11)'), (240, '0.0158(11)'), (300, '4.98(13)'))]
+        self.pages(page)
+        t = PE.bvs_site_tables('x.pdf', st)
+        self.assertEqual(len(t), 1); self.assertEqual(t[0]['rows'], [('V1', 3.97), ('V2', 4.18), ('P1', 4.89), ('P2', 4.98)])
+
+    def test_the_asterisk_operator_glyph_is_a_footnote_mark(self):
+        # alicewilsonite: 'BVS∗∗' (U+2217) headed the column; the caption's 'bond valence sums' two words used to stand in for it
+        st = _Fake(['Sr1', 'Sr2', 'Ce3', 'Na4'], ['O1'])
+        page = [_line(30, (46, 'Table'), (70, '4.'), (80, 'Coordinates'), (150, 'of'), (170, 'atoms,'), (220, 'site'), (250, 'occupancies,'), (330, 'and'), (360, 'bond-valence'), (430, 'sums')),
+                _line(44, (104, 'Site'), (198, 'x'), (254, 'y'), (311, 'z'), (353, 'Ueq'), (379, 'Site'), (395, 'composition'), (465, 'BVS∗∗')),
+                _line(58, (104, 'Sr1'), (159, '0.54194(18)'), (215, '0.31556(17)'), (280, '0.6334(2)'), (331, '0.0310(3)'), (379, 'Sr0.73Ce0.22Ba0.05∗'), (475, '2.29')),
+                _line(72, (104, 'Sr2'), (159, '0.87712(17)'), (215, '0.64054(15)'), (271, '0.63063(19)'), (331, '0.0318(4)'), (379, 'Sr0.67Ce0.28Ba0.05∗'), (475, '2.15')),
+                _line(86, (104, 'Ce3'), (159, '0.21535(11)'), (215, '0.97861(11)'), (271, '0.63657(13)'), (331, '0.0297(3)'), (379, 'Ce0.60Sr0.40∗'), (475, '2.64')),
+                _line(100, (104, 'Na4'), (163, '0.6747(12)'), (219, '0.6413(11)'), (275, '0.0140(13)'), (327, '0.0149(11)'), (379, 'Na1.00'), (475, '1.34'))]
+        self.pages(page)
+        t = PE.bvs_site_tables('x.pdf', st)
+        self.assertEqual([x['rows'] for x in t], [[('Sr1', 2.29), ('Sr2', 2.15), ('Ce3', 2.64), ('Na4', 1.34)]])   # one table, not a second one from the caption's words
+
+
+class GridLabelsAndTranspose(unittest.TestCase):
+    """The caption-found grid set the other way round (anions across, cations down), its rows labelled
+    'site/occupant' (zincorinmanite 'M1/Fe3+'; gorerite 'A/Ca1 Ca …', 'M2 0.67Fe + 0.33Ti …')."""
+
+    def pages(self, *pages):
+        saved = PE._pages
+        PE._pages = lambda _pdf, **kw: list(pages)
+        self.addCleanup(lambda: setattr(PE, '_pages', saved))
+
+    def test_labels(self):
+        self.assertEqual(PE._bv_norm('M1/Fe3+'), 'M1'); self.assertEqual(PE._bv_norm('A/Ca1'), 'CA1')
+        self.assertEqual(PE._bv_norm('Fe1/Al1'), 'FE1/AL1'); self.assertEqual(PE._bv_norm('BVS∗∗'), 'BVS')
+
+    def test_a_transposed_grid_with_occupant_labels(self):
+        st = _Fake(['M1', 'M2', 'M3'], ['O1', 'O2', 'O3', 'O4'])
+        page = [_line(30, (303, 'Table'), (323, '8.'), (334, 'Bond-valence'), (400, '(in'), (420, 'valence'), (460, 'units)'), (500, 'for'), (520, 'zincorinmanite')),
+                _line(44, (310, 'Site/Atom'), (359, 'O1'), (402, 'O2'), (446, 'O3'), (489, 'O4'), (533, 'Σcat')),
+                _line(58, (310, 'M1/Fe3+'), (359, '0.46'), (402, '0.60'), (446, '0.52'), (489, '0.40'), (533, '2.90')),
+                _line(72, (310, 'M2/Sb5+'), (446, '0.94'), (489, '0.80'), (533, '5.22')),
+                _line(86, (310, 'M3/Zn'), (402, '0.47'), (489, '0.48'), (533, '1.91')),
+                _line(100, (310, 'Σan'), (359, '1.38'), (402, '2.27'), (446, '1.98'), (489, '2.08'))]
+        self.pages(page)
+        t = PE._find_bv_tables('x.pdf', st)
+        self.assertEqual(len(t), 1); rows = t[0]['rows']
+        self.assertEqual(rows[0][:4], ['Atom', 'M1', 'M2', 'M3']); self.assertEqual(rows[1][:2], ['O1', '0.46']); self.assertEqual(rows[3][2], '0.94')
+
+    def test_occupant_tokens_between_the_label_and_its_values(self):
+        ws = [(100, 0, 130, 10, 'A/Ca1'), (140, 0, 155, 10, 'Ca'), (200, 0, 240, 10, '0.076→2↓'), (300, 0, 340, 10, '0.116→↓'), (400, 0, 430, 10, '1.08')]
+        lab, vals = PE._value_run(ws)
+        self.assertEqual(lab[4], 'A/Ca1'); self.assertEqual([v[4] for v in vals], ['0.076→2↓', '0.116→↓', '1.08'])
+        ws = [(100, 0, 120, 10, 'M2'), (130, 0, 170, 10, '0.67Fe'), (175, 0, 180, 10, '+'), (185, 0, 225, 10, '0.33Ti'), (300, 0, 340, 10, '0.302→↓'), (400, 0, 430, 10, '3.21')]
+        lab, vals = PE._value_run(ws)
+        self.assertEqual(lab[4], 'M2')
+
+
+    def test_the_header_line_is_the_one_naming_sites_not_a_block_title(self):
+        # libbyite: 'NH4 Na1 Na2 U1 U2 S S2 S3 Hydrogen bonds Σ' — 'bonds' is a header word; nancyrossite: 'Fe3+ Ge' beside the
+        # other page column's 'Relationship to other minerals'; gorerite: 'R block' between the header and the rows is prose
+        st = _Fake(['Na1', 'Na2', 'U1', 'U2', 'S1'], ['O1', 'O2', 'O3'])
+        page = [_line(30, (43, 'Table'), (63, '5.'), (72, 'Bond'), (91, 'valence'), (117, 'analysis'), (145, 'for'), (156, 'libbyite.')),
+                _line(44, (87, 'NH4'), (135, 'Na1'), (191, 'Na2'), (244, 'U1'), (288, 'U2'), (333, 'S1'), (459, 'Hydrogen'), (492, 'bonds'), (547, 'Σ')),
+                _line(58, (43, 'O1'), (130, '0.13×2↓'), (182, '0.06'), (329, '1.71'), (543, '1.90')),
+                _line(72, (43, 'O2'), (87, '0.20'), (244, '0.55'), (329, '1.20'), (543, '1.95')),
+                _line(86, (43, 'O3'), (135, '0.15'), (288, '0.52'), (329, '1.30'), (543, '1.97'))]
+        self.pages(page)
+        t = PE._find_bv_tables('x.pdf', st)
+        self.assertEqual(t[0]['rows'][0][:5], ['Atom', 'NH4', 'Na1', 'Na2', 'U1'])
+        page = [_line(30, (40, 'Table'), (60, '6.'), (70, 'Weighted'), (120, 'bond'), (150, 'valences'), (200, 'for'), (220, 'gorerite.')),
+                _line(44, (40, 'Site'), (100, 'O1'), (150, 'O2'), (200, 'O3'), (250, 'O4'), (300, 'Sum')),
+                _line(58, (40, 'R'), (55, 'block')),
+                _line(72, (40, 'Ca1'), (100, '0.30'), (150, '0.25'), (300, '1.10')),
+                _line(86, (40, 'M2'), (150, '0.40'), (200, '0.87'), (300, '3.21')),
+                _line(100, (40, 'M3'), (100, '0.48'), (250, '0.60'), (300, '2.82'))]
+        self.pages(page)
+        t = PE._find_bv_tables('x.pdf', _Fake(['Ca1', 'M2', 'M3'], ['O1', 'O2', 'O3', 'O4']))
+        self.assertEqual(t[0]['rows'][0][:4], ['Atom', 'Ca1', 'M2', 'M3'])            # transposed, the header read past 'R block'
+
+
+class ParameterSetCitations(unittest.TestCase):
+    """bv_statement: a numeric citation resolved through the reference list; 'are from Brown (1981)'."""
+
+    def test_numeric_citation_resolves_in_the_reference_list(self):
+        t = ('Bond-valence parameters are taken from [11] for As-O, Cu-O and Ca-O.\n'
+             '[11] Gagné, O.C., Hawthorne, F.C.: Acta Cryst. B71, 562 (2015).\n')
+        r = PE.bv_statement(t); self.assertEqual(r['params'], 'gh'); self.assertTrue(r.get('from_refs'))
+        t2 = t + 'Bond-valence parameters are taken from [12] for Cu-Cl.\n[12] Brese, N.E., O\'Keeffe, M.: Acta Cryst. B47, 192 (1991).\n'
+        r = PE.bv_statement(t2); self.assertIsNone(r['params']); self.assertTrue(r.get('mixed'))
+
+    def test_a_source_the_tool_lacks_after_are_from(self):
+        r = PE.bv_statement('Bond-valence parameters (vu) are from Brown (1981); the sums are in Table 7.')
+        self.assertIsNone(r['params']); self.assertEqual(r.get('foreign'), 'Brown (1981)')

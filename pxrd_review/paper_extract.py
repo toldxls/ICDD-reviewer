@@ -1377,6 +1377,24 @@ def bv_statement(text):
             out['params'] = refs[0]; out['from_refs'] = True
             out['sentences'].append('the parameter set cited in the reference list (%s), no sentence naming it beside the table' % refs[0])
     if out['params'] is None and pieces:
+        # a numeric citation beside the parameter statement ('Bond-valence parameters are taken from [11]', polyarsite):
+        # the reference list says which set [11] is
+        nums = [n for s_ in pieces if re.search(r'\bparameters\b', s_, re.I) for n in re.findall(r'\[(\d{1,3})\]', s_)]
+        found = set()
+        for n in dict.fromkeys(nums):
+            m = re.search(r'(?:^|\n|\s)\[?%s[\].]\s+([A-Z][^\n]{20,400})' % n, text)
+            if not m:
+                continue
+            entry = m.group(1)
+            for k, pat in (('gh', r'Gagn[eé]|Comprehensive derivation of bond-valence'), ('bo', r"Brese|Bond-valence parameters for solids"), ('ba', r'Brown (?:and|&) Altermatt|Bond-valence parameters (?:obtained )?from a systematic')):
+                if re.search(pat, entry, re.I):
+                    found.add(k)
+        if len(found) == 1:
+            out['params'] = found.pop(); out['from_refs'] = True
+            out['sentences'].append('the parameter set the numeric citation [%s] resolves to in the reference list (%s)' % (nums[0], out['params']))
+        elif len(found) > 1:
+            out['mixed'] = True
+    if out['params'] is None and pieces:
         # What the paper DOES say, so that a set the tool does not carry, a program, or no citation at
         # all is on the record with its reason rather than a silent blank: the record is 'nooracle'.
         joined = ' '.join(pieces)
@@ -1394,7 +1412,7 @@ def bv_statement(text):
             out['uncited'] = len(pieces)
     return out
 
-_FOREIGN_SET = re.compile(r"(?:parameters?|constants?)\s+(?:\([^)]{0,40}\)\s+)?(?:of|from|by|given by|taken from|according to|listed by|reported by|derived by|proposed by|after)\s+"
+_FOREIGN_SET = re.compile(r"(?:parameters?|constants?)\s+(?:\([^)]{0,40}\)\s+)?(?:(?:are|were|was|is)\s+)?(?:of|from|by|given by|taken from|according to|listed by|reported by|derived by|proposed by|after)\s+"
                           r"((?:[A-Z][\w’'-]+)(?:\s+(?:and|&)\s+[A-Z][\w’'-]+|\s+et\s+al\.?)?,?\s*\(?(?:19|20)\d\d[a-z]?\)?)")   # 'parameters from Brown (2009)', 'parameters of Hong et al. (2004)'
 
 def _flex_title(title):
@@ -4891,7 +4909,7 @@ def check_paper(pdf, cif=None, out_dir=None):
 
 _AN_RE = re.compile(r'^(O|OH|OW|Ow|W|Wat|F|Cl|OD|Oh|Hw|H2O)\d*[A-Za-z]?\d*(?:\((?:OH|OH2|H2O|W|OW|HW|Wat)\))?$')   # 'O8(OH)': the paper tags its hydroxyl
 
-_BV_TAIL = re.compile(r'(?:\s*×\s*\d+(?:\.\d+)?)?[↓→]*[*†‡§#¶]{0,3}$')   # 'M1*', 'Na1×0.20→': a footnote mark and the occupancy a header weights its column by
+_BV_TAIL = re.compile(r'(?:/[A-Z][a-z]?\d?[+\-])?(?:\s*×\s*\d+(?:\.\d+)?)?[↓→]*[*†‡§#¶]{0,3}$')   # 'M1*', 'Na1×0.20→', 'M1/Fe3+': a footnote mark, the occupancy a header weights its column by, the site's charged occupant (zincorinmanite)
 
 
 _HEADER_WORDS = {'donated', 'donor', 'donors', 'accepted', 'acceptor', 'acceptors', 'bond', 'bonds', 'sum', 'sums', 'total', 'totals', 'anion', 'anions', 'cation', 'cations',
@@ -4902,7 +4920,9 @@ def _bv_norm(t):
     """A label as bv_check normalises it, the tail marks off. Pure, and memoised: the bond-valence
     table search asks it 900k times over forty papers for a few hundred distinct labels."""
     from pxrd_review import bv_check as B
-    t = t.replace('−', '-').replace('–', '-').strip()
+    t = t.replace('−', '-').replace('–', '-').replace('∗', '*').strip()
+    t = re.sub(r'^[A-Z]\d?/(?=[A-Z][a-z]?\d+(?![\d+\-]))', '', t)          # 'A/Ca1': the paper's site letter before the .cif's label (gorerite) — not 'M1/Fe3+', whose charged occupant is the tail
+    t = re.sub(r'^([A-Z]{1,2}\d{1,2})/[A-Z][a-z]?$', r'\1', t)                # 'M3/Zn': the site and its one occupant
     return B._norm_label(_BV_TAIL.sub('', t) or t)
 
 def _cation_labels(st):
@@ -4937,6 +4957,11 @@ def site_name_map(path, st, tol=0.25):
         rows = []
     own = {_bv_norm(x) for r in st.sites for x in r.label.split('/')} | {_bv_norm(r.label) for r in st.sites}
     out = {}; taken = {}
+    # a multiply-occupied site printed one occupant per line ('M1 0.1685 …' then 'Al', 'Zn', 'Mg' at the same
+    # x y z): the element rows are the site's constituents, not other sites — they used to land on the one
+    # .cif site beside M1 and cost it the alias (zincorinmanite, 2026-09-22)
+    named_xyz = {(x, y, z) for lab, x, y, z, _t in rows or [] if not re.fullmatch(r'[A-Z][a-z]?', lab or '')}
+    rows = [r for r in rows or [] if not (re.fullmatch(r'[A-Z][a-z]?', r[0] or '') and (r[1], r[2], r[3]) in named_xyz)]
     for lab, x, y, z, _tail in rows or []:
         try:
             xyz = [float(x), float(y), float(z)]
@@ -5207,11 +5232,22 @@ def _find_bv_tables(path, st):
                 out.append(full or g)
             grids = out
         return grids
-    return (bv_tables_by_caption(path, st)      # the table the paper itself points to
+    tabs = (bv_tables_by_caption(path, st)      # the table the paper itself points to
             or bv_bond_column(path, st)         # the valence printed beside each distance
             or bv_grids_by_rows(path, st)       # the grid, by its anion rows
             or bvs_site_tables(path, st)        # one sum per site, in a BVS column
             or _bvs_marks_table(path, st))      # 'BVS 2.12' under each site's block
+    # a grid the paper set the other way round — anions across the header, cations down the rows
+    # ('Site/Atom O1 O2 O3 O4 Σcat' / 'M1/Fe3+ 0.46 …', zincorinmanite; gorerite) — is turned as the
+    # checker reads it, the way a manuscript's Word table already was
+    def _clean(c):                                                     # 'M1/Fe3+' -> 'M1', 'A/Ca1' -> 'Ca1': the checker's own normaliser knows neither form
+        c = re.sub(r'/[A-Z][a-z]?\d?[+\-]$', '', (c or '').strip())
+        c = re.sub(r'^([A-Z]{1,2}\d{1,2})/[A-Z][a-z]?$', r'\1', c)
+        return re.sub(r'^[A-Z]\d?/(?=[A-Z][a-z]?\d+(?![\d+\-]))', '', c)
+    def _tidy(rows):
+        rows = _maybe_transpose(rows, st)
+        return [[_clean(rows[0][0])] + [_clean(c) for c in rows[0][1:]]] + [[_clean(r[0])] + list(r[1:]) for r in rows[1:]] if rows else rows
+    return [dict(t, rows=_tidy(t['rows'])) if t.get('kind') == 'grid' and t.get('rows') else t for t in (tabs or [])]
 
 
 _CELL_LINE = re.compile(r'^table (\d+): (\S+)–(\S+) (?:[↓→]?\s*\d{1,2}\s*[×x]\s*[↓→]?\s*)?([\d.]+)(?:\s*\([^)]*\)|\s*[↓→]?\s*[×x]\s*[\d.]+\s*[↓→]*|\s*[↓→])*\s*vs ([\d.]+) computed\s*$')   # '0.11(×0.88↓)', '0.326 ×2↓', '0.24↓×2,': the marks after the value
@@ -5650,7 +5686,7 @@ def _bv_pattern(lines, n, bad):
 # stands for — BEFORE it, after it, or both, and welded on with no space ('↓×40.07→×2',
 # '2×→0.41×4↓'); or the mark alone on a line of its own under the row it belongs to.
 _VAL_MARK = r'(?:[↓→]|[×x]\s*\d{1,2}|\d{1,2}\s*[×x])'
-_BV_VAL = re.compile(r'^%s*\d\.\d+(?:,\d\.\d+)*%s*$|^[×x]?\d*[↓→]+$|^[×x]\d+[↓→]*$|^\(\d+\)$|^[↓→]+$'
+_BV_VAL = re.compile(r'^%s*\d\.\d+(?:,\d\.\d+)*%s*(?:[→↓]\d[→↓]?)?$|^[×x]?\d*[↓→]+$|^[×x]\d+[↓→]*$|^\(\d+\)$|^[↓→]+$'   # '0.076→2↓': the multiplicity written between the arrows (gorerite)
                      % (_VAL_MARK, _VAL_MARK))
 
 
@@ -5873,9 +5909,16 @@ def _value_run(ws):
         i = max(j, i + 1)
     if best is None:
         return None
-    lab = ws[best[0] - 1]
-    return (lab, [ws[k] for k in best[1]]) if _ROW_LABEL.match(lab[4]) else None
+    k = best[0] - 1
+    while k > 0 and re.fullmatch(r'(?:\d*\.\d+)?[A-Z][a-z]?\d?[+\-]?|\+|\(|\)', ws[k][4]) and not _ROW_LABEL.match(ws[k][4]):
+        k -= 1                                                        # 'A/Ca1 Ca 0.076→', 'M2 0.67Fe + 0.33Ti 0.302→': the occupants between the label and its values (gorerite)
+    if k > 0 and '/' in ws[k - 1][4] and _ROW_LABEL.match(ws[k - 1][4].split('/')[0]) and re.fullmatch(r'[A-Z][a-z]?', ws[k][4]):
+        k -= 1                                                        # 'A/Ca1 Ca': the site label, then its element
+    lab = ws[k]
+    return (lab, [ws[k_] for k_ in best[1]]) if _ROW_LABEL.match(lab[4].split('/')[0]) else None   # 'M1/Fe3+', 'A/Ca1': the site and its occupant (zincorinmanite, gorerite)
 
+
+_HEAD_WORDS = {'donated', 'accepted', 'sum', 'total', 'bond', 'valence', 'valences', 'site', 'atom', 'cation', 'anion', 'cations', 'anions', 'sums', 'vu'}   # lowercase words a grid header may carry
 
 def _grid_from_runs(lines, runs, pno, cap_i=None):
     """Rows already located as (line index, label word, [value words]) -> the `bv_tables` shape.
@@ -5886,8 +5929,10 @@ def _grid_from_runs(lines, runs, pno, cap_i=None):
     head = []
     for k in range(runs[0][0] - 1, max(-1, (cap_i if cap_i is not None else runs[0][0] - 6)), -1):
         hw = [w for w in lines[k]['w'] if w[0] >= x_lo and w[2] <= x_hi]
-        if len([w for w in hw if not _BV_VAL.match(w[4])]) >= 2:
-            head = hw; break
+        n_lab = len([w for w in hw if _ROW_LABEL.match(w[4]) or re.fullmatch(r'Σ\w*|Sum|Total', w[4])])
+        n_low = len([w for w in hw if re.fullmatch(r'[a-z]{3,}', w[4]) and w[4] not in _HEAD_WORDS])
+        if len([w for w in hw if not _BV_VAL.match(w[4])]) >= 2 and n_lab >= 1 and (n_lab > n_low or (n_lab >= 2 and n_lab >= n_low)):
+            head = hw; break                                         # a header names sites ('O1 O2 … Sum', '(Zn0.699Fe3+ Ge', 'Fe3+ Ge Relationship to other minerals' beside a page column); a block title between it and the rows ('R block', gorerite) is one label and one word of prose
     cols = []
     for x in sorted((w[0] + w[2]) / 2 for _j, _lab, vs in runs for w in vs):
         if cols and x - cols[-1][-1] <= 9.0:
@@ -6120,7 +6165,7 @@ def _bvs_marks_table(path, st):
     return [{'page': None, 'kind': 'sites', 'head': 'BVS', 'rows': list(rows)}]
 
 
-_BVS_HEAD = re.compile(r'^(BVS|BVSs|BVS\*|BVS[a-c]|ΣBVS?|Σv|BV|BVsum|BVsums|Σs|Σ\(s\)|BVS\d|PBV|ΣBV|BVΣ|B\.V\.S\.?|b\.v\.s\.?)\*{0,2}$')   # 'B.V.S.' (majzlanite), 'b.v.s.*'   # 'PBV': the sum as some journals head it   # a bare 'Σ' is a grid's sum column, not a BVS column
+_BVS_HEAD = re.compile(r'^(BVS|BVSs|BVS\*|BVS[a-h]|ΣBVS?|Σv|BV|BVsum|BVsums|Σs|Σ\(s\)|BVS\d|PBV|ΣBV|BVΣ|B\.V\.S\.?|b\.v\.s\.?)\*{0,2}$')   # 'B.V.S.' (majzlanite), 'b.v.s.*'   # 'PBV': the sum as some journals head it   # a bare 'Σ' is a grid's sum column, not a BVS column
 
 def bvs_site_tables(pdf, st):
     """Bond-valence SUMS printed as a column of another table — the coordinates table ('Atom x y z
@@ -6134,9 +6179,11 @@ def bvs_site_tables(pdf, st):
     for pno, lines in enumerate(_pages(pdf)):
         for i, ln in enumerate(lines):
             ws = ln['w']; toks = [w[4] for w in ws]
-            bcols = [k for k, t in enumerate(toks) if _BVS_HEAD.match(t)]
+            bcols = [k for k, t in enumerate(toks) if _BVS_HEAD.match(t.replace('∗', '*'))]   # 'BVS∗∗': the asterisk operator glyph (U+2217) as a footnote mark (alicewilsonite) — the caption's 'bond valence sums' two words used to stand in for it
             bx = {}                                                                # a two-word head ('Bond | valence', ferraioloite): the column sits under the PAIR's midpoint
             for k, t in enumerate(toks[:-1]):
+                if re.match(r'^(Table|TABLE|Tab\.)$', toks[0]):
+                    break                                                          # a caption's 'bond valence sums' is not a column head
                 if re.fullmatch(r'Bond|bond|Bond-', t) and re.fullmatch(r'valences?\*{0,2}', toks[k + 1], re.I) and k + 1 not in bcols:
                     bcols.append(k + 1); bx[k + 1] = (ws[k][0] + ws[k + 1][2]) / 2
             # 'Atom'/'Site' over the label column says the line is a table header. Plenty of
@@ -6163,6 +6210,9 @@ def bvs_site_tables(pdf, st):
                     if re.match(r'^[-–−]?\d', first) and len(lw) >= 3 and sum(1 for w in lw if re.match(r'^[-–−]?\d', w[4])) >= len(lw) - 2:
                         j += 1; continue                                     # a row's continuation line (a second mineral's coordinates under the same site): neither a row nor a miss
                     lab_w = None
+                    if len(lw) > 2 and re.fullmatch(r'[A-Z][a-z]?', first) and re.fullmatch(r'\d{1,2}', lw[1][4]) and norm(first + lw[1][4]) in cats | anions \
+                            and norm(first) not in cats | anions and lw[1][0] - lw[0][2] < 12:   # … not 'Fe 1 0.25' where Fe is a site of its own and the 1 its s.o.f. (69122)
+                        lw = [(lw[0][0], lw[0][1], lw[1][2], lw[0][3], first + lw[1][4])] + lw[2:]; first = lw[0][4]   # 'V 1': a site label the font split from its number (77959)
                     # the label: the first token, or — a two-column page puts the other column's prose in
                     # front of the row ('… struc- Site* x y z Ueq BVS** Q' / '… ther- A(1) ½ 0 0 …') — the
                     # site token nearest the header's label column, left of the sums

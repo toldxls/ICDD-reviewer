@@ -18,7 +18,7 @@ _OX = (r'(?:SiO2|TiO2|Al2O3|Fe2O3|FeO|MnO|MgO|CaO|Na2O|K2O|P2O5|SO3|As2O5|As2O3|
 _OX_RE = re.compile(r'\b' + _OX + r'\b')
 _WT = re.compile(r'wt\.?\s?%|weight\s?%|wt\s?per\s?cent|\bwt\b', re.I)
 _ANALYSED = re.compile(r'microprobe|EPMA|WDS|EDS|electron probe|electron-probe|SEM|ICP|analys', re.I)
-_BV_CAPTION = re.compile(r'[Tt]able\s*S?\d+[^\n]{0,150}[Bb]ond[- ][Vv]alence|[Bb]ond[- ][Vv]alence[^\n]{0,150}[Tt]able\s*S?\d+')
+_BV_CAPTION = re.compile(r'[Tt]able\s*\d+[^\n]{0,150}[Bb]ond[- ][Vv]alence|[Bb]ond[- ][Vv]alence[^\n]{0,150}[Tt]able\s*\d+')   # 'Table S3' / 'Online Materials Table S3' is NOT printed in the paper (I003637, I002906, 2026-09-22): the reader cannot read what is not there
 # a STATED compatibility index or category — not the Gladstone–Dale relationship used to calculate an
 # index the paper could not measure ('the Gladstone–Dale relationship gives n = 1.88'): that paper
 # reports no compatibility, and its n is checked by the optics reader instead
@@ -58,7 +58,7 @@ def features(text):
                 if rows >= 3:
                     coords = True; break
     return {'epma': bool(_WT.search(t)) and n_ox >= 4 and bool(_ANALYSED.search(t)),
-            'bv': bool(_BV_CAPTION.search(t)),
+            'bv': any(not re.search(r'[Oo]nline [Mm]aterial|[Ss]upplement|[Dd]eposited|CIF', m.group(0)) for m in _BV_CAPTION.finditer(t)),
             'coords': coords,
             'gd': bool(_GD.search(t)),
             'optics': bool(_OPTICS.search(t))}

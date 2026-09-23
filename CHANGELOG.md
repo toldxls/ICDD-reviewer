@@ -33,6 +33,23 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+**Bond-valence readers, first batch (2026-09-22 evening; plan block 1, item 2).** The 32 papers whose table the crude scan
+sees and no finder read, and the 85 whose parameter set had no oracle, traced one by one. Whole corpus, bond-valence tables
+verified 236 → 238 of 332 (the denominator now excludes tables the paper sends to its online materials — those were
+never printed to read), parameter sets 214 → 216; three more tables read (zincorinmanite's checks 6 cells, no disagreement;
+alicewilsonite's and two others' sums agree for the first time), none lost; workbooks 340 → 344 with contradictions still 0.
+- `bvs_site_tables`: a site label the font split from its number ('V 1'), guarded against a site of its own beside its
+  s.o.f. ('Fe 1 0.25'); a footnote letter past c ('BVSe'); the asterisk-operator glyph as a mark ('BVS∗∗' — the caption's
+  'bond valence sums' two words had been standing in for it); a caption's words are no column head.
+- The caption route (`bv_tables_by_caption` / `_value_run` / `_grid_from_runs`): a row labelled site/occupant ('M1/Fe3+',
+  'A/Ca1 Ca', 'M2 0.67Fe + 0.33Ti'); a multiplicity written between the arrows ('0.076→2↓'); the header is the line that
+  names sites, not a block title ('R block'); grids set anions-across are turned as the checker reads them and their
+  labels cleaned of the occupant, as a manuscript's Word table already was.
+- `site_name_map`: a multiply-occupied site printed one occupant per line no longer loses its alias to its own constituents.
+- `bv_statement`: a numeric citation ('parameters are taken from [11]') resolved through the reference list, two of them
+  a mix; 'parameters (vu) are from Brown (1981)' is a source the tool lacks, not 'no set named'.
+- `tools/paper_features.py`: a bond-valence table in the online materials is not printed.
+
 **The powder-table reader, from the entry-recall worklist (2026-09-22 pm; plan block 1, item 1).** The 35 entries whose paper
 prints the list and whose seeded dropped line or intensity slip went unseen were the reader's: it read nothing (a header with
 the indices in the MIDDLE — `Iobs Icalc h k l dobs dcalc`, the commonest journal layout — dropped every row), a few lines (a
