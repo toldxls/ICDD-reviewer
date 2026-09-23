@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.12.2](#0122--2026-09-23) | 23 Sep | `pxrd update` and the chip's Pull now no longer restart the tool when the pull changed nothing: HEAD is compared before and after, "already up to date" keeps the tool running |
 | [0.12.1](#0121--2026-09-23) | 23 Sep | Mineral groups on the .pdf page (members with formulas on the card, a large group listed in the Mindat pane while hovered, supergroups through their subgroups — the snapshot now stores each group's parent); a review of 0.12.0: names broken at their own hyphen at a line end are read (1,270 → 281 lost on the corpus), 89 species with long suffixes, apostrophes or two-word names now found, series ('bismuthinite–aikinite') and polytypes marked, a title word's tint kept inside its box |
 | [0.12.0](#0120--2026-09-23) | 23 Sep | Mineral names on the .pdf page: every IMA species the paper names is tinted and a hover opens its Mindat formula, group, Strunz code, cell and type locality; a word one slip from a species name is underlined with the name it is nearest; the entry's own mineral tinted once a page; matched against the local Mindat snapshot, so a paper's words never leave the machine — a reading aid, no new check |
 | [0.11.4](#0114--2026-09-23) | 23 Sep | Three reader rounds from the plan's block 1, each gated on the whole corpus: the powder-table reader rebuilt from the entry-recall worklist (printed-list recall of a dropped line 78 → 92 %, an intensity slip 66 → 88 %; checks 34/37 pair lines one-to-one), the bond-valence readers' first batch (tables no finder read, parameter sets cited by number), the optics and density readers (27 papers' densities read for the first time, a reason where no index is read), and an adversarial read of all three that found five density misreads — no new check |
@@ -35,6 +36,8 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.12.2] — 2026-09-23
 
 ### Fixed
 - **`pxrd update` / the chip's Pull now restarted the tool although nothing had changed.** On a git
