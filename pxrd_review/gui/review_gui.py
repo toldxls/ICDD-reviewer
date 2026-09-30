@@ -2823,8 +2823,13 @@ def _ms_row(key):
     t = MS['triage'].get(key) or {}
     outs = _ms_outputs(key)
     pdf = next((k for k in (MS.get('pdfs') or {}) if os.path.splitext(k)[0] == key), None) or (key if _tb_docx_path(key) else None)   # what the Tables mode can be filled from
+    try:
+        st_ = os.stat(MS['files'][key]); mtime, size = int(st_.st_mtime), st_.st_size
+    except OSError:
+        mtime, size = 0, 0
     row = {'key': key, 'name': os.path.basename(MS['files'][key]), 'reviewed': bool(t.get('reviewed')),
-           'has_annotated': os.path.exists(outs['annotated']), 'pending': True, 'summary': None, 'error': None, 'pdf': pdf}
+           'has_annotated': os.path.exists(outs['annotated']), 'pending': True, 'summary': None, 'error': None, 'pdf': pdf,
+           'mtime': mtime, 'size': size, 'kind': os.path.splitext(MS['files'][key])[1].lower().lstrip('.')}   # what the list can be sorted by
     if c and c['fp'] == _ms_fingerprint(key):
         d = c['data']
         row.update(pending=False, summary=d.get('summary') or {}, error=d.get('error'),

@@ -339,6 +339,7 @@ class ManuscriptMode(unittest.TestCase):
         self.assertEqual(sorted(f['key'] for f in st['files']), ['paper', 'table'])
         self.assertEqual(st['cifs'], ['x'])
         paper = next(f for f in st['files'] if f['key'] == 'paper')
+        self.assertTrue(paper['mtime'] > 0 and paper['size'] > 0 and paper['kind'] in ('docx', 'pdf'), paper)     # what the sidebar sorts by
         self.assertEqual({k: v for k, v in paper['summary'].items() if k in ('orphan', 'uncited', 'pair', 'form')}, {'orphan': 1, 'uncited': 1, 'pair': 0, 'form': 0})
         d = json.loads(self.c.get('/api/ms/doc/paper').data)
         kinds = sorted(f['kind'] for f in d['analysis']['findings'])

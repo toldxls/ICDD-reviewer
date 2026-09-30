@@ -129,6 +129,9 @@ package version in `pyproject.toml`.
   (bond-valence sums, charge balance, colour) is quoted; H₂O or OH in the formula with no O–H band, thermal analysis,
   water determination or difference calculation named. Reminders for the reviewer, never findings: on published papers
   the valence note is common (most rest on bond-valence sums, and say so).
+- **GUI, Manuscript mode: the folder's list can be sorted** — by name, newest or oldest first, largest first, .docx before
+  .pdf, or most findings (a select beside the filter, remembered in the browser); the rows carry the file's date,
+  size and kind for it.
 
 ## [0.13.0] — 2026-09-30
 

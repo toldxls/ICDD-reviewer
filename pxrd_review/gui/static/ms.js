@@ -73,9 +73,24 @@ function msMatchesView(f) {
   if (MSS.view === 'clean') return !f.pending && !msHasFindings(f) && !f.error;
   return true;
 }
+const msFindingCount = f => f.summary ? Object.values(f.summary).reduce((a, n) => a + (n || 0), 0) : -1;
+function msSortKey() { try { return localStorage.getItem('ms-sort') || 'name'; } catch (e) { return 'name'; } }
+function msSorted(list) {
+  const by = msSortKey();
+  const name = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  const cmp = {
+    name,
+    newest: (a, b) => (b.mtime || 0) - (a.mtime || 0) || name(a, b),
+    oldest: (a, b) => (a.mtime || 0) - (b.mtime || 0) || name(a, b),
+    size: (a, b) => (b.size || 0) - (a.size || 0) || name(a, b),
+    kind: (a, b) => (a.kind === b.kind ? 0 : a.kind === 'docx' ? -1 : b.kind === 'docx' ? 1 : a.kind.localeCompare(b.kind)) || name(a, b),
+    findings: (a, b) => msFindingCount(b) - msFindingCount(a) || name(a, b),
+  }[by] || name;
+  return [...list].sort(cmp);
+}
 function msVisible() {
   const q = $('#ms-filter').value.toLowerCase();
-  return MSS.files.filter(f => msMatchesView(f) && (!q || f.name.toLowerCase().includes(q)));
+  return msSorted(MSS.files.filter(f => msMatchesView(f) && (!q || f.name.toLowerCase().includes(q))));
 }
 function msRenderList() {
   const ul = $('#ms-list'); ul.innerHTML = '';
@@ -100,6 +115,8 @@ document.querySelectorAll('#ms-views button').forEach(b => b.addEventListener('c
   msRenderList();
 }));
 $('#ms-filter').addEventListener('input', msRenderList);
+(() => { const sel = $('#ms-sort'); if (!sel) return; sel.value = msSortKey(); if (sel.value !== msSortKey()) sel.value = 'name';
+  sel.addEventListener('change', () => { try { localStorage.setItem('ms-sort', sel.value); } catch (e) {} msRenderList(); }); })();
 
 // ---- folder -----------------------------------------------------------------
 async function msOpenFolder(path, confirm) {
