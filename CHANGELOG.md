@@ -64,6 +64,20 @@ package version in `pyproject.toml`.
   column). The number of analyses is read from the header ('Mean (n = 8)'), the caption ('mean of 12 analyses') or an
   `n` row, and travels with the table (`n_points`) to the basis-free ratios, the table lint and the dominance check.
 
+- **`pxrd paper --check`: the site-scattering table** (`site_scattering_tables` / `site_scattering_check`, hooked after the
+  dominance check) — a table of assigned site populations with their refined and calculated scattering, read by its caption
+  in a .pdf or a .docx. The CALCULATED scattering must be the population's own electrons (Σ apfu × Z, per formula unit or per
+  site): a value off by more than 2 % (0.6 e) is a finding — the arithmetic is the paper's own. Refined vs calculated apart by
+  more than 10 % is information (the assignment is the authors' judgement; published tables show 20 %). With a .cif, the
+  electrons its site holds (Σ occupancy × Z) against the refined value the manuscript prints for that site: information from
+  5 %, a finding from 15 % — the deposited .cif does not give the refined scattering the manuscript prints. Populations in
+  every corpus form: 'Mn1.64Fe0.36', 'Fe3+ 0.53Mg0.32' (the valence split from its coefficient by a superscript run),
+  '1.68 Mg 0.35 Fe2', '0.71 Na + 0.28□ + 0.01 Ca', a lanthanide group at the electrons the table's note gives it,
+  (H2O)/(OH) as units, a population wrapped onto the next line (kept in its column), a 'scattering curve' column, an
+  'Ideal composition' column. A row is judged only when exactly one population stands beside the value (an ambiguous or
+  cut row is counted, never flagged). And the electron counts the PROSE states ('272.0 and 272.2 epfu from EMPA and
+  SREF') against the formulas read (`epfu_lines`): a count a formula gives (cations, every atom or anions) is said to be
+  reproduced; any other is left alone.
 - **`pxrd paper --check`: 2V in every place it is stated** (`optics_2v_lines`) — two stated values more than 5° apart
   ('2V is given as 63° vs 70.5° in different places') are a finding; a stated value more than 15° from the one the three
   indices give (cos²Vz = (1/β² − 1/γ²)/(1/α² − 1/γ²)) is information, the indices' rounding moving 2V as it does;

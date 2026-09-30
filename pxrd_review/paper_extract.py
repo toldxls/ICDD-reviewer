@@ -5347,6 +5347,379 @@ def dominance_check(text, ex, cif=None):
     return (['dominance within the scatter, site by site:'] + L) if L else []
 
 
+# ----------------------------------------------------------------------------- site scattering: the assigned population's electrons
+
+_SS_CAPTION = re.compile(r'site[- ]scattering|site[- ]populations?|site[- ]assignments?|electrons per (?:formula|site)|scattering \(e|\bepfu\b|\beps\b|mean (?:atomic|electron) number', re.I)
+_SS_HEAD_REF = re.compile(r'^(?:refined|observed|obs\.?|exp\.?|experimental|rss\*?|ssf\s*exp|ss\s*obs|sref|sc-?xrd)$', re.I)
+_SS_HEAD_CALC = re.compile(r'^(?:calculated|calc\.?|css\*{0,2}|ssf\s*calc|ss\s*calc|epma|emp[a]?)$', re.I)
+_SS_HEAD_WORD = re.compile(r'^(?:Site|Atom|Assigned|Proposed|Optimised|Optimized|site|population|populations?|scattering|s\.s\.?|ss|\(?epfu\)?|\(?apfu\)?|'
+                           r'Ideal|composition|Chemical|chemical|Occupancy|occupancy|Bond|bond|distance|distances?|length|lengths?|Mean|mean|mdl|eps|SOF|SC|value|values?|\(e−?\)a?|\(Å\)|<[^>]+>|Refined|Calculated|from|data|EMP|SREF|N)$')
+_hw = lambda t: t.replace('ﬁ', 'fi').replace('ﬂ', 'fl')                                    # a header word set with a ligature ('Reﬁned')
+_SS_LABEL = re.compile(r"^(?:\[\d{1,2}\])?(?:Σ|Sum|Total)?[A-Z][A-Za-z]?(?:\(\d{1,2}[A-Za-z]?(?:[,–-]\d)?\)|\d{0,2}[A-Za-z]?)['′*†a-z]{0,2}$")
+_SS_NUM = re.compile(r'^(\d+(?:\.\d+)?)(?:\(\d+\))?[a-z*†]{0,3}$')
+_SS_ELEMENTISH = re.compile(r'^(?:[A-Z][a-z]?|□|☐)(?:\d?[+\-þ])?\+?$|^[A-Z][a-z]?\d$')       # 'Na', 'Fe2+', 'Fe2' (the + lost), '□', 'Ti4+'
+_SS_GLUED = re.compile(r'^[(\[]?[A-Z][a-z]?(?:\d?[+\-þ])?\d*\.\d+')                          # 'Mn1.64Fe0.36', 'Fe3+0.53': the coefficient-after grammar
+_SS_TOKEN = re.compile(r'^(?:\d[\d.,()×□☐]*\+?[a-z*†]{0,3}|\d+\.\d+[A-Z][\w.+\-þ()]*|[(\[]*(?:[A-Z][a-z]?|□|☐|Σ)[\w.+\-þ()\[\]Σ×/′\'*†,]*|[+=→−–\-*†‡]+|\(?×\d+\)?|[a-c]|cations|anions|apfu|epfu|[⅙⅓½¼¾⅔]+)$')
+_SS_PROSE = re.compile(r'^[A-Za-z][a-z]{3,}[,.;:)]*$')                                       # a word: the neighbouring column's prose, or the ideal-composition column's caption
+_SS_VACANT = {'□', '☐', 'A', 'Vac', 'vac', '&', '▫', 'o'}                                   # a Symbol-font box reaches the text layer as A or &
+_SS_GROUP = {'Ln', 'REE', 'TR', 'Ree', 'LREE', 'HREE', 'M', 'R'}                            # a lanthanide group: its electrons come from the table's note or not at all
+_SS_UNITS = {'Wa': 10, 'Hy': 9}                                                             # (H2O) and (OH) as one unit each
+SS_CALC_TOL = 0.02        # a printed calculated site scattering against the population's electrons: 2 % (or 0.6 e), the rounding of the coefficients
+SS_NEAR = 0.08            # a printed number this near the population's electrons IS the calculated column (further: no such column, nothing to say)
+SS_DIFF_INFO = 0.10       # refined vs calculated apart by more than this share of the calculated: information (published tables show 20 %)
+SS_CIF_INFO = 0.05        # the .cif's electrons per atom against the manuscript's refined value: information from here
+SS_CIF_FLAG = 0.15        # and a finding from here — the deposited .cif does not give the refined scattering the manuscript prints
+_SS_CELL_GAP = 14.0       # a number this close (pt) to the token before it is in the same cell: a coefficient, not the next column
+
+
+def _population_electrons(s, ln_e=None, before=None):
+    """The electrons and atoms of a site population as a table writes it — 'Mn1.64Fe0.36', 'Fe3+0.53Mg0.32Mn0.15',
+    '1.68 Mg 0.35 Fe2', '0.71 Na + 0.28□ + 0.01 Ca', '(Sr1.07Ca0.26Na0.04)Σ1.39Ln3+0.61' — -> (electrons, atoms incl.
+    vacancies, {symbol: n}, unknown symbols). `before`: the coefficient stands before its symbol ('0.71 Na'); decided
+    from the string when not given. A lanthanide group counts `ln_e` electrons per atom, or is unknown."""
+    from pxrd_review.cif_audit import _ZNUM
+    t = s.replace('þ', '+').replace('−', '-').replace('–', '-').replace(' ', ' ')
+    t = re.sub(r'\(?H2O\)?', ' Wa', t)
+    t = re.sub(r'\(OH\)|(?<![A-Za-z])OH(?![a-z])', ' Hy', t)
+    t = re.sub(r'Σ\s*\d+(?:\.\d+)?', ' ', t)                         # '(…)Σ1.39' the group's sum
+    t = re.sub(r'[()\[\]]', ' ', t)
+    t = re.sub(r'\+\+', '+ ', t)                                      # 'Fe3++ 0.13': a valence and a separator
+    t = re.sub(r'(?<=[\s□☐])\+\s*', ' ', t)                           # the separator between terms ('Na + 0.28'), never a valence ('Fe3+')
+    t = re.sub(r'\b[a-z]{2,}\b', ' ', t)                              # 'cations', 'anions'
+    if before is None or re.match(r'^\s*\d', t):
+        before = bool(re.match(r'^\s*\d', t))                           # '2.00Mn' in a table that otherwise writes 'Mn2.00'
+    els = {}; unknown = []; atoms = 0.0
+    if before:
+        it = re.finditer(r'(\d+(?:\.\d+)?)\s*([A-Z][a-z]?|□|☐)(?:\d?[+-]|\d(?![.\d]))?', t)
+    else:
+        it = re.finditer(r'([A-Z][a-z]?|□|☐)(?:\d[+-]|[+-])?\s*(\d+(?:\.\d+)?)?(?![.\d])', t)
+    for m in it:
+        n, el = (m.group(1), m.group(2)) if before else (m.group(2), m.group(1))
+        n = float(n) if n else 1.0
+        atoms += n
+        if el in _SS_VACANT:
+            continue
+        if el in _SS_GROUP:
+            if ln_e is None:
+                unknown.append(el); continue
+        elif el not in _ZNUM and el not in _SS_UNITS:
+            unknown.append(el); continue
+        els[el] = els.get(el, 0.0) + n
+    e = sum(n * (_ZNUM.get(el) or _SS_UNITS.get(el) or ln_e) for el, n in els.items())
+    return e, atoms, els, unknown
+
+
+def _ss_note_ln(lines):
+    """The electrons a table's note gives one lanthanide: 'a mean number of electrons of 60', 'f-curve of 66.8 el.', 'fav = 58.59 el'."""
+    t = ' '.join(lines)
+    m = re.search(r'(?:mean number of electrons of|f-?curve of|f\w*\s*=)\s*(\d{2}(?:\.\d+)?)\s*(?:el\b|electrons|e\b|,|\.|$)', t, re.I)
+    return float(m.group(1)) if m else None
+
+
+def site_scattering_tables(path):
+    """Every table of the document that gives site populations with their scattering, read by its caption:
+    [{'page', 'caption', 'rows', 'ln_e', 'notes', 'before'}], a row = {'label', 'groups': [population strings, in
+    order], 'values': [(x, value, token)], 'ref', 'calc', 'cut'}. Rows are assembled by the label column (a wrapped
+    population continues its row); the row's tokens end at the first word of prose (the neighbouring column,
+    `cut`); a number is a value unless it is a coefficient — before its symbol ('1.68 Mg'), or after a valence
+    and in the same cell ('Ln3+ 0.61'). The population fragments between values are kept as separate groups (an
+    'Ideal composition' column, a refined 'Ce0.376(6)' beside the assigned population). `ref`/`calc` are the values
+    under the header words 'Refined' / 'Calculated' when both columns are found, else None."""
+    out = []
+    for pno, lines in enumerate(_pages(path)):
+        for ci, ln in enumerate(lines):
+            ws = ln['w']
+            if len(ws) < 3 or not re.match(r'^(?:Table|TABLE)$', ws[0][4]) or not re.match(r'^\d{1,2}[.:]?$', ws[1][4]):
+                continue
+            if not ws[1][4][-1] in '.:' and not ws[2][4][:1].isupper():
+                continue                                                 # 'Table 7 compares the site scattering…': prose
+            second = [w for w in ws[2:] if re.match(r'^(?:Table|TABLE)$', w[4])]
+            x_lo = ws[0][0] - 8
+            x_hi = (second[0][0] - 5) if second else (max(w[2] for w in ws) + 12)
+            cap_ws = [w for w in ws if w[0] < x_hi]
+            cap = ' '.join(w[4] for w in cap_ws); cap_end = ci
+            for j in range(ci + 1, min(ci + 4, len(lines))):
+                nxt = [w for w in lines[j]['w'] if x_lo <= w[0] < x_hi + 40]
+                if nxt and nxt[0][0] < ws[0][0] + 30 and not _SS_LABEL.match(nxt[0][4]) and not _SS_HEAD_WORD.match(_hw(nxt[0][4])):
+                    cap += ' ' + ' '.join(w[4] for w in nxt); cap_end = j
+                else:
+                    break
+            if not _SS_CAPTION.search(cap):
+                continue
+            if re.search(r'coordinates|displacement|bond[- ]valence|angles', cap[:140], re.I) and not re.search(r'site[- ]scattering', cap, re.I):
+                continue
+            # the table may be wider than its caption: header words extend the window, each from the last
+            for j in range(ci + 1, min(ci + 7, len(lines))):
+                for w in sorted(lines[j]['w'], key=lambda w: w[0]):
+                    if w[2] > x_hi and w[0] <= x_hi + 110 and (_SS_HEAD_WORD.match(_hw(w[4])) or _SS_HEAD_REF.match(_hw(w[4])) or _SS_HEAD_CALC.match(_hw(w[4]))):
+                        x_hi = w[2] + 12
+            rows = []; head = []; notes = []; label_x = None; cur = None; blank = 0
+            for j in range(cap_end + 1, min(len(lines), ci + 70)):
+                # a label column set left of the caption's start is admitted, a word of prose there is not
+                tk = [w for w in lines[j]['w'] if x_lo <= w[0] <= x_hi or (x_lo - 60 <= w[0] < x_lo and (_SS_LABEL.match(w[4]) or _SS_NUM.match(w[4])))]
+                if not tk:
+                    blank += 1
+                    if rows and blank > 3:
+                        break
+                    continue
+                blank = 0
+                first = tk[0][4]
+                if rows and (_ANY_CAPTION.match(' '.join(w[4] for w in tk[:2])) or re.match(r'^(?:Fig(?:ure)?\.?|FIGURE)$', first)):
+                    break
+                if re.match(r'^(?:Notes?:?|\*+|[a-c]\s*=?|Symbols?:?)$', first) or (re.match(r'^\*', first) and rows):
+                    notes.append(' '.join(w[4] for w in tk)); continue
+                if notes:
+                    notes.append(' '.join(w[4] for w in tk)); continue
+                if _SS_LABEL.match(first) and len(first) <= 10 and (label_x is None or abs(tk[0][0] - label_x) <= 14) and not _SS_HEAD_REF.match(_hw(first)) \
+                        and first not in ('Site', 'Atom', 'Sites', 'Table', 'Cations', 'Anions', 'Position', 'Wyckoff', 'The', 'Total'):
+                    if label_x is None:
+                        if not head and j > ci + 12:
+                            break
+                        label_x = tk[0][0]
+                    cur = {'label': first.rstrip('*†\'′'), 'tokens': tk[1:], 'cont': []}
+                    rows.append(cur); continue
+                if cur is not None and re.match(r'^(?:Σ|R[A-Z]|Sum|Total)', first):
+                    cur = None; continue                             # a sum row the label test did not take: not part of the row above
+                if cur is not None and len(tk) <= 12 and not _SS_PROSE.match(first):
+                    cur['cont'].append(tk); continue                 # a population wrapped onto the next line
+                if not rows:
+                    head += tk; continue
+                if len(tk) >= 9 and not any(_SS_GLUED.match(w[4]) for w in tk):
+                    break                                            # prose resumes
+                notes.append(' '.join(w[4] for w in tk))
+            if len(rows) < 2:
+                continue
+            ln_e = _ss_note_ln(notes + [cap])
+            hx_ref = [w[0] for w in head if _SS_HEAD_REF.match(_hw(w[4]))]
+            hx_calc = [w[0] for w in head if _SS_HEAD_CALC.match(_hw(w[4]))]
+            glued = sum(1 for r in rows for w in r['tokens'] if _SS_GLUED.match(w[4]))
+            spaced = sum(1 for r in rows for a, b in zip(r['tokens'], r['tokens'][1:])
+                         if _SS_NUM.match(a[4]) and float(_SS_NUM.match(a[4]).group(1)) < 10 and _SS_ELEMENTISH.match(b[4]) and b[0] - a[2] < _SS_CELL_GAP)
+            spaced += sum(1 for r in rows for w in r['tokens'] if re.match(r'^\d+\.\d+[A-Z][a-z]?(?:\d?[+\-þ])?$', w[4]))     # '2.00Mn'
+            before = spaced > glued
+            for r in rows:
+                toks = r.pop('tokens'); cut = False
+                for cont in r.pop('cont'):
+                    # a wrapped population continues its COLUMN: its words go before the first value to the right of the population
+                    pop_x1 = max([w[2] for w in toks if not _SS_NUM.match(w[4]) and not re.match(r'^[+=→−–\-]+$', w[4])] or [toks[0][0] if toks else 0])
+                    at = next((k for k, w in enumerate(toks) if w[0] > pop_x1 + 2 and _SS_NUM.match(w[4])), len(toks))
+                    left = [w for w in cont if w[0] < (toks[at][0] if at < len(toks) else 1e9)]
+                    toks = toks[:at] + left + toks[at:] + [w for w in cont if w not in left]
+                for k, w in enumerate(toks):
+                    if not _SS_TOKEN.match(w[4]) or _SS_PROSE.match(w[4]) and w[4].rstrip(',.;:)') not in ('cations', 'anions', 'apfu', 'epfu'):
+                        toks = toks[:k]; cut = True; break
+                groups = []; frag = []; vals = []
+                for k, w in enumerate(toks):
+                    t = w[4]
+                    m = _SS_NUM.match(t)
+                    if m:
+                        v = float(m.group(1))
+                        prev = toks[k - 1] if k else None
+                        nxt = toks[k + 1] if k + 1 < len(toks) else None
+                        coef = v < 10 and ((before and nxt is not None and bool(_SS_ELEMENTISH.match(nxt[4])) and nxt[0] - w[2] < _SS_CELL_GAP) or
+                                           (not before and prev is not None and bool(re.search(r'(?:[A-Za-z]\d?|\d)[+\-þ]$', prev[4])) and w[0] - prev[2] < _SS_CELL_GAP))
+                        if coef:
+                            frag.append(t)
+                        else:
+                            if frag:
+                                groups.append(' '.join(frag)); frag = []
+                            vals.append((w[0], v, t))
+                    elif re.match(r'^[+=→−–\-*†‡]+$', t) or re.match(r'^\(?×\d+\)?$', t) or re.match(r'^[a-c]$', t):
+                        continue
+                    elif _SS_PROSE.match(t):
+                        continue
+                    else:
+                        frag.append(t)
+                if frag:
+                    groups.append(' '.join(frag))
+                if not before and len(groups) > 1:
+                    # a 'scattering curve' column: one bare symbol before the numbers, while another group carries coefficients
+                    groups = [g for g in groups if not (re.fullmatch(r'[A-Z][a-z]?', g) and any(re.search(r'\d', o) for o in groups))] or groups
+                r['groups'] = groups; r['values'] = vals; r['cut'] = cut
+                r['mult'] = any(re.match(r'^\(?×\d+\)?$', w[4]) for w in toks)       # '(×6)': a per-site value multiplied to the cell — conventions mixed in one row
+            out.append({'page': pno + 1, 'caption': cap[:160], 'rows': rows, 'ln_e': ln_e, 'notes': notes, 'before': before,
+                        'hx_ref': hx_ref, 'hx_calc': hx_calc})
+    return out
+
+
+def _ss_match(printed, e, atoms):
+    """Does a printed scattering reproduce the population's electrons e — per formula unit, or per site (e over the
+    site's atoms) — within SS_CALC_TOL? -> (True/False, the convention's value)."""
+    cands = [e]
+    n = round(atoms)
+    if n >= 2 and abs(atoms - n) < 0.06:
+        cands.append(e / n)
+    for c in cands:
+        if abs(printed - c) <= max(0.6, SS_CALC_TOL * c):
+            return True, c
+    return False, min(cands, key=lambda c: abs(printed - c))
+
+
+def _cif_site_electrons(st, label):
+    """Electrons per atom of the .cif site the manuscript calls `label` (Σ occupancy × Z over its species), or None."""
+    from pxrd_review.cif_audit import _ZNUM
+    want = re.sub(r'^\[\d+\]', '', label)
+    want = re.sub(r'[()\s]', '', want).upper()
+    alias = {re.sub(r'[()\s]', '', k).upper(): v for k, v in (getattr(st, 'aliases', None) or {}).items()}
+    for s_ in st.sites:
+        labs = [re.sub(r'[()\s]', '', l_).upper() for l_ in s_.label.split('/')]
+        if want in labs or alias.get(want) in s_.label.split('/'):
+            e = sum(sp.occ * _ZNUM.get(sp.element, 0) for sp in s_.species)
+            return e, ', '.join('%s %.3f' % (sp.element, sp.occ) for sp in s_.species)
+    return None
+
+
+def site_scattering_check(path, ex, cif=None):
+    """A table of site populations with their scattering, against itself and the .cif: the CALCULATED scattering
+    must be the population's own electrons (Σ apfu × Z — a finding when it is not, the arithmetic being the
+    paper's); refined vs calculated apart by more than SS_DIFF_INFO is information (the assignment is the authors'
+    judgement); and with a .cif, the electrons its site holds against the refined value the manuscript prints
+    (information from SS_CIF_INFO, a finding from SS_CIF_FLAG). -> lines (the head first) or []."""
+    try:
+        tables = site_scattering_tables(path)
+    except Exception:
+        return []
+    if not tables:
+        return []
+    st = None
+    if cif:
+        try:
+            from pxrd_review import bv_check as B
+            st = B.Structure(cif)
+        except Exception:
+            st = None
+    L = []; n_ok = 0; n_rows = 0; worst = None
+    for tb in tables:
+        for r in tb['rows']:
+            if not r['groups'] or not r['values'] or re.match(r'^(?:Σ|Sum|Total|RM|ΣM)', r['label']):
+                continue
+            cands = [g for g in r['groups']]
+            if len(r['groups']) > 1:
+                cands.append(' '.join(r['groups']))
+            reads = []
+            for g in cands:
+                e, atoms, els, unknown = _population_electrons(g, tb['ln_e'], tb['before'])
+                if not unknown and els and e > 0:
+                    reads.append((g, e, atoms))
+            if not reads:
+                continue
+            # the calculated column: the values under a 'Calculated' header word, else any value a population reproduces
+            match = None; near = None
+            pool = [v for v in r['values'] if min(abs(v[0] - x) for x in tb['hx_calc']) < 60] if tb['hx_calc'] else r['values']
+            pool = pool or r['values']
+            for v in pool:
+                for g, e, atoms in reads:
+                    ok, conv = _ss_match(v[1], e, atoms)
+                    if ok:
+                        match = (v, g, e, atoms, conv); break
+                    if abs(v[1] - conv) <= SS_NEAR * conv and (near is None or abs(v[1] - conv) < abs(near[0][1] - near[4])):
+                        near = (v, g, e, atoms, conv)
+                if match:
+                    break
+            if not match and not near:
+                continue                                                 # no calculated column beside this population
+            n_rows += 1
+            v, g, e, atoms, conv = match or near
+            popt = g.replace('þ', '+')
+            if match:
+                n_ok += 1
+            elif len(reads) == 1 and not r['cut']:
+                L.append('%s: calculated site scattering %s printed vs %.2f from the population %s (Σ apfu × Z)' % (r['label'], v[2], conv, popt))
+            else:
+                continue                                                 # an ambiguous or cut population: no verdict
+            printed_calc = v[1]
+            ref = None
+            others = [o for o in r['values'] if o is not v]
+            sane = [o for o in others if not (1.3 <= o[1] <= 3.5 and re.match(r'^\d\.\d{3}', o[2]) and conv > 6) and 0.3 * conv <= o[1] <= 3 * conv]   # not a bond length, not a SOF
+            if tb['hx_ref'] and sane:
+                left = [x for x in tb['hx_ref'] if x < v[0] + 5]                  # the 'Refined' column beside THIS calculated one (a bond-length pair has its own), refined being printed first
+                hx = max(left) if left else min(tb['hx_ref'], key=lambda x: abs(x - v[0]))
+                nearest = min(sane, key=lambda o: abs(o[0] - hx))
+                ref = nearest if abs(nearest[0] - hx) < 45 else None
+            elif sane and not tb['hx_calc']:
+                ref = min(sane, key=lambda o: abs(o[1] - printed_calc))
+            if ref is not None and not r['mult'] and not r['cut']:
+                n_site = round(atoms) if abs(atoms - round(atoms)) < 0.06 else 1
+                d = min(((ref[1] * k - printed_calc) / printed_calc for k in ({1, n_site} if abs(conv - e) < 1e-9 else {1})), key=abs)   # a refined value printed per site beside a per-formula calculated one
+                if abs(d) > SS_DIFF_INFO and abs(ref[1] - printed_calc) > 1.5 and (worst is None or abs(d) > abs(worst[0])):
+                    worst = (d, r['label'], ref[2], v[2], popt)
+                if st is not None:
+                    got = _cif_site_electrons(st, r['label'])
+                    if got and atoms > 0:
+                        per_fu = abs(conv - e) < 1e-9                    # the paper's number is per formula unit: per atom = over the site's atoms
+                        e_print = ref[1] / atoms if per_fu else ref[1]
+                        e_cif = got[0]
+                        if e_print > 0:
+                            dd = (e_cif - e_print) / e_print
+                            if abs(dd) > SS_CIF_FLAG:
+                                L.append('%s: refined site scattering %s%s vs %.1f e per atom in the .cif (%s) — the deposited .cif does not give the refined value the manuscript prints' % (
+                                    r['label'], ref[2], ' (%.1f e per atom)' % e_print if per_fu else '', e_cif, got[1]))
+                            elif abs(dd) > SS_CIF_INFO:
+                                L.append('%s: refined site scattering %s%s, %.1f e per atom in the .cif (%s) (information)' % (
+                                    r['label'], ref[2], ' (%.1f e per atom)' % e_print if per_fu else '', e_cif, got[1]))
+    if worst:
+        L.append('%s: refined site scattering %s against %s calculated from the assigned population %s (%+.0f %%) (information)' % (worst[1], worst[2], worst[3], worst[4], 100 * worst[0]))
+    if not n_rows:
+        return []
+    head = 'site scattering: %d of %d assigned populations give the calculated scattering printed%s' % (n_ok, n_rows, '' if st is None else '; the .cif compared where a site label matches')
+    return [head] + L
+
+
+_EPFU_SENT = re.compile(r'(?:[^.]|\.(?=\d))*?(?:electrons per formula unit|\bepfu\b|electrons per site|\beps\b)(?:[^.]|\.(?=\d))*\.', re.I)
+EPFU_TOL = 0.005          # a stated electron count against the formula's: half a per cent (the coefficients' rounding)
+
+
+def _formula_electrons(counts):
+    """(cations only, every atom, anions only) electrons of a formula's counts — the conventions a paper states a count in."""
+    from pxrd_review.cif_audit import _ZNUM
+    has_o = counts.get('O', 0) > 0
+    anion = {'O', 'H', 'F', 'Cl', 'Br', 'I'} | (set() if has_o else {'S', 'Se', 'Te'})
+    cat = sum(n * _ZNUM.get(el, 0) for el, n in counts.items() if el not in anion)
+    tot = sum(n * _ZNUM.get(el, 0) for el, n in counts.items())
+    return cat, tot, tot - cat
+
+
+def epfu_lines(text, ex):
+    """The electron counts the prose states ('272.0 and 272.2 epfu from EMPA and SREF') against the formulas read:
+    a count the empirical or structural formula gives (cations, every atom, or anions) within EPFU_TOL is reproduced;
+    one that no formula read gives is left alone (the paper's convention may be another, the formula another still).
+    -> lines (the head first) or []."""
+    t = (text or '').replace('\xa0', ' ')
+    forms = []
+    try:
+        forms = _formulas(t, (ex or {}).get('name') or '')
+    except Exception:
+        forms = []
+    if not forms:
+        return []
+    L = []; seen = set()
+    for m in _EPFU_SENT.finditer(t):
+        sent = m.group(0)
+        if re.search(r'per site|\beps\b', sent, re.I) and not re.search(r'per formula', sent, re.I):
+            continue                                                      # a per-site count: the table check's business
+        nums = [float(x) for x in re.findall(r'(?<![\d.])(\d{2,4}(?:\.\d{1,2})?)(?![\d.%])', sent) if 20 <= float(x) <= 5000]
+        nums = [n for n in nums if not re.search(r'\(%s\)' % re.escape(('%g' % n)), sent) and not (1900 <= n <= 2100 and float(n).is_integer())]
+        if not nums:
+            continue
+        for n in nums:
+            if n in seen:
+                continue
+            seen.add(n)
+            hit = None
+            for f in forms:
+                cat, tot, an = _formula_electrons(f[1])
+                for lab, val in (('cations', cat), ('all atoms', tot), ('anions', an)):
+                    if val and abs(n - val) <= max(0.3, EPFU_TOL * val):
+                        hit = (lab, val, f[4] or 'formula'); break
+                if hit:
+                    break
+            if hit:
+                L.append('%g electrons per formula unit stated: the %s formula gives %.1f (%s)' % (n, hit[2], hit[1], hit[0]))
+            # a count no formula read gives is left alone: per site, per cell, anions only, the structural formula the
+            # reader did not parse — on the corpus 67 such lines stood beside 13 reproduced, none of them a finding
+    return (['electrons per formula unit, as the text states them:'] + L) if L else []
+
+
 _2V = re.compile(r'\b2V\s*[xz]?\s*(?:\(\s*(meas\.?|obs\.?|calc\.?|calculated|measured|est\.?)\s*\))?\s*(meas\.?|obs\.?|calc\.?|calculated|measured|est\.?)?\s*[=:≈]?\s*(\d{1,3}(?:\.\d)?)\s*(?:\(\d+\))?\s*°?', re.I)
 _ABG = re.compile(r'(?<![A-Za-z])(?:n?α|alpha)\s*[=≈]\s*(1\.\d{2,4})[^.]{0,80}?(?<![A-Za-z])(?:n?β|beta)\s*[=≈]\s*(1\.\d{2,4})[^.]{0,80}?(?<![A-Za-z])(?:n?γ|gamma)\s*[=≈]\s*(1\.\d{2,4})', re.I)
 TWO_V_APART = 5.0          # two stated 2V values this far apart are two values
@@ -5470,6 +5843,8 @@ def check_paper(pdf, cif=None, out_dir=None):
         out['lines'] += _section(charge_balance_check(text, ex, out['composition']))
         out['lines'] += _section(epma_table_lint(ex, text))
         out['lines'] += _section(dominance_check(text, ex, cif))
+        out['lines'] += _section(site_scattering_check(pdf, ex, cif))
+        out['lines'] += _section(epfu_lines(text, ex))
         out['lines'] += _section(optics_2v_lines(text))
         o_ = ex.get('optics') or {}
         if o_.get('n') and not (gd_statement(text) or {}).get('ci') and not re.search(r'compatib', text, re.I):

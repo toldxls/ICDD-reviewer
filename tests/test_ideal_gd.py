@@ -207,5 +207,130 @@ class TwoV(unittest.TestCase):
         self.assertTrue(any('from the indices' in x and 'information' in x for x in PE.optics_2v_lines('α = 1.600, β = 1.610, γ = 1.630, 2V = 40°.')))
 
 
+SS_CIF = """data_ss
+_cell_length_a 8
+_cell_length_b 8
+_cell_length_c 8
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_cell_volume 512
+_cell_formula_units_z 1
+_space_group_name_H-M_alt 'P 1'
+loop_
+_space_group_symop_operation_xyz
+'x, y, z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_U_iso_or_equiv
+M1 Mn 0 0 0 0.82 0.010
+M1B Fe 0 0 0 0.18 0.010
+M3 Zn 0.5 0.5 0.5 1.0 0.010
+O1 O 0.25 0 0 1.0 0.015
+"""
+
+
+def _ss_pdf(path, rows, caption='Table 7. Refined site-scattering values (epfu) and assigned site populations for testite.',
+            header=(('Site', 40), ('Refined', 90), ('Assigned site population', 160), ('Calculated', 330), ('<M–O>', 400))):
+    """A site-scattering table as a page: rows = [[(text, x), …] per line]; a row's wrapped line has no label."""
+    import pymupdf
+    doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
+    y = 60
+    page.insert_text((40, y), caption, fontsize=9); y += 16
+    for t, x in header:
+        page.insert_text((x, y), t, fontsize=9)
+    y += 14
+    for cells in rows:
+        for t, x in cells:
+            page.insert_text((x, y), t, fontsize=9)
+        y += 14
+    doc.save(path); doc.close()
+
+
+class SiteScattering(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_population_forms(self):
+        e = lambda s, b=None: round(PE._population_electrons(s, 58.59, b)[0], 2)
+        self.assertEqual(e('Mn1.64Fe0.36'), 50.36)
+        self.assertEqual(e('Mn2+ 0.75Ca0.14Sr0.11'), 25.73)                    # the valence split from its coefficient by a superscript run
+        self.assertEqual(e('1.68 Mg 0.35 Fe2', True), 29.26)                    # the coefficient before its symbol, the + of Fe2+ lost
+        self.assertEqual(e('0.71 Na + 0.28□+ 0.01 Ca', True), 8.01)             # a vacancy counts no electrons
+        self.assertEqual(e('(Sr1.07Ca0.26Na0.04Pb0.02)Σ1.39Ln3+ 0.61'), 83.68)  # a lanthanide group at the note's electrons
+        self.assertEqual(e('0.36 Mg 0.79 Fe2+ 0.72 Fe3++ 0.13 Ti 0.01 Zn', True), 46.74)
+        self.assertEqual(e('2.00Mn', False), 50.0)                              # a number glued before its symbol in a symbol-first table
+        self.assertEqual(e('(H2O)0.89Na0.11'), 10.11)
+        self.assertEqual(PE._population_electrons('Ln0.835Ca0.165')[3], ['Ln'])  # no note: unknown
+
+    def test_table_against_itself_and_the_cif(self):
+        pdf = os.path.join(self.d, 't.pdf')
+        _ss_pdf(pdf, [[('M1', 40), ('50.1', 90), ('Mn1.64Fe0.36', 160), ('50.4', 330), ('2.150', 400)],
+                      [('M2', 40), ('34.2', 90), ('Mg1.20Mn0.60Fe0.20', 160), ('33.5', 330), ('2.080', 400)],
+                      [('M3', 40), ('18.0', 90), ('Zn0.43Mg0.41Cu0.16', 160), ('22.46', 330), ('2.073', 400)],
+                      [('T', 40), ('14.0', 90), ('Si', 160), ('14.0', 330), ('1.620', 400)]])
+        tabs = PE.site_scattering_tables(pdf)
+        self.assertEqual(len(tabs), 1)
+        self.assertEqual([r['label'] for r in tabs[0]['rows']], ['M1', 'M2', 'M3', 'T'])
+        self.assertEqual(tabs[0]['rows'][0]['groups'], ['Mn1.64Fe0.36'])
+        L = PE.site_scattering_check(pdf, {})
+        self.assertTrue(L[0].startswith('site scattering: 3 of 4 assigned populations give the calculated scattering printed'), L)
+        self.assertTrue(any(x.startswith('M2: calculated site scattering 33.5 printed vs 34.60 from the population Mg1.20Mn0.60Fe0.20') for x in L), L)   # 34.6 is right; 33.5 is not
+        self.assertTrue(any(x.startswith('M3: refined site scattering 18.0 against 22.46 calculated from the assigned population') and x.endswith('(-20 %) (information)') for x in L), L)
+        cif = os.path.join(self.d, 's.cif')
+        with open(cif, 'w') as f:
+            f.write(SS_CIF)
+        L = PE.site_scattering_check(pdf, {}, cif)
+        self.assertTrue(any(x.startswith('M3: refined site scattering 18.0 (18.0 e per atom) vs 30.0 e per atom in the .cif (Zn 1.000)') for x in L), L)   # 67 % off: a finding
+        self.assertFalse(any(x.startswith('M1:') for x in L), L)                # 25.05 e per atom printed, 25.18 in the .cif
+
+    def test_wrapped_population_coefficient_first(self):
+        pdf = os.path.join(self.d, 'w.pdf')
+        _ss_pdf(pdf, [[('X', 40), ('15.69(9)', 90), ('0.61 Ca + 0.35 Na + 0.04 □', 160), ('16.10', 330)],
+                      [('Y', 40), ('47.26(24)', 90), ('1.50 Mg + 0.47 Fe2+ + 0.71 Al +', 160), ('47.04', 330)],
+                      [('0.14 Fe3+ + 0.18 Ti', 160)],
+                      [('Z', 40), ('79.40(24)', 90), ('4.54 Al + 0.18 Fe3+ + 1.27 Mg', 160), ('79.19', 330)]],
+                caption='Table 7. Refined site-scattering values and optimised site-populations for testite.',
+                header=(('Site', 40), ('Refined', 90), ('Optimised site-population', 160), ('Calculated', 330)))
+        tabs = PE.site_scattering_tables(pdf)
+        self.assertTrue(tabs[0]['before'])
+        self.assertEqual(tabs[0]['rows'][1]['groups'], ['1.50 Mg 0.47 Fe2+ 0.71 Al 0.14 Fe3+ 0.18 Ti'])
+        L = PE.site_scattering_check(pdf, {})
+        self.assertTrue(L[0].startswith('site scattering: 3 of 3 assigned populations'), L)
+        self.assertEqual(len(L), 1, L)
+
+    def test_manuscript_docx_table(self):
+        from docx import Document
+        path = os.path.join(self.d, 'm.docx')
+        doc = Document()
+        doc.add_paragraph('Table 5. Refined site-scattering values (epfu) and assigned site populations for testite.')
+        t = doc.add_table(rows=1, cols=4)
+        for c, h in zip(t.rows[0].cells, ('Site', 'Refined site scattering', 'Assigned site population', 'Calculated site scattering')):
+            c.text = h
+        for row in (('M1', '50.1', 'Mn1.64Fe0.36', '50.4'), ('M2', '34.2', 'Mg1.20Mn0.60Fe0.20', '33.5'), ('T', '14.0', 'Si', '14.0')):
+            for c, v in zip(t.add_row().cells, row):
+                c.text = v
+        doc.save(path)
+        L = PE.site_scattering_check(path, {})
+        self.assertTrue(L and L[0].startswith('site scattering: 2 of 3'), L)
+        self.assertTrue(any(x.startswith('M2: calculated site scattering 33.5 printed vs 34.60') for x in L), L)
+
+    def test_electrons_per_formula_unit_in_prose(self):
+        text = ('The empirical formula, calculated on the basis of 7 O apfu, is Ca1.00Mg2.01Si2.99O7(OH)0.98. '
+                'The number of electrons per formula unit derived from EMPA and SREF (86.0 and 88.5 epfu, respectively) agree.')
+        L = PE.epfu_lines(text, {'name': 'testite'})
+        self.assertTrue(any(x.startswith('86 electrons per formula unit stated: the empirical formula gives 86.0 (cations)') for x in L), L)
+        self.assertFalse(any(x.startswith('88.5') for x in L), L)                # a count no formula gives: left alone
+        self.assertEqual(PE.epfu_lines('No count here. The empirical formula is Ca1.00Mg2.01Si2.99O7(OH)0.98.', {}), [])
+
+
 if __name__ == '__main__':
     unittest.main()
