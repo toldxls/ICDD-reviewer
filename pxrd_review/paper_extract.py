@@ -1354,10 +1354,10 @@ def optics(text, name=None):
             if out[key] is None:
                 out[key] = float(v); out['sentences'].append(t[max(0, m_.start() - 40): m_.end() + 30].strip())
         break
-    for key, pat in (('D_meas', r'(?:(?-i:D)\s*meas\.?|(?-i:Dmeas)|\b(?-i:Dm)\b|\b(?-i:dm)\s*=|measured densit(?:y|ies)' + W + r'{0,100}?|densit(?:y|ies)' + W + r'{0,80}?(?:measured|floatation|flotation|pycnomet|Clerici|Berman|hydrostatic|torsion)(?!\s+(?:ind|refract))' + W + r'{0,100}?)' + lead + D +
+    for key, pat in (('D_meas', r'(?:(?-i:D)\s*meas\.?|(?-i:Dmeas)|\b(?-i:Dm)\b|\b(?-i:dm)\s*=|densit(?:y|ies)\s*\(\s*meas\.?\s*\)|measured densit(?:y|ies)' + W + r'{0,100}?|densit(?:y|ies)' + W + r'{0,80}?(?:measured|floatation|flotation|pycnomet|Clerici|Berman|hydrostatic|torsion)(?!\s+(?:ind|refract))' + W + r'{0,100}?)' + lead + D +
                                 r'|\bdensity\s*(?:=|is|of|:)\s*' + D + r'\(\d+\)'
                                 r'|\bdensit(?:y|ies)(?:\s+of)?,?\s*' + U + r'\s*' + D + ESD + U + r',?\s*(?:was|were|is|are)?\s*(?:measured\b|determined\b' + W + r'{0,60}?(?:flotation|floatation|float|pycnomet|Clerici|sink|heavy|Berman|hydrostatic|torsion|iodide|toluene|bromoform))'),      # 'A density of 3.21 g/cm3 was measured by flotation'; 'determined' only by a method — 'density 3.266 obtained from SC-XRD unit-cell parameters' is a calculated one
-                     ('D_calc', r'(?:(?-i:D)\s*\(?\s*calc\.?\)?|(?-i:d)\s*\(?\s*calc\.?\)?(?=\s*(?:of|is|=|:)\s*[0-9])|(?-i:Dcalc)|\b(?-i:D[Xx])\b|\b(?-i:dx)\s*=|calculated densit(?:y|ies)' + W + r'{0,120}?|densit(?:y|ies)' + W + r'{0,160}?(?:calculated|computed)' + W + r'{0,120}?)' + lead + D +      # a capital D: 'd(calc) 3.049 3.059' is a powder table's calculated d column (proudite); a lowercase 'd (calc) of 3.012' (caryochroite) needs its lead word
+                     ('D_calc', r'(?:densit(?:y|ies)\s*\(\s*(?:calc\.?|for (?:the )?above formula)\s*\)|(?-i:D)\s*\(?\s*calc\.?\)?|(?-i:d)\s*\(?\s*calc\.?\)?(?=\s*(?:of|is|=|:)\s*[0-9])|(?-i:Dcalc)|\b(?-i:D[Xx])\b|\b(?-i:dx)\s*=|calculated densit(?:y|ies)' + W + r'{0,120}?|densit(?:y|ies)' + W + r'{0,160}?(?:calculated|computed)' + W + r'{0,120}?)' + lead + D +      # a capital D: 'd(calc) 3.049 3.059' is a powder table's calculated d column (proudite); a lowercase 'd (calc) of 3.012' (caryochroite) needs its lead word
                                 r'|\bdensit(?:y|ies)(?:\s+of)?,?\s*' + U + r'\s*' + D + ESD + U + r',?\s*(?:was|were|is|are)?\s*(?:calculated|computed)\b')):      # 'The density, 4.324 g cm−3, was calculated based on'; 'A density of 2.79 g/cm3 was calculated'
         if out[key] is not None:
             continue
@@ -3789,6 +3789,20 @@ def gd_statement(text):
             out['category'] = re.sub(r'[-\s\x02\xad]', '', cat.group(1)).lower(); out['sentence'] = out['sentence'] or t[max(0, m.start() - 20):m.end() + min(len(seg), 120)].strip()
         if out['ci'] is not None and out['category']:
             break
+    # every index the sentence states, with the formula or density it is for: 'is −0.043 (good) for the
+    # empirical formula and 0.031 (excellent) for the ideal formula' — the grid check reads them all
+    out['all'] = []
+    if out['sentence']:
+        seg = t[t.find(out['sentence'][:40]):][:400] if out['sentence'][:40] in t else out['sentence']
+        k_ = re.search(r'compatib|K\s*_?[Pp]\s*/', seg, re.I)
+        seg = seg[k_.start():] if k_ else seg                             # from the statement itself, not the 20 characters kept before it
+        seg = seg[:re.search(r'\.\s+(?=[A-Z][a-z])', seg).start()] if re.search(r'\.\s+(?=[A-Z][a-z])', seg) else seg
+        for m_ in re.finditer(r'(?<![\d.])(-?\s?0?\.\d{2,4})(?![\d]|\.\d)\s*(?:\(\s*(superior|excellent|good|fair|poor)\s*\))?', seg):
+            tail = seg[m_.end():m_.end() + 90]
+            tail = tail[:re.search(r'(?<![\d.])-?\s?0?\.\d{2,4}', tail).start()] if re.search(r'(?<![\d.])-?\s?0?\.\d{2,4}', tail) else tail
+            q = re.search(r'\b(empirical|ideal|end-?member|simplified|measured|calculated)\b', tail, re.I)
+            out['all'].append({'ci': float(m_.group(1).replace(' ', '')), 'category': (m_.group(2) or '').lower() or None,
+                               'for': q.group(1).lower().replace('-', '') if q else None})
     if out['category'] is None:
         m = re.search(r'\b(superior|excellent|good|fair|poor)\b[^.]{0,60}(?:compatib|Mandarino|Gladstone)', t, re.I)
         if m:
@@ -4450,8 +4464,15 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None, coords=None):
         else:
             _set(f, 'gd', 'nooracle', None, 'no n read to form K_P' if not n_ else (gd.get('detail') or 'no density, or no wt% table, to form K_C'))
     lines += _section(gd['lines'])
+    try:
+        lines += _section(gd_grid(ex, comp, gd_statement(text), cif))
+    except Exception:
+        pass
     # the cell against itself and the density
     masses = []
+    idf_ = ideal_formula(text)
+    if idf_ and _formula_mass_counts(idf_[1]):
+        masses.append(('the ideal formula', _formula_mass_counts(idf_[1])))
     for ftxt, counts_, _i, _o, kind, _c in _formulas(text, ex.get('name') or ''):
         if counts_ and counts_ != (comp or {}).get('counts'):
             masses.append((kind or 'another formula', _formula_mass_counts(counts_)))
@@ -4902,6 +4923,174 @@ def printed_codes_check(pdf, cif):
     res['lines'] = B.printed_bond_code_lines(res, frame)
     return res
 
+_IDEAL_F = re.compile(r'(?:ideal(?:ized)?|end-?member|simplified)\s+formula\s*(?:(?:of|for)\s+[\w-]+\s+)?(?:is|[:=])\s*([^\s,;]{4,90}(?:\s*[·•]\s*\d*\s*H2O)?)', re.I)
+
+def ideal_formula(text):
+    """The ideal formula the paper states ('Ideal formula: …', 'The ideal formula is …'): (text, {element: apfu}) or None."""
+    for m in _IDEAL_F.finditer(text or ''):
+        f = m.group(1).rstrip(',.;')
+        try:
+            counts = EP.parse_icdd_formula(_journal_to_icdd(f))[0]
+        except Exception:
+            continue
+        if counts and sum(counts.values()) > 1 and any(el not in ('H', 'O') for el in counts):
+            return f, counts
+    return None
+
+def ideal_wt(counts):
+    """{constituent: wt%} for an ideal formula's element counts (gd.formula_to_wt: the usual oxides, H as H2O)."""
+    from pxrd_review import gd as GD
+    wt, _fw = GD.formula_to_wt({el: n for el, n in counts.items() if el != 'O'})
+    return {k: v for k, v in wt.items() if not k.startswith('O=')}
+
+_REQUIRES = re.compile(r'(?:requires?|corresponds? to|ideal(?:ly)?)[^.]{0,20}?((?:[A-Z][a-z]?\d*\+?\d*O?\d*(?:\s*\(?\w{0,6}\)?)?\s+\d{1,2}\.\d{1,2}\s*,?\s*(?:and\s+)?){2,12})(?:total\s+(\d{2,3}\.\d{1,2}))?', re.I)
+
+def ideal_wt_check(text, ex):
+    """The ideal wt% the paper prints (a 'requires MgO 17.06, … total 100.00' sentence; the analytical table's Ideal
+    column) against the wt% its own ideal formula gives — a stated value off by more than the rounding is a finding,
+    and so is a list that does not add to the total it prints. -> lines (the head first)."""
+    idf = ideal_formula(text)
+    if not idf:
+        return []
+    ftxt, counts = idf
+    try:
+        wt = ideal_wt(counts)
+    except Exception:
+        return []
+    norm = lambda c: re.sub(r'\d\+|\(\w*\)|[§*†‡]', '', c).replace(' ', '')
+    stated = []                                                     # (constituent, value, where)
+    for m in _REQUIRES.finditer(text.replace('−', '-')):
+        vals = re.findall(r'([A-Z][a-z]?\d*\+?\d*O?\d*)\s+(\d{1,2}\.\d{1,2})', m.group(1))
+        if len(vals) >= 2:
+            stated += [(norm(c), float(v), 'the text') for c, v in vals]
+            if m.group(2):
+                tot = sum(float(v) for _c, v in vals)
+                if abs(tot - float(m.group(2))) > 0.011 * len(vals):
+                    stated.append(('total', float(m.group(2)), 'the text (the values listed add to %.2f)' % tot))
+            break
+    e = ex.get('epma') or {}
+    hx = next((x for h, x in (e.get('head_cells') or []) if h.lower().startswith('ideal')), None)
+    if hx is not None:
+        for r in e.get('rows_all') or []:
+            for x, v in zip(r.get('xs') or [], r.get('all') or []):
+                if abs(x - hx) < 6 and v:
+                    stated.append((norm(r['constituent']), float(v), "the table's Ideal column"))
+    if not stated:
+        return []
+    L = ['ideal formula: %s gives %s' % (ftxt, ', '.join('%s %.2f' % kv for kv in wt.items()))]
+    seen = set()
+    for c, v, where in stated:
+        if c == 'total':
+            m_ = re.search(r'add to ([\d.]+)', where)
+            if m_:
+                L.append('the ideal wt%% listed in the text add to %s vs the total printed, %.2f' % (m_.group(1), v))
+            continue
+        key = next((k for k in wt if norm(k) == c), None)
+        if key is None or (c, v, where) in seen:
+            continue
+        seen.add((c, v, where))
+        if abs(wt[key] - v) > 0.02:
+            L.append('%s %.2f in %s vs %.2f from the ideal formula' % (c, v, where, wt[key]))
+    L = [x for x in L if x]
+    return L if len(L) > 1 else []
+
+def gd_grid(ex, comp, stmt, cif=None):
+    """Every compatibility index the paper states, against every way of forming it: K_C from the analysis and from the
+    ideal formula, K_P from each density the paper prints and from Z·M/V of the .cif with either formula's mass. The
+    nearest is named and whether it reproduces the statement (±0.005) — information beside gd_check's verdict, so a
+    statement no combination reproduces is visible as such. -> lines."""
+    from pxrd_review import gd as GD
+    o = ex.get('optics') or {}; n = o.get('n')
+    all_ = [x for x in (stmt or {}).get('all') or [] if x.get('ci') is not None]
+    if not n or not all_:
+        return []
+    kcs = []
+    try:
+        sets, _why = _gd_wt_sets(ex, comp)
+        if sets:
+            kc, _rows = GD.kc({c: v for c, v in sets[0][0].items() if v})
+            if kc:
+                kcs.append(('the analysis', kc))
+    except Exception:
+        pass
+    text = ex.get('_text') or ''
+    idf = ideal_formula(text)
+    M_ideal = None
+    if idf:
+        try:
+            kc, _rows = GD.kc(ideal_wt(idf[1]))
+            if kc:
+                kcs.append(('the ideal formula', kc))
+            M_ideal = _formula_mass_counts(idf[1])
+        except Exception:
+            pass
+    if not kcs:
+        return []
+    dens = [(k, o[key]) for key, k in (('D_meas', 'the measured density'), ('D_calc', 'the stated D_calc')) if o.get(key)]
+    if cif:
+        try:
+            from pxrd_review import bv_check as _B
+            st_ = _B.Structure(cif, include_h=False); Z = _B._num(st_.block['items'].get('_cell_formula_units_z') or '')
+            if Z:
+                M_emp = _formula_mass_counts((comp or {}).get('counts') or {})
+                if M_ideal:
+                    dens.append(('D %.3f from the .cif cell, Z = %g and the ideal formula' % (Z * M_ideal / (st_.volume * 0.602214), Z), Z * M_ideal / (st_.volume * 0.602214)))
+                if M_emp:
+                    dens.append(('D %.3f from the .cif cell, Z = %g and the empirical formula' % (Z * M_emp / (st_.volume * 0.602214), Z), Z * M_emp / (st_.volume * 0.602214)))
+        except Exception:
+            pass
+    if not dens:
+        return []
+    L = ['Gladstone–Dale, the statements one by one (K_C %s; n %.4f):' % ('; '.join('%.4f from %s' % (kc, lab) for lab, kc in kcs), n)]
+    for x in all_:
+        grid = [(1 - ((n - 1) / D) / kc, klab, dlab) for klab, kc in kcs for dlab, D in dens]
+        ci, klab, dlab = min(grid, key=lambda g: abs(g[0] - x['ci']))
+        gap = abs(ci - x['ci'])
+        verdict = 'reproduced' if gap <= 0.005 else ('within 0.03, the constants\' slack' if gap <= 0.03 else 'reproduced by no combination [unverified]')
+        for_ = x.get('for')
+        if gap <= 0.03 and for_ in ('empirical', 'ideal', 'endmember', 'simplified') and ((for_ == 'empirical') != (klab == 'the analysis')):
+            verdict += ' — but with K_C of %s, not of the %s formula it is stated for' % (klab, for_)
+        L.append('stated %+.3f%s%s: nearest %+.3f from K_C of %s with %s — %s' % (x['ci'], ' (%s)' % x['category'] if x.get('category') else '',
+                 ' for the %s formula' % x['for'] if x.get('for') in ('empirical', 'ideal', 'endmember', 'simplified') else '', ci, klab, dlab, verdict))
+    return L
+
+def basis_free_ratios(ex, ideal_counts, n_points=None):
+    """The molar ratios of the ideal formula's major elements as the analysis gives them, with the uncertainty the
+    table's s.d. allows (of the means, s.d./√n when n is known, the s.d. itself otherwise) — no basis enters into a
+    ratio, so a ratio beyond its uncertainty from the ideal one is a composition finding whatever the basis. -> lines."""
+    e = ex.get('epma') or {}
+    rows = [r for r in (e.get('rows') or []) if r.get('mean') and r.get('sd')]
+    mols = {}
+    for r in rows:
+        try:
+            c = EP.parse_constituent(r['constituent'])
+        except Exception:
+            continue
+        if c.kind == 'water' or not c.element:
+            continue
+        mol = r['mean'] / c.mw * c.n_cat
+        rel = r['sd'] / r['mean'] / (math.sqrt(n_points) if n_points else 1.0)
+        if c.element in mols:
+            m0, rel0 = mols[c.element]
+            mols[c.element] = (m0 + mol, math.sqrt((m0 * rel0) ** 2 + (mol * rel) ** 2) / (m0 + mol))
+        else:
+            mols[c.element] = (mol, rel)
+    els = [el for el, k in ideal_counts.items() if el not in ('H', 'O') and k >= 0.5 and el in mols]
+    if len(els) < 2:
+        return []
+    L = []
+    for i in range(len(els)):
+        for j in range(i + 1, len(els)):
+            a, b = els[i], els[j]
+            r = mols[a][0] / mols[b][0]; ideal = ideal_counts[a] / ideal_counts[b]
+            sig = r * math.sqrt(mols[a][1] ** 2 + mols[b][1] ** 2)
+            if sig and abs(r - ideal) > 2 * sig:
+                k_ = abs(r - ideal) / sig
+                L.append('%s:%s = %.3f ± %.3f (%s) where the ideal formula has %.3f — %.1fσ%s'
+                         % (a, b, r, sig, 'from the s.d. of the means, n = %d' % n_points if n_points else 'from the s.d.; n not read, so the s.d. of the means would be smaller',
+                            ideal, k_, ' off, whatever the basis' if k_ > 3 else ' — information'))
+    return ['composition ratios (basis-free):'] + L if L else []
+
 def check_paper(pdf, cif=None, out_dir=None):
     """The paper against itself and its .cif: {'extract', 'composition', 'bv', 'bv_status', 'powder',
     'powder_status', 'fields', 'lines'} — the lines are what a manuscript review prints: a 'readers:'
@@ -4933,6 +5122,14 @@ def check_paper(pdf, cif=None, out_dir=None):
         out['lines'] += out['composition']['lines']
     elif ex.get('epma'):
         out['lines'].append('composition: an analytical table was read but no empirical formula sentence was found to check it against')
+    try:
+        ex['_text'] = text
+        out['lines'] += _section(ideal_wt_check(text, ex))
+        idf_ = ideal_formula(text)
+        if idf_ and ex.get('epma'):
+            out['lines'] += _section(basis_free_ratios(ex, idf_[1], (ex.get('epma') or {}).get('n_points')))
+    except Exception as e_:                                          # a reader that fails never takes the check down with it
+        ex['notes'].append('the ideal-formula checks were not run (%s)' % str(e_)[:80])
     bc = None
     # Nine papers in ten come without a .cif, and two things in the paper itself can stand in for
     # one — for the BOND-VALENCE check only, never for the cell check or verify, which must not be

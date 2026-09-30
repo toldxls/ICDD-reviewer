@@ -456,6 +456,34 @@ def report_text(red, table):
         L.append('  ' + table['note'])
     return '\n'.join(L)
 
+def basis_sensitivity(ds, red, adds=(), converts=(), drop=(), points=None, raw_anions=False):
+    """The formula on the basis asked for and on the standard alternatives — the anion count it gave, its
+    cation total, each major cation held at its own count — so a reader sees what moves with the basis
+    and what does not (the cation ratios never do). -> [(basis label, formula, charge balance)]."""
+    out = [(_basis_label(red.basis), red.formula(), red.charge)]
+    cats = [(k, r) for k, r in red.rows.items() if r.c.kind not in ('water', 'element-anion') and r.apfu > 0]
+    o_tot = sum(r.o_apfu for r in red.rows.values())
+    cat_tot = sum(r.apfu for k, r in cats)
+    alts = []
+    if o_tot > 0.5:
+        alts.append(('O', round(o_tot)))
+    if cat_tot > 0.5:
+        alts.append(('cations', round(cat_tot)))
+    for k, r in cats:
+        if r.apfu >= 0.5 and r.c.element:
+            alts.append(('element', r.c.element, max(1, round(r.apfu))))
+    seen = {red.basis}
+    for b in alts:
+        if b in seen:
+            continue
+        seen.add(b)
+        try:
+            r2 = reduce(ds, b, adds, converts, drop, points, raw_anions=raw_anions)
+        except Exception:
+            continue
+        out.append((_basis_label(b), r2.formula(), r2.charge))
+    return out
+
 def _basis_label(b):
     return {'O': '%s anions apfu', 'cations': '%s cations apfu'}.get(b[0], '%s').replace('%s', str(b[1]) if len(b) > 1 else '') if b[0] != 'element' else '%s = %s apfu' % (b[1], b[2])
 
@@ -1267,6 +1295,7 @@ def main(argv=None):
     ap.add_argument('--charge', choices=['H2O', 'Fe'], help='balance charge: H2O = add the hydrogen the analysis lacks (needs a cation/element basis and --anions N); Fe = split FeO into FeO + Fe2O3 on the basis given')
     ap.add_argument('--anions', type=float, help='total anions (O + F) per formula unit from the structure, for --charge H2O')
     ap.add_argument('--raw-anions', action='store_true', help='count oxide O and halogens both, without the O=F reduction (the spreadsheet convention, e.g. 21.5)')
+    ap.add_argument('--basis-sensitivity', action='store_true', help='also the formula on the standard alternative bases (the anion count found, the cation total, each major cation held) — the cation ratios do not move')
     ap.add_argument('--add', action='append', default=[], help='X=structure:N | X=wt:V | X=difference (repeatable)')
     ap.add_argument('--convert', action='append', default=[], help='UO2=UO3 (repeatable)')
     ap.add_argument('--drop', action='append', default=[], help='constituent to leave out (repeatable)')
@@ -1295,6 +1324,13 @@ def main(argv=None):
     except ValueError as e:
         raise SystemExit('epma: %s' % e)
     print(text)
+    if a.basis_sensitivity:
+        print('BASIS SENSITIVITY — the same analysis on the standard alternative bases (a cation RATIO never moves with the basis)')
+        for lab, f, ch in basis_sensitivity(ds, red, [_parse_add(x) for x in a.add if x.strip()],
+                                            [tuple(y.strip() for y in c.split('=', 1)) for c in a.convert if c.strip() and '=' in c],
+                                            [d.strip() for d in a.drop if d.strip()], parse_points(a.points), a.raw_anions):
+            print('  %-28s %s   (charge %+.2f)' % (lab, f, ch))
+        print()
     out = a.out or os.path.join(os.path.dirname(os.path.abspath(a.probe)), 'review_out')
     stem = os.path.splitext(os.path.basename(a.probe))[0]
     paths = export(ds, red, table, text, out, stem, a.word, a.xlsx, a.journal)

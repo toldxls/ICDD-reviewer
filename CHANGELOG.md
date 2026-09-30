@@ -101,6 +101,20 @@ package version in `pyproject.toml`.
   cell behind dcalc) and a dobs outside its group are notes. A pdf's negative indices come through the text layer
   without their overbar; each row is matched to the pattern line among its sign variants whose d is the printed dcalc.
 
+- **The composition and Gladstone–Dale readers of `pxrd paper --check`**: the density reader takes 'Density (calc.) = …',
+  'Density (meas.) …' and a data table's 'Density (for above formula) …' (11 corpus papers gained a D_calc). The ideal
+  formula the paper states is read (`ideal_formula`) and its wt% computed; every ideal wt% the paper prints — a
+  'requires MgO 17.06, … total 100.00' sentence, the analytical table's Ideal column — is compared with it, and so is
+  the printed total with the values listed (`ideal_wt_check`). The compatibility statement is read whole, each index
+  with the formula it is stated for, and a grid line sets every stated index beside every way of forming it (K_C from
+  the analysis and from the ideal formula; K_P from each density printed and from the .cif's cell with either formula's
+  mass), naming the nearest and whether it reproduces the statement, and saying when the combination that does is not
+  the one the statement claims (`gd_grid`; gd_check's verdict and its 0.03 slack are unchanged). The molar ratios of the
+  ideal formula's major elements as the analysis gives them, with the uncertainty the table's s.d. allows, are set
+  beside the ideal ratios — no basis enters into a ratio, so a difference beyond 3σ stands whatever the basis
+  (`basis_free_ratios`; 2–3σ is shown as information). `pxrd epma --basis-sensitivity` prints the formula on the
+  standard alternative bases beside the one asked for.
+
 ### Fixed
 - **A contact past a cation's first coordination shell is no bond** (`bv_check.first_shell`): a tetrahedral cation
   with an O near 2.9 Å (~0.04 vu, over `MIN_S`) had a fifth bond, a mean distance a quarter of an ångström long and a
