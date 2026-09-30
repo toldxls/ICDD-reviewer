@@ -278,6 +278,95 @@ def check_refinement(st, lines=None):
     return recs
 
 
+# ----------------------------------------------------------------------------- the formula the sites give
+
+_ZNUM = {s: i + 1 for i, s in enumerate(
+    'H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe '
+    'Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm'.split())}
+SITE_APFU_TOL = 0.05       # apfu and 5 %: an element the sites give beyond this of the formula sum, or of the manuscript's structural formula
+
+
+def site_totals(st):
+    """{element: atoms per cell} from the sites (multiplicity × occupancy × species fraction)."""
+    have = {}
+    for s_ in st.sites:
+        for sp in s_.species:
+            if sp.element:
+                have[sp.element] = have.get(sp.element, 0.0) + s_.mult * sp.occ
+    return have
+
+
+def check_site_formula(st, lines=None):
+    """The formula the refined sites give (occupancy × multiplicity, over Z) against the .cif's own formula sum and
+    against the structural or empirical formula the manuscript prints. An element out by more than 5 % and 0.05 apfu is
+    a flag on the .cif's side (the formula sum is what the program's F(000), μ and density came from) and a flag against
+    the manuscript's formula; H is compared only when the refinement located it."""
+    from pxrd_review import bv_check as B
+    have = site_totals(st)
+    z = B._z_from_formula(st)
+    recs = []
+    if not have or not z:
+        return recs
+    def rec(text, sev='flag'):
+        recs.append({'kind': 'site formula', 'severity': sev, 'text': text})
+    want = {}
+    for el, num in re.findall(r'([A-Z][a-z]?)\s*(\d*\.?\d*)', st.formula or ''):
+        if el in _ZNUM:
+            want[el] = want.get(el, 0.0) + (float(num) if num else 1.0)
+    have = dict(have); have['N'] = have.get('N', 0.0) + have.pop('NH', 0.0)     # an ammonium modelled as one scatterer
+    per_fu = {el: v / z for el, v in have.items()}
+    # cations only: a mixed anion site (F/OH) is typed one way in the .cif and split in the formula sum, and H, N follow it
+    skip = {'O', 'H', 'F', 'Cl', 'Br', 'I', 'N', 'NH'}
+    off, absent = [], []
+    for el, w in want.items():
+        if el in skip:
+            continue
+        h = per_fu.get(el, 0.0)
+        if h == 0.0 and w > 0:
+            absent.append('%s %g' % (el, w))                          # in the formula sum, on no site: not located (Li, Be, B, C of a carbonate the sites hold as O…)
+        elif abs(h - w) > max(SITE_APFU_TOL, 0.05 * w):
+            off.append('%s %.2f from the sites vs %g in the formula sum' % (el, h, w))
+    for el, h in per_fu.items():
+        if el not in want and el not in skip and h >= SITE_APFU_TOL:
+            off.append('%s %.2f from the sites vs none in the formula sum' % (el, h))
+    if off:
+        rec('the sites give a formula the .cif\'s formula sum does not match (Z = %d): %s — F(000), μ and the density the program wrote follow the formula sum, not the sites' % (z, '; '.join(off[:6])))
+    if absent:
+        rec('in the formula sum but on no site: %s (per formula unit, Z = %d) — not located, or left out of the model' % (', '.join(absent[:6]), z), 'note')
+    if lines:
+        from pxrd_review import paper_extract as PE
+        text = ' '.join(t for _k, t in lines)
+        pick = next((f for f in PE._formulas(text) if f[4] == 'structural'), None)    # the refinement's own formula; an empirical one need not match the sites
+        if pick and pick[1] and not re.search(r'\n|\d\(\d+\)|\b(?:IV|VI|VII|VIII|IX|XII)\b|(?<![A-Za-z(])[A-Z]\s?[\[(]', pick[0]):
+            # a formula broken over lines, carrying esds, coordination numerals or site letters is not read whole: no comparison
+            ftxt, counts = pick[0], pick[1]
+            diffs = []
+            for el, c in counts.items():
+                if el in skip or el not in _ZNUM:
+                    continue
+                h = per_fu.get(el, 0.0)
+                if abs(h - c) > max(SITE_APFU_TOL, 0.05 * c):
+                    diffs.append('%s %.2f from the sites vs %g in the formula' % (el, h, c))
+            if diffs and len(diffs) <= max(2, len(counts) // 3):
+                rec('the manuscript\'s structural formula %s vs the sites (occupancy × multiplicity / Z = %d): %s' % (ftxt[:90], z, '; '.join(diffs)))
+    return recs
+
+
+def check_f000(st):
+    """F(000) recomputed from the sites (Σ multiplicity × occupancy × atomic number over the cell) against the .cif's
+    own: a difference beyond 2 % means the formula sum the program used is not what the sites hold (a note — the
+    manuscript's printed F(000) is compared with the .cif's by check_numbers)."""
+    f_cif = _cif_num(st, '_exptl_crystal_f_000')[0]
+    have = site_totals(st)
+    if not f_cif or not have:
+        return []
+    f_sites = sum(n * _ZNUM.get(el, 0) for el, n in have.items())
+    if f_sites and abs(f_sites - f_cif) > 0.02 * f_cif:
+        return [{'kind': 'F(000)', 'severity': 'note', 'text': 'F(000) %g in the .cif vs %.0f electrons from the sites (%+.1f %%): the formula sum the program used and the sites disagree%s'
+                 % (f_cif, f_sites, 100.0 * (f_cif - f_sites) / f_sites, '' if 'H' in have else ' (H not located: a few electrons per formula unit are missing from the sites)')}]
+    return []
+
+
 # ----------------------------------------------------------------------------- the twin law
 
 def _mat3(rows):
@@ -784,7 +873,7 @@ def audit(cif, manuscript=None, checkcif=None):
     elif manuscript:
         lines = docx_lines(manuscript)
         recs += check_numbers(st, lines) + check_density(st, lines) + check_labels(st, lines)
-    recs += check_refinement(st, lines) + check_twin(st, lines)
+    recs += check_refinement(st, lines) + check_twin(st, lines) + check_site_formula(st, lines) + check_f000(st)
     out = {'records': recs, 'lines': []}
     L = out['lines']
     L.append('CIF audit — %s%s' % (os.path.basename(cif), (' vs ' + os.path.basename(manuscript)) if manuscript else ''))

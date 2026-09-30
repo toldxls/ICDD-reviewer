@@ -334,5 +334,26 @@ class TwinLaw(unittest.TestCase):
         self.assertTrue(any('second component is absent' in r['text'] for r in recs), [r['text'] for r in recs])
 
 
+class SiteFormula(unittest.TestCase):
+    def test_sites_against_the_formula_sum_and_f000(self):
+        tmp = tempfile.mkdtemp(prefix='cifsf_')
+        try:
+            path = os.path.join(tmp, 's.cif')
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(CIF)                                        # formula sum 'Mg O2 H2', F(000) 40; the sites hold Mg O2 H — one H short, 29 electrons
+            st = B.Structure(path)
+            self.assertEqual({k: round(v, 3) for k, v in CA.site_totals(st).items()}, {'Mg': 1.0, 'O': 2.0, 'H': 1.0})
+            recs = CA.check_site_formula(st, [('p', 'The structural formula is Mg2O2H2.')])
+            texts = [r['text'] for r in recs]
+            self.assertEqual(recs, [], texts)                                                        # Mg and O agree; H is not judged
+            recs = CA.check_site_formula(st, [('p', 'The structural formula, from the refined occupancies, is Mg2.00O2.00H2.00.')])
+            texts = [r['text'] for r in recs]
+            self.assertTrue(any("manuscript's structural formula" in t and 'Mg 1.00 from the sites vs 2 in the formula' in t for t in texts), texts)
+            f = CA.check_f000(st)
+            self.assertEqual(len(f), 1); self.assertIn('F(000) 40 in the .cif vs 29 electrons from the sites', f[0]['text'])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()
