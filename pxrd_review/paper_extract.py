@@ -5347,6 +5347,49 @@ def dominance_check(text, ex, cif=None):
     return (['dominance within the scatter, site by site:'] + L) if L else []
 
 
+_2V = re.compile(r'\b2V\s*[xz]?\s*(?:\(\s*(meas\.?|obs\.?|calc\.?|calculated|measured|est\.?)\s*\))?\s*(meas\.?|obs\.?|calc\.?|calculated|measured|est\.?)?\s*[=:≈]?\s*(\d{1,3}(?:\.\d)?)\s*(?:\(\d+\))?\s*°?', re.I)
+_ABG = re.compile(r'(?<![A-Za-z])(?:n?α|alpha)\s*[=≈]\s*(1\.\d{2,4})[^.]{0,80}?(?<![A-Za-z])(?:n?β|beta)\s*[=≈]\s*(1\.\d{2,4})[^.]{0,80}?(?<![A-Za-z])(?:n?γ|gamma)\s*[=≈]\s*(1\.\d{2,4})', re.I)
+TWO_V_APART = 5.0          # two stated 2V values this far apart are two values
+TWO_V_CALC = 15.0          # a stated 2V this far from the one the indices give is information (third-decimal rounding of the indices swings it)
+
+
+def optics_2v_lines(text):
+    """2V as the text states it, in every place, against itself and against the value the three indices give
+    (cos²Vz = (1/β² − 1/γ²)/(1/α² − 1/γ²)): two stated values more than 5° apart are a finding; a stated value more than
+    15° from the computed one is information (the indices' rounding moves 2V a lot). -> lines (the head first)."""
+    t = (text or '').replace('\xa0', ' ')
+    stated = []
+    for m in _2V.finditer(t):
+        v = float(m.group(3))
+        if 5 <= v <= 90:                                                # '2V' read off a stray '2 °' is not an angle
+            q = (m.group(1) or m.group(2) or '').lower().rstrip('.')
+            stated.append((v, 'calc' if q.startswith('calc') else 'meas' if q.startswith(('meas', 'obs')) else q or ''))
+    calc = None
+    m = _ABG.search(t)
+    if m:
+        a, b, g = (float(x) for x in m.groups())
+        if a < b < g:
+            c2 = (1 / b ** 2 - 1 / g ** 2) / (1 / a ** 2 - 1 / g ** 2)
+            if 0 <= c2 <= 1:
+                vz = 2 * math.degrees(math.acos(math.sqrt(c2)))
+                calc = (min(vz, 180 - vz), '+' if vz < 90 else '−', a, b, g)
+    if not stated and calc is None:
+        return []
+    L = []
+    vals = sorted({v for v, _q in stated})
+    meas = sorted({v for v, q in stated if q != 'calc'})
+    several = len(set(re.findall(r'IMA\s*(20\d\d[-–]\d{2,3}[a-z]?)', t))) >= 2      # a paper describing two minerals states two 2V: information, not a difference
+    if len(meas) >= 2 and meas[-1] - meas[0] > TWO_V_APART:
+        L.append('2V is given as %s in different places%s' % (' vs '.join('%g°' % v for v in meas), ' (information: the paper describes more than one mineral)' if several else ''))
+    if calc is not None:
+        far = [v for v, q in stated if q != 'calc' and abs(v - calc[0]) > TWO_V_CALC]
+        if far:
+            L.append('2V from the indices α %.3f, β %.3f, γ %.3f is %.1f° (%s); the text gives %s (information: the indices\' rounding moves it)' % (calc[2], calc[3], calc[4], calc[0], calc[1], ', '.join('%g°' % v for v in far)))
+    if not L:
+        return []
+    return ['optics: 2V stated %s%s' % (', '.join('%g°%s' % (v, ' (%s)' % q if q else '') for v, q in stated[:6]), '; from the indices %.1f°' % calc[0] if calc else '')] + L
+
+
 def basis_free_ratios(ex, ideal_counts, n_points=None):
     """The molar ratios of the ideal formula's major elements as the analysis gives them, with the uncertainty the
     table's s.d. allows (of the means, s.d./√n when n is known, the s.d. itself otherwise) — no basis enters into a
@@ -5421,6 +5464,7 @@ def check_paper(pdf, cif=None, out_dir=None):
         out['lines'] += _section(charge_balance_check(text, ex, out['composition']))
         out['lines'] += _section(epma_table_lint(ex, text))
         out['lines'] += _section(dominance_check(text, ex, cif))
+        out['lines'] += _section(optics_2v_lines(text))
         o_ = ex.get('optics') or {}
         if o_.get('n') and not (gd_statement(text) or {}).get('ci') and not re.search(r'compatib', text, re.I):
             out['lines'].append('compatibility index: none is stated although the refractive indices (n = %.3f) allow one (information)' % o_['n'])

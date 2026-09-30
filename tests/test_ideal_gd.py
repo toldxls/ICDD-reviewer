@@ -194,5 +194,16 @@ class Dominance(unittest.TestCase):
         self.assertEqual(PE.dominance_check('The empirical formula is (Mn0.80Ca0.20)Σ1.00Si1.00O3.', ex), [])
 
 
+class TwoV(unittest.TestCase):
+    def test_two_stated_values_and_the_indices(self):
+        text = ('Optically biaxial (+), α = 1.600(2), β = 1.610(2), γ = 1.630(2), 2V(meas.) = 70.5°. '
+                'Table 7. Optical data. 2V 63° 2V(calc) 71.6°.')
+        L = PE.optics_2v_lines(text)
+        self.assertTrue(L and L[0].startswith('optics: 2V stated 70.5° (meas), 63°, 71.6° (calc); from the indices 71.3°'), L)
+        self.assertTrue(any(x.startswith('2V is given as 63° vs 70.5° in different places') for x in L), L)
+        self.assertEqual(PE.optics_2v_lines('Optically biaxial (+), α = 1.600, β = 1.610, γ = 1.630, 2V(meas.) = 72°.'), [])
+        self.assertTrue(any('from the indices' in x and 'information' in x for x in PE.optics_2v_lines('α = 1.600, β = 1.610, γ = 1.630, 2V = 40°.')))
+
+
 if __name__ == '__main__':
     unittest.main()

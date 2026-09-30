@@ -64,6 +64,11 @@ package version in `pyproject.toml`.
   column). The number of analyses is read from the header ('Mean (n = 8)'), the caption ('mean of 12 analyses') or an
   `n` row, and travels with the table (`n_points`) to the basis-free ratios, the table lint and the dominance check.
 
+- **`pxrd paper --check`: 2V in every place it is stated** (`optics_2v_lines`) — two stated values more than 5° apart
+  ('2V is given as 63° vs 70.5° in different places') are a finding; a stated value more than 15° from the one the three
+  indices give (cos²Vz = (1/β² − 1/γ²)/(1/α² − 1/γ²)) is information, the indices' rounding moving 2V as it does.
+- The BASF-against-"no twinning" flag is a note when the denying sentence names another mineral (a comparison paper).
+
 ### Fixed
 - An ideal formula with a comma inside its brackets ('Ba3(Mg,Fe)…') was cut at the comma and read as 'Ba3(Mg' — a wrong
   calculated density and a wrong ideal wt% followed from it (both readers, `paper_extract` and `cif_audit`, now require

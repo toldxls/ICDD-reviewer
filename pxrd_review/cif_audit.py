@@ -281,7 +281,16 @@ def check_refinement(st, lines=None):
         mneg = _NO_TWIN.search(text)
         if mneg:
             s = max(0, mneg.start() - 60)
-            note('the .res refines a twin (BASF %s) but the manuscript says ‘…%s…’' % (', '.join('%.3f' % b for b in basf) or 'set', text[s:mneg.end() + 40].strip()), 'flag')
+            sent = text[max(0, text.rfind('.', 0, mneg.start()) + 1): text.find('.', mneg.end()) if text.find('.', mneg.end()) > 0 else mneg.end() + 120]
+            try:
+                from pxrd_review import paper_extract as PE
+                own = (PE.mineral_name(text) or '').lower()
+            except Exception:
+                own = ''
+            others = [w for w in re.findall(r'\b([a-zà-ÿ]{5,}ite)\b', sent.lower()) if w not in ('calcite', 'dolomite', 'granite', 'pegmatite', 'satellite', 'composite') and (not own or w not in own)]
+            # a denial in a sentence about another mineral (a comparison paper) is not this structure's: information there
+            note('the .res refines a twin (BASF %s) but the manuscript says ‘…%s…’%s' % (', '.join('%.3f' % b for b in basf) or 'set', text[s:mneg.end() + 40].strip(),
+                 (' — the sentence names %s, which may be what it is about' % others[0]) if others else ''), 'note' if others else 'flag')
         elif not _TWIN_WORD.search(text):
             note('the .res refines a twin (BASF %s) and the manuscript does not mention twinning' % (', '.join('%.3f' % b for b in basf) or 'set'))
     return recs
