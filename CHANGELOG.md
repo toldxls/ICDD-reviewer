@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.15.1](#0151--2026-09-30) | 30 Sep | GUI: the Mindat & cross-source pane looks up any species or group from the local snapshot and filters species by element on a periodic table; formulas in the pane's group list no longer break mid-token |
 | [0.15.0](#0150--2026-09-30) | 30 Sep | The manuscript review reads a `.pdf` proposal whole (report only); a memo-driven regression; `pxrd paper --check` reads the analytical table's s.d. and count of analyses under their own headers, 2V in every place it is stated (against itself, the indices, and a comparison table's own column), the site-scattering table (the population's electrons vs the calculated column, refined vs calculated, the .cif's site vs the refined value) and the prose electron counts; `pxrd cifaudit` recomputes μ from the sites at Mo Kα; the under-bonded O, absolute Tmin, prism-as-plane, missing compatibility index and 'twinning not observed' rules |
 | [0.14.0](#0140--2026-09-30) | 30 Sep | The rest of the manuscript review's list: `pxrd lint` cross-references (a cited table or figure with no caption) and evidence notes; `pxrd paper --check` charge balance of the empirical formula, the analytical table's own arithmetic (mean vs range, Samuelson's bound), dominance within the scatter site by site, the parameter set a table follows vs the one cited; `pxrd cifaudit` occupancies from the `.res`, a refinement triage, the twin law in the cell's geometry, the formula the sites give and F(000); `pxrd bv` oxygens whose sums disagree with their names; the Manuscript list sorts; a local review's four fixes |
 | [0.13.0](#0130--2026-09-30) | 30 Sep | The manuscript side: `pxrd bv --table` reads symmetry codes and hydrogen-bond tables against the .cif, `pxrd cifaudit` / `pxrd checkcif` audit the .cif against its manuscript and report, `pxrd powder` computes the pattern from the .cif and `pxrd pxrdaudit` sets the manuscript's table against it, the ideal formula's wt% and every stated compatibility index are checked, `pxrd lint` and `pxrd proposal` (one annotated copy from every check); the entry reflection-list checks flag only strong lines or a mistyped d, and an HKLEd-flagged multiple is not a dropped index; the first-shell cut in bond-valence sums |
@@ -39,6 +40,11 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.15.1] — 2026-09-30
+**The Mindat pane answers questions of its own.** A lookup box for any species or group in the local snapshot, and a
+periodic table that filters the species by element — nothing typed leaves the machine. And the group list's formulas
+wrap at chemistry, not mid-token.
 
 ### Added
 - **GUI, the Mindat & cross-source pane has a lookup box**: a mineral name (Enter) brings up its record from the local
