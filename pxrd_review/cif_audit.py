@@ -444,7 +444,7 @@ def twin_law(st, M):
     else:
         out['kind'] = 'other'
     # the axis (eigenvalue +1 of a rotation; the normal, eigenvalue −1, of a mirror): a null vector of Mc − λI
-    lam = -1.0 if out['kind'] == 'mirror' else 1.0
+    lam = -1.0 if out['kind'] in ('mirror', 'rotoinversion') else 1.0
     A = [[Mc[i][j] - (lam if i == j else 0.0) for j in range(3)] for i in range(3)]
     best = None
     for i in range(3):
@@ -550,7 +550,8 @@ def check_twin(st, lines=None):
                     Mx = [[float(row[tags.index('_twin_individual_twin_matrix_%d%d' % (i, j))]) for j in (1, 2, 3)] for i in (1, 2, 3)]
                 except Exception:
                     continue
-                if any(abs(Mx[i][j] - (1.0 if i == j else 0.0)) > 0.01 for i in range(3) for j in range(3)) and Mx not in [L for _w, L in laws]:
+                same = lambda A, Bm: all(abs(A[i][j] - Bm[i][j]) <= 0.01 for i in range(3) for j in range(3))
+                if not same(Mx, [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) and not any(same(Mx, L) for _w, L in laws):
                     laws.append(("the .cif's twin loop", Mx))
             break
     if not laws:
@@ -611,7 +612,7 @@ def check_twin(st, lines=None):
         P = printed_twin_matrix(twin_text)
         if P is not None:
             if P == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]:
-                rec('the twin matrix the text prints, (1 0 0; 0 1 0; 0 0 1), is the identity — the law that was refined is %s' % (laws[0][1] if laws else '?') if laws else
+                rec('the twin matrix the text prints, (1 0 0; 0 1 0; 0 0 1), is the identity — the law that was refined is (%s)' % '; '.join(' '.join('%g' % x for x in r) for r in laws[0][1]) if laws else
                     'the twin matrix the text prints, (1 0 0; 0 1 0; 0 0 1), is the identity: no twin law', 'flag')
             elif laws:
                 try:

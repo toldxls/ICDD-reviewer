@@ -224,10 +224,10 @@ def crossrefs(paragraphs, docx=True):
 
 
 _VALENCE_IN_FORMULA = re.compile(r'(?<![A-Za-z])(Fe|Mn|Ti|V|Cu|Ce|Eu|Cr|Co|Ni|Sb|As|U|Se|Te|Mo|W|Nb|Sn|Pb|Tl|Bi|S)\s?(\d)\s?[+⁺](?!\s?[a-z])|(?<![A-Za-z])(Fe|Mn|Ti|V|Cu|Ce|Eu|Cr|Co|Ni|Sb|As|U|Se|Te|Mo|W|Nb|Sn|Pb|Tl|Bi)[²³⁴⁵⁶]⁺')   # 'Ca2Fe3+2': no word boundary between the 2 and the Fe
-_VALENCE_METHOD = re.compile(r'Mössbauer|Moessbauer|Mossbauer|\bXPS\b|X-ray photoelectron|XANES|XAFS|EXAFS|\bEELS\b|electron energy[- ]loss|wet[- ]chemi|titrat|\bEPR\b|\bESR\b|colorimetr|K ?β|Kβ|flank method|spectrophotometr', re.I)
+_VALENCE_METHOD = re.compile(r'Mössbauer|Moessbauer|Mossbauer|\bXPS\b|X-ray photoelectron|XANES|XAFS|EXAFS|\bEELS\b|electron energy[- ]loss|wet[- ]chemi|titrat|\bEPR\b|\bESR\b|colorimetr|flank method|spectrophotometr', re.I)   # not 'Kβ': the diffractometer's Kβ filter is on every page
 _VALENCE_ARGUMENT = re.compile(r'bond[- ]valence|charge[- ]balance|electroneutrality|colou?r|pleochro|crystal[- ]chemical|site geometry|bond lengths?|coordination', re.I)
 _HYDROUS_FORMULA = re.compile(r'\(OH\)|\bOH\d|H2O|H₂O|\(H3O\)|H3O\b')                      # the formula's own tokens, not the words 'water' / 'hydroxyl' of the prose
-_OH_EVIDENCE = re.compile(r'(3[0-7]\d\d)\s*(?:cm|cm[-–−]1|cm\s*[-–−]\s*1)|O[-–—]?H stretch|stretching vibrations? of (?:the )?(?:O[-–—]?H|water|hydroxyl)|thermogravimetr|\bTGA?\b|\bDTA\b|\bDSC\b|weight loss|mass loss|loss on ignition|\bLOI\b|H2O was calculated|calculated (?:from|by|on the basis of)|by difference|Penfield|Karl[- ]Fischer|CHN|hydrogen analys|neutron', re.I)
+_OH_EVIDENCE = re.compile(r'(3[0-7]\d\d)\s*(?:cm|cm[-–−]1|cm\s*[-–−]\s*1)|O[-–—]?H stretch|stretching vibrations? of (?:the )?(?:O[-–—]?H|water|hydroxyl)|thermogravimetr|\bTGA?\b|\bDTA\b|\bDSC\b|weight loss|mass loss|loss on ignition|\bLOI\b|H2O (?:was |content (?:was )?)?calculated|water (?:was |content (?:was )?)?calculated|calculated H2O|by difference|Penfield|Karl[- ]Fischer|CHN|hydrogen analys|neutron', re.I)
 
 
 def evidence(text):
