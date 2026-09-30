@@ -18,7 +18,7 @@ Four checks, each a list of records {'kind', 'severity', 'text'} and printed as 
   labels   — a site label the prose names ('Mg2') that the .cif has no site for: flag.
 Nothing here writes into any file; the .cif is read only.
 """
-import os, re, sys, argparse
+import os, re, sys, math, argparse
 
 from pxrd_review import bv_check as B
 
@@ -44,7 +44,10 @@ def res_atoms(st):
         toks = s.split()
         key = toks[0].upper()
         if key == 'SFAC':
-            sfac += [t for t in toks[1:] if re.match(r'^[A-Z][a-z]?$', t)]
+            if len(toks) > 2 and re.match(r'^-?\d', toks[2]):
+                sfac.append(toks[1].capitalize())                        # the long form: one symbol and its scattering-factor terms
+            else:
+                sfac += [t.capitalize() for t in toks[1:] if re.match(r'^[A-Za-z][A-Za-z]?$', t)]   # 'SFAC CA MN Y': SHELXL keeps the case it was given
             continue
         if key in ('HKLF', 'END'):
             break
@@ -93,6 +96,187 @@ def check_riding(st):
                      'text': '%s rides on %s in the .res (Uiso = %g × its Ueq %s), but it is bonded to %s (%.2f Å; Ueq %s): the H is listed after the wrong atom'
                              % (lab, prev[0], abs(u), ueq(parent), donor.label, near[0][1], ueq(donor))})
     return recs
+
+def res_model(st):
+    """The embedded .res as a model: {'fvar': [values], 'atoms': [{'label', 'element', 'xyz', 'sof', 'u', 'part'}],
+    'twin': (3×3 matrix, n) or None, 'basf': [values], 'wght': [values]} — None without a .res."""
+    res = st.block['items'].get('_shelx_res_file')
+    if not res:
+        return None
+    m = {'fvar': [], 'atoms': [], 'twin': None, 'basf': [], 'wght': []}
+    part = 0; sfac = []
+    for ln in res.replace('=\n', ' ').split('\n'):
+        toks = ln.strip().split()
+        if not toks:
+            continue
+        key = toks[0].upper()
+        try:
+            if key == 'FVAR':
+                m['fvar'] += [float(v) for v in toks[1:]]
+            elif key == 'SFAC':
+                if len(toks) > 2 and re.match(r'^-?\d', toks[2]):
+                    sfac.append(toks[1].capitalize())
+                else:
+                    sfac += [t.capitalize() for t in toks[1:] if re.match(r'^[A-Za-z][A-Za-z]?$', t)]
+            elif key == 'PART':
+                part = int(float(toks[1])) if len(toks) > 1 else 0
+            elif key == 'TWIN':
+                nums = [float(v) for v in toks[1:]]
+                m['twin'] = ([nums[0:3], nums[3:6], nums[6:9]] if len(nums) >= 9 else [[-1, 0, 0], [0, -1, 0], [0, 0, -1]], int(nums[9]) if len(nums) > 9 else 2)
+            elif key == 'BASF':
+                m['basf'] += [float(v) for v in toks[1:]]
+            elif key == 'WGHT':
+                m['wght'] = [float(v) for v in toks[1:]]
+            elif key in ('HKLF', 'END'):
+                break
+            elif re.match(r'^[A-Za-z]{1,2}[A-Za-z0-9\'\"]*$', toks[0]) and len(toks) >= 6 and key not in _RES_CMDS and not re.match(r'^Q\d+$', key):
+                sf = int(toks[1]); xyz = [float(v) for v in toks[2:5]]; sof = float(toks[5]); u = float(toks[6]) if len(toks) > 6 else None
+                m['atoms'].append({'label': toks[0], 'element': sfac[sf - 1] if 0 < sf <= len(sfac) else None, 'xyz': xyz, 'sof': sof, 'u': u, 'part': part})
+        except (ValueError, IndexError):
+            continue
+    return m
+
+
+def sof_value(code, fvar):
+    """A SHELXL parameter code -> (value, kind, k): 10 + q is fixed at q ('fixed'); 10k + q is q·fv(k) ('fv');
+    −(10k + q) is q·(1 − fv(k)) ('1-fv'); anything else is refined freely ('free')."""
+    k = int(abs(code) // 10); q = round(abs(code) - 10 * k, 5)
+    if code >= 0 and k == 1:
+        return q, 'fixed', None
+    if k >= 2 and len(fvar) >= k:
+        fv = fvar[k - 1]
+        return (q * fv, 'fv', k) if code > 0 else (q * (1.0 - fv), '1-fv', k)
+    return (q if k == 0 else None), 'free', None
+
+
+OCC_OVER = 1.03            # a site's occupancies adding to more than this: over-occupied (a species standing in for a heavier one, or a slip)
+OCC_PARTIAL = (0.02, 0.98) # a chemical occupancy in this range is partial
+
+
+def check_occupancies(st):
+    """The .res occupancies: a site whose species add to more than 1 (flag); partial occupancies fixed rather than
+    refined (note — a bond-valence or composition argument resting on them is not independent); a split pair refined
+    without a common free variable whose occupancies do not add to 1 (note). The chemical occupancy is the sof over
+    the site's symmetry factor (its multiplicity over the general position's)."""
+    m = res_model(st)
+    if not m or not m['atoms']:
+        return []
+    general = max(1, len(st.ops))
+    def site_of(lab):
+        return st.site(lab) or next((x for x in st.sites if lab.upper() in [y.upper() for y in x.label.split('/')]), None)   # 'Fe1/Mg1': a merged site
+    rows = []
+    for a in m['atoms']:
+        if (a['element'] or '').upper() in ('H', 'D'):
+            continue
+        v, kind, k = sof_value(a['sof'], m['fvar'])
+        s = site_of(a['label'])
+        if v is None or s is None or not s.mult:
+            continue
+        sym = s.mult / float(general)
+        rows.append({'label': a['label'], 'el': a['element'] or s.element, 'xyz': a['xyz'], 'occ': v / sym if sym else v, 'kind': kind, 'k': k, 'part': a['part']})
+    recs = []
+    groups = {}                                                  # species sharing one position add up on one site
+    for r in rows:
+        groups.setdefault(tuple(round(x, 3) for x in r['xyz']), []).append(r)
+    for key, rs in groups.items():
+        tot = sum(r['occ'] for r in rs)
+        if tot > OCC_OVER:
+            recs.append({'kind': 'occupancy', 'severity': 'flag',
+                         'text': 'site %s: occupancies %s add to %.3f vs 1 — over-occupied (one species standing in for a heavier one, or a slip)' % ('/'.join(r['label'] for r in rs), ' + '.join('%.3f' % r['occ'] for r in rs), tot)})
+    fixed = [r for r in rows if r['kind'] == 'fixed' and OCC_PARTIAL[0] < r['occ'] < OCC_PARTIAL[1]]
+    if fixed:
+        recs.append({'kind': 'occupancy', 'severity': 'note',
+                     'text': 'occupancies fixed, not refined: %s — a bond-valence sum or a site composition that rests on them is not independent of what was put in'
+                             % ', '.join('%s %.3f' % (r['label'], r['occ']) for r in fixed[:12])})
+    seen = set()                                                 # split pairs: two positions within 0.9 Å, both partial, not tied by one free variable
+    for i, r in enumerate(rows):
+        for r2 in rows[i + 1:]:
+            if r['xyz'] == r2['xyz'] or (r['label'], r2['label']) in seen:
+                continue
+            if not (OCC_PARTIAL[0] < r['occ'] < OCC_PARTIAL[1] and OCC_PARTIAL[0] < r2['occ'] < OCC_PARTIAL[1]):
+                continue
+            try:
+                d = st.dist(r['xyz'], r2['xyz'])
+            except Exception:
+                continue
+            if d > 0.9:
+                continue
+            seen.add((r['label'], r2['label']))
+            tied = r['k'] is not None and r['k'] == r2['k'] and {r['kind'], r2['kind']} == {'fv', '1-fv'}
+            tot = r['occ'] + r2['occ']
+            if tot > OCC_OVER:
+                recs.append({'kind': 'occupancy', 'severity': 'flag',
+                             'text': 'split pair %s/%s (%.2f Å apart): occupancies %.3f + %.3f add to %.3f vs 1 — two positions of one atom cannot both be there that often'
+                                     % (r['label'], r2['label'], d, r['occ'], r2['occ'], tot)})
+            elif not tied and abs(tot - 1.0) > 0.02:
+                recs.append({'kind': 'occupancy', 'severity': 'note',
+                             'text': 'split pair %s/%s (%.2f Å apart): occupancies %.3f and %.3f refined without a common free variable, adding to %.3f'
+                                     % (r['label'], r2['label'], d, r['occ'], r2['occ'], tot)})
+    return recs
+
+
+_NO_TWIN = re.compile(r'no twinning|not twinned|twinning (?:was|is) not (?:observed|detected|found|present)|absence of twinning|untwinned|no evidence (?:of|for) twinning', re.I)
+_TWIN_WORD = re.compile(r'\btwin', re.I)
+REFINE_RULES = {'R1_vs_Rint': 3.0, 'wR2_over_R1': 3.5, 'wght_a': 0.15, 'completeness': 0.95, 'observed_fraction': 0.5, 'data_per_parameter': 8.0, 'flack': (0.15, 0.85)}
+
+
+def check_refinement(st, lines=None):
+    """Refinement-quality triage from the .cif and its .res, as notes with the numbers: R1 against Rint, wR2/R1, the
+    weighting scheme's a term, the completeness, the fraction of observed reflections, data per parameter, a Flack
+    parameter between 0.15 and 0.85, and the twin refinement (BASF) against what the manuscript says. Two are flags:
+    a manuscript that says the crystal was not twinned while the .res refines a twin fraction, and a transmission
+    range wider than μ and the crystal can produce (Tmin/Tmax below exp(−2 μ dmax))."""
+    items = st.block['items']
+    num = lambda tag: _cif_num(st, tag)[0]
+    recs = []
+    def note(text, sev='note'):
+        recs.append({'kind': 'refinement', 'severity': sev, 'text': text})
+    r1, rint, wr2 = num('_refine_ls_r_factor_gt'), num('_diffrn_reflns_av_r_equivalents'), num('_refine_ls_wr_factor_ref')
+    if r1 and rint and r1 > max(REFINE_RULES['R1_vs_Rint'] * rint, 0.06):
+        note('R1 %.3f against Rint %.3f: the model fits the data %.0f× worse than the equivalents agree with each other' % (r1, rint, r1 / rint))
+    if r1 and wr2 and wr2 / r1 > REFINE_RULES['wR2_over_R1']:
+        note('wR2 %.3f is %.1f× R1 %.3f: a few strong reflections or the weighting scheme carry the misfit' % (wr2, wr2 / r1, r1))
+    w = items.get('_refine_ls_weighting_details') or ''
+    mw = re.search(r'\(\s*(\d*\.\d+)\s*P\s*\)\s*\^?2', w)
+    m = res_model(st)
+    if mw and float(mw.group(1)) > REFINE_RULES['wght_a']:
+        note('weighting scheme a = %s: a term this large usually absorbs a systematic misfit (twinning, disorder, absorption)' % mw.group(1))
+    elif m and m['wght'] and not mw and m['wght'][0] > REFINE_RULES['wght_a']:
+        note('WGHT %g in the .res: a weighting term this large usually absorbs a systematic misfit' % m['wght'][0])
+    comp = num('_diffrn_measured_fraction_theta_max')
+    if comp is not None and comp < REFINE_RULES['completeness']:
+        note('completeness %.3f to θmax' % comp)
+    gt, tot, npar = num('_reflns_number_gt'), num('_reflns_number_total'), num('_refine_ls_number_parameters')
+    if gt and tot and gt / tot < REFINE_RULES['observed_fraction']:
+        note('%d of %d unique reflections observed (%.0f %%)' % (gt, tot, 100.0 * gt / tot))
+    if tot and npar and tot / npar < REFINE_RULES['data_per_parameter']:
+        note('%d reflections for %d parameters: %.1f data per parameter' % (tot, npar, tot / npar))
+    fl, fl_esd = _cif_num(st, '_refine_ls_abs_structure_flack')
+    if fl is not None and REFINE_RULES['flack'][0] <= fl <= REFINE_RULES['flack'][1] and (fl_esd is None or fl_esd < 0.15):
+        note('Flack parameter %s: an inversion twin not modelled, or the wrong absolute structure' % items.get('_refine_ls_abs_structure_flack'))
+    mu, dmax = num('_exptl_absorpt_coefficient_mu'), num('_exptl_crystal_size_max')
+    tmin, tmax = num('_exptl_absorpt_correction_t_min'), num('_exptl_absorpt_correction_t_max')
+    if mu and dmax and tmin and tmax and tmax > 0:
+        floor = math.exp(-2.0 * mu * dmax)
+        ctype = (items.get('_exptl_absorpt_correction_type') or '').lower()
+        if tmin / tmax < floor * 0.999:
+            # a numerical / analytical correction's Tmin and Tmax are transmissions and must fit the crystal; a multi-scan
+            # or empirical correction's carry scaling too (SADABS' are not transmissions) — information there
+            physical = bool(re.search(r'analyt|numer|integrat|gauss|sphere|cylind', ctype))
+            note('Tmin/Tmax = %.3f vs exp(−2 μ dmax) = %.3f for μ %.2f mm⁻¹ and a %.3f mm crystal (%s correction): the range spans more absorption than the crystal can produce%s'
+                 % (tmin / tmax, floor, mu, dmax, ctype or 'unstated', '' if physical else ' — or the crystal size is misstated'), 'flag' if physical else 'note')
+    basf = (m or {}).get('basf') or []
+    twinned = bool(basf) or bool((m or {}).get('twin')) or items.get('_twin_individual_mass_fraction_refined') not in (None, '', '?')
+    if twinned and lines:
+        text = ' '.join(t for _k, t in lines)
+        mneg = _NO_TWIN.search(text)
+        if mneg:
+            s = max(0, mneg.start() - 60)
+            note('the .res refines a twin (BASF %s) but the manuscript says ‘…%s…’' % (', '.join('%.3f' % b for b in basf) or 'set', text[s:mneg.end() + 40].strip()), 'flag')
+        elif not _TWIN_WORD.search(text):
+            note('the .res refines a twin (BASF %s) and the manuscript does not mention twinning' % (', '.join('%.3f' % b for b in basf) or 'set'))
+    return recs
+
 
 # ----------------------------------------------------------------------------- the manuscript
 
@@ -332,10 +516,15 @@ def check_labels(st, lines):
 
 def audit(cif, manuscript=None, checkcif=None):
     st = B.Structure(cif)
-    recs = check_riding(st)
-    if manuscript:
+    recs = check_riding(st) + check_occupancies(st)
+    lines = None
+    if manuscript and manuscript.lower().endswith('.pdf'):
+        from pxrd_review import cell_lambda_check as C
+        lines = [('p', p) for p in re.split(r'\n\s*\n', C.pdf_text(manuscript) or '') if p.strip()]
+    elif manuscript:
         lines = docx_lines(manuscript)
         recs += check_numbers(st, lines) + check_density(st, lines) + check_labels(st, lines)
+    recs += check_refinement(st, lines)
     out = {'records': recs, 'lines': []}
     L = out['lines']
     L.append('CIF audit — %s%s' % (os.path.basename(cif), (' vs ' + os.path.basename(manuscript)) if manuscript else ''))

@@ -58,6 +58,19 @@ package version in `pyproject.toml`.
   sum or a multiplier, a formula the text layer garbled, and more than two O out of balance (a misread, never a
   finding). On 1,041 corpus papers: 2 flags (printed formulas out of balance by one to two charges), 6 information
   lines, 56 stops with a reason, the rest silent.
+- **`pxrd cifaudit`: the .res occupancies and a refinement-quality triage** (`cif_audit.check_occupancies`,
+  `check_refinement`, `res_model`). From the embedded `.res` — each site occupancy from its SHELXL code (fixed, a free
+  variable, one minus a free variable) over the site's symmetry factor: a site whose species add to more than 1 is a
+  flag (a species standing in for a heavier one, or a slip), and so is a split pair that adds to more than 1; partial
+  occupancies fixed rather than refined are a note (a bond-valence or site-composition argument resting on them is not
+  independent), and a split pair on two free variables that does not add to 1 is a note. The triage, as notes with the
+  numbers: R1 against Rint (more than three times), wR2/R1 above 3.5, a weighting-scheme a term above 0.15,
+  completeness below 0.95, under half the reflections observed, under 8 data per parameter, a Flack parameter between
+  0.15 and 0.85, a transmission range wider than μ and the crystal allow (a flag for an analytical or numerical
+  correction, a note for multi-scan, whose Tmin/Tmax carry scaling). A `.res` that refines a twin (BASF) while the
+  manuscript says the crystal was not twinned is a flag; a BASF the manuscript never mentions is a note. A `.pdf`
+  manuscript is read for its text. Corpus (209 structures): 9 over-occupied sites in 5 structures; the rest notes.
+  The `.res` element table is now read from `SFAC` lines in any case (`SFAC CA MN`), which the riding-H check depends on.
 
 ## [0.13.0] — 2026-09-30
 

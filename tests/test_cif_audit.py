@@ -169,5 +169,60 @@ class Audit(unittest.TestCase):
         self.assertTrue(any(ln.startswith('  CRITICAL PLAT965') for ln in out['lines']), out['lines'])
 
 
+# a P-1 cell (two operators): a shared Fe/Mg site fixed by hand at 0.31 + 0.225 (partial, not over-occupied), a split O5A/O5B pair
+# 0.5 Å apart refined on two free variables, a Ca on an inversion centre (sof 10.5 is a full site), the refinement's
+# transmission range wider than μ and the crystal allow, and a BASF the manuscript denies
+CIF_OCC = CIF.replace("_space_group_name_H-M_alt 'P 1'", "_space_group_name_H-M_alt 'P -1'").replace("'x, y, z'\n", "'x, y, z'\n'-x, -y, -z'\n") \
+    .replace("H1 H 0 0.62 0 0.036\n", "H1 H 0 0.62 0 0.036\nFe1 Fe 0.3 0.2 0.1 0.010\nMg2 Mg 0.3 0.2 0.1 0.010\nO5A O 0.30 0.30 0.30 0.020\nO5B O 0.34 0.34 0.30 0.020\nCa1 Ca 0 0 0.5 0.012\n") \
+    .replace("_exptl_absorpt_coefficient_mu 1.234\n", "_exptl_absorpt_coefficient_mu 1.234\n_exptl_absorpt_correction_type analytical\n_exptl_crystal_size_max 0.10\n_exptl_absorpt_correction_T_min 0.40\n_exptl_absorpt_correction_T_max 0.95\n") \
+    .replace("SFAC Mg O H\nUNIT 1 2 2\n", "SFAC MG O H FE CA\nUNIT 2 4 4 2 2\nFVAR 0.5 0.62 0.30\nBASF 0.23\n") \
+    .replace("MG1   1   0.000000  0.000000  0.000000  11.00000  0.01000\n", "MG1   1   0.000000  0.000000  0.000000  10.50000  0.01000\n") \
+    .replace("OW1   2   0.000000  0.500000  0.000000  11.00000  0.03000\n",
+             "OW1   2   0.000000  0.500000  0.000000  10.50000  0.03000\nFE1   4   0.300000  0.200000  0.100000  10.31000  0.01000\nMG2   1   0.300000  0.200000  0.100000  10.22500  0.01000\n"
+             "O5A   2   0.300000  0.300000  0.300000  21.00000  0.02000\nO5B   2   0.340000  0.340000  0.300000  31.00000  0.02000\nCA1   5   0.000000  0.000000  0.500000  10.50000  0.01200\n")
+
+
+class Occupancies(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='cifocc_')
+        self.cif = os.path.join(self.tmp, 'o.cif')
+        with open(self.cif, 'w', encoding='utf-8') as f:
+            f.write(CIF_OCC)
+        self.st = B.Structure(self.cif)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_res_model_reads_upper_case_sfac_and_codes(self):
+        m = CA.res_model(self.st)
+        self.assertEqual(m['fvar'], [0.5, 0.62, 0.30]); self.assertEqual(m['basf'], [0.23])
+        els = {a['label']: a['element'] for a in m['atoms']}
+        self.assertEqual((els['FE1'], els['CA1'], els['MG2']), ('Fe', 'Ca', 'Mg'))
+        self.assertEqual(CA.sof_value(10.31, m['fvar']), (0.31, 'fixed', None))
+        self.assertEqual(CA.sof_value(21.0, m['fvar']), (0.62, 'fv', 2))
+        v, kind, k = CA.sof_value(-21.0, m['fvar']); self.assertAlmostEqual(v, 0.38); self.assertEqual((kind, k), ('1-fv', 2))
+
+    def test_occupancies(self):
+        recs = CA.check_occupancies(self.st)
+        texts = [r['text'] for r in recs]
+        # Fe1/Mg1 share a general position (sym factor 1): 0.31 + 0.225 fixed… no: the site is general, sof = occupancy
+        over = [r for r in recs if r['severity'] == 'flag']
+        self.assertEqual(over, [], texts)                                  # 0.31 + 0.225 = 0.535: not over-occupied
+        self.assertTrue(any(t.startswith('occupancies fixed, not refined: FE1 0.310, MG2 0.225') for t in texts), texts)
+        self.assertTrue(any(t.startswith('split pair O5A/O5B') and 'adding to 0.920' in t for t in texts), texts)   # fv2 0.62 + fv3 0.30, two free variables
+        self.assertFalse(any('CA1' in t for t in texts), texts)            # sof 10.5 on the inversion centre is a full site
+
+    def test_refinement_triage(self):
+        recs = CA.check_refinement(self.st, [('p', 'The crystal was examined and no twinning was observed.')])
+        flags = [r['text'] for r in recs if r['severity'] == 'flag']
+        self.assertEqual(len(flags), 2, [r['text'] for r in recs])
+        self.assertTrue(any(t.startswith('Tmin/Tmax = 0.421 vs exp(−2 μ dmax) = 0.781') for t in flags), flags)   # analytical: a flag
+        self.assertTrue(any('refines a twin (BASF 0.230) but the manuscript says' in t for t in flags), flags)
+        recs = CA.check_refinement(self.st, [('p', 'The structure was refined as a two-component twin.')])
+        self.assertFalse(any('BASF' in r['text'] for r in recs if r['severity'] == 'flag'))
+        recs = CA.check_refinement(self.st, [('p', 'Nothing about it.')])
+        self.assertTrue(any('does not mention twinning' in r['text'] for r in recs))
+
+
 if __name__ == '__main__':
     unittest.main()
