@@ -48,6 +48,16 @@ package version in `pyproject.toml`.
   the finding is a note only: on 1,263 published papers every dangling reference the text layer produced was a caption it
   had lost (a rotated table, a caption inside its figure), and after the rules above a pdf produces none. `pxrd proposal`
   writes the flag as a comment on the citation; the GUI's Manuscript mode shows it red.
+- **`pxrd paper --check`: the empirical formula's charge balance** (`paper_extract.charge_balance_check`). Σ(+) − Σ(−)
+  over the formula the paper prints, each cation at the valence the formula itself fixes (a superscript, a polyanion —
+  sulfate, thiosulfate, oxalate, uranyl, ammonium …, an element printed in two states counted state by state), else the
+  analysis's oxide, else the species' ideal formula (information only), else the one valence the element has in a
+  mineral; and the O count the charges call for beside the O printed. Half an O apart is a finding ('O2.03 printed vs
+  O3.03 from the charges'), a quarter is information. It stops and says why for a variable-valence element no source
+  fixes, sulfur with O but no polyanion written, an element in two polyanions, an anion group whose integer reads as a
+  sum or a multiplier, a formula the text layer garbled, and more than two O out of balance (a misread, never a
+  finding). On 1,041 corpus papers: 2 flags (printed formulas out of balance by one to two charges), 6 information
+  lines, 56 stops with a reason, the rest silent.
 
 ## [0.13.0] — 2026-09-30
 

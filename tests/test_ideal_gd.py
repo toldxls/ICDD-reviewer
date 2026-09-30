@@ -80,5 +80,32 @@ class BasisSensitivity(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class ChargeBalance(unittest.TestCase):
+    EX = {'name': None, 'epma': {'rows': [{'constituent': 'MgO', 'mean': 17.7}, {'constituent': 'As2O5', 'mean': 45.9}, {'constituent': 'H2O', 'mean': 36.0}]}}
+
+    def test_balanced_formula_is_silent(self):
+        t = 'The empirical formula, calculated on the basis of Mg = 1, is Mg1.00As1.00O8.00H9.00.'
+        self.assertEqual(PE.charge_balance_check(t, self.EX), [])
+
+    def test_an_o_count_one_short_is_a_finding(self):
+        t = 'The empirical formula, calculated on the basis of Mg = 1, is Mg1.00As1.00O7.00H9.00.'
+        L = PE.charge_balance_check(t, self.EX)
+        self.assertEqual(len(L), 2, L)
+        self.assertIn('O7.00 printed vs O8.00 from the charges', L[1]); self.assertIn('As+5 from the analysis', L[1])
+
+    def test_a_quarter_o_is_information(self):
+        t = 'The empirical formula, calculated on the basis of Mg = 1, is Mg1.00As1.00O7.70H9.00.'
+        L = PE.charge_balance_check(t, self.EX)
+        self.assertEqual(len(L), 1, L); self.assertIn('information', L[0]); self.assertNotIn(' vs ', L[0])
+
+    def test_a_variable_valence_with_no_source_stops_the_sum(self):
+        t = 'The empirical formula is Fe1.00As1.00O5.00.'
+        L = PE.charge_balance_check(t, {'name': None, 'epma': {'rows': [{'constituent': 'As2O5', 'mean': 50.0}]}})
+        self.assertEqual(L, ['charge balance: not summed — the valence of Fe is stated nowhere the tool reads'])
+        # the formula's own superscript decides
+        t = 'The empirical formula is Fe3+1.00As1.00O4.00.'
+        self.assertEqual(PE.charge_balance_check(t, {'name': None, 'epma': {'rows': [{'constituent': 'As2O5', 'mean': 50.0}]}}), [])
+
+
 if __name__ == '__main__':
     unittest.main()

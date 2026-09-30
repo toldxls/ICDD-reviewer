@@ -4994,6 +4994,133 @@ def ideal_wt_check(text, ex):
     L = [x for x in L if x]
     return L if len(L) > 1 else []
 
+# elements whose valence the formula, the analysis or the species must state before a charge is summed
+_VARIABLE = {'Fe', 'Mn', 'Cr', 'V', 'Co', 'Ni', 'Cu', 'Ce', 'Eu', 'U', 'Sb', 'As', 'Te', 'Se', 'Mo', 'W', 'Nb', 'Sn', 'Pb', 'Tl',
+             'Au', 'Pt', 'Pd', 'Ir', 'Os', 'Ru', 'Bi', 'Hg', 'Ag', 'N', 'Re'}       # Ti, C, P, Zr, the lanthanides but Ce/Eu: one valence in a mineral formula
+_FIXED_ANION = {'O': -2, 'F': -1, 'Cl': -1, 'Br': -1}
+# the valence a polyanion written in the formula fixes for its central element
+_POLY = [(r'\(?\bUO2\b', 'U', 6), (r'S2O3', 'S', 2), (r'\(SO4\)|SO4', 'S', 6), (r'\(SO3\)|\(SO3OH\)|(?<!2)SO3(?![.\d])', 'S', 4), (r'SeO4', 'Se', 6), (r'SeO3', 'Se', 4),
+         (r'TeO6|TeO4', 'Te', 6), (r'TeO3', 'Te', 4), (r'AsO4|AsO3OH|AsO2\(OH\)', 'As', 5), (r'AsO3\b', 'As', 3), (r'PO4|PO3OH|PO2\(OH\)', 'P', 5),
+         (r'C2O4', 'C', 3), (r'CO3', 'C', 4), (r'NO3', 'N', 5), (r'NH3', 'N', -3), (r'IO3', 'I', 5), (r'SbO4|SbO6|Sb\(OH\)6', 'Sb', 5), (r'VO4|V2O7', 'V', 5), (r'MoO4', 'Mo', 6),
+         (r'WO4', 'W', 6), (r'CrO4', 'Cr', 6), (r'SiO4|Si2O7|SiO3', 'Si', 4), (r'BO3|BO4', 'B', 3), (r'NH4', 'N', -3)]
+_MISREAD = 2.0             # more than two O out of balance: the formula was not read whole, not a finding
+CHARGE_FLAG = 0.5          # the O count the charges call for differs from the printed one by half an O or more (one charge): a flag
+CHARGE_NOTE = 0.25         # a quarter of an O: information
+
+
+def _valences(counts, ox, ex, species, ftxt):
+    """{element: charge} for every element of the formula, with where each came from, or (None, reason).
+    The formula's own superscripts first, then the analysis's oxide, then the species' ideal formula, then the usual
+    oxide for an element of one valence; a variable-valence element with no source stops the check."""
+    val, src = {}, {}
+    table = {}
+    for r in (ex.get('epma') or {}).get('rows') or []:
+        c = r.get('constituent') or ''
+        try:
+            k = EP.parse_constituent('N2H8O' if c == '(NH4)2O' else c)
+        except Exception:
+            continue
+        if k.kind == 'oxide' and abs(k.charge - round(k.charge)) < 0.01 and 1 <= k.charge <= 7:
+            table.setdefault(k.element, set()).add(int(round(k.charge)))          # SO4 / PO4 as a 'constituent' would give +8: not an oxide
+        elif k.kind == 'element-anion':
+            table.setdefault(k.element, set()).add(k.charge)
+    ammonium = bool(re.search(r'NH4|N\s*H\s*4', ftxt))
+    has_o = counts.get('O', 0) > 0
+    for el, n in counts.items():
+        if el not in EP.ATOMIC_WEIGHTS or n == 0:
+            continue
+        if el == 'H':
+            val[el] = 1; src[el] = ''; continue
+        if el in _FIXED_ANION:
+            val[el] = _FIXED_ANION[el]; src[el] = ''; continue
+        if el in ox and ox[el]:
+            states = set(ox[el]) if isinstance(ox[el], (set, frozenset, list, tuple)) else {ox[el]}
+            if len(states) > 1:
+                return None, '%s is printed in two valence states, and their counts are summed as one' % el
+            val[el] = int(next(iter(states))); src[el] = 'the formula'; continue
+        poly = [(re.search(pat, ftxt).group(0).strip('()'), q) for pat, e_, q in _POLY if e_ == el and re.search(pat, ftxt)]
+        if poly:
+            if len({q for _p, q in poly}) > 1:
+                return None, '%s is written in two polyanions (%s), and their counts are summed as one' % (el, ', '.join(sorted({p_ for p_, _q in poly})))
+            val[el] = poly[0][1]; src[el] = 'the formula'; continue
+        if el in ('S', 'Se', 'Te', 'I') and not has_o:
+            val[el] = -2 if el != 'I' else -1; src[el] = 'no O: a sulfide'; continue
+        if el in ('S', 'Se', 'Te', 'I') and table.get(el) and min(table[el]) < 0:
+            return None, 'the valence of %s is not fixed by the formula (no polyanion written) and the analysis gives it as an element' % el
+        if el in table:
+            if len(table[el]) > 1:
+                return None, '%s is analysed in two valence states (%s) and the formula prints it in one' % (el, ', '.join('%+d' % v for v in sorted(table[el])))
+            val[el] = next(iter(table[el])); src[el] = 'the analysis'; continue
+        sp = (species or {}).get('ox', {}).get(el)
+        if sp and len(sp) == 1:
+            val[el] = next(iter(sp)); src[el] = 'the ideal formula'; continue
+        if el in _VARIABLE:
+            return None, 'the valence of %s is stated nowhere the tool reads' % el
+        oxide = EP._USUAL_OXIDE.get(el)
+        if not oxide:
+            return None, 'no valence for %s' % el
+        val[el] = int(round(EP.parse_constituent(oxide).charge)); src[el] = ''
+    return (val, src), None
+
+
+def charge_balance_check(text, ex, comp=None):
+    """The empirical formula's O count against the charges of everything else it prints: Σ(+) − Σ(−) over the
+    formula with each cation at the valence the formula / the analysis / the species gives, and the O the charges
+    call for beside the O printed. Half an O apart (one charge) is a finding — a mistyped coefficient, or a
+    formula balanced on another valence than the one written; a quarter of an O is information. -> lines."""
+    fs = _formulas(text, ex.get('name') or '')
+    if not fs:
+        return []
+    fs = sorted(fs, key=lambda f: 0 if f[4] == 'empirical' else 1)
+    ftxt, counts, _issues, ox, kind, _ctx = fs[0]
+    if not counts or counts.get('O', 0) <= 0 or len([e for e in counts if e in EP.ATOMIC_WEIGHTS]) < 2:
+        return []
+    if _issues or re.search(r'\d\s+\d', ftxt) or ftxt.count('(') != ftxt.count(')') or ftxt.count('[') != ftxt.count(']') \
+            or max(counts.values()) > 100:                          # a text layer that lost its brackets and sums; '1.708H2O' read as 1.7 thousand H2O
+        return []                                                    # not read whole: no sum
+    counts = dict(counts)
+    # an amphibole's site letters — 'A(K0.61…)0.88 BCa2.00 C(Fe2+…) T(Si…) W[(OH)…]' — are not carbon, boron, tungsten: a bare
+    # letter before a bracket or an element, in a formula that has two or more such markers
+    markers = set(re.findall(r'(?<![A-Za-z(\[])([ABCTWM])(?=\s?[\(\[]|[A-Z][a-z]?\d)', ftxt))
+    if len(markers) >= 2:
+        for el in ('C', 'B', 'W'):
+            if counts.get(el) == 1.0 and el in markers and not any(re.search(pat, ftxt) for pat, e_, _q in _POLY if e_ == el):
+                counts.pop(el)
+    for grp, n in re.findall(r'\(((?:[^()]|\([^()]*\))*)\)(\d)(?!\d|\.\d)', ftxt):
+        decs = [float(x) for x in re.findall(r'\d+\.\d+', grp)]
+        if len(decs) >= 2 and abs(sum(decs) - int(n)) <= 0.02 and re.search(r'O|F|Cl', grp):   # an anion group: '(F1.40(OH)0.60)2'; a cation group's integer is its sum
+            return ['charge balance: not summed — ‘(%s)%s’ reads as a sum or as a multiplier, and the two give different O counts' % (grp[:40], n)]
+    species = species_record(ex.get('name'))
+    # an element printed in two valence states ('Fe2+0.48Fe3+1.52'): each state's own count carries its charge, and the
+    # element leaves the single-valence resolution — when the states add up to the element's count
+    states = {}
+    icdd = _journal_to_icdd(ftxt)
+    for el, q, n in re.findall(r'([A-Z][a-z]?)(\d)\s*C\s*(\d+\.\d+)', icdd):          # 'Fe3 C1.01'
+        states.setdefault(el, []).append((int(q), float(n)))
+    for el, n, q in re.findall(r'([A-Z][a-z]?)(\d+\.\d+)\s*\+(\d)', icdd):           # 'Fe0.50 +2'
+        states.setdefault(el, []).append((int(q), float(n)))
+    fixed = {el: sum(q * n for q, n in v) for el, v in states.items()
+             if len({q for q, _n in v}) > 1 and abs(sum(n for _q, n in v) - counts.get(el, 0.0)) <= 0.02 + 0.01 * counts.get(el, 0.0)}
+    got, why = _valences({el: n for el, n in counts.items() if el not in fixed}, {el: v for el, v in (ox or {}).items() if el not in fixed}, ex, species, ftxt)
+    if got is None:
+        return ['charge balance: not summed — %s' % why]
+    val, src = got
+    total = sum(val[el] * n for el, n in counts.items() if el in val) + sum(fixed.values())
+    for el in fixed:
+        src[el] = 'the formula (%s)' % ', '.join('%+d × %.2f' % (q, n) for q, n in states[el])
+    o_need = counts['O'] + total / 2.0
+    dec = max((len(m) for m in re.findall(r'O\s?\d+\.(\d+)', ftxt)), default=2)
+    basis = ', '.join(('%s from %s' % (el, src[el])) if el in fixed else ('%s%+d from %s' % (el, val[el], src[el])) for el in counts if src.get(el))
+    line = 'O%.*f printed vs O%.*f from the charges (Σ(+) − Σ(−) = %+.2f%s)' % (dec, counts['O'], dec, o_need, total, '; ' + basis if basis else '')
+    if abs(total / 2.0) >= _MISREAD:
+        return ['charge balance: not summed — the %s formula as read is %.1f O out of balance, which is a misread, not a finding' % (kind, abs(total / 2.0))]
+    if abs(total / 2.0) >= CHARGE_FLAG and not any(v == 'the ideal formula' for v in src.values()):
+        return ['charge balance of the %s formula %s:' % (kind, ftxt[:120]), line]
+    if abs(total / 2.0) >= CHARGE_NOTE:
+        return ['charge balance of the %s formula %s: Σ(+) − Σ(−) = %+.2f, a quarter of an O or more (information%s)' % (kind, ftxt[:120], total, '; ' + basis if basis else '')]
+    return []
+
+
 def gd_grid(ex, comp, stmt, cif=None):
     """Every compatibility index the paper states, against every way of forming it: K_C from the analysis and from the
     ideal formula, K_P from each density the paper prints and from Z·M/V of the .cif with either formula's mass. The
@@ -5125,6 +5252,7 @@ def check_paper(pdf, cif=None, out_dir=None):
     try:
         ex['_text'] = text
         out['lines'] += _section(ideal_wt_check(text, ex))
+        out['lines'] += _section(charge_balance_check(text, ex, out['composition']))
         idf_ = ideal_formula(text)
         if idf_ and ex.get('epma'):
             out['lines'] += _section(basis_free_ratios(ex, idf_[1], (ex.get('epma') or {}).get('n_points')))
