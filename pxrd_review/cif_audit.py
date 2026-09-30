@@ -376,6 +376,51 @@ def check_f000(st):
     return []
 
 
+MU_TOL = 0.10              # μ from the sites against the .cif's, as a fraction: the table is good to a few per cent
+_MU_TABLE = None
+
+
+def _mu_table():
+    global _MU_TABLE
+    if _MU_TABLE is None:
+        import json
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'mu_moka.json'), encoding='utf-8') as f:
+            _MU_TABLE = json.load(f)
+    return _MU_TABLE
+
+
+def mu_from_sites(st, lam=None):
+    """μ (mm⁻¹) from the sites at Mo Kα — Σ over the cell of atoms × A × (μ/ρ) over N_A V — or None when the wavelength is
+    not Mo Kα or an element has no coefficient. -> (mu, missing elements)."""
+    from pxrd_review import epma as EP
+    T = _mu_table()
+    lam = lam if lam is not None else _cif_num(st, '_diffrn_radiation_wavelength')[0]
+    if lam is None or abs(lam - T['wavelength']) > 0.002:
+        return None, []
+    have = site_totals(st)
+    missing = [el for el in have if el not in T['mu_rho'] or el not in EP.ATOMIC_WEIGHTS]
+    if missing or not have or not st.volume:
+        return None, missing
+    mu = 0.1 * sum(n * EP.ATOMIC_WEIGHTS[el] * T['mu_rho'][el] for el, n in have.items()) / (6.02214076e23 * st.volume * 1e-24)
+    return mu, []
+
+
+def check_mu(st):
+    """μ recomputed from the sites at the .cif's wavelength against the .cif's own μ: beyond 10 % a note — the formula sum
+    behind the program's μ is not what the sites hold, or μ was computed for another radiation (Mo Kα data only: the
+    table is Mo Kα's)."""
+    mu_cif = _cif_num(st, '_exptl_absorpt_coefficient_mu')[0]
+    if not mu_cif:
+        return []
+    mu, missing = mu_from_sites(st)
+    if mu is None:
+        return []
+    if abs(mu - mu_cif) > MU_TOL * mu_cif:
+        return [{'kind': 'mu', 'severity': 'note', 'text': 'μ %.3f mm⁻¹ in the .cif vs %.3f from the sites at Mo Kα (%+.0f %%): the formula sum behind the program\'s μ and the sites disagree, or μ was computed for another radiation%s'
+                 % (mu_cif, mu, 100.0 * (mu_cif - mu) / mu, '' if 'H' in site_totals(st) else ' (H not located: a fraction of a per cent at most)')}]
+    return []
+
+
 # ----------------------------------------------------------------------------- the twin law
 
 def _mat3(rows):
@@ -886,7 +931,7 @@ def audit(cif, manuscript=None, checkcif=None):
     elif manuscript:
         lines = docx_lines(manuscript)
         recs += check_numbers(st, lines) + check_density(st, lines) + check_labels(st, lines)
-    recs += check_refinement(st, lines) + check_twin(st, lines) + check_site_formula(st, lines) + check_f000(st)
+    recs += check_refinement(st, lines) + check_twin(st, lines) + check_site_formula(st, lines) + check_f000(st) + check_mu(st)
     out = {'records': recs, 'lines': []}
     L = out['lines']
     L.append('CIF audit — %s%s' % (os.path.basename(cif), (' vs ' + os.path.basename(manuscript)) if manuscript else ''))

@@ -370,6 +370,39 @@ class MeasuredCationBasis(unittest.TestCase):
             shutil.rmtree(tmp)
 
 
+class SdAndCount(unittest.TestCase):
+    """The s.d. comes from the S.D. column by position, never from an Ideal column; the count of analyses from the header or caption."""
+    def _pdf(self, path, caption, header, rows):
+        import pymupdf
+        doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
+        y = 60
+        for txt in ('Sdtestite, a new mineral from Nowhere', 'The empirical formula, calculated on the basis of 4 O apfu, is Ca1.00Mg1.00Si1.00O4.', caption):
+            page.insert_text((40, y), txt, fontsize=9); y += 16
+        xs = (40, 130, 200, 300, 370)                                     # the cells line up under the header, as in print
+        for cells in (header,) + tuple(rows):
+            for x, c in zip(xs, cells):
+                page.insert_text((x, y), c, fontsize=9)
+            y += 16
+        doc.save(path); doc.close()
+
+    def test_ideal_column_is_not_the_sd_and_n_is_read(self):
+        tmp = tempfile.mkdtemp(prefix='pe_sd_')
+        try:
+            p = os.path.join(tmp, 'a.pdf')
+            self._pdf(p, 'Table 1. Chemical data (wt%) for sdtestite.', ('Constituent', 'Mean (n = 8)', 'Range', 'Ideal'),
+                      (('CaO', '32.10', '31.80-32.40', '32.11'), ('MgO', '23.05', '22.70-23.60', '23.09'), ('SiO2', '34.40', '33.90-34.70', '34.40'), ('Total', '99.55')))
+            e = PE.epma_table(p, 'sdtestite')
+            self.assertEqual(e['n_points'], 8)
+            self.assertEqual([r['sd'] for r in e['rows']], [None, None, None])              # the Ideal column is not a scatter
+            p2 = os.path.join(tmp, 'b.pdf')
+            self._pdf(p2, 'Table 1. Chemical data (wt%) for sdtestite (mean of 12 analyses).', ('Constituent', 'Mean', 'Range', 'S.D.', 'Ideal'),
+                      (('CaO', '32.10', '31.80-32.40', '0.21', '32.11'), ('MgO', '23.05', '22.70-23.60', '0.30', '23.09'), ('SiO2', '34.40', '33.90-34.70', '0.28', '34.40'), ('Total', '99.55')))
+            e = PE.epma_table(p2, 'sdtestite')
+            self.assertEqual([r['sd'] for r in e['rows']], [0.21, 0.30, 0.28]); self.assertEqual(e['n_points'], 12)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()
 

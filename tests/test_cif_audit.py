@@ -355,5 +355,22 @@ class SiteFormula(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class Mu(unittest.TestCase):
+    def test_mu_from_the_sites_at_mo_ka(self):
+        tmp = tempfile.mkdtemp(prefix='cifmu_')
+        try:
+            path = os.path.join(tmp, 'm.cif')
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(CIF.replace('_exptl_absorpt_coefficient_mu 1.234\n', '_exptl_absorpt_coefficient_mu 1.234\n_diffrn_radiation_wavelength 0.71073\n'))
+            st = B.Structure(path)
+            mu, missing = CA.mu_from_sites(st)
+            self.assertEqual(missing, []); self.assertAlmostEqual(mu, 0.0457, places=3)         # Mg O2 H in 512 Å³: (24.305·4.06 + 2·15.999·1.31 + 1.008·0.373) / (N_A · V)
+            recs = CA.check_mu(st)
+            self.assertEqual(len(recs), 1); self.assertIn('μ 1.234 mm⁻¹ in the .cif vs 0.046 from the sites at Mo Kα', recs[0]['text'])
+            self.assertEqual(CA.mu_from_sites(st, lam=1.5418), (None, []))                        # the table is Mo Kα's: another radiation is not judged
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()

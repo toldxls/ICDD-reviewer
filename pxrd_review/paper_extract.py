@@ -927,6 +927,18 @@ def epma_table(pdf, name=''):
                         if nums_m:
                             keep_cols = [q for q, v in enumerate(nums_m) if abs(v - nums_m[0]) <= 0.15 * nums_m[0]]
                 past_total = False; first_val = {}; rows_nd = []; apfu = {}   # apfu: the paper's own atoms per formula unit, read off the block it prints them in
+                sd_x = next(((w[0] + w[2]) / 2 for w in head_ws if re.match(r'^\(?(s\.?d\.?|σ|1σ|sigma|e\.?s\.?d\.?|st\.?\s?dev\.?|stdev|sd)\)?$', w[4], re.I)), None) if head_ws else None
+                if sd_x is None and head_ws:                                    # 'St. Dev.' / 'Std dev' as two header words: the column sits between them
+                    for w1, w2 in zip(head_ws, head_ws[1:]):
+                        if re.match(r'^(st\.?|std\.?|stand\.?|standard)$', w1[4], re.I) and re.match(r'^dev(?:\.|iation)?$', w2[4], re.I):
+                            sd_x = (w1[0] + w2[2]) / 2; break
+                other_named = bool(re.search(r'\b(ideal|calc\.?|calculated|prob\.?|probe|standard|std\.?|norm\w*|theor\w*|end[- ]?member)\b', ' '.join(head), re.I))
+                # the number of analyses the table states: 'Mean (n = 8)' in the header, 'mean of 12 analyses', or an 'n' row
+                m_n = re.search(r'\bn\s*=\s*(\d{1,3})\b|(?:mean|average)\s+of\s+(\d{1,3})|\b(\d{1,3})\s+(?:point |spot )?analys', ' '.join(head) + ' ' + (cap or ''), re.I)
+                n_points = int(next(g for g in m_n.groups() if g)) if m_n else None
+                for c_, k_, v_, wr_ in block:
+                    if re.fullmatch(r'n|N|no\.?|number of analyses|no\. of analyses|analyses', (c_ or '').strip()) and v_ and v_[0][0] == 'num' and 1 <= v_[0][1] <= 200 and float(v_[0][1]).is_integer():
+                        n_points = n_points or int(v_[0][1])
                 bare = lambda c_: bool(re.fullmatch(r'[A-Z][a-z]?', c_))
                 # Below the Total the apfu block begins with the first row that can only be one (a bare
                 # element, a constituent again, an ion such as SO4 or UO2), and from there on EVERY row
@@ -1010,16 +1022,24 @@ def epma_table(pdf, name=''):
                         if x1 is not None and x1 > first_x_med + 40:
                             continue                                             # the row's only number is columns to the right of the means: no mean (kept in col_cells)
                     sd = None
-                    # s.d. is the number after the range (Mean | Range | S.D.), else the second number when
-                    # the header says so
+                    # s.d.: under the S.D. header token when the header has one (by x; a header token off its column falls back
+                    # on the row's order: the number after the range, else the second number); else the esd in brackets after
+                    # the mean; else the number after the range — but not when the header names an Ideal / Calc / Prob /
+                    # Standard column and no S.D., whose number would be taken for it (an 'SiO2 32.48 ± 32.25' on the corpus)
                     esd = next((v for k, v in vals if k == 'esd'), None)
-                    if esd is not None:
+                    after = [v for k, v in vals[[k for k, _ in vals].index('range') + 1:] if k == 'num'] if rng is not None else []
+                    if sd_x is not None:
+                        cand_sd = [(abs((w[0] + w[2]) / 2 - sd_x), w[4]) for w in ws_row if _numlike(w[4])]
+                        if cand_sd and min(cand_sd)[0] < 22:
+                            sd = float(re.match(r'-?\d+\.?\d*', min(cand_sd)[1].replace('−', '-').lstrip('(')).group(0))
+                        elif after:
+                            sd = after[0]
+                        elif len(nums) >= 2:
+                            sd = nums[1]
+                    elif esd is not None:
                         sd = esd
-                    elif rng is not None:
-                        after = [v for k, v in vals[[k for k, _ in vals].index('range') + 1:] if k == 'num']
-                        sd = after[0] if after else None
-                    elif len(nums) >= 2 and any(re.match(r'(S\.?D\.?|σ|e\.?s\.?d)', h, re.I) for h in head):
-                        sd = nums[1]
+                    elif after and not other_named:
+                        sd = after[0]
                     xs = [(w[0] + w[2]) / 2 for w in ws_row if _numlike(w[4]) or _NA.match(w[4])]
                     if c == 'HS':                                               # hydrosulfide, wt% of HS: the sulfur (the H is informational)
                         k_hs = 32.06 / 33.068; c = 'S'; mean = round(mean * k_hs, 3); nums_all = [round(v * k_hs, 3) for v in nums_all]
@@ -1042,7 +1062,7 @@ def epma_table(pdf, name=''):
                             break                                                # the caption: the header ends here
                         if len(in_span) <= 8:
                             head_span += [(w[4], (w[0] + w[2]) / 2) for w in in_span]
-                cand = {'rows': _drop_totals(rows), 'total': total, 'header': ' '.join(head)[:200], 'page': pno + 1, 'n': n_const, 'score': score, 'caption': cap[:160], 'head_cells': head_cells, 'rows_all': rows + rows_nd, 'label_x': x_col, 'apfu': apfu, 'col_cells': col_cells, 'head_span': head_span}
+                cand = {'rows': _drop_totals(rows), 'total': total, 'header': ' '.join(head)[:200], 'page': pno + 1, 'n': n_const, 'score': score, 'caption': cap[:160], 'head_cells': head_cells, 'rows_all': rows + rows_nd, 'label_x': x_col, 'apfu': apfu, 'col_cells': col_cells, 'head_span': head_span, 'n_points': n_points}
                 key_rows = {(r_['constituent'], r_['mean']) for r_ in cand['rows']}
                 if any(c_['page'] == cand['page'] and abs((c_.get('label_x') or 0) - (x_col or 0)) <= 30 and key_rows <= {(r_['constituent'], r_['mean']) for r_ in c_['rows']} for c_ in cands):
                     i = j; continue                                          # the same block read again from its second row (a side-by-side rescan): not another table
@@ -5213,7 +5233,7 @@ def epma_table_lint(ex, text):
     rows = [r for r in e.get('rows') or [] if r.get('mean') is not None]
     if not rows:
         return []
-    n, n_src = analyses_count(text, e.get('caption') or '', with_source=True)
+    n, n_src = (e['n_points'], 'table') if e.get('n_points') else analyses_count(text, e.get('caption') or '', with_source=True)
     L = []
     for r in rows:
         c, mean, sd, rng = r['constituent'], r['mean'], r.get('sd'), r.get('range')
@@ -5228,12 +5248,15 @@ def epma_table_lint(ex, text):
         # a slip sits near its range (within one range-width of it); a mean far outside is another sample's column
         if out_by > tol and 0.1 * width < out_by <= width and 0.5 * lo <= mean <= 2.0 * hi:
             L.append('%s: mean %g vs its range %g–%g — the mean lies outside the range' % (c, mean, lo, hi))
-        elif sd and sd >= 0.01 and n and n >= 2 and lo <= mean <= hi:
+        elif sd and sd >= 0.01 and n and n >= 2 and lo <= mean <= hi and 0.5 * mean <= lo and hi <= 2.0 * mean:   # a range of the mean's magnitude: this column's, not another's
             bound = max(hi - mean, mean - lo) / math.sqrt(n - 1)
             ratio = bound / sd
-            if ratio >= 2.0 and bound - sd > 0.02 + tol and n_src == 'caption':   # the table's own count of analyses; a count read elsewhere may be another set's
+            se_like = sd * math.sqrt(n) >= bound                     # a column that is really the standard error of the mean would pass as s.d. × √n
+            if ratio >= 2.0 and bound - sd > 0.02 + tol and n_src in ('caption', 'table') and not se_like:   # the table's own count of analyses; a count read elsewhere may be another set's
                 L.append('%s: s.d. %g vs at least %.2f that the range %g–%g and n = %d allow (the farthest analysis lies within s.d.·√(n−1) of the mean)' % (c, sd, bound, lo, hi, n))
-            elif (ratio >= 1.2 and bound - sd > 0.02 + tol) or (ratio >= 2.0 and bound - sd > 0.02 + tol):
+            elif ratio >= 2.0 and bound - sd > 0.02 + tol and se_like:
+                L.append('%s: s.d. %g is short of the %.2f its range %g–%g and n = %d call for — unless the column is the standard error of the mean (× √n = %.2f) (information)' % (c, sd, bound, lo, hi, n, sd * math.sqrt(n)))
+            elif ratio >= 1.2 and bound - sd > 0.02 + tol:
                 L.append('%s: s.d. %g is short of the %.2f its range %g–%g and n = %d call for (information)' % (c, sd, bound, lo, hi, n))
     if n is not None and n <= 2:
         L.append('%d analys%s (information)' % (n, 'is' if n == 1 else 'es'))

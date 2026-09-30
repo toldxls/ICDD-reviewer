@@ -52,6 +52,18 @@ package version in `pyproject.toml`.
   elongation direction written as a plane, '(100)', is a notation note; a paper with refractive indices and no
   compatibility index is told so (`pxrd paper --check`).
 
+- **`pxrd cifaudit`: μ recomputed from the sites** (`check_mu`, `data/mu_moka.json`). At Mo Kα, Σ atoms × A × (μ/ρ) over
+  N_A V from the sites, against the .cif's own μ: beyond 10 % a note — the formula sum behind the program's μ is not what
+  the sites hold, or μ was computed for another radiation. The coefficients: the heavy elements harvested by least
+  squares from the μ values of the corpus .cif files (the tables the refinement programs use, each within 3 % by its own
+  uncertainty; 114 structures then agree with their .cif's μ to a median 0.0 %, 90 % within ±3.5 %), the light elements
+  from International Tables C approximations. Other radiations are not judged.
+- **The composition reader's s.d. and count of analyses.** The s.d. is taken under the table's own S.D. / σ / e.s.d. header
+  by position, falling back on the row's order only under such a header; a table whose header names an Ideal, Calc,
+  Probe or Standard column and no S.D. lends no number as a scatter (an 'SiO2 32.48 ± 32.25' had come from an Ideal
+  column). The number of analyses is read from the header ('Mean (n = 8)'), the caption ('mean of 12 analyses') or an
+  `n` row, and travels with the table (`n_points`) to the basis-free ratios, the table lint and the dominance check.
+
 ### Fixed
 - An ideal formula with a comma inside its brackets ('Ba3(Mg,Fe)…') was cut at the comma and read as 'Ba3(Mg' — a wrong
   calculated density and a wrong ideal wt% followed from it (both readers, `paper_extract` and `cif_audit`, now require
