@@ -27,6 +27,16 @@ class MindatLookup(unittest.TestCase):
         r = self.c.get('/api/mn/search?q=Asgruvanite-(Ce)').get_json()          # the ASCII spelling resolves through the usual fallbacks
         self.assertTrue(r['hits'] and 'sgruvanite' in r['hits'][0]['name'], r['hits'][:1])
 
+    @unittest.skipUnless(_snapshot(), 'no Mindat snapshot')
+    def test_species_by_element(self):
+        r = self.c.get('/api/mn/elements?has=Si,O&only=1').get_json()
+        names = [h['name'] for h in r['hits']]
+        self.assertIn('Quartz', names)                                           # the simplest chemistries first
+        self.assertTrue(all(set(h['elements']) <= {'Si', 'O'} for h in r['hits']), names[:5])
+        r = self.c.get('/api/mn/elements?has=Sc&not=Fe').get_json()
+        self.assertTrue(r['total'] > 5 and all('Sc' in h['elements'] and 'Fe' not in h['elements'] for h in r['hits']))
+        self.assertNotIn('Fe', r['counts']); self.assertEqual(r['counts']['Sc'], r['total'])
+
     def test_a_short_or_unknown_query_is_empty_not_an_error(self):
         self.assertEqual(self.c.get('/api/mn/search?q=q').get_json()['hits'], [])
         r = self.c.get('/api/mn/search?q=zzqxnosuchmineral').get_json()

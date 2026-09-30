@@ -40,6 +40,17 @@
   </header>
 
   <!-- appearance / layout settings -->
+  <!-- the Mindat pane's element filter: a periodic table; built by app.js (mnPtBuild) -->
+  <div id="mn-ptpanel" class="panel hidden">
+    <div class="mn-pt-head"><b>Species by element</b>
+      <span class="muted" id="mn-pt-count"></span>
+      <label class="chk mini" title="keep only the species whose every element is among those chosen"><input type="checkbox" id="mn-pt-only"> only these</label>
+      <button class="ghost mini" id="mn-pt-clear" title="unselect every element">clear</button>
+      <button class="ghost mini" id="mn-pt-close" title="close (Esc)">✕</button>
+    </div>
+    <div class="note-line">click once: must contain (green) · twice: must not (red) · a greyed element would leave no species</div>
+    <div id="mn-pt-grid"></div>
+  </div>
   <div id="settings" class="panel hidden">
     <div class="set-row"><span class="set-label">Theme</span>
       <div id="theme-picker" class="seg">
@@ -466,7 +477,8 @@
               <div class="pane-title">
                 <button class="collapse" title="collapse">▾</button>
                 <span class="ptitle">Mindat &amp; cross-source</span>
-                <input type="search" id="mn-q" placeholder="look up a mineral…" title="Look a mineral up in the local Mindat snapshot (Enter): its IMA formula, cell, group, status and type locality — or a group name for its members. Nothing is sent anywhere. Esc or ✕ brings the entry's record back.">
+                <input type="search" id="mn-q" placeholder="look up a mineral or group…" title="Look a mineral up in the local Mindat snapshot (Enter): its IMA formula, cell, group, status and type locality — or a group name for its members. Nothing is sent anywhere. Esc or ✕ brings the entry's record back.">
+                <button id="mn-pt" class="ghost mini" title="Filter the species by element: a periodic table — click an element once for MUST contain, twice for MUST NOT; 'only these' keeps species with no other element. From the local snapshot; nothing is sent anywhere.">⚛ elements</button>
               </div>
               <div class="pane-body" id="mindat-body"></div>
             </section>

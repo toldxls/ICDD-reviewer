@@ -45,6 +45,9 @@ package version in `pyproject.toml`.
   Mindat snapshot — IMA formula, cell, group, Strunz code, IMA status, elements, type locality — with the names that
   begin with or contain what was typed; a group name ('apatite', 'amphibole supergroup') lists the members by subgroup.
   Nothing is sent anywhere. Esc, the field's ✕ or the panel's ✕ bring the entry's record back (`/api/mn/search`).
+- **… and a periodic table beside it (⚛ elements)**: click an element once for MUST contain, twice for MUST NOT;
+  'only these' keeps the species with no other element; the species list lands in the pane (simplest chemistries
+  first) and the table greys every element that would leave nothing (`/api/mn/elements`, from the snapshot).
 
 ### Fixed
 - **Formulas in the pane's group list broke mid-token** ('Ti4' on one line, '+' on the next): the list went through the

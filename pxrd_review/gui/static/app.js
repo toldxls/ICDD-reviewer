@@ -1340,9 +1340,84 @@ async function mnSearch(q) {
   }
   body.replaceChildren(box); body.scrollTop = 0;
 }
+// ---- the pane's element filter: a periodic table in a popup; every change re-asks the snapshot and lists the species
+const PT_ROWS = [
+  ['H', 1, 1], ['He', 1, 18],
+  ['Li', 2, 1], ['Be', 2, 2], ['B', 2, 13], ['C', 2, 14], ['N', 2, 15], ['O', 2, 16], ['F', 2, 17], ['Ne', 2, 18],
+  ['Na', 3, 1], ['Mg', 3, 2], ['Al', 3, 13], ['Si', 3, 14], ['P', 3, 15], ['S', 3, 16], ['Cl', 3, 17], ['Ar', 3, 18],
+  ...'K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr'.split(' ').map((e, i) => [e, 4, i + 1]),
+  ...'Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe'.split(' ').map((e, i) => [e, 5, i + 1]),
+  ['Cs', 6, 1], ['Ba', 6, 2], ...'Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn'.split(' ').map((e, i) => [e, 6, i + 4]),
+  ['Fr', 7, 1], ['Ra', 7, 2],
+  ...'La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu'.split(' ').map((e, i) => [e, 9, i + 3]),
+  ...'Ac Th Pa U Np Pu'.split(' ').map((e, i) => [e, 10, i + 3]),
+];
+const PTS = { has: new Set(), not: new Set(), built: false };
+function mnPtBuild() {
+  if (PTS.built) return;
+  PTS.built = true;
+  const grid = $('#mn-pt-grid');
+  const cells = {};
+  for (const [e, r, c] of PT_ROWS) cells[r * 100 + c] = e;
+  for (let r = 1; r <= 10; r++) {
+    if (r === 8) { grid.append(el('div', { class: 'pt spacer' })); continue; }   // the gap above the f-block rows
+    for (let c = 1; c <= 18; c++) {
+      const e = cells[r * 100 + c];
+      if (!e) { grid.append(el('div', { class: 'pt gap' })); continue; }
+      const b = el('button', { class: 'pt', 'data-el': e, title: e }, e);
+      b.addEventListener('click', () => {
+        if (PTS.has.has(e)) { PTS.has.delete(e); PTS.not.add(e); }
+        else if (PTS.not.has(e)) PTS.not.delete(e);
+        else PTS.has.add(e);
+        mnPtRun();
+      });
+      grid.append(b);
+    }
+  }
+  $('#mn-pt-only').addEventListener('change', mnPtRun);
+  $('#mn-pt-clear').addEventListener('click', () => { PTS.has.clear(); PTS.not.clear(); mnPtRun(); });
+  $('#mn-pt-close').addEventListener('click', mnPtClose);
+}
+function mnPtClose() { $('#mn-ptpanel').classList.add('hidden'); }
+function mnPtPaint(r) {
+  for (const b of $('#mn-pt-grid').querySelectorAll('.pt[data-el]')) {
+    const e = b.dataset.el, n = r && r.counts ? (r.counts[e] || 0) : null;
+    b.classList.toggle('has', PTS.has.has(e)); b.classList.toggle('not', PTS.not.has(e));
+    b.classList.toggle('none', n === 0 && !PTS.has.has(e) && !PTS.not.has(e));
+    b.title = n === null ? e : `${e} — ${n} species`;
+  }
+  $('#mn-pt-count').textContent = r ? `${r.total} species` : '';
+}
+async function mnPtRun() {
+  const has = [...PTS.has], not = [...PTS.not], only = $('#mn-pt-only').checked;
+  if (!has.length && !not.length) { mnPtPaint(null); mnPinned = false; mnPaneRestore(); return; }
+  let r;
+  try { r = await fetch(`/api/mn/elements?has=${has.join(',')}&not=${not.join(',')}&only=${only ? 1 : 0}`).then(x => x.json()); } catch (_) { return; }
+  mnPtPaint(r);
+  const body = mnPaneUsable();
+  if (!body) return;
+  if (!mnPaneSaved) mnPaneSaved = [...body.childNodes];
+  mnPinned = true;
+  const box = el('div', { class: 'mn-pane' });
+  const what = [has.join(' + '), not.length ? '− ' + not.join(' − ') : '', only ? '(only these)' : ''].filter(Boolean).join(' ');
+  const head = el('div', { class: 'sub mn-pane-head' }, `Elements ${what} — ${r.total} species${r.total > r.hits.length ? ' (first ' + r.hits.length + ')' : ''}`);
+  const x = el('button', { class: 'ghost mini', title: 'back to the entry\'s Mindat record' }, '✕');
+  x.addEventListener('click', () => { mnPinned = false; mnPaneRestore(); mnPtClose(); });
+  head.append(x); box.append(head);
+  if (!r.hits.length) box.append(el('div', { class: 'note-line' }, 'no species in the snapshot with that chemistry'));
+  mnGroupBody({ name: '', sections: [{ name: '', members: r.hits }] }, box);
+  body.replaceChildren(box); body.scrollTop = 0;
+}
 (() => {
   const q = document.getElementById('mn-q');
   if (!q) return;
+  const pt = document.getElementById('mn-pt');
+  pt.addEventListener('click', e => {
+    e.stopPropagation();
+    mnPtBuild();
+    $('#mn-ptpanel').classList.toggle('hidden');
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#mn-ptpanel').classList.contains('hidden')) mnPtClose(); });
   q.addEventListener('click', e => e.stopPropagation());
   q.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); mnSearch(q.value); }

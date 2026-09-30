@@ -379,6 +379,34 @@ def mn_search(q, limit=12):
 def api_mn_search():
     return jsonify(mn_search(request.args.get('q', '')))
 
+def mn_elements(has=(), without=(), only=False, limit=300):
+    """Species by element, from the LOCAL snapshot: every element of `has` present, none of `without`, and with `only`
+    no element outside `has` — the pane's periodic-table filter. -> {total, hits: [{name, formula, elements}] (the simplest
+    chemistries first), counts: {element: matching species that carry it} (the table greys an element that would leave
+    nothing)}."""
+    has = {e for e in has if e}; without = {e for e in without if e}
+    out = {'has': sorted(has), 'not': sorted(without), 'only': bool(only), 'total': 0, 'hits': [], 'counts': {}}
+    try:
+        recs = MN._index()[0]
+    except Exception as e:
+        out['error'] = str(e)[:120]; return out
+    hits = []; counts = {}
+    for r in recs.values():
+        els = set(r.get('elements') or [])
+        if not els or not has <= els or (els & without) or (only and not els <= has):
+            continue
+        hits.append({'name': r.get('name', ''), 'formula': html.unescape(r.get('formula') or ''), 'elements': sorted(els)})
+        for e in els:
+            counts[e] = counts.get(e, 0) + 1
+    hits.sort(key=lambda h: (len(h['elements']), h['name'].lower()))
+    out.update(total=len(hits), hits=hits[:limit], counts=counts)
+    return out
+
+@app.route('/api/mn/elements')
+def api_mn_elements():
+    split = lambda k: [x.strip() for x in request.args.get(k, '').split(',') if x.strip()]
+    return jsonify(mn_elements(split('has'), split('not'), request.args.get('only', '') in ('1', 'true', 'yes')))
+
 # ------------------------------------------------------------------ serialization
 def _finding_keys(findings):
     """Content-stable triage keys for the extra findings — annotate_review.finding_keys
