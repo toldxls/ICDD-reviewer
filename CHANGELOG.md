@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.13.0](#0130--2026-09-30) | 30 Sep | The manuscript side: `pxrd bv --table` reads symmetry codes and hydrogen-bond tables against the .cif, `pxrd cifaudit` / `pxrd checkcif` audit the .cif against its manuscript and report, `pxrd powder` computes the pattern from the .cif and `pxrd pxrdaudit` sets the manuscript's table against it, the ideal formula's wt% and every stated compatibility index are checked, `pxrd lint` and `pxrd proposal` (one annotated copy from every check); the entry reflection-list checks flag only strong lines or a mistyped d, and an HKLEd-flagged multiple is not a dropped index; the first-shell cut in bond-valence sums |
 | [0.12.2](#0122--2026-09-23) | 23 Sep | `pxrd update` and the chip's Pull now no longer restart the tool when the pull changed nothing: HEAD is compared before and after, "already up to date" keeps the tool running |
 | [0.12.1](#0121--2026-09-23) | 23 Sep | Mineral groups on the .pdf page (members with formulas on the card, a large group listed in the Mindat pane while hovered, supergroups through their subgroups — the snapshot now stores each group's parent); a review of 0.12.0: names broken at their own hyphen at a line end are read (1,270 → 281 lost on the corpus), 89 species with long suffixes, apostrophes or two-word names now found, series ('bismuthinite–aikinite') and polytypes marked, a title word's tint kept inside its box |
 | [0.12.0](#0120--2026-09-23) | 23 Sep | Mineral names on the .pdf page: every IMA species the paper names is tinted and a hover opens its Mindat formula, group, Strunz code, cell and type locality; a word one slip from a species name is underlined with the name it is nearest; the entry's own mineral tinted once a page; matched against the local Mindat snapshot, so a paper's words never leave the machine — a reading aid, no new check |
@@ -36,6 +37,16 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.13.0] — 2026-09-30
+
+**The manuscript side of a review.** Six new tools for a new-mineral manuscript with its structure — symmetry codes
+and hydrogen-bond tables, the .cif against its manuscript and its checkCIF report, the powder pattern from the .cif and
+the manuscript's table against it, the ideal formula's wt% and every stated compatibility index, spectroscopy and
+notation lints, and `pxrd proposal` to run them all into one annotated copy — plus a recalibration of the entry
+reflection-list checks (a weak line is a note; an HKLEd-flagged multiple is not a dropped index) and the first-shell
+cut in the bond-valence sums. Gates: the unit suite, the regression suite, the private manuscript regression and
+corpus A/Bs for every rule (numbers in each entry below).
 
 ### Added
 - **`pxrd bv --table`: the manuscript's symmetry codes and hydrogen-bond table.** Each table's footnote is read
