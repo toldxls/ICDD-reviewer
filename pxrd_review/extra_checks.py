@@ -2679,6 +2679,13 @@ def _measured(e):
     ins = getattr(e, 'instr', None) or {}
     return (ins.get('spacing_instr') or '').strip().lower() not in ('calculated', 'other')
 
+# The reflection list against the paper (checks 15, 29, 34): a finding about a WEAK line is a note, a strong one or a
+# mistyped d a flag (2026-09-30: a human review met too many written comments on lines of no weight). Intensities on
+# the 100 scale of the list they are read from.
+STRONG_NAMED = 20.0        # a line the paper names among its strongest lines, absent from the entry
+REFL_WEAK = 10.0           # an entry line the .pdf does not print, with no one-keystroke neighbour
+LINE_WEAK = 5.0            # a paper table line the entry lacks, with no mistyped twin
+
 def check15_strongest_lines(e, text):
     """The paper's own list of its strongest lines ('The strongest lines of the powder X-ray diffraction
     pattern [d, Å (I, %) (hkl)] are: 6.683(65)(020), 3.355(44)(103), …') against the reflection list:
@@ -2719,7 +2726,10 @@ def check15_strongest_lines(e, text):
         miss, m = min(scored, key=lambda s: len(s[0]))
         if miss:
             near = lambda d: min(docx_ds, key=lambda x: abs(x - float(d)))
-            out.append(Finding('strongest_lines', 'flag',
+            # a strong line, or one the entry holds with two digits swapped or one changed, is the finding; a weak one is information
+            same_form = lambda d, x: ('%.' + str(len(d.split('.')[1])) + 'f') % x
+            strong = any(float(i) >= STRONG_NAMED or _one_keystroke(d, same_form(d, near(d))) for d, i in miss)
+            out.append(Finding('strongest_lines', 'flag' if strong else 'note',
                        ".pdf lists %s among its strongest lines, but the reflection list has no such line "
                        "(nearest: %s) — a line missing or a d mistyped." % (
                            ', '.join('%s (I %s)' % (d, i) for d, i in miss),
@@ -2915,7 +2925,11 @@ def check29_reflections_in_paper(e, text):
     if not parts:
         return out
     miss = [d for d in miss if not any(f.evidence == num[d] for f in out)]
-    out.append(Finding('reflections', 'flag',
+    # a line the paper prints one keystroke away is a mistyped d whatever its intensity; with no such neighbour, a
+    # weak unprinted line may be from a fuller source than the .pdf — information
+    emax = max((_val(r[1]) or 0 for r in e.refl), default=0) or 100.0
+    strong = any(' one keystroke away' in p or (_val(info[num[d]][1]) or 0) * 100.0 / emax >= REFL_WEAK for p, d in zip(parts, miss))
+    out.append(Finding('reflections', 'flag' if strong else 'note',
                "Reflection list %s: not printed anywhere in the .pdf, although the other %d lines of the list "
                "are — verify against the paper's table (a hkl assigned to the wrong d would hide it); a list "
                "taken from a fuller source than the .pdf prints is the other possibility."
@@ -3133,13 +3147,17 @@ def check34_lines_missing(e, pdf_path, skip=()):
         miss = [(d, i) for d, i in miss if not i or i * scale >= floor - 1e-9]   # weaker than the entry's weakest line: the list was cut there, the line is not missing (okruginite's I 1 against a list that stops at 3)
         if not miss:
             return out
-    parts = []
+    parts = []; twins = 0
     for d, i in miss:
         twin = next((x for x, xi in ed if xi and i and not near(x, pds) and abs(x - d) / d < 0.03
                      and abs(xi - i * scale) <= 0.02 * max(xi, 1) + 0.5), None)
+        twins += bool(twin)
         parts.append('%g%s%s' % (d, ' (I %g)' % i if i else '', ' — the entry has %g at that intensity, which the table does not print: a mistyped d'
                                      % twin if twin else ''))
-    out.append(Finding('lines_missing', 'flag',
+    # a weak line the entry lacks is information; a line of some strength, or one the entry carries under a mistyped d, is the finding
+    pmax = max((i for _, i in obs if i), default=0) or 100.0
+    strong = twins or any(i and 100.0 * i / pmax >= LINE_WEAK for _, i in miss)
+    out.append(Finding('lines_missing', 'flag' if strong else 'note',
                        "The .pdf's powder table %s %s absent from the reflection list: %s — the other %d of "
                        "its lines are there; verify against the table."
                        % ('observes' if src == 'observed' else 'lists (in its calculated pattern — the table prints no observed column)',   # the words say which column was read: a calculated line is not an observation
@@ -3196,17 +3214,22 @@ def check37_intensity_vs_paper(e, pdf_path):
     return out
 
 def check35_blank_hkl_in_group(e, text=None):
-    """Two rows share a d — a multiply-indexed line — and one of them has no indices: the second hkl of
-    the pair was dropped (suenoite 1.716, argentopearceite 1.482, cloudite 2.236; 6 of 266 entries)."""
+    """Two rows share a d and one of them has no indices. When the indexed row carries an HKLEd flag
+    (M = a multiple, + = closely overlapping reflections combined, C) the blank twin is the template's own
+    second line of a declared multiple, not a dropped index: every one of the 22 such pairs on the 925
+    corpus entries with a paper (2026-09-30) was flagged that way, and none was changed by a reviewer —
+    silent. An unflagged duplicate with a blank hkl is a note."""
     groups = {}
     for d, i, hkl, fl in _refl_lines(e):
-        groups.setdefault(d, []).append(hkl)
-    bad = [d for d, v in groups.items() if len(v) > 1 and any(any(h) for h in v) and any(not any(h) for h in v)]
+        groups.setdefault(d, []).append((hkl, (fl or '').strip()))
+    bad = [d for d, v in groups.items() if len(v) > 1 and any(any(h) for h, _ in v) and any(not any(h) for h, _ in v)
+           and not any(fl for h, fl in v if any(h))]
     if not bad:
         return []
-    return [Finding('hkl_blank', 'flag',
-                    "Reflection list d = %s is entered twice — a multiply-indexed line — and one of the rows has "
-                    "no hkl: the second index of the group is missing." % ', '.join(bad[:4]),
+    return [Finding('hkl_blank', 'note',
+                    "Reflection list d = %s is entered twice and one of the rows has no hkl and no HKLEd flag — a "
+                    "multiple is marked M on its indexed row; verify whether a second index was dropped or the row is a stray."
+                    % ', '.join(bad[:4]),
                     ', '.join(bad[:4]), 'refl')]
 
 def check36_same_d_two_intensities(e, text=None):

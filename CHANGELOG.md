@@ -133,6 +133,15 @@ package version in `pyproject.toml`.
   `proposal_expected.json` kept there.
 
 ### Fixed
+- **The reflection-list checks write fewer comments about lines of no weight.** The blank-hkl twin of a row
+  flagged `M` (a multiple), `+` (closely overlapping reflections combined) or `C` in HKLEd is the template's own
+  second line of a declared multiple — check35 was flagging it as a dropped index on every such pair (22 of 22 on
+  the corpus entries with a paper, none changed by a reviewer); it is silent there and a note for an unflagged
+  duplicate. A paper table line the entry lacks (check34) flags only above 5 % of the table's strongest line or
+  when the entry carries it under a mistyped d, a line the paper names among its strongest (check15) only above
+  I 20 or when the entry holds it with digits swapped or changed, an entry d the .pdf never prints (check29) only
+  with a one-keystroke neighbour in the paper or above I 10; the rest are notes. Every flag the corpus still
+  carries is a mistyped d or a line of real weight.
 - **A contact past a cation's first coordination shell is no bond** (`bv_check.first_shell`): a tetrahedral cation
   with an O near 2.9 Å (~0.04 vu, over `MIN_S`) had a fifth bond, a mean distance a quarter of an ångström long and a
   "different bond set?" against the paper's correct mean. The shell ends at a gap of 1.35 × the previous distance after at least three

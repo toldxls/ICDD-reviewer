@@ -1121,9 +1121,12 @@ CASES = [
      and (X.set_powder_reader(None) or True))(
      ['9.120', '6.050', '4.560', '3.913', '3.843', '3.020', '2.910', '2.871', '2.601', '2.300'], [100, 45, 30, 22, 60, 15, 80, 12, 9, 25])),
  # --- the reflection list against the paper's table and against itself (checks 34–36) ---
- ("hkl_blank: one row of a multiply-indexed line has no hkl", lambda: [f.sev for f in X.check35_blank_hkl_in_group(
+ ("hkl_blank: the blank twin of a row flagged M is the template's second line of a multiple — silent; an unflagged one is a note", lambda: X.check35_blank_hkl_in_group(
      type('S', (), {'raw_rows': [['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['1.7160', '20.000', '1', '8', '2', 'M', ''],
-                                 ['1.7160', '20.000', '', '', '', 'M', ''], ['1.6000', '5.000', '', '', '', '', '']]}))] == ['flag']),
+                                 ['1.7160', '20.000', '', '', '', '', ''], ['1.6000', '5.000', '', '', '', '', '']]})) == []
+     and [f.sev for f in X.check35_blank_hkl_in_group(
+     type('S', (), {'raw_rows': [['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['1.7160', '20.000', '1', '8', '2', '', ''],
+                                 ['1.7160', '20.000', '', '', '', '', '']]}))] == ['note']),
  ("hkl_blank: an unindexed line on its own is not a group", lambda: X.check35_blank_hkl_in_group(
      type('S', (), {'raw_rows': [['d(A)', 'I', 'h', 'k', 'l', 'HKLEd', 'IEd'], ['1.6000', '5.000', '', '', '', '', '']]})) == []),
  ("same_d: one d, two intensities on a measured list is a note; a calculated list is silent", lambda:
@@ -1208,8 +1211,8 @@ CASES = [
   lambda: bool(extras('I003527', 'xtl_density', 'flag', substr='2/3×'))),
  ("I003416 Optical Data Sign=1 is not a sign",
   lambda: bool(extras('I003416', 'optical', 'flag', substr='Sign=1'))),
- ("I003698 strongest-lines sentence names 2.5946, which the reflection list lacks",
-  lambda: bool(extras('I003698', 'strongest_lines', 'flag', substr='2.5946'))),
+ ("I003698 strongest-lines sentence names 2.5946 (I 12), which the reflection list lacks — a weak line: a note",
+  lambda: bool(extras('I003698', 'strongest_lines', 'note', substr='2.5946')) and not extras('I003698', 'strongest_lines', 'flag')),
  ("I003747 no strongest_lines / reflections flag (clean)",
   lambda: not extras('I003747', 'strongest_lines', 'flag') and not extras('I003747', 'reflections', 'flag')),
  ("strongest_lines: a list of the CALCULATED pattern is not the measured list (metaheimite)",
