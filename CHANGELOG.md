@@ -64,6 +64,22 @@ package version in `pyproject.toml`.
   tables rendered and read by eye all omit codes, none was lost in reading; 9 print codes, and one of those has a code
   that puts its O 13 Å from the Si.
 
+- **`pxrd cifaudit <cif> [--manuscript X.docx] [--checkcif report.pdf]`** (`cif_audit.py`): a structure .cif against
+  itself and the manuscript that describes it. An H whose Uiso rides (SHELXL's −1.2 / −1.5) on the atom listed before it in
+  the embedded `.res` while it is bonded to another atom is flagged with both Ueq values. The refinement numbers the
+  manuscript prints (R1, wR2, Rint, GoF, reflections, parameters, restraints, μ, F(000), θmax, cell, V, Z) are compared with
+  the .cif's: a table value that differs is a flag; a prose value is a flag when its sentence names the .cif's own
+  reflection count or calls itself final, and a note when it merely lies near the .cif's (the corpus: 8 of 97 papers state
+  such a value, half of them an earlier stage of the refinement); a cell whose axes are far from the .cif's, or that sits
+  under a powder heading, is another cell and is left alone. The density the manuscript states for its ideal formula is
+  recomputed from that formula, the .cif's cell and Z — never from `_exptl_crystal_density_diffrn`, which the refinement
+  program computes from an H-less formula sum, and a manuscript that copied that value is told so. A site label the prose
+  names that the .cif has no site for is flagged (formulas, charges, space-group symbols, citations and reaction equations
+  excluded). **`pxrd checkcif <report>`** (`checkcif.py`): a checkCIF/PLATON report re-tiered by review significance — a
+  weighting scheme that did not converge, an estimated twin fraction, a large variance K and the Henn R-gap outrank their
+  G/C tier, the PUBL* A-level metadata alerts are demoted, and a residual peak 0.6–1.05 Å from an O is pointed out as a
+  possible unmodelled H. Both read only.
+
 ### Fixed
 - **A contact past a cation's first coordination shell is no bond** (`bv_check.first_shell`): a tetrahedral cation
   with an O near 2.9 Å (~0.04 vu, over `MIN_S`) had a fifth bond, a mean distance a quarter of an ångström long and a

@@ -27,6 +27,11 @@ long module paths, or ports.
     pxrd epma <probe.xlsx|.csv> --basis O=21 [--add H2O=structure:6 …] [--charge H2O --anions N] [--xlsx]
                                    microprobe reduction: mean/range/s.d. table, empirical formula on a
                                    basis, xlsx with live formulas
+    pxrd cifaudit <structure.cif> [--manuscript paper.docx] [--checkcif report.pdf]
+                                   the .cif against itself and its manuscript: an H riding on the wrong
+                                   atom, refinement numbers (R1, Rint, cell …) that differ, the stated
+                                   density vs the ideal formula, site labels the .cif lacks
+    pxrd checkcif <report.pdf|.txt> a checkCIF report re-tiered by review significance
     pxrd paper <paper.pdf>             what the Tables mode reads from a paper: the analytical table, basis,
                                    calculated constituents, optics, bond-valence set, powder table
     pxrd update [--check] [--release]  is a newer version on GitHub? install it (the GUI's version
@@ -68,6 +73,8 @@ MODULE = {
     'pxrd':       'pxrd_review.pxrd_table',   # takes obs + calc lists — not folder-resolved
     'update':     'pxrd_review.update',       # options only: --check / --release
     'paper':      'pxrd_review.paper_extract',# takes a .pdf — not folder-resolved
+    'cifaudit':   'pxrd_review.cif_audit',    # takes a .cif (+ --manuscript, --checkcif) — not folder-resolved
+    'checkcif':   'pxrd_review.checkcif',     # takes a checkCIF report — not folder-resolved
 }
 NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'sweep', 'check'}
 MEM = os.path.join(P.cache_dir(), 'pxrd_last.json')   # remembered folder per sub-command
