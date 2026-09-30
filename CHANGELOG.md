@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.14.0](#0140--2026-09-30) | 30 Sep | The rest of the manuscript review's list: `pxrd lint` cross-references (a cited table or figure with no caption) and evidence notes; `pxrd paper --check` charge balance of the empirical formula, the analytical table's own arithmetic (mean vs range, Samuelson's bound), dominance within the scatter site by site, the parameter set a table follows vs the one cited; `pxrd cifaudit` occupancies from the `.res`, a refinement triage, the twin law in the cell's geometry, the formula the sites give and F(000); `pxrd bv` oxygens whose sums disagree with their names; the Manuscript list sorts; a local review's four fixes |
 | [0.13.0](#0130--2026-09-30) | 30 Sep | The manuscript side: `pxrd bv --table` reads symmetry codes and hydrogen-bond tables against the .cif, `pxrd cifaudit` / `pxrd checkcif` audit the .cif against its manuscript and report, `pxrd powder` computes the pattern from the .cif and `pxrd pxrdaudit` sets the manuscript's table against it, the ideal formula's wt% and every stated compatibility index are checked, `pxrd lint` and `pxrd proposal` (one annotated copy from every check); the entry reflection-list checks flag only strong lines or a mistyped d, and an HKLEd-flagged multiple is not a dropped index; the first-shell cut in bond-valence sums |
 | [0.12.2](#0122--2026-09-23) | 23 Sep | `pxrd update` and the chip's Pull now no longer restart the tool when the pull changed nothing: HEAD is compared before and after, "already up to date" keeps the tool running |
 | [0.12.1](#0121--2026-09-23) | 23 Sep | Mineral groups on the .pdf page (members with formulas on the card, a large group listed in the Mindat pane while hovered, supergroups through their subgroups — the snapshot now stores each group's parent); a review of 0.12.0: names broken at their own hyphen at a line end are read (1,270 → 281 lost on the corpus), 89 species with long suffixes, apostrophes or two-word names now found, series ('bismuthinite–aikinite') and polytypes marked, a title word's tint kept inside its box |
@@ -37,6 +38,15 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.14.0] — 2026-09-30
+
+**The rest of the manuscript review's list, each rule gated on the corpus.** Cross-references, the empirical formula's
+charge balance, the `.res` occupancies and a refinement-quality triage, the twin law, oxygens whose sums disagree with
+their names, the parameter set a table follows against the one it cites, the analytical table's own arithmetic,
+species-defining dominance within the scatter, the formula the sites give and F(000), evidence lints, and a sortable
+manuscript list in the GUI — then a local adversarial review of all of it (four defects fixed). Gates: 598 unit tests,
+the regression suite, the private manuscript regression and a corpus tally read by hand for every new red line.
 
 ### Added
 - **`pxrd lint`: table and figure cross-references** (`lints.crossrefs`). A table or figure the text cites that has no
