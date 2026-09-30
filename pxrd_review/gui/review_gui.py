@@ -2781,7 +2781,8 @@ def _ms_structure_findings(key, path):
             add('powder table', ['could not run (%s)' % str(ex)[:80]])
     try:
         from pxrd_review import lints as LI
-        add('lints', [m for m, _a in LI.lint(path)['findings']], flag_of=lambda s_: False)
+        li = LI.lint(path); fl = {m for m, _a in li['flags']}
+        add('lints', [m for m, _a in li['findings']], flag_of=lambda s_: s_ in fl)
     except Exception as ex:
         add('lints', ['could not run (%s)' % str(ex)[:80]])
     return out

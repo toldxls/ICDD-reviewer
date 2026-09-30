@@ -38,6 +38,17 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+- **`pxrd lint`: table and figure cross-references** (`lints.crossrefs`). A table or figure the text cites that has no
+  caption of that number is a flag in a .docx manuscript (read cell by cell, every caption in the file) when the
+  captions run 1…n without a gap; a caption the text never cites is a note. The oracle is the document itself. What
+  is not a dangling reference: a footnote mark or a line number glued to the citation ('Table 6¹' → 61), another
+  paper's table ('Table 5 of …', 'their Figs.', a year beside the citation), a deposited or supplementary table, a
+  citation wrapped to a line's start, 'Table 1a.' as Table 1's, a supplement file whose text cites nothing. In a .pdf
+  the finding is a note only: on 1,263 published papers every dangling reference the text layer produced was a caption it
+  had lost (a rotated table, a caption inside its figure), and after the rules above a pdf produces none. `pxrd proposal`
+  writes the flag as a comment on the citation; the GUI's Manuscript mode shows it red.
+
 ## [0.13.0] — 2026-09-30
 
 **The manuscript side of a review.** Six new tools for a new-mineral manuscript with its structure — symmetry codes

@@ -31,6 +31,23 @@ class Lints(unittest.TestCase):
         self.assertEqual(sum('symmetry code (2)' in m for m in f), 1, f)
 
 
+    def test_crossrefs(self):
+        paras = ['Table 1. Analytical data.', 'Table 2. Powder data.', 'Figure 1. Crystals.', 'Figure 2. The structure.', 'Figure 3. Raman spectrum.',
+                 'The composition (Table 1) and the powder data (Tables 2 and 3) are given; the structure is shown in Figs. 2–3, and Fig. 5a shows twinning.',
+                 'Compare Table 4 in Smith (2020).', 'Table 2 (continued).', 'References', 'Jones, A. (2019) Table 9 of wonders. Journal, 1, 1–2.']
+        f = LI.crossrefs(paras)
+        flags = [m for m, _a, s in f if s == 'flag']; notes = [m for m, _a, s in f if s == 'note']
+        self.assertEqual(len(flags), 2, flags)
+        self.assertTrue(any(m.startswith('cross-reference: Table 3 is cited') and 'table captions are 1–2' in m for m in flags), flags)
+        self.assertTrue(any(m.startswith('cross-reference: Figure 5 is cited') and 'figure captions are 1–3' in m for m in flags), flags)
+        self.assertEqual(notes, ["cross-reference: Figure 1 (‘Figure 1. Crystals.’) is never cited in the text"])
+        # no captions of a kind: nothing is judged; a supplementary set travelling separately is left alone
+        self.assertEqual(LI.crossrefs(['See Table 3 and Fig. 2.']), [])
+        self.assertEqual([s for _m, _a, s in LI.crossrefs(['Table 1. Data.', 'Table 1 and Table S2 hold the data.'])], [])
+        # a docx lint carries the flag separately from the notes
+        self.assertEqual(LI._numbers('3a, b'), ['3']); self.assertEqual(LI._numbers('2–4'), ['2', '3', '4']); self.assertEqual(LI._numbers('S1 and S3'), ['S1', 'S3'])
+
+
 class Proposal(unittest.TestCase):
     def test_review_writes_report_and_copy(self):
         tmp = tempfile.mkdtemp(prefix='prop_')
@@ -48,7 +65,7 @@ class Proposal(unittest.TestCase):
             self.assertEqual((os.path.basename(docx), os.path.basename(cif), cc), ('testite manuscript.docx', 'testite.cif', None))
             res = PR.review(tmp, quiet=True)
             text = open(res['report'], encoding='utf-8').read()
-            self.assertIn('== references', text); self.assertIn('== .cif audit', text); self.assertIn('== lints (notes)', text)
+            self.assertIn('== references', text); self.assertIn('== .cif audit', text); self.assertIn('== lints', text)
             self.assertIn('site Ti2 is named in the text', text)
             self.assertIn('cleavage given as the zone symbol [110]', text)
             self.assertTrue(os.path.exists(res['copy']))

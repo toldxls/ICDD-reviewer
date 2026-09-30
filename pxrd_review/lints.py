@@ -8,7 +8,9 @@ weigh — none is a verdict:
             carry (a curated list of systems and their excitation lines);
   notation  cleavage, parting or twinning given with a zone symbol [uvw] where a form {hkl} or plane
             (hkl) is meant; a table caption printed twice under one number; one symmetry-code number
-            defined as two operators in two tables.
+            defined as two operators in two tables;
+  crossrefs a table or figure the text cites that has no caption (the one lint that is a flag: the
+            document's own captions are the oracle), and a caption the text never cites (a note).
 Each finding carries the sentence it comes from and an anchor for a Word comment.
 """
 import os, re, sys, argparse
@@ -104,8 +106,124 @@ def notation(paragraphs, tables_codes=None):
     return list(dict.fromkeys(out))
 
 
+# a caption: 'Table 3.' / 'TABLE 3' / 'Fig. 2:' / 'Table 3 Chemical composition' (no stop, a capitalised title) at a line's start
+_CAPTION = re.compile(r'^\s*(Supplementary\s+|Suppl\.\s*|Online\s+)?(Table|Figure|Fig\.)\s*(S?\d{1,3})[a-z]?\s*(?:[.:|]|[-–—]\s|(?=\s+(?-i:[A-Z][a-z])))', re.I)   # 'Table 1a.' is Table 1's
+_CITE = re.compile(r'\b(Tables?|Figures?|Figs?\.?)\s*(S?\d{1,3}[a-z]?(?:\s*[-–—]\s*S?\d{1,3}[a-z]?)?'
+                   r'(?:\s*(?:,|;|and|&)\s*(?!\d{4}\b)S?\d{1,3}[a-z]?(?:\s*[-–—]\s*S?\d{1,3}[a-z]?)?)*)(?!\s*(?:in|of)\s+[A-Z][a-z]+)(?!\s*(?:th|st|nd|rd)\b)')
+# a citation that is not of this document's own table: another paper's, a deposited or supplementary one, a book's
+_OTHER_DOC = re.compile(r"\btheir\s+(?:Fig|Tab)|\bdeposit|document item|supplement|appendix|\bedition\b|\bin (?:ref|\[)|\bof [A-Z][a-z]+ (?:et al|\()|\bmicrofiche\b", re.I)
+_REFS_HEAD = re.compile(r'^\s*(References(?:\s+cited)?|Literature cited|Bibliography)\s*$', re.I)
+_CONT = re.compile(r'\(?\b(?:cont(?:inued|\.|d\.)?)\b', re.I)
+
+
+def _numbers(spec):
+    """'3 and 4' / '2–4' / '3a, b' / 'S1' -> the labels named ('3', '4' … ; a letter suffix drops)."""
+    out = []
+    for part in re.split(r'\s*(?:,|;|and|&)\s*', spec):
+        m = re.match(r'(S?)(\d+)[a-z]?(?:\s*[-–—]\s*(S?)(\d+)[a-z]?)?$', part.strip(), re.I)
+        if not m:
+            continue
+        s, a, _s2, b = m.group(1).upper(), int(m.group(2)), m.group(3), m.group(4)
+        if b and int(b) >= a and int(b) - a <= 20:
+            out += ['%s%d' % (s, n) for n in range(a, int(b) + 1)]
+        else:
+            out.append('%s%d' % (s, a))
+    return out
+
+
+def crossrefs(paragraphs, docx=True):
+    """[(message, anchor, severity)] — a table / figure cited with no caption of that number, and a caption the
+    text never cites (note). Captions: 'Table 3.' / 'TABLE 3' / 'Fig. 4:' / 'Table 2 Chemical …' at a paragraph's or a
+    line's start, 'Table 1a.' as Table 1's, 'Supplementary Table S1' for the S-numbered set; a '(continued)' caption is
+    its first page's. A citation wrapped to a line's start ('given in' ⏎ 'Table 1. The …') is not a caption.
+    A cited number with no caption is a FLAG only in a .docx (read cell by cell, every caption in the file), when the
+    captions read run 1…n without a gap and the number is past n: a gap says the reader lost captions, a number inside the
+    run is such a lost caption, a jump past n+1 whose leading digits are a caption number is a footnote mark or a
+    line number glued to the citation ('Table 6¹'), and a year, 'their', 'deposited' or 'of Author (year)' beside the
+    citation makes it another document's. In a .pdf the same finding is a note: the text layer loses the last
+    table or figure's caption often enough (a rotated table, a caption inside the figure) that on the corpus of
+    published papers every such flag was the reader's. The reference list is left out."""
+    caps = {'Table': {}, 'Figure': {}}
+    cites = {'Table': {}, 'Figure': {}}
+    in_refs = False
+    for p in paragraphs:
+        if _REFS_HEAD.match(p):
+            in_refs = True
+            continue
+        body = p
+        prev = ''
+        for seg in re.split(r'[\t\n]', p):                    # two captions set side by side share one paragraph, a tab between them; a pdf's caption starts a line
+            m = _CAPTION.match(seg)
+            # a citation wrapped to a line's start ('are given in' ⏎ 'Table 1. The …') is not a caption: the line before it
+            # ends mid-sentence — a caption follows a full stop, a table's last row or a blank line
+            if m and prev and re.search(r'[a-z,;(–—-]\s*$', prev):
+                m = None
+            prev = seg.strip() or prev
+            if m:
+                kind = 'Table' if m.group(2).lower().startswith('t') else 'Figure'
+                label = m.group(3).upper()
+                if not _CONT.search(seg[:m.end() + 24]):
+                    caps[kind].setdefault(label, seg[:80])
+                body = body.replace(seg[:m.end()], ' ', 1)    # the caption's own text may cite another table; its head is not a citation
+        if in_refs:
+            continue
+        for c in _CITE.finditer(body):
+            kind = 'Table' if c.group(1).lower().startswith('t') else 'Figure'
+            for label in _numbers(c.group(2)):
+                cites[kind].setdefault(label, (c.group(0), p))
+    whole = ' '.join(paragraphs)
+    def runs(nums):
+        out, start, prev = [], None, None
+        for n in nums + [None]:
+            if start is None:
+                start = prev = n
+            elif n is not None and n == prev + 1:
+                prev = n
+            else:
+                out.append(str(start) if start == prev else '%d–%d' % (start, prev)); start = prev = n
+        return ', '.join(out)
+    out = []
+    for kind in ('Table', 'Figure'):
+        if not caps[kind]:
+            continue
+        word = r'(?:Table|Tab\.)' if kind == 'Table' else r'(?:Figure|Fig\.?)'
+        for sup in ('', 'S'):
+            have = [k for k in caps[kind] if (k[:1] == 'S') == (sup == 'S')]
+            cited = [k for k in cites[kind] if (k[:1] == 'S') == (sup == 'S')]
+            missing = [k for k in cited if k not in caps[kind]]
+            if not have:
+                continue                                      # 'Table S2' cited, no supplementary captions in this file: it travels separately
+            nums = sorted(int(re.sub(r'\D', '', k)) for k in have)
+            complete = nums[0] == 1 and nums == list(range(1, nums[-1] + 1))
+            if missing and len(missing) > max(1, len(cited) // 2):   # most of what is cited has no caption read: the captions are not in this file (or not read), not the citations wrong
+                out.append(("cross-reference: %d of the %d %ss the text cites have no caption in this file (%s %s read) — the captions may travel separately"
+                            % (len(missing), len(cited), kind.lower(), kind.lower(), sup + runs(nums)), None, 'note'))
+                missing = []
+            for label in sorted(missing, key=lambda k: int(re.sub(r'\D', '', k) or 0)):
+                span, p = cites[kind][label]
+                s = p.find(span); sent = p[max(0, s - 50): s + len(span) + 50].strip()
+                n = int(re.sub(r'\D', '', label) or 0)
+                if _OTHER_DOC.search(sent) or (not docx and re.search(r'\b(?:1[89]|20)\d\d\b', sent)):
+                    continue                                  # another document's table, or one deposited elsewhere; in a pdf a year beside the citation is another paper's
+                if n > nums[-1] + 1 and any(str(n).startswith(str(k)) and n != k for k in nums):
+                    continue                                  # 'Table 6¹' read as Table 61, a line number glued to 'Fig. 2'
+                sev = 'flag' if docx and complete and n > nums[-1] else 'note'
+                out.append(("cross-reference: %s %s is cited (‘…%s…’) but %s %s %s — its %s captions are %s%s"
+                            % (kind, label, sent, 'the manuscript has no' if sev == 'flag' else 'no caption was read for', kind, label,
+                               kind.lower(), sup, runs(nums)), span, sev))
+            for label in have:
+                if label in cites[kind] or not cites[kind]:
+                    continue                                  # a file whose text cites no table at all is a supplement or a table file: its captions are cited elsewhere
+                n = re.sub(r'\D', '', label)
+                mentions = len(re.findall(r'\b%ss?\s*\(?%s%s(?![\d])' % (word, 'S' if sup else '', n), whole))
+                if mentions <= 1:                             # the caption is the only place the number occurs (a citation wrapped to a line start still counts)
+                    out.append(("cross-reference: %s %s (‘%s’) is never cited in the text" % (kind, label, caps[kind][label][:60]), caps[kind][label][:40], 'note'))
+    return out
+
+
 def lint(path):
-    """Both lint families over a .docx or .pdf: {'findings': [(message, anchor)], 'lines': [...]}."""
+    """The lint families over a .docx or .pdf: {'findings': [(message, anchor)], 'flags': [(message, anchor)], 'lines': [...]} —
+    'findings' is everything (the flags included); a line is prefixed 'note: ' unless it is a flag."""
     from pxrd_review import bv_check as B
     if path.lower().endswith('.docx'):
         from pxrd_review import cif_audit as CA
@@ -117,11 +235,14 @@ def lint(path):
         except Exception:
             notes = None
     else:
-        from pxrd_review import paper_extract as PE
-        text = PE.text_of(path); paras = re.split(r'\n\s*\n|\n(?=\s*(?:Table|Figure|Fig\.)\s+\d)', text); notes = None
-    found = spectro(text) + notation(paras, notes)
+        from pxrd_review import paper_extract as PE, cell_lambda_check as C
+        text = PE.text_of(path)                               # one folded line: the band and laser sentences
+        raw = C.pdf_text(path) or text                        # the page's lines kept: a caption starts one
+        paras = re.split(r'\n\s*\n|\n(?=\s*(?:Table|Figure|Fig\.)\s*S?\d)', raw, flags=re.I); notes = None
+    found = [(m, a, 'note') for m, a in spectro(text) + notation(paras, notes)] + crossrefs(paras, docx=path.lower().endswith('.docx'))
     head = 'Lints — %s' % os.path.basename(path)
-    return {'findings': found, 'lines': [head] + (['  note: ' + m for m, _a in found] or ['  nothing to report'])}
+    return {'findings': [(m, a) for m, a, _s in found], 'flags': [(m, a) for m, a, s in found if s == 'flag'],
+            'lines': [head] + (['  ' + ('' if s == 'flag' else 'note: ') + m for m, _a, s in found] or ['  nothing to report'])}
 
 
 def main(argv=None):

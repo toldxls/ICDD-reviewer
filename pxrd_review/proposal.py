@@ -160,10 +160,13 @@ def review(target, cif=None, checkcif=None, out_dir=None, annotate_copy=True, qu
                 flags.append((s, _quoted(s)))
     except Exception as e:
         section('paper checks', ['could not run (%s)' % str(e)[:100]])
-    # -- lints (notes)
+    # -- lints (notes, but a cross-reference to a table or figure the manuscript does not have is a flag)
     try:
         from pxrd_review import lints as LI
-        section('lints (notes)', LI.lint(docx)['lines'][1:])
+        li = LI.lint(docx)
+        section('lints', li['lines'][1:])
+        for msg, anchor in li['flags']:
+            flags.append((msg, [anchor] + _quoted(msg)))
     except Exception as e:
         section('lints', ['could not run (%s)' % str(e)[:100]])
     # -- the annotated copy first, so the report can say how many flags it holds
