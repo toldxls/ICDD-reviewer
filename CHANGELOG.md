@@ -40,6 +40,18 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+- **GUI, the Mindat & cross-source pane has a lookup box**: a mineral name (Enter) brings up its record from the local
+  Mindat snapshot — IMA formula, cell, group, Strunz code, IMA status, elements, type locality — with the names that
+  begin with or contain what was typed; a group name ('apatite', 'amphibole supergroup') lists the members by subgroup.
+  Nothing is sent anywhere. Esc, the field's ✕ or the panel's ✕ bring the entry's record back (`/api/mn/search`).
+
+### Fixed
+- **Formulas in the pane's group list broke mid-token** ('Ti4' on one line, '+' on the next): the list went through the
+  two-column key/value table, which squeezed each formula into a narrow column and broke it anywhere. Members are rows
+  now, the formula on its own line; a formula anywhere in the GUI breaks only after a closed group or a dot, and never
+  inside a subscript or superscript.
+
 ## [0.15.0] — 2026-09-30
 **The proposal review on a `.pdf`, and the readers a review memo asked for.** A proposal that comes as a .pdf gets the whole
 review as one report; a memo-driven private regression is the recall gate for the manuscript checks. New readers, each

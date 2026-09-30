@@ -1287,12 +1287,69 @@ function mnGroupList(g, pinned) {
   box.append(head);
   if (g.above && g.above.length) box.append(el('div', { class: 'note-line' }, 'in ' + g.above.join(' › ')));
   if (!pinned) box.append(el('div', { class: 'note-line' }, 'click the name on the page to keep this list here'));
+  mnGroupBody(g, box);
+  return box;
+}
+// a group's members by (sub)group, one row per species with the formula on its own line — a two-column table had
+// squeezed the formulas into a narrow column and broken them mid-token ('Ti4' / '+')
+function mnGroupBody(g, box) {
   for (const sec of g.sections) {
     if (g.sections.length > 1 || sec.name !== g.name) box.append(el('div', { class: 'sub' }, sec.name));
-    box.append(kvTable(sec.members.map(m => [m.name, fmtFormula(m.formula)])));
+    box.append(el('div', { class: 'mn-rows' }, ...sec.members.map(m => el('div', { class: 'mn-row' }, el('span', { class: 'mn-name' }, m.name), fmtFormula(m.formula)))));
   }
   return box;
 }
+
+// ---- the pane's lookup box: a mineral or group name → its snapshot record(s), in place of the entry's record until ✕/Esc
+function mnSearchHit(h) {
+  const box = el('div', { class: 'mn-hit' });
+  box.append(el('div', { class: 'mn-name' }, h.name));
+  if (h.formula) box.append(el('div', { class: 'mn-formula' }, fmtFormula(h.formula)));
+  const meta = [h.group, h.strunz && ('Strunz ' + h.strunz), h.ima_status && String(h.ima_status).toLowerCase()].filter(Boolean);
+  if (meta.length) box.append(el('div', { class: 'mn-meta muted' }, meta.join(' · ')));
+  if (h.a || h.b || h.c) box.append(cellGrid([h.a, h.b, h.c, h.al || '', h.be || '', h.ga || '', '', ''], {}, []));   // Mindat stores 0 for an angle it does not give
+  const kv = [];
+  if (h.sorted && h.sorted.length) kv.push(['sorted axes', h.sorted.map(x => (+x).toFixed(3)).join(', ')]);
+  if (h.sg) kv.push(['SG (Mindat id, not IT no.)', h.sg]);
+  if (h.elements && h.elements.length) kv.push(['elements', h.elements.join(' ')]);
+  if (h.locality) kv.push(['type locality', h.locality]);
+  if (kv.length) box.append(kvTable(kv));
+  return box;
+}
+async function mnSearch(q) {
+  q = (q || '').trim();
+  if (!q) { mnPinned = false; mnPaneRestore(); return; }
+  let r;
+  try { r = await fetch('/api/mn/search?q=' + encodeURIComponent(q)).then(x => x.json()); } catch (_) { return; }
+  const body = mnPaneUsable();
+  if (!body) return;
+  if (!mnPaneSaved) mnPaneSaved = [...body.childNodes];
+  mnPinned = true;
+  const box = el('div', { class: 'mn-pane' });
+  const head = el('div', { class: 'sub mn-pane-head' }, `Mindat: “${q}”` + (r.total ? ` — ${r.total} species${r.total > r.hits.length ? ' (first ' + r.hits.length + ')' : ''}` : ''));
+  const x = el('button', { class: 'ghost mini', title: 'back to the entry\'s Mindat record (Esc)' }, '✕');
+  x.addEventListener('click', () => { mnPinned = false; mnPaneRestore(); });
+  head.append(x); box.append(head);
+  if (!r.hits.length && !r.group) box.append(el('div', { class: 'note-line' }, 'nothing in the Mindat snapshot by that name' + (r.error ? ' (' + r.error + ')' : '')));
+  for (const h of r.hits) box.append(mnSearchHit(h));
+  if (r.group) {
+    const g = r.group;
+    box.append(el('div', { class: 'sub mn-grp-head' }, `${g.name} — ${g.n} species`));
+    if (g.above && g.above.length) box.append(el('div', { class: 'note-line' }, 'in ' + g.above.join(' › ')));
+    mnGroupBody(g, box);
+  }
+  body.replaceChildren(box); body.scrollTop = 0;
+}
+(() => {
+  const q = document.getElementById('mn-q');
+  if (!q) return;
+  q.addEventListener('click', e => e.stopPropagation());
+  q.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); mnSearch(q.value); }
+    else if (e.key === 'Escape') { q.value = ''; mnPinned = false; mnPaneRestore(); q.blur(); }
+  });
+  q.addEventListener('search', () => { if (!q.value) { mnPinned = false; mnPaneRestore(); } });   // the field's own ✕
+})();
 function mnPaneShow(g, pinned) {
   const body = mnPaneUsable();
   if (!body) return false;
@@ -1651,7 +1708,8 @@ function kvTable(pairs) {
 function fmtFormula(s) {
   const span = el('span', { class: 'formula' });
   span.textContent = s || '';                                   // escapes < > & to entities
-  span.innerHTML = span.innerHTML.replace(/&lt;(\/?)(sub|sup)&gt;/gi, '<$1$2>');
+  span.innerHTML = span.innerHTML.replace(/&lt;(\/?)(sub|sup)&gt;/gi, '<$1$2>')
+    .replace(/((?:[)\]](?:<su[bp]>[^<]*<\/su[bp]>)*)|·)/g, '$1<wbr>');   // a line may break after a closed group (with its subscript) or a dot
   return span;
 }
 

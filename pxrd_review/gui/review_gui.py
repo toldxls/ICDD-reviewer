@@ -342,6 +342,43 @@ def _mindat_block(name):
         pass
     return block
 
+def mn_search(q, limit=12):
+    """The Mindat & cross-source pane's lookup box, answered from the LOCAL snapshot only (a typed name never goes to
+    Mindat): the species the name resolves to (the usual spelling fallbacks), then names beginning with it, then names
+    containing it — each as the pane's own record (cell, SG id, IMA formula, group, status, elements, type locality) —
+    and the group of that name ('apatite', 'amphibole supergroup'), listed as the name layer lists one."""
+    q = (q or '').strip()
+    out = {'q': q, 'hits': [], 'total': 0, 'group': None}
+    if len(q) < 2:
+        return out
+    try:
+        from pxrd_review import mindat
+        n = mindat._norm(q)
+        recs = MN._index()[0]
+        names = []
+        exact = X.mindat_struct(q)
+        if exact:
+            names.append(exact['name'])
+        names += sorted(r['name'] for k, r in recs.items() if k.startswith(n) and r['name'] not in names)
+        names += sorted(r['name'] for k, r in recs.items() if n in k and not k.startswith(n) and r['name'] not in names)
+        out['total'] = len(names)
+        for nm in names[:limit]:
+            blk = _mindat_block(nm) or {}
+            blk['name'] = nm
+            blk['strunz'] = (mindat.lookup(nm) or {}).get('strunz', '')
+            out['hits'].append(blk)
+        m = re.match(r'^(.*?)(?:\s+(supergroup|subgroup|group|series|family))?$', n)
+        gid = MN.pick_group(m.group(1).strip(), m.group(2) or '') if m else None
+        if gid:
+            out['group'] = MN.group_card(gid)
+    except Exception as e:
+        out['error'] = str(e)[:120]
+    return out
+
+@app.route('/api/mn/search')
+def api_mn_search():
+    return jsonify(mn_search(request.args.get('q', '')))
+
 # ------------------------------------------------------------------ serialization
 def _finding_keys(findings):
     """Content-stable triage keys for the extra findings — annotate_review.finding_keys

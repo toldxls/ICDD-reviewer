@@ -337,7 +337,15 @@ input[type=range] { accent-color: var(--accent); }
 .mn-note { font-size: .86em; margin-bottom: 6px; }
 .mn-card + .mn-card { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
 .mn-name { font-weight: 700; color: var(--ok); }
-.mn-formula { font-size: 1.05em; margin: 2px 0; word-break: break-word; }
+.mn-formula { font-size: 1.05em; margin: 2px 0; }
+/* a formula breaks after a group or a dot (fmtFormula puts <wbr> there), anywhere only when nothing else fits, and never inside
+   a subscript/superscript run — the group list had been wrapping 'Ti4+' as 'Ti4' / '+' */
+.formula { word-break: normal; overflow-wrap: anywhere; }
+.formula sub, .formula sup { white-space: nowrap; }
+.mn-rows .mn-row { padding: 2px 0; border-bottom: 1px solid var(--line); }
+.mn-rows .mn-row .mn-name { display: block; }
+#mn-q { flex: 1 1 80px; min-width: 60px; max-width: 220px; font-size: .88em; font-weight: 400; padding: 1px 6px; }
+.mn-hit + .mn-hit { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
 .mn-meta { font-size: .84em; }
 .mn-foot { font-size: .78em; margin-top: 6px; }
 .mn-grp-head { color: var(--info); }
