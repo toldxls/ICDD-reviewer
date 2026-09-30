@@ -359,6 +359,9 @@ input[type=range] { accent-color: var(--accent); }
 .formula sub, .formula sup { white-space: nowrap; }
 .mn-rows .mn-row { padding: 2px 0; border-bottom: 1px solid var(--line); }
 .mn-rows .mn-row .mn-name { display: block; }
+.mn-link { cursor: pointer; }
+.mn-link:hover { text-decoration: underline dotted; }
+.mn-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
 #mn-q { flex: 1 1 80px; min-width: 60px; max-width: 220px; font-size: .88em; font-weight: 400; padding: 1px 6px; }
 .mn-hit + .mn-hit { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
 .mn-meta { font-size: .84em; }

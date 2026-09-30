@@ -1295,9 +1295,55 @@ function mnGroupList(g, pinned) {
 function mnGroupBody(g, box) {
   for (const sec of g.sections) {
     if (g.sections.length > 1 || sec.name !== g.name) box.append(el('div', { class: 'sub' }, sec.name));
-    box.append(el('div', { class: 'mn-rows' }, ...sec.members.map(m => el('div', { class: 'mn-row' }, el('span', { class: 'mn-name' }, m.name), fmtFormula(m.formula)))));
+    box.append(el('div', { class: 'mn-rows' }, ...sec.members.map(m => el('div', { class: 'mn-row' }, mnNameLink(m.name), fmtFormula(m.formula)))));
   }
   return box;
+}
+// a species name in a pane list opens its record, in place of the list, with '‹ back' to the very list it came from
+function mnNameLink(name) {
+  const a = el('span', { class: 'mn-name mn-link', title: 'open ' + name + '\'s Mindat record (‹ back returns here)' }, name);
+  a.addEventListener('click', e => { e.stopPropagation(); mnOpenSpecies(name); });
+  return a;
+}
+// the pane's navigation: the content being replaced is kept on the new view, whose '‹ back' puts it back; ✕ returns to
+// the entry's own record. mnPinned holds through it so a hover elsewhere cannot pull the view away.
+function mnPaneNav(build) {
+  const body = mnPaneUsable();
+  if (!body) return;
+  if (!mnPaneSaved) mnPaneSaved = [...body.childNodes];
+  const back = [...body.childNodes];
+  mnPinned = true;
+  const box = el('div', { class: 'mn-pane' });
+  const head = el('div', { class: 'sub mn-pane-head' });
+  const left = el('span', { class: 'mn-nav' });
+  const b = el('button', { class: 'ghost mini', title: 'back to the list' }, '‹ back');
+  b.addEventListener('click', () => { body.replaceChildren(...back); body.scrollTop = 0; });
+  left.append(b);
+  const x = el('button', { class: 'ghost mini', title: 'back to the entry\'s Mindat record' }, '✕');
+  x.addEventListener('click', () => { mnPinned = false; mnPaneRestore(); });
+  head.append(left, x); box.append(head);
+  build(box, left);
+  body.replaceChildren(box); body.scrollTop = 0;
+}
+async function mnOpenSpecies(name) {
+  let r;
+  try { r = await fetch('/api/mn/search?q=' + encodeURIComponent(name)).then(x => x.json()); } catch (_) { return; }
+  const h = (r.hits || []).find(h => h.name.toLowerCase() === name.toLowerCase()) || (r.hits || [])[0];
+  mnPaneNav((box, left) => {
+    left.append(' ', el('span', { class: 'muted' }, 'Mindat record'));
+    box.append(h ? mnSearchHit(h) : el('div', { class: 'note-line' }, name + ' is not in the Mindat snapshot'));
+  });
+}
+async function mnOpenGroup(name) {
+  let r;
+  try { r = await fetch('/api/mn/search?q=' + encodeURIComponent(name)).then(x => x.json()); } catch (_) { return; }
+  const g = r.group;
+  mnPaneNav((box, left) => {
+    if (!g) { box.append(el('div', { class: 'note-line' }, name + ' is not a group of the Mindat snapshot')); return; }
+    left.append(' ', el('span', { class: 'mn-grp-head' }, `${g.name} — ${g.n} species`));
+    if (g.above && g.above.length) box.append(el('div', { class: 'note-line' }, 'in ' + g.above.join(' › ')));
+    mnGroupBody(g, box);
+  });
 }
 
 // ---- the pane's lookup box: a mineral or group name → its snapshot record(s), in place of the entry's record until ✕/Esc
@@ -1305,8 +1351,14 @@ function mnSearchHit(h) {
   const box = el('div', { class: 'mn-hit' });
   box.append(el('div', { class: 'mn-name' }, h.name));
   if (h.formula) box.append(el('div', { class: 'mn-formula' }, fmtFormula(h.formula)));
-  const meta = [h.group, h.strunz && ('Strunz ' + h.strunz), h.ima_status && String(h.ima_status).toLowerCase()].filter(Boolean);
-  if (meta.length) box.append(el('div', { class: 'mn-meta muted' }, meta.join(' · ')));
+  const meta = el('div', { class: 'mn-meta muted' });
+  if (h.group) {
+    const g = el('span', { class: 'mn-link', title: 'list the ' + h.group }, h.group);
+    g.addEventListener('click', e => { e.stopPropagation(); mnOpenGroup(h.group); });
+    meta.append(g);
+  }
+  for (const t of [h.strunz && ('Strunz ' + h.strunz), h.ima_status && String(h.ima_status).toLowerCase()].filter(Boolean)) meta.append((meta.childNodes.length ? ' · ' : '') + t);
+  if (meta.childNodes.length) box.append(meta);
   if (h.a || h.b || h.c) box.append(cellGrid([h.a, h.b, h.c, h.al || '', h.be || '', h.ga || '', '', ''], {}, []));   // Mindat stores 0 for an angle it does not give
   const kv = [];
   if (h.sorted && h.sorted.length) kv.push(['sorted axes', h.sorted.map(x => (+x).toFixed(3)).join(', ')]);
@@ -1446,7 +1498,7 @@ function mnGroupRows(g) {
   for (const sec of g.sections) {
     if (g.sections.length > 1) box.append(el('div', { class: 'mn-meta muted' }, sec.name));
     for (const m of sec.members)
-      box.append(el('div', { class: 'mn-row' }, el('span', { class: 'mn-name' }, m.name), ' ', fmtFormula(m.formula)));
+      box.append(el('div', { class: 'mn-row' }, mnNameLink(m.name), ' ', fmtFormula(m.formula)));   // the hover card's rows open the record in the pane too
   }
   return box;
 }

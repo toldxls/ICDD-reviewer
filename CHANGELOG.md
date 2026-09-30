@@ -41,6 +41,12 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+- **GUI, the Mindat pane's lists are navigable**: every species name in a list — the group pinned from the .pdf page,
+  a lookup's group, an element filter's results, the hover card — opens that species' record in the pane, with
+  **‹ back** to the very list it came from; a record's group name opens the group the same way. ✕ still returns to
+  the entry's own record.
+
 ## [0.15.1] — 2026-09-30
 **The Mindat pane answers questions of its own.** A lookup box for any species or group in the local snapshot, and a
 periodic table that filters the species by element — nothing typed leaves the machine. And the group list's formulas
