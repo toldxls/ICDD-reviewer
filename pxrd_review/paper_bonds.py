@@ -29,7 +29,7 @@ from pxrd_review import bv_check as B
 from pxrd_review import epma as EP
 
 # one row of a bond-distance table: 'Pb1 – S7 2.814(14)', 'X –O(2) 2.503(4) × 3'
-Row = namedtuple('Row', 'cation anion dist esd count page line col site', defaults=(None,))   # site: the name printed beside the element, 'Mn (X)' -> 'X'
+Row = namedtuple('Row', 'cation anion dist esd count page line col site code', defaults=(None, None))   # site: the name printed beside the element, 'Mn (X)' -> 'X'; code: the symmetry code on the anion ('O1vi' -> 'vi')
 
 DIST = re.compile(r'^(\d\.\d{2,5})(?:\((\d{1,3})\))?$')                  # to five decimals: '2.28319(13)' (77445)
 DASH = '–—−‐-'
@@ -43,7 +43,7 @@ DASH = '–—−‐-'
 HEAD = r"(?:\((?:[A-Z][a-z]?,)+[A-Z][a-z]?\)|(?:[A-Z][a-z]?,)+[A-Z][a-z]?|[A-Z][A-Za-z]?)"   # 'Pb', 'Ow', a mixed site '(S,Se)' / 'Na,Ca' (mumme2013, 2496)
 LAB = re.compile(r"^[%s]?\s*(%s)(?:\((\d{1,2}[a-z]?)\)|(\d{1,2}))?([A-Z]?)([a-z]{0,4}['′*†‡#]{0,2})$" % (DASH, HEAD))
 PAIR = re.compile(r"^(%s(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[%s]"
-                  r"(%s(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[a-z]{0,4}['′″*†‡#]{0,2}$" % (HEAD, DASH, HEAD))   # 'Z–O8′': the same anion under a symmetry code, a second bond
+                  r"(%s(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)([a-z]{0,4}['′″*†‡#]{0,2})$" % (HEAD, DASH, HEAD))   # 'Z–O8′': the same anion under a symmetry code, a second bond
 CAT_DASH = re.compile(r"^(%s(?:\(\d{1,2}[a-z]?\)|\d{1,2})?[A-Z]?)[%s]$" % (HEAD, DASH))   # 'Pd1–' as its own token, the anion next (78708)
 BARE_DASH = re.compile(r'^[%s]+$' % DASH)
 MULT_SIGNS = ('×', 'x', 'X', '·', '∙', '*')
@@ -80,6 +80,16 @@ def _label(tok):
         return None, False
     head, par, plain, upper, _sym = m.groups()
     return head + (par or plain or '') + (upper or ''), bool(re.match(r'^[%s]' % DASH, tok.strip()))
+
+
+def _code(tok):
+    """The symmetry code a label token carries ('O1vi' -> 'vi', 'Z–O8′' -> '′'), None without one.
+    Whether it IS a code or part of the label ('O1a' for a split site) is for the caller to decide,
+    against the structure's own labels."""
+    t = _strip_mult(tok)[0].strip()
+    m = LAB.match(t)
+    sym = m.group(5) if m else (PAIR.match(t).group(3) if PAIR.match(t) else '')
+    return sym or None
 
 
 def _pair_token(tok):
@@ -392,7 +402,7 @@ def _cells(line, relaxed=False, mangled=False):
             count = _mult_after(ws, i, mangled)
         # the cell starts at the dash, on the head row and on every continuation row alike; the
         # cation of the head row sits further left and would put that row in another column
-        out.append((ws[dash][0], cat, an, d, int(m.group(2)) if m.group(2) else None, count, site))
+        out.append((ws[dash][0], cat, an, d, int(m.group(2)) if m.group(2) else None, count, site, _code(ws[j][4])))
     return out
 
 
@@ -490,7 +500,7 @@ def read_tables(pdf, pages=None):
                 carried[k] = c[1]; sites[k] = c[6] if len(c) > 6 else None
             if not cat:
                 continue
-            by_col.setdefault(k, []).append(Row(cat, c[2], c[3], c[4], c[5], pno + 1, li, k, sites.get(k) if cat == carried.get(k) else None))
+            by_col.setdefault(k, []).append(Row(cat, c[2], c[3], c[4], c[5], pno + 1, li, k, sites.get(k) if cat == carried.get(k) else None, c[7]))
         bonds = [r for k in sorted(by_col) for r in by_col[k]]
         if len(bonds) >= floor:
             out.append({'page': pno + 1, 'caption': _caption(lines, found[0][0]),

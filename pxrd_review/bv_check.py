@@ -540,7 +540,29 @@ MIN_S = 0.025
 # cell, 2026-09-10), reported as information — the line's wording is what the record layer and
 # the GUI read, so the decision is made HERE, once.
 BLANK_INFO = 0.10
-PREFER = {'gh': ['bs', 'a', 'b'], 'bo': ['b', 'a', 'bs'], 'ba': ['a', 'b', 'bs']}
+# A contact past the cation's first coordination shell is no bond a table lists even when it passes
+# MIN_S: a tetrahedral cation with an O near 2.9 Å (~0.04 vu) had a 5th bond, a mean distance a
+# quarter of an ångström long and a "different bond set?" against the paper's correct mean. The shell ends at a gap of
+# SHELL_GAP × the previous distance after at least SHELL_MIN bonds, when everything past it is worth
+# under SHELL_S. Over the corpus .cif files that cuts ~30 cations — As/P/Si/C/B/Zn tetrahedra and a few
+# Mo/Mn with a 2.7–3.1 Å contact at 0.025–0.045 vu — and keeps the lone-pair Te4+/Se4+ long bonds
+# (0.09–0.13 vu) and the split S–O bonds of a disordered sulfate (1.2 vu past a 1.35 gap).
+SHELL_GAP, SHELL_MIN, SHELL_S = 1.35, 3, 0.05
+
+def first_shell(rows):
+    """The payloads of the first coordination shell, in their original order: rows are
+    [(distance, count, strongest valence, payload)]."""
+    order = sorted(range(len(rows)), key=lambda k: rows[k][0])
+    n = 0
+    for i in range(1, len(order)):
+        prev, here = rows[order[i - 1]], rows[order[i]]
+        n += prev[1]
+        if n >= SHELL_MIN and here[0] >= SHELL_GAP * prev[0] and all(rows[k][2] < SHELL_S for k in order[i:]):
+            cut = set(order[i:])
+            return [r[3] for k, r in enumerate(rows) if k not in cut]
+    return [r[3] for r in rows]
+
+PREFER ={'gh': ['bs', 'a', 'b'], 'bo': ['b', 'a', 'bs'], 'ba': ['a', 'b', 'bs']}
 # per-cation preferences that override the set: U6+–O from Burns, Ewing & Hawthorne (1997) — the
 # parameters every uranyl-mineral description uses (--params still applies to everything else)
 PREFER_CATION = {('U', 6): ['r']}
@@ -711,6 +733,8 @@ def compute(st, params, cutoff=None, hbond='oo', hmax=None, donors=None, force=N
                     continue                        # too weak to be a bond in a published table (an
                                                     # explicit --cutoff means: everything within it)
                 bonds.append(Bond(c, other, d, n, vals))
+        if c.element != 'H' and cutoff is None:
+            bonds = first_shell([(b.dist, b.count, max((s or 0.0) for _, s in b.vals), b) for b in bonds])
         if c.element == 'H' and bonds:
             # X-ray O–H distances are short and unreliable: take the acceptor valences from the
             # H···O distances and give the donor the rest, so every H sums to exactly 1 vu
@@ -1349,6 +1373,647 @@ def check_bond_table(st, result, tables):
                          % (cc, aa, dist, seen, count))
     L.insert(0, '%d bond distances agree with the .cif, %d do not' % (n_ok, n_bad))
     return L
+
+# ----------------------------------------------------------------------------- symmetry codes
+
+# A table's symmetry codes are defined in its footnote ('(2) ‘–x+1, y+½, –z’', '(i) x, y, z−1',
+# '#1 -x+1,y,-z+1', 'i = …', a superscript label) and used as superscripts on the atom labels. Each
+# coded distance is recomputed with the printed operator on the .cif's own coordinates: a code that
+# misses by more than CODE_MISS while another image of the atom reproduces the printed distance is a
+# wrong code (typically the operator printed without its lattice translation). Between the esd
+# tolerance and CODE_MISS the code is right and the VALUE is off — `check_bond_table`'s business.
+CODE_MISS = 0.10
+_FRAC = {'½': '1/2', '⅓': '1/3', '⅔': '2/3', '¼': '1/4', '¾': '3/4', '⅙': '1/6', '⅚': '5/6',
+         '⅛': '1/8', '⅜': '3/8', '⅝': '5/8', '⅞': '7/8'}
+_PRIMES = str.maketrans({'′': "'", '’': "'", '″': "''", '‴': "'''"})
+_OP_TERM = r"[-+0-9/.xyz ]*[xyz][-+0-9/.xyz ]*"
+_OP = r"(%s,%s,%s)" % (_OP_TERM, _OP_TERM, _OP_TERM)
+_CODE_DEF = re.compile(r"(?:\(\s*([0-9]{1,2}[A-Za-z]?|[ivxlc]{1,6}|[a-z]|'{1,3})\s*\)|#\s*([0-9]{1,2})|\^([^^]{1,5})\^"
+                       r"|(?<![A-Za-z0-9/])([ivxlc]{1,6}|[a-z]|[0-9]{1,2}[A-Za-z]?|'{1,3})\s*[=:])\s*[:=]?\s*" + _OP)
+_SAME_AS = re.compile(r"(?:symmetry )?codes? (?:are |is )?(?:the )?same as (?:in |for )?Table\s+(\d+)", re.I)
+_CAPTION = re.compile(r"^\s*Table\s+(\d+)[.:]")
+_NUMWORD = {w: i for i, w in enumerate('zero one two three four five six seven eight nine ten eleven twelve thirteen '
+                                         'fourteen fifteen sixteen seventeen eighteen nineteen twenty'.split())}
+
+_DASH_FOLD = str.maketrans({'–': '-', '—': '-', '−': '-', '‐': '-', '‑': '-', '‒': '-'})
+
+def _code_key(lab):
+    return re.sub(r'\s|#', '', (lab or '').translate(_PRIMES))
+
+def repair_op_text(t):
+    """A symmetry-code footnote as a pdf's text layer delivers it, repaired: a font's signs mapped to
+    other glyphs ('þ' for +, a control code for −), a sign glyph lost ('y1', 'z  1' — no operator puts
+    a digit straight after a coordinate), a stacked fraction read as two numbers ('+ 1 2' is +½).
+    WHICH sign was lost the footnote itself says: the font drops one glyph and keeps the other, so a
+    footnote that shows 'x+1' but never 'x−1' lost its minus, and one that shows 'z–1' but never 'z+1'
+    (plumbojohntomaite's '−y3/2' for −y+3/2) lost its plus. Where it shows both or neither, the digit
+    is left welded on and the operator fails to parse — unread beats misread. Measured on the corpus:
+    30 of ~100 papers that print codes needed one of these."""
+    t = (t or '').replace('þ', '+')
+    t = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '§', t)          # a sign in a font's private code (\x03 for − in one, \x04 for + in another)
+    lost = re.compile(r'§|(?<=[xyz])[ \u00a0\u2009]*(?=\d)')
+    if lost.search(t):
+        foot = re.split(r'\.\s+(?=[A-Z0-9])|https?://|Downloaded', t, maxsplit=1)[0]     # the footnote, not the page after it
+        plus = re.search(r'\+\s*[\dxyz]', foot); minus = re.search(r'[-−–]\s*[\dxyz]', foot)
+        if bool(plus) != bool(minus):
+            t = lost.sub('-' if plus else '+', t)
+    return re.sub(r'([-+−–])\s*([1-9])\s+([2-9])(?=\s*[,;)(.]|\s*$|\s+[a-z(])', r'\1\2/\3', t)
+
+# a pdf footnote's bare label: '; ii x, y, z+1', '1 x, y, z; 2 x, y−1, z'
+_CODE_DEF_BARE = re.compile(r"(?:^|[;:]\s*|\.\s+)([ivxlc]{1,6}|[0-9]{1,2})\s+" + _OP)
+
+def parse_code_notes(text):
+    """{code label: (rot, tr, printed operator)} from a table's footnote text."""
+    out = OrderedDict()
+    # labels first (a prime label must survive the quote stripping), then the operators
+    t = repair_op_text(re.sub(r'[ \t\r\n\u00a0\u2009\u202f]+', ' ', text or '')).translate(_PRIMES).translate(_DASH_FOLD)   # an operator broken over two lines
+    t = re.sub(r"[‘“”\"]", '', t)
+    t = re.sub(r"(?<=[\s,])'(?=[-+0-9xyz])|(?<=[xyz0-9])'(?=\s*[;,.)]|\s*$|\s+\()", '', t)   # a quoted operator's straight quotes
+    for k, v in _FRAC.items():
+        t = t.replace(k, v)
+    t = re.sub(r'[   ]', ' ', t)
+    found = [(m.start(), _code_key(next(g for g in m.groups()[:4] if g)), m.group(5), m.end()) for m in _CODE_DEF.finditer(t)]
+    spans = [(f[0], f[3]) for f in found]
+    found += [(m.start(1), _code_key(m.group(1)), m.group(2), m.end()) for m in _CODE_DEF_BARE.finditer(t)
+              if not any(a0 < m.end() and m.start(1) < a1 for a0, a1 in spans)]
+    for _at, lab, op, _end in sorted(found):
+        op = re.split(r'\.(?=\s|$)', op)[0].strip().rstrip(' .')          # 'z. 1 Supplementary …': the sentence ends the code
+        if re.search(r'[xyz]\s*\d', op):
+            continue                                      # a lost sign repair_op_text could not tell: unread, not a guess
+        try:
+            rot, tr = parse_symop(op.replace(' ', ''))
+        except ValueError:
+            continue
+        if lab not in out:
+            out[lab] = (rot, tr, op)
+    return out
+
+def _para_text(p):
+    """A body paragraph's text with superscript runs marked ^…^ (a footnote label 'ⁱ x, y, z')."""
+    out = []
+    for r in p.iter(W + 'r'):
+        t = ''.join(x.text or '' for x in r.iter(W + 't'))
+        rpr = r.find(W + 'rPr'); va = rpr.find(W + 'vertAlign') if rpr is not None else None
+        if va is not None and va.get(W + 'val') == 'superscript' and t.strip():
+            t = '^' + t + '^'
+        out.append(t)
+    return re.sub(r'\s+', ' ', ''.join(out)).strip()
+
+def read_table_notes(path):
+    """The symmetry codes each table of a .docx defines, and the body text: ({table index: {'caption':
+    number or None, 'codes': {label: (rot, tr, printed)}}}, [paragraph texts]). A table's footnote is
+    its caption and the paragraphs after it up to the next table or caption, plus its own rows; a note
+    'symmetry codes are the same as in Table N' takes table N's."""
+    from docx import Document
+    body = Document(path).element.body
+    items = []                                   # ('t', index) | ('p', text), in body order
+    ti = 0
+    for el in body.iterchildren():
+        if el.tag == W + 'tbl':
+            items.append(('t', ti, ' ; '.join(_cell_text(tc) for tc in el.iter(W + 'tc')))); ti += 1
+        elif el.tag == W + 'p':
+            items.append(('p', None, _para_text(el)))
+    notes = {}
+    for k, (kind, idx, text) in enumerate(items):
+        if kind != 't':
+            continue
+        before = [x[2] for x in items[max(0, k - 3):k] if x[0] == 'p' and _CAPTION.match(x[2])]
+        after = []
+        for kind2, _, t2 in items[k + 1:]:
+            if kind2 == 't' or _CAPTION.match(t2) or re.match(r'^\s*(Fig\.|Figure)\s*\d', t2):
+                break
+            after.append(t2)
+        cap = before[-1] if before else ''
+        notes[idx] = {'caption': int(_CAPTION.match(cap).group(1)) if cap else None,
+                      'text': ' '.join([cap] + after), 'cells': text}
+    by_caption = {v['caption']: i for i, v in notes.items() if v['caption'] is not None}
+    for i, v in notes.items():
+        v['codes'] = parse_code_notes(v['text'] + ' ; ' + v['cells'])
+    for i, v in notes.items():
+        m = _SAME_AS.search(v['text'])
+        if m and not v['codes'] and int(m.group(1)) in by_caption:
+            v['codes'] = notes[by_caption[int(m.group(1))]]['codes']
+    return notes, [x[2] for x in items if x[0] == 'p']
+
+_ATOM = r"([A-Za-z]{1,3}\d*[A-Za-z]?\d*(?:/[A-Za-z]+\d*)?)\s*(?:\^([^^]{1,5})\^|(['′″‴]{1,3})|#(\d{1,2}))?"
+_CODED_BOND = re.compile(r"^" + _ATOM + r"\s*[–—−-]\s*" + _ATOM + r"\s*(?:[×x]\s*\d+)?\s*$")
+_HB_SEP = r"(?:⋯|…|\.{2,3}|·{2,3}|⋅{2,3}|∙{2,3}|···)"
+_CODED_HB = re.compile(r"^" + _ATOM + r"\s*[–—−-]\s*" + _ATOM + r"\s*" + _HB_SEP + r"\s*" + _ATOM + r"\s*$")
+_CODED_DA = re.compile(r"^" + _ATOM + r"\s*" + _HB_SEP + r"\s*" + _ATOM + r"\s*$")
+_NUM = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(\(\d+\))?\s*$")
+
+def _atom_code(groups):
+    lab, sup, prime, hsh = groups
+    return lab, _code_key(sup or prime or hsh) or None
+
+def _find_site(st, lab):
+    """The .cif site a printed label names: exact, case/bracket-folded, or 'OH3' for 'O3' (only when one
+    site fits)."""
+    s = st.site(lab)
+    if s is not None:
+        return s
+    n = _norm_label(lab)
+    hits = [x for x in st.sites if n in [_norm_label(p) for p in x.label.split('/')]]
+    if len(hits) == 1:
+        return hits[0]
+    num = re.sub(r'\D', '', n); pre = n.rstrip('0123456789')
+    if pre in ('O', 'OH', 'OW') and num:
+        hits = [x for x in st.sites if any(_norm_label(p).rstrip('0123456789') in ('O', 'OH', 'OW') and re.sub(r'\D', '', _norm_label(p)) == num
+                                           for p in x.label.split('/'))]
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+def _pos(site, op=None, frame=None):
+    p = list((frame or {}).get(site.label, site.frac))
+    return p if op is None else _apply(op, p)
+
+def _images_of(st, site, frame=None):
+    """Every image of `site` within ±2 cells, with the operator (rot, tr) that makes it."""
+    seen = []
+    for rot, tr in st.ops:
+        base = _apply((rot, tr), _pos(site, None, frame))
+        for i in range(-2, 3):
+            for j in range(-2, 3):
+                for k in range(-2, 3):
+                    q = [base[0] + i, base[1] + j, base[2] + k]
+                    if any(max(abs(q[m] - s[m]) for m in range(3)) < 1e-4 for s, _ in seen):
+                        continue
+                    seen.append((q, (rot, [tr[0] + i, tr[1] + j, tr[2] + k])))
+    return seen
+
+_AXIS_HDR = re.compile(r'^\(?([xyz])(?:\s*/\s*[abc])?\)?$', re.I)
+
+def _coord_val(t):
+    t = re.sub(r'\(\d+\)$', '', (t or '').strip().translate(_DASH_FOLD))
+    for k, v in _FRAC.items():
+        t = t.replace(k, v)
+    m = re.match(r'^(-?)(\d+)/(\d+)$', t)
+    if m:
+        return (-1 if m.group(1) else 1) * float(m.group(2)) / float(m.group(3))
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+def manuscript_frame(st, tables):
+    """The coordinates the manuscript's own atom table prints, per .cif site label — the frame its
+    symmetry codes refer to. A .cif may hold a site one cell over (y = 1.344 where the paper prints
+    0.344), which moves every translation that involves it. Only sites the paper prints at the .cif's
+    position modulo a lattice vector are taken: ({label: frac}, n sites taken, n that differ)."""
+    sites = []
+    for rows in tables:
+        for hi, hdr in enumerate(rows[:2]):
+            ax = {m.group(1).lower(): ci for ci, c in enumerate(hdr) for m in [_AXIS_HDR.match(c.strip())] if m}
+            if len(ax) < 3:
+                continue
+            for row in rows[hi + 1:]:
+                if len(row) > max(ax.values()) and row[0].strip():
+                    sites.append((row[0].strip(),) + tuple(_coord_val(row[ax[a]]) for a in 'xyz'))
+            break
+    return frame_from_sites(st, sites)
+
+def frame_from_sites(st, sites):
+    """`manuscript_frame` from rows already read: [(label, x, y, z)] (a pdf's coordinates table,
+    `paper_structure.paper_sites`)."""
+    frame = {}; n_diff = 0
+    for lab, *vals in sites:
+        site = st.site(lab)
+        vals = vals[:3]
+        if site is None or len(vals) < 3 or None in vals:
+            continue
+        d = [vals[m] - site.frac[m] for m in range(3)]
+        if all(abs(v - round(v)) < 0.002 for v in d):
+            frame[site.label] = [site.frac[m] + round(d[m]) for m in range(3)]
+        else:
+            n_diff += 1
+    return frame, len(frame), n_diff
+
+def _op_text(op):
+    from pxrd_review.tables import symop_string
+    return symop_string(op[0], op[1])
+
+def _same_rot(a, b):
+    return all(abs(a[i][j] - b[i][j]) < 1e-6 for i in range(3) for j in range(3))
+
+def _loop_codes(st, lab1, lab2):
+    """The .cif's own symmetry codes for a label pair, from its _geom_bond / _geom_hbond loops (the
+    code moves the second atom)."""
+    out = set()
+    tags, rows = _loop(st.block, '_geom_bond_distance')
+    if rows:
+        for a, b, s in zip(_col(tags, rows, '_geom_bond_atom_site_label_1'), _col(tags, rows, '_geom_bond_atom_site_label_2'),
+                           _col(tags, rows, '_geom_bond_site_symmetry_2', '.')):
+            if (a, b) == (lab1, lab2):
+                out.add(s.strip())
+    tags, rows = _loop(st.block, '_geom_hbond_distance_ha')
+    if rows:
+        for a, b, s in zip(_col(tags, rows, '_geom_hbond_atom_site_label_d'), _col(tags, rows, '_geom_hbond_atom_site_label_a'),
+                           _col(tags, rows, '_geom_hbond_site_symmetry_a', '.')):
+            if (a, b) == (lab1, lab2):
+                out.add(s.strip())
+    return {('1_555' if c in ('.', '') else c) for c in out}
+
+def _loop_note(st, site, pos, pair, frame=None):
+    """' (the .cif's 2_657)' when the fix is the code the .cif's own geometry loop gives for the pair
+    (only in the .cif's frame: a site the manuscript prints a cell over moves the translation)."""
+    if frame and any(frame.get(l) is not None and frame[l] != list(st.site(l).frac) for l in pair):
+        return ''
+    c = _code_of(st, site, pos)
+    c = '1_555' if c == '.' else c
+    return " (the .cif's %s)" % c if c in _loop_codes(st, *pair) else ''
+
+def _num_run(cells):
+    """The numbers in the cells after a row label, up to the next label (a table printed in two
+    column blocks carries a second row in the same line)."""
+    out = []
+    for c in cells:
+        m = _NUM.match(c.replace('−', '-'))
+        if m:
+            out.append((float(m.group(1)), _esd(m.group(1) + (m.group(2) or ''))))
+        elif c.strip():
+            break
+    return out
+
+def _sup(code):
+    return '^%s^' % code if code else ''
+
+_IDENT = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+
+def _same_op(a, b):
+    """One operator up to a lattice translation: the same rotation, translations a whole number of cells apart."""
+    return _same_rot(a[0], b[0]) and all(abs((a[1][m] - b[1][m]) - round(a[1][m] - b[1][m])) < 1e-6 for m in range(3))
+
+def _in_group(st, op):
+    """Is (rot, tr) one of the space group's operators, up to a lattice translation?"""
+    return any(_same_rot(op[0], r) and all(abs((op[1][m] - t[m]) - round(op[1][m] - t[m])) < 1e-6 for m in range(3)) for r, t in st.ops)
+
+def check_symmetry_codes(st, tables, notes, paragraphs=()):
+    """Records {'table','row','kind','severity','text','fix'} for the symmetry codes of a manuscript's
+    bond-distance and hydrogen-bond tables, recomputed on the manuscript's own coordinates (the .cif's,
+    moved by the lattice vectors its atom table shows). A row the printed code does not reproduce while
+    another image of the atom does is one of:
+      operator     (flag) the code is the wrong operator;
+      nocode       (flag) no code, but the bond is to an image other than the atom as listed;
+      translation  (flag) the right operator with the wrong (usually a left-out) lattice translation.
+    Codes carry their translations — 65 of the ~70 corpus papers whose text prints codes do. A missing
+    translation (coded or uncoded) is flagged row by row only when the document's own rows prove that
+    convention (>= 2 coded distances reproduce, and no fewer than such rows); otherwise one 'codes' line
+    per table says the translations are left out. A table printing no codes at all gets one line.
+      donor        (flag) an H-bond row's D is not the atom the H is bonded to in the .cif;
+      duplicate    (note) two H-bond rows are one bond and its symmetry image;
+      undefined    (note) a superscript on a label that the table's footnote does not define.
+    Plus one 'count' record per coded table."""
+    recs = []; stats = {}; used_by = {}; wheres = {}; has_codes = {}
+    frame, n_frame, n_diff = manuscript_frame(st, tables)
+    if n_diff > n_frame:
+        frame = {}
+        recs.append({'table': None, 'row': None, 'kind': 'frame', 'severity': 'note', 'fix': None,
+                     'text': "the manuscript's atom coordinates are not the .cif's (%d sites differ beyond a lattice vector: another "
+                             "origin or setting?) — its symmetry codes are checked on the .cif's coordinates" % n_diff})
+    anions = [s for s in st.sites if s.element in ('O', 'N', 'F', 'Cl')]
+    P = lambda site, op=None: _pos(site, op, frame)
+    for ti, rows in enumerate(tables):
+        codes = (notes.get(ti) or {}).get('codes') or {}
+        cap = (notes.get(ti) or {}).get('caption')
+        where = 'table %d%s' % (ti + 1, ' (Table %d)' % cap if cap is not None and cap != ti + 1 else '')
+        hb_rows = []; hb_all = set(); n_ok = 0; used = {}
+        wheres[ti] = where; used_by[ti] = used; has_codes[ti] = bool(codes)
+        def rec(ri, kind, sev, text, fix=None, **extra):
+            r = {'table': ti, 'row': ri, 'kind': kind, 'severity': sev, 'text': '%s row %d: %s' % (where, ri + 1, text), 'fix': fix}
+            r.update(extra); recs.append(r)
+        def resolve(ri, code, cell):
+            if code is None:
+                return None, True
+            if code in codes:
+                return codes[code][:2], True
+            if codes:
+                rec(ri, 'undefined', 'note', '%s — code (%s) is not defined in the table\'s symmetry-code footnote' % (cell, code))
+            return None, False
+        def search(p_fixed, site, want, want2=None, p2=None, pair=None, printed_op=None):
+            """The image of `site` reproducing distance `want` from p_fixed (and `want2` from p2): the
+            .cif's own loop code first, then the printed operator, then the least translation."""
+            hits = [(q, op) for q, op in _images_of(st, site, frame)
+                    if abs(st.dist(p_fixed, q) - want[0]) <= want[1] and (want2 is None or abs(st.dist(p2, q) - want2[0]) <= want2[1])]
+            if not hits:
+                return None
+            def rank(h):
+                q, op = h
+                in_loop = bool(pair) and bool(_loop_note(st, site, q, pair, frame))
+                ref = printed_op or (_IDENT, [0, 0, 0])
+                # a coded row means an image: the atom as listed is the last resort (a ×2 pair's other
+                # row is often that very atom, printed without a code)
+                as_listed = printed_op is not None and _same_rot(op[0], _IDENT) and all(abs(v) < 1e-9 for v in op[1])
+                return (as_listed, not in_loop, not _same_rot(op[0], ref[0]), sum(abs(op[1][m] - ref[1][m]) for m in range(3)))
+            return min(hits, key=rank)
+        def miss(ri, cell_s, d_txt, code, mover, other_lab, got, hit, gives, pair, extra=''):
+            """A row the printed code (or no code) does not reproduce, and the image that does."""
+            fix = _op_text(hit[1]); ln = _loop_note(st, mover, hit[0], pair, frame)
+            if code:
+                printed = codes[code][:2]
+                kind = 'translation' if _same_op(hit[1], printed) else 'operator'
+                if _same_rot(hit[1][0], _IDENT) and all(abs(v) < 1e-9 for v in hit[1][1]):
+                    rec(ri, kind, 'flag', "%s%s — code (%s) '%s' is not needed: it puts %s %.3f Å from %s%s, and %s as listed gives %.3f"
+                        % (cell_s, d_txt, code, _op_text(printed), mover.label, got, other_lab, extra, mover.label, gives), '',
+                        example="'(%s) %s' on %s, which needs no code" % (code, _op_text(printed), cell_s))
+                    return
+                what = 'lacks its lattice translation' if kind == 'translation' else \
+                       'is the wrong operator' + ('' if _in_group(st, printed) else ' (not an operator of %s)' % st.sg)
+                rec(ri, kind, 'flag', "%s%s — code (%s) '%s' %s: it puts %s %.3f Å from %s%s; '%s'%s gives %.3f"
+                    % (cell_s, d_txt, code, _op_text(printed), what, mover.label, got, other_lab, extra, fix, ln, gives), fix,
+                    example="'(%s) %s' → '%s'%s for %s" % (code, _op_text(printed), fix, ln, cell_s))
+            else:
+                kind = 'translation' if _same_rot(hit[1][0], _IDENT) else 'nocode'
+                rec(ri, 'nocode', 'flag', "%s%s has no symmetry code, but %s as listed is %.3f Å from %s%s; the bond is to %s at '%s'%s (%.3f)"
+                    % (cell_s, d_txt, mover.label, got, other_lab, extra, mover.label, fix, ln, gives), fix,
+                    missing=kind, example="%s at '%s'%s for %s" % (mover.label, fix, ln, cell_s))
+        for ri, row in enumerate(rows):
+            for ci, cell in enumerate(row):
+                cell_s = cell.strip()
+                mh = _CODED_HB.match(cell_s)
+                mb = None if mh else _CODED_BOND.match(cell_s)
+                mda = None if (mh or mb) else _CODED_DA.match(cell_s)
+                if not (mh or mb or mda):
+                    continue
+                nums = _num_run(row[ci + 1:])
+                if mb:
+                    (a1, c1), (a2, c2) = _atom_code(mb.groups()[0:4]), _atom_code(mb.groups()[4:8])
+                    if not nums or not (_atom_like(a1) and _atom_like(a2)) or cell_s.startswith('<'):
+                        continue
+                    s1, s2 = _find_site(st, a1), _find_site(st, a2)
+                    if s1 is None or s2 is None or s1.element == 'H' or s2.element == 'H' or s1 is s2 and not (c1 or c2):
+                        continue
+                    op1, ok1 = resolve(ri, c1, cell_s); op2, ok2 = resolve(ri, c2, cell_s)
+                    if not (ok1 and ok2):
+                        continue
+                    d, esd = nums[0]
+                    if d > 4.5:
+                        continue
+                    tol = max(0.01, 3 * (esd or 0))
+                    p1, p2 = P(s1, op1), P(s2, op2)
+                    got = st.dist(p1, p2)
+                    coded = bool(c1 or c2)
+                    for c in (c1, c2):
+                        if c:
+                            used.setdefault(c, []).append((ri, abs(got - d) <= tol, cell_s))
+                    if abs(got - d) <= tol:
+                        n_ok += coded; continue
+                    if abs(got - d) <= CODE_MISS:
+                        continue                                    # the value, not the code
+                    mover, fixed_p, code, other = (s1, p2, c1, s2) if (c1 and not c2) else (s2, p1, c2, s1)
+                    pair = (other.label, mover.label)
+                    hit = search(fixed_p, mover, (d, tol), pair=pair, printed_op=codes[code][:2] if code else None)
+                    if hit is not None:
+                        miss(ri, cell_s, ' %.3f' % d, code, mover, other.label, got, hit, st.dist(fixed_p, hit[0]), pair)
+                    continue
+                # hydrogen-bond rows: D–H⋯A (or D⋯A)
+                if mh:
+                    (dl, dc), (hl, hc), (al, ac) = (_atom_code(mh.groups()[k:k + 4]) for k in (0, 4, 8))
+                else:
+                    (dl, dc), (al, ac) = (_atom_code(mda.groups()[k:k + 4]) for k in (0, 4)); hl, hc = None, None
+                sd, sa = _find_site(st, dl), _find_site(st, al)
+                sh = _find_site(st, hl) if hl else None
+                if sd is None or sa is None or (hl and sh is None):
+                    continue
+                hb_all.add(ri)
+                opd, okd = resolve(ri, dc, cell_s); oph, okh = resolve(ri, hc, cell_s) if hl else (None, True)
+                opa, oka = resolve(ri, ac, cell_s)
+                if not (okd and okh and oka):
+                    continue
+                vals = [v for v in nums if v[0] <= 4.5 or 90 <= v[0] <= 180]
+                rest = sorted([v for v in vals if 1.3 < v[0] <= 4.5])
+                if sh is not None and len(rest) >= 2:
+                    ha, da = rest[0], rest[-1]
+                elif len(rest) >= 1:
+                    ha, da = None, rest[-1]
+                else:
+                    continue
+                coded = bool(dc or hc or ac)
+                ph = P(sh, oph) if sh is not None else None
+                # the donor: the printed D where the H sits on it; the atom the H is bonded to in the .cif otherwise
+                pd = P(sd, opd)
+                donor_note = ''
+                if sh is not None:
+                    near = st.images(ph, 1.1, anions)
+                    if not dc:
+                        mine = [x for x in st.images(ph, 1.3, [sd])]
+                        if mine:
+                            pd = mine[0][2]
+                    if near and near[0][0] is not sd and sd.label not in near[0][0].label.split('/'):
+                        true_d, d_dh, p_true = near[0]
+                        far = st.images(ph, 6.0, [sd])
+                        rec(ri, 'donor', 'flag', '%s — %s is bonded to %s (%.2f Å) in the .cif, not %s (%s)'
+                            % (cell_s, sh.label, true_d.label, d_dh, sd.label, ('%.2f Å' % far[0][1]) if far else 'over 6 Å'), true_d.label)
+                        pd = p_true; donor_note = " (%s's donor in the .cif)" % sh.label
+                        sd = true_d
+                pa = P(sa, opa)
+                got = st.dist(pd, pa)
+                got_ha = st.dist(ph, pa) if (ph is not None and ha) else None
+                tol = max(0.01, 3 * (da[1] or 0))
+                tol_ha = max(0.01, 3 * (ha[1] or 0)) if ha else None
+                ok = abs(got - da[0]) <= tol and (got_ha is None or abs(got_ha - ha[0]) <= tol_ha)
+                for c in (dc, hc, ac):
+                    if c:
+                        used.setdefault(c, []).append((ri, ok, cell_s))
+                if ok:
+                    n_ok += coded
+                    hb_rows.append((ri, cell_s, sd, sh, sa, pd, ph, pa, len(recs)))
+                    continue
+                if abs(got - da[0]) <= CODE_MISS and (got_ha is None or abs(got_ha - ha[0]) <= CODE_MISS):
+                    continue
+                txt = ' (printed D⋯A %.3f)' % da[0]
+                if dc and not ac and sh is None:
+                    # a D⋯A table with the code on the donor: the donor's image is the one under test
+                    pair = (sa.label, sd.label)
+                    hit = search(pa, sd, (da[0], tol), pair=pair, printed_op=codes[dc][:2])
+                    if hit is not None:
+                        miss(ri, cell_s, '', dc, sd, sa.label, got, hit, st.dist(pa, hit[0]), pair, txt)
+                    continue
+                pair = (sd.label, sa.label)
+                hit = search(pd, sa, (da[0], tol), (ha[0], tol_ha) if got_ha is not None else None, ph,
+                             pair=pair, printed_op=codes[ac][:2] if ac else None)
+                if hit is not None:
+                    miss(ri, cell_s, '', ac, sa, sd.label, got, hit, st.dist(pd, hit[0]), pair, donor_note + txt)
+        # the same hydrogen bond twice: one row the symmetry image of the other
+        dup = []
+        for i in range(len(hb_rows)):
+            for j in range(i + 1, len(hb_rows)):
+                a, b = hb_rows[i], hb_rows[j]
+                if a[3] is None or a[3] is not b[3] or a[4] is not b[4] or a[2] is not b[2]:
+                    continue
+                for rot, tr in st.ops:
+                    t = None; same = True
+                    for p, q in ((a[5], b[5]), (a[6], b[6]), (a[7], b[7])):
+                        g = _apply((rot, tr), p); dlt = [q[m] - g[m] for m in range(3)]
+                        if any(abs(v - round(v)) > 1e-3 for v in dlt):
+                            same = False; break
+                        dlt = [int(round(v)) for v in dlt]
+                        if t is None:
+                            t = dlt
+                        elif dlt != t:
+                            same = False; break
+                    if same:
+                        dup.append((a, b, _op_text((rot, [tr[m] + t[m] for m in range(3)]))))
+                        break
+        if dup:
+            n_rows = len(hb_all)
+            n_unique = n_rows - len({b[0] for _, b, _ in dup})
+            said = ''
+            for ptxt in paragraphs:
+                m = re.search(r"\b(\d+|%s)\s+(?:unique\s+|distinct\s+|independent\s+|symmetry[- ]independent\s+)?(?:hydrogen|H)[ -]bonds?\b"
+                              % '|'.join(_NUMWORD), ptxt, re.I)
+                if m:
+                    n = int(m.group(1)) if m.group(1).isdigit() else _NUMWORD[m.group(1).lower()]
+                    if n == n_rows and n != n_unique:
+                        said = "; the text counts '%s'" % m.group(0)
+                        break
+            for a, b, optxt in dup:
+                rec(b[0], 'duplicate', 'note', "rows %d and %d (%s, %s) are one hydrogen bond and its image under '%s': the table's %d rows hold %d unique hydrogen bonds%s"
+                    % (a[0] + 1, b[0] + 1, a[1], b[1], optxt, n_rows, n_unique, said))
+        n_bad = sum(1 for r in recs if r['table'] == ti and r['kind'] in ('operator', 'translation'))
+        stats[ti] = (n_ok, n_bad)
+        if n_ok or n_bad:
+            recs.append({'table': ti, 'row': None, 'kind': 'count', 'severity': 'info', 'fix': None,
+                         'text': '%s: %d coded distances reproduce with the printed symmetry codes, %d do not' % (where, n_ok, n_bad)})
+    # A left-out translation is judged row by row only where the document's own rows show the codes
+    # carry their translations; otherwise the habit is one line per table, not a storm of rows.
+    trans = lambda r: r['kind'] == 'translation' or r.get('missing') == 'translation'
+    tot_ok = sum(v[0] for v in stats.values())
+    proven = tot_ok >= 2 and tot_ok >= sum(1 for r in recs if trans(r))
+    for ti in sorted(stats):
+        mine = [r for r in recs if r['table'] == ti]
+        if not has_codes[ti]:
+            gone = [r for r in mine if r['kind'] == 'nocode']
+            if gone:
+                recs[:] = [r for r in recs if r not in gone]
+                recs.append({'table': ti, 'row': None, 'kind': 'nocode', 'severity': 'flag', 'fix': None,
+                             'text': '%s: the table prints no symmetry codes, but %d of its distances are to an image of the atom, not the '
+                                     'atom as listed (rows %s; e.g. %s)' % (wheres[ti], len(gone), ', '.join(str(x + 1) for x in sorted({r['row'] for r in gone})[:12])
+                                                                          + (' …' if len({r['row'] for r in gone}) > 12 else ''), gone[0]['example'])})
+            continue
+        if proven:
+            for r in mine:
+                if r['kind'] in ('translation', 'operator'):
+                    c = re.search(r"code \(([^)]+)\)", r['text']).group(1)
+                    right = [x for x in used_by[ti].get(c, []) if x[1]]
+                    if right:
+                        r['text'] += (' — code (%s) is right for row %d (%s): one code number stands for two operators, this row needs its own'
+                                      % (c, right[0][0] + 1, right[0][2]))
+            continue
+        gone = [r for r in mine if trans(r)]
+        if gone:
+            recs[:] = [r for r in recs if r not in gone]
+            coded = [r for r in gone if r['kind'] == 'translation']
+            n_ok = stats[ti][0]
+            recs.append({'table': ti, 'row': None, 'kind': 'translation', 'severity': 'flag', 'fix': None,
+                         'text': "%s: the symmetry codes are printed without their lattice translations — %d of the %d coded distances "
+                                 "reproduce only with one added%s (e.g. %s)"
+                                 % (wheres[ti], len(coded), len(coded) + n_ok + sum(1 for r in mine if r['kind'] == 'operator'),
+                                    '; %d uncoded rows need a translation-only code' % (len(gone) - len(coded)) if len(gone) > len(coded) else '',
+                                    gone[0]['example'])})
+    for r in recs:
+        r.pop('example', None); r.pop('missing', None)
+    return recs
+
+_IMG_TOL = 0.012         # a printed distance to three decimals, its esd and the rounding
+
+def _reproducing_images(st, pa, site, d, frame=None):
+    """[(rot, tr, position)] — the images of `site` at distance d (± _IMG_TOL) from pa."""
+    out = []
+    q0 = _pos(site, None, frame)
+    for rot, tr in st.ops:
+        base = _apply((rot, tr), q0)
+        for i, j, k in st._images_within(pa, base, d + _IMG_TOL):
+            q = [base[0] + i, base[1] + j, base[2] + k]
+            if abs(st.dist(pa, q) - d) <= _IMG_TOL:
+                out.append((rot, [tr[0] + i, tr[1] + j, tr[2] + k], q))
+    return out
+
+def printed_bond_codes(st, rows, codes, frame=None):
+    """The symmetry codes of a paper's printed bond table, recomputed on the .cif. rows: [(cation,
+    anion, d, code or None)]; codes: {label: (rot, tr, printed)} from its footnote; frame: the
+    coordinates the paper prints (`manuscript_frame`) — without one, translations are not judged
+    (the paper may print an atom a cell away from the .cif), only the operator, which no lattice
+    shift changes. -> {'n', 'coded', 'ok', 'image', 'shift', 'wrong', 'translation', 'unneeded',
+    'undefined', 'unread'}, each a list of (row, what) but the counts."""
+    out = {k: [] for k in ('image', 'shift', 'wrong', 'translation', 'unneeded', 'undefined')}
+    out.update(n=0, coded=0, ok=0, unread=[])
+    for cat, an, d, code in rows:
+        sa = _find_site(st, cat) if cat else None
+        full = st.site(an + code) if code else None                # 'O1a': a label of the .cif, not a code
+        sb = full or _find_site(st, an)
+        if full is not None:
+            code = None
+        if sa is None or sb is None or d is None or st.is_cation(sb) or not st.is_cation(sa):
+            continue                                              # a cation–anion bond ('a Nb–Nb distance of 3.03 Å' in prose is no table row)
+        pa = _pos(sa, None, frame)
+        hits = _reproducing_images(st, pa, sb, d, frame)
+        if not hits:
+            continue                                              # the distance itself is off: not this check's business
+        out['n'] += 1
+        ident = [h for h in hits if _same_rot(h[0], _IDENT)]
+        at_listed = [h for h in ident if all(abs(v) < 1e-9 for v in h[1])]
+        label = '%s–%s%s %.3f' % (cat, an, code or '', d)
+        pick = lambda hs: _op_text(min(hs, key=lambda h: sum(abs(v) for v in h[1]))[:2])
+        if code is None:
+            if at_listed or (ident and not frame):
+                out['ok'] += 1
+            elif ident:
+                out['shift'].append((label, pick(ident)))
+            else:
+                out['image'].append((label, pick(hits)))
+            continue
+        out['coded'] += 1
+        if code not in codes:
+            (out['undefined'] if codes else out['unread']).append((label, code))
+            continue
+        rot, tr, _printed = codes[code]
+        same = [h for h in hits if _same_op(h[:2], (rot, tr))]
+        exact = [h for h in same if all(abs(h[1][m] - tr[m]) < 1e-6 for m in range(3))]
+        if exact or (same and not frame):
+            out['ok'] += 1
+        elif same:
+            out['translation'].append((label, "(%s) '%s' → '%s'" % (code, _op_text((rot, tr)), pick(same))))
+        elif at_listed and len(hits) == len(at_listed):
+            out['unneeded'].append((label, "(%s) '%s'" % (code, _op_text((rot, tr)))))
+        else:
+            out['wrong'].append((label, "(%s) '%s'%s → '%s'" % (code, _op_text((rot, tr)),
+                                                                  '' if _in_group(st, (rot, tr)) else ' (no operator of %s)' % st.sg,
+                                                                  pick([h for h in hits if h not in at_listed] or hits))))
+    return out
+
+def printed_bond_code_lines(res, frame):
+    """The result as the paper check's lines — information, never a red line: a paper that omits its
+    codes, or prints them without their translations, follows a common practice (the corpus)."""
+    L = []
+    if not res['n']:
+        return L
+    L.append('symmetry codes: %d printed bonds recomputed on the .cif, %d of them with a code%s'
+             % (res['n'], res['coded'], '' if frame else " (the paper's own coordinates unread: operators judged, translations not)"))
+    ex = lambda lst, k=8: '; '.join('%s at %s' % (a, b) for a, b in lst[:k]) + (' …' if len(lst) > k else '')
+    if res['image']:
+        L.append('  %d bonds printed without a code are to an image under another operator: %s%s'
+                 % (len(res['image']), ex(res['image']), '' if res['coded'] else ' — the table prints no symmetry codes'))
+    if res['shift']:
+        L.append('  %d bonds printed without a code are to the atom one or more cells over: %s' % (len(res['shift']), ex(res['shift'])))
+    if res['wrong']:
+        L.append('  %d codes name another operator than the bond needs: %s' % (len(res['wrong']), ex(res['wrong'])))
+    if res['unneeded']:
+        L.append('  %d codes on bonds to the atom as listed: %s' % (len(res['unneeded']), '; '.join('%s %s' % x for x in res['unneeded'][:8])))
+    if res['translation']:
+        L.append('  %d codes without their lattice translation: %s' % (len(res['translation']), ex(res['translation'])))
+    if res['undefined']:
+        L.append('  codes defined in no footnote read: %s' % ', '.join(sorted({'%s (%s)' % (c, a) for a, c in res['undefined']})[:8]))
+    if res['unread']:
+        L.append('  the table carries symmetry codes (%s) but no code footnote was read — those bonds are unchecked'
+                 % ', '.join(sorted({c for _a, c in res['unread']})[:8]))
+    return L
+
+def symmetry_code_lines(recs):
+    """The records as report lines: the counts, then the flags, then the notes."""
+    order = {'info': 0, 'flag': 1, 'note': 2}
+    return [('note: ' if r['severity'] == 'note' else '') + r['text']
+            for r in sorted(recs, key=lambda r: (order[r['severity']], -1 if r['table'] is None else r['table'], -1 if r['row'] is None else r['row']))]
 
 def _bv_cell(txt):
     """Parse one table cell into segments [(value, n_down, n_across)] — one per listed value,
@@ -2570,6 +3235,15 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
         site_lines = best_site_table(st, result, anion_sum, site_tables, PARAM_NAMES[params], compare_anions=not hbonds)[0]
         # from a .pdf only the bond-VALENCE tables are read (the distances are the paper check's, `pxrd paper --check`)
         text += '\n  '.join(['bond distances: not read from a .pdf — only its bond-valence table is'] if is_pdf else check_bond_table(st, result, tables))
+        if not is_pdf and tables:
+            try:
+                notes, paras = read_table_notes(table)
+            except Exception as ex_:
+                notes, paras = {}, []
+                st.notes.append('symmetry-code footnotes could not be read (%s)' % str(ex_)[:120])
+            sym = symmetry_code_lines(check_symmetry_codes(st, tables, notes, paras))
+            if sym:
+                text += '\n  ' + '\n  '.join(sym)
         if tables or not site_lines:
             text += '\n  ' + '\n  '.join(check_bvs_table(st, result, cells, anion_sum, tables, PARAM_NAMES[params]))
         if site_lines:

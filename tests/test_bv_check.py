@@ -681,3 +681,344 @@ class ColumnMappedOff(unittest.TestCase):
         lines = B.check_bvs_table(st, res, cells, an, [rows], 'GH')
         self.assertFalse(any('mapped one column off' in ln for ln in lines), lines)
         self.assertTrue(any('2 disagree' in ln for ln in lines), lines)
+
+
+# A synthetic P2/m hydrate for the symmetry-code checks (orthogonal cell 7 × 8 × 6 Å). The water OW1
+# sits on the mirror (y = 0); its H1 points 0.96 Å towards the image of O2 under −x+1, y, −z+1 (2.775 Å
+# away) — so the right code carries a lattice translation, and the same operator without it (−x, y, −z)
+# puts O2 far away. H1's mirror image (x, −y, z) is bonded to the same OW1: the same hydrogen bond again.
+_OW1 = (0.10, 0.0, 0.10)
+_DA = (1.6 / 7, 1.5 / 8, 1.7 / 6)                           # the D⋯A vector, fractional (2.775 Å)
+_PA = tuple(_OW1[i] + _DA[i] for i in range(3))
+_O2 = (1 - _PA[0], _PA[1], 1 - _PA[2])                       # O2 = (−x+1, y, −z+1) of the acceptor position
+_H1 = tuple(_OW1[i] + _DA[i] * 0.96 / 2.775 for i in range(3))
+WATER = """data_water
+_chemical_name_mineral testwater
+_cell_length_a 7
+_cell_length_b 8
+_cell_length_c 6
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_name_H-M_alt 'P 2/m'
+loop_
+_space_group_symop_operation_xyz
+'x, y, z'
+'-x, y, -z'
+'-x, -y, -z'
+'x, -y, z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+Mg1 Mg 0.5 0.5 0.5
+O1 O 0.5 0.25 0.5
+OW1 O %.6f %.6f %.6f
+O2 O %.6f %.6f %.6f
+H1 H %.6f %.6f %.6f
+""" % (_OW1 + _O2 + _H1)
+
+
+def _ms_docx(path, blocks, paras=()):
+    """A manuscript: each block (caption, rows, footnote) as a caption paragraph, a Word table and a
+    footnote paragraph; '^c^' in a cell or footnote is written as a superscript run."""
+    import re as _re
+    from docx import Document
+    doc = Document()
+    def put(par, text):
+        for k, part in enumerate(_re.split(r'\^([^^]*)\^', text)):
+            if part:
+                par.add_run(part).font.superscript = bool(k % 2)
+    for p in paras:
+        put(doc.add_paragraph(), p)
+    for cap, rows, foot in blocks:
+        put(doc.add_paragraph(), cap)
+        t = doc.add_table(rows=0, cols=max(len(r) for r in rows))
+        for row in rows:
+            cells = t.add_row().cells
+            for i, x in enumerate(row):
+                cells[i].paragraphs[0].text = ''
+                put(cells[i].paragraphs[0], x)
+        if foot:
+            put(doc.add_paragraph(), foot)
+    doc.save(path)
+    return path
+
+
+class CodeNotes(unittest.TestCase):
+    def test_label_and_fraction_forms(self):
+        c = B.parse_code_notes("Symmetry transformations used to generate equivalent atoms: (1) ‘x, y, z–1’; "
+                               "(3B) ‘x−½, −y+½, z+1’; (i) −x+1/2, y, −z; #2 -x+1,y,-z+1; iv = x, y−1, z; ′ = x, −y, z+¼")
+        self.assertEqual(list(c), ['1', '3B', 'i', '2', 'iv', "'"])
+        self.assertEqual(c['1'][:2], B.parse_symop('x,y,z-1'))
+        self.assertEqual(c['3B'][:2], B.parse_symop('x-1/2,-y+1/2,z+1'))
+        self.assertEqual(c['i'][:2], B.parse_symop('-x+1/2,y,-z'))
+        self.assertEqual(c['2'][:2], B.parse_symop('-x+1,y,-z+1'))
+        self.assertEqual(c['iv'][:2], B.parse_symop('x,y-1,z'))
+        self.assertEqual(c["'"][:2], B.parse_symop('x,-y,z+1/4'))
+        self.assertEqual(B.parse_code_notes('Bond valences are from Gagné and Hawthorne (2015).'), {})
+
+    def test_per_table_codes_and_same_as(self):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        try:
+            path = _ms_docx(os.path.join(tmp, 'ms.docx'), [
+                ('Table 5. Bond distances.', [['Mg1–O1^1^', '2.000(1)']], 'Symmetry codes: (1) x, y, z+1.'),
+                ('Table 6. Hydrogen bonds.', [['OW1–H1⋯O2^1^', '0.96', '1.8', '2.775']], 'Symmetry codes: (1) −x+1, y, −z+1.'),
+                ('Table 7. Bond valences.', [['O1', '0.33']], 'Symmetry codes are the same as in Table 6.')])
+            notes, paras = B.read_table_notes(path)
+            self.assertEqual([notes[i]['caption'] for i in range(3)], [5, 6, 7])
+            self.assertEqual(notes[0]['codes']['1'][:2], B.parse_symop('x,y,z+1'))
+            self.assertEqual(notes[1]['codes']['1'][:2], B.parse_symop('-x+1,y,-z+1'))
+            self.assertEqual(notes[2]['codes'], notes[1]['codes'])
+            self.assertIn('Table 6. Hydrogen bonds.', paras)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class SymmetryCodes(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='bv_')
+        self.cif = _write(self.tmp, 'water.cif', WATER)
+        self.st = B.Structure(self.cif)
+        ow1, h1, o2 = (self.st.site(x) for x in ('OW1', 'H1', 'O2'))
+        pa = B._apply(B.parse_symop('-x+1,y,-z+1'), o2.frac)
+        self.da = '%.3f(3)' % self.st.dist(ow1.frac, pa)
+        self.ha = '%.2f(3)' % self.st.dist(h1.frac, pa)
+        self.dh = '%.2f(3)' % self.st.dist(ow1.frac, h1.frac)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def run_check(self, blocks, paras=()):
+        path = _ms_docx(os.path.join(self.tmp, 'ms.docx'), blocks, paras)
+        notes, ps = B.read_table_notes(path)
+        return B.check_symmetry_codes(self.st, B.read_tables(path), notes, ps)
+
+    def hb(self, label):
+        return [label, self.dh, self.ha, self.da, '160(3)']
+
+    def test_right_codes_are_silent(self):
+        recs = self.run_check([('Table 6. Hydrogen bonds.', [['D–H⋯A', 'D–H', 'H⋯A', 'D⋯A', '∠DHA'], self.hb('OW1–H1⋯O2^1^')],
+                                'Symmetry codes: (1) –x+1, y, –z+1.')])
+        self.assertEqual([r for r in recs if r['severity'] != 'info'], [], recs)
+        self.assertIn('1 coded distances reproduce', recs[0]['text'])
+
+    def test_code_without_its_translation_and_duplicate_row(self):
+        recs = self.run_check([('Table 6. Hydrogen bonds.', [self.hb('OW1–H1⋯O2^1^'), self.hb('OW1–H1^2^⋯O2^3^'), self.hb('OW1–H1⋯O2^4^')],
+                                "Symmetry codes: (1) ‘–x+1, y, –z+1’; (2) ‘x, –y, z’; (3) ‘–x+1, –y, –z+1’; (4) ‘–x, y, –z’.")],
+                              paras=['The three hydrogen bonds in Table 6 link the waters.'])
+        flags = [r for r in recs if r['severity'] == 'flag']
+        self.assertEqual(len(flags), 1, recs)
+        self.assertEqual((flags[0]['kind'], flags[0]['row'], flags[0]['fix']), ('translation', 2, '−x+1, y, −z+1'))
+        self.assertIn("code (4) '−x, y, −z' lacks its lattice translation", flags[0]['text'])
+        dup = [r for r in recs if r['kind'] == 'duplicate']
+        self.assertEqual(len(dup), 1, recs)
+        self.assertIn('rows 1 and 2', dup[0]['text'])
+        self.assertIn("image under 'x, −y, z'", dup[0]['text'])
+        self.assertIn("the text counts 'three hydrogen bonds'", dup[0]['text'])
+
+    def test_wrong_donor_label(self):
+        recs = self.run_check([('Table 6. Hydrogen bonds.', [self.hb('O1–H1⋯O2^1^'), self.hb('OW1–H1^2^⋯O2^3^')],
+                                'Symmetry codes: (1) –x+1, y, –z+1; (2) x, –y, z; (3) –x+1, –y, –z+1.')])
+        donor = [r for r in recs if r['kind'] == 'donor']
+        self.assertEqual(len(donor), 1, recs)
+        self.assertEqual((donor[0]['row'], donor[0]['severity'], donor[0]['fix']), (0, 'flag', 'OW1'))
+        self.assertIn('H1 is bonded to OW1', donor[0]['text'])
+        self.assertFalse(any(r['kind'] in ('translation', 'operator') for r in recs), recs)   # the distance holds from the true donor
+
+    def test_a_table_that_omits_every_translation_is_one_record(self):
+        recs = self.run_check([('Table 6. Hydrogen bonds.', [self.hb('OW1–H1⋯O2^1^'), self.hb('OW1–H1^2^⋯O2^3^')],
+                                'Symmetry codes: (1) –x, y, –z; (2) x, –y, z; (3) –x, –y, –z.')])
+        codes = [r for r in recs if r['kind'] == 'translation']
+        self.assertEqual(len(codes), 1, recs)
+        self.assertEqual((codes[0]['severity'], codes[0]['row']), ('flag', None))
+        self.assertIn('printed without their lattice translations — 2 of the 2 coded distances', codes[0]['text'])
+
+    def test_one_number_per_table(self):
+        recs = self.run_check([('Table 5. Hydrogen bonds.', [self.hb('OW1–H1⋯O2^1^')], 'Symmetry codes: (1) –x+1, y, –z+1.'),
+                               ('Table 6. Hydrogen bonds again.', [self.hb('OW1–H1^2^⋯O2^1^')], 'Symmetry codes: (1) –x+1, –y, –z+1; (2) x, –y, z.')])
+        self.assertEqual([r for r in recs if r['severity'] != 'info'], [], recs)
+
+    def test_undefined_code(self):
+        recs = self.run_check([('Table 6. Hydrogen bonds.', [self.hb('OW1–H1⋯O2^1^'), self.hb('OW1–H1⋯O2^9^')],
+                                'Symmetry codes: (1) –x+1, y, –z+1.')])
+        und = [r for r in recs if r['kind'] == 'undefined']
+        self.assertEqual(len(und), 1, recs)
+        self.assertEqual((und[0]['row'], und[0]['severity']), (1, 'note'))
+
+    def test_wrong_operator_is_flagged_row_by_row(self):
+        # the mirror (x, −y, z) where the twofold with its translation is meant: another operator, always a row flag
+        recs = self.run_check([('Table 6. Hydrogen bonds.', [self.hb('OW1–H1⋯O2^1^'), self.hb('OW1–H1^2^⋯O2^3^'), self.hb('OW1–H1⋯O2^2^')],
+                                'Symmetry codes: (1) –x+1, y, –z+1; (2) x, –y, z; (3) –x+1, –y, –z+1.')])
+        op = [r for r in recs if r['kind'] == 'operator']
+        self.assertEqual(len(op), 1, recs)
+        self.assertEqual((op[0]['row'], op[0]['severity'], op[0]['fix']), (2, 'flag', '−x+1, y, −z+1'))
+        self.assertIn('is the wrong operator', op[0]['text'])
+
+    def test_an_operator_the_group_does_not_have(self):
+        # Mg1–O1 2.000 twice: as listed, and across the mirror; the code printed is no operator of P2/m
+        recs = self.run_check([('Table 5. Bond distances.', [['Mg1–O1', '2.000(1)'], ['Mg1–O1^5^', '2.000(1)'],
+                                                             ['OW1–H1⋯O2^1^'] + self.hb('')[1:], ['OW1–H1^2^⋯O2^3^'] + self.hb('')[1:]],
+                                'Symmetry codes: (1) –x+1, y, –z+1; (2) x, –y, z; (3) –x+1, –y, –z+1; (5) –x+½, y, –z.')])
+        op = [r for r in recs if r['kind'] == 'operator']
+        self.assertEqual(len(op), 1, recs)
+        self.assertEqual(op[0]['row'], 1)
+        self.assertIn(op[0]['fix'], ('x, −y+1, z', '−x+1, −y+1, −z+1'))               # the image across Mg1 (mirror = inversion there), not O1 as listed
+        self.assertIn('not an operator of P 2/m', op[0]['text'])
+
+    def test_a_distance_that_needs_a_code_and_has_none(self):
+        recs = self.run_check([('Table 6. Hydrogen bonds.', [self.hb('OW1–H1⋯O2^1^'), self.hb('OW1–H1^2^⋯O2^3^'), self.hb('OW1–H1⋯O2')],
+                                'Symmetry codes: (1) –x+1, y, –z+1; (2) x, –y, z; (3) –x+1, –y, –z+1.')])
+        nc = [r for r in recs if r['kind'] == 'nocode']
+        self.assertEqual(len(nc), 1, recs)
+        self.assertEqual((nc[0]['row'], nc[0]['severity'], nc[0]['fix']), (2, 'flag', '−x+1, y, −z+1'))
+        self.assertIn('has no symmetry code, but O2 as listed is', nc[0]['text'])
+
+    def test_a_table_with_no_codes_at_all_is_one_line(self):
+        recs = self.run_check([('Table 6. Hydrogen bonds.', [self.hb('OW1–H1⋯O2'), self.hb('OW1⋯O2')], '')])
+        nc = [r for r in recs if r['kind'] == 'nocode']
+        self.assertEqual(len(nc), 1, recs)
+        self.assertEqual((nc[0]['row'], nc[0]['severity']), (None, 'flag'))
+        self.assertIn('prints no symmetry codes, but 2 of its distances', nc[0]['text'])
+
+    def test_codes_follow_the_coordinates_the_manuscript_prints(self):
+        # the manuscript prints O2 one cell over (x − 1): its code '−x, y, −z+1' is right in ITS frame (the .cif's
+        # coordinates want '−x+1, y, −z+1')
+        o2 = self.st.site('O2').frac
+        coords = [['Atom', 'x', 'y', 'z']] + [[s.label] + ['%.6f' % v for v in s.frac] for s in self.st.sites if s.label != 'O2'] + \
+                 [['O2', '%.6f' % (o2[0] - 1), '%.6f' % o2[1], '%.6f' % o2[2]]]
+        recs = self.run_check([('Table 4. Atom coordinates.', coords, ''),
+                               ('Table 6. Hydrogen bonds.', [self.hb('OW1–H1⋯O2^1^'), self.hb('OW1–H1^2^⋯O2^3^')],
+                                'Symmetry codes: (1) –x, y, –z+1; (2) x, –y, z; (3) –x, –y, –z+1.')])
+        self.assertEqual([r['kind'] for r in recs if r['severity'] != 'info'], ['duplicate'], recs)   # rows 1, 2: one bond
+        frame, n, diff = B.manuscript_frame(self.st, B.read_tables(os.path.join(self.tmp, 'ms.docx')))
+        self.assertEqual((n, diff), (5, 0))
+        self.assertAlmostEqual(frame['O2'][0], o2[0] - 1)
+
+    def test_run_reports_them(self):
+        path = _ms_docx(os.path.join(self.tmp, 'ms.docx'), [
+            ('Table 6. Hydrogen bonds.', [self.hb('OW1–H1⋯O2^1^'), self.hb('OW1–H1^2^⋯O2^3^'), self.hb('OW1–H1⋯O2^4^')],
+             'Symmetry codes: (1) –x+1, y, –z+1; (2) x, –y, z; (3) –x+1, –y, –z+1; (4) –x, y, –z.')])
+        text = B.run(self.cif, table=path, out_dir=os.path.join(self.tmp, 'o'), quiet=True)[4]
+        self.assertIn("code (4) '−x, y, −z' lacks its lattice translation: it puts O2", text)
+        self.assertIn('note: table 1 (Table 6) row 2: rows 1 and 2', text)
+
+
+# A PO4 tetrahedron in a P1 cube with a fifth O 2.9 Å from P (a contact ~0.03 vu, past the first shell).
+_T = 1.54 / math.sqrt(3) / 10
+PHOSPHATE = """data_phosphate
+_chemical_name_mineral testphosphate
+_cell_length_a 10
+_cell_length_b 10
+_cell_length_c 10
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_name_H-M_alt 'P 1'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+P1 P5+ 0.5 0.5 0.5
+O1 O2- %(p).6f %(p).6f %(p).6f
+O2 O2- %(p).6f %(m).6f %(m).6f
+O3 O2- %(m).6f %(p).6f %(m).6f
+O4 O2- %(m).6f %(m).6f %(p).6f
+O5 O2- 0.5 0.5 0.79
+""" % {'p': 0.5 + _T, 'm': 0.5 - _T}
+
+
+class FirstShell(unittest.TestCase):
+    def test_contact_past_the_tetrahedron_is_no_bond(self):
+        tmp = tempfile.mkdtemp(prefix='bv_')
+        try:
+            st = B.Structure(_write(tmp, 'po4.cif', PHOSPHATE))
+            res = B.compute(st, B.Params())[0]
+            p = [r for r in res if r[0].label == 'P1'][0]
+            self.assertEqual(sorted(b.anion.label for b in p[1]), ['O1', 'O2', 'O3', 'O4'])
+            self.assertAlmostEqual(p[4], 1.54, places=3)
+            doc = [['P1–O1', '1.540(2)'], ['P1–O2', '1.540(2)'], ['P1–O3', '1.540(2)'], ['P1–O4', '1.540(2)'], ['<P1–O>', '1.540']]
+            lines = B.check_bond_table(st, res, [doc])
+            self.assertIn('4 bond distances agree with the .cif, 0 do not', lines[0])
+            self.assertFalse(any('different bond set' in x or 'not in the table' in x for x in lines), lines)
+            # an explicit cutoff still means everything within it
+            p5 = [r for r in B.compute(st, B.Params(), cutoff=3.0)[0] if r[0].label == 'P1'][0]
+            self.assertIn('O5', [b.anion.label for b in p5[1]])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_shells_that_stay_whole(self):
+        keep = lambda rows: len(B.first_shell([(d, n, s, k) for k, (d, n, s) in enumerate(rows)]))
+        self.assertEqual(keep([(2.10, 6, 0.33)]), 1)                                   # an octahedron
+        self.assertEqual(keep([(1.90, 3, 1.2), (2.80, 2, 0.09)]), 2)                   # Te4+: the long bonds are worth 0.09 vu
+        self.assertEqual(keep([(1.78, 2, 1.6), (2.35, 5, 0.6)]), 2)                    # uranyl: the gap comes after two bonds
+        self.assertEqual(keep([(1.47, 3, 1.5), (1.99, 1, 1.25)]), 2)                   # a split sulfate O: strong
+        self.assertEqual(keep([(1.69, 3, 1.25), (1.73, 1, 1.1), (2.95, 1, 0.035)]), 2) # a tetrahedral anion and a contact
+
+
+class FootnoteRepair(unittest.TestCase):
+    """A code footnote as a pdf's text layer delivers it: the lost sign is the one the footnote never shows."""
+    def ops(self, text):
+        return {k: v[2].replace(' ', '') for k, v in B.parse_code_notes(text).items()}
+
+    def test_lost_minus_lost_plus_and_undecidable(self):
+        self.assertEqual(self.ops('(ii) x+2, y+2, z+1; (iii) x, y, z1; (iv) x, y 1/2, z+1'),
+                         {'ii': 'x+2,y+2,z+1', 'iii': 'x,y,z-1', 'iv': 'x,y-1/2,z+1'})      # '+' printed: the minus was lost
+        self.assertEqual(self.ops('(i) x, −y\x043/2, z; (v) x, y, z\x041; (vii) x, y, z–1'),
+                         {'i': 'x,-y+3/2,z', 'v': 'x,y,z+1', 'vii': 'x,y,z-1'})             # '−' printed: the plus was lost
+        self.assertEqual(self.ops('(x) x, yþ1, z; (xii) \x03xþ1, \x03yþ1, z'), {'x': 'x,y+1,z', 'xii': '-x+1,-y+1,z'})
+        self.assertEqual(self.ops('(i) x1, y, z; (ii) x, y, z'), {'ii': 'x,y,z'})           # no sign printed anywhere: unread, not guessed
+
+    def test_stacked_fractions_line_breaks_and_the_sentence_after(self):
+        self.assertEqual(self.ops('(ii) x + 1 2, y + 1, z  1 2'), {'ii': 'x+1/2,y+1,z-1/2'})
+        self.assertEqual(self.ops('a: x, y–1,\nz; b: x+½, y\n+½, z + 1'), {'a': 'x,y-1,z', 'b': 'x+1/2,y+1/2,z+1'})
+        self.assertEqual(self.ops('e: x+1, y+1, z; f: x+1, y, z. 1 Supplementary data are available'), {'e': 'x+1,y+1,z', 'f': 'x+1,y,z'})
+        self.assertEqual(self.ops('Symmetry codes: 1 x, y, z; 2 x, y−1, z'), {'1': 'x,y,z', '2': 'x,y-1,z'})
+
+
+class PrintedBondCodes(unittest.TestCase):
+    """A paper's printed bond table against the .cif: the synthetic P2/m hydrate, Mg1 on the inversion centre
+    with O1 2.000 Å away along b, its mirror image (x, −y+1, z) the second bond."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='bv_')
+        self.st = B.Structure(_write(self.tmp, 'water.cif', WATER))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def check(self, rows, codes='', frame=None):
+        return B.printed_bond_codes(self.st, rows, B.parse_code_notes(codes), frame)
+
+    def test_each_outcome(self):
+        ident = {s.label: list(s.frac) for s in self.st.sites}                 # the paper prints the .cif's coordinates
+        r = self.check([('Mg1', 'O1', 2.000, None), ('Mg1', 'O1', 2.000, 'i')], '(i) x, −y+1, z')
+        self.assertEqual((r['n'], r['coded'], r['ok']), (2, 1, 2))
+        rutile = B.Structure(_write(self.tmp, 'rutile.cif', RUTILE))           # Ti–O1 1.980 is the listed O1; 1.949 only a 4₂ image
+        r = B.printed_bond_codes(rutile, [('Ti1', 'O1', 1.980, None), ('Ti1', 'O1', 1.949, None)], {}, None)
+        self.assertEqual((r['ok'], len(r['image'])), (1, 1), r)              # an image under another operator, printed without a code
+        r = self.check([('Mg1', 'O1', 2.000, 'i')], '(i) −x+½, y, −z')
+        self.assertEqual(len(r['wrong']), 1); self.assertIn('no operator of P 2/m', r['wrong'][0][1])
+        r = self.check([('Mg1', 'O1', 2.000, 'i')], '(i) x, −y+2, z', frame=ident)
+        self.assertEqual(len(r['translation']), 1)                             # the mirror, a cell too far
+        r = self.check([('Mg1', 'O1', 2.000, 'i')], '(i) x, −y, z')
+        self.assertEqual(r['ok'], 1)                                           # no frame: the operator is judged, not the translation
+        r = self.check([('Mg1', 'O1', 2.000, 'ii')], '(i) x, −y+1, z')
+        self.assertEqual(len(r['undefined']), 1)
+        r = self.check([('Mg1', 'O1', 2.000, 'ii')])
+        self.assertEqual(len(r['unread']), 1)
+        self.assertEqual(self.check([('Mg1', 'Mg1', 2.000, None)])['n'], 0)    # no cation–cation 'bonds' (prose distances)
+        lines = B.printed_bond_code_lines(self.check([('Mg1', 'O1', 2.000, 'i')], '(i) −x+½, y, −z'), None)
+        self.assertTrue(lines[0].startswith('symmetry codes: 1 printed bonds'), lines)
+        from pxrd_review.gui.review_gui import _calc_kind
+        self.assertEqual({_calc_kind(ln.strip()) for ln in lines}, {'calcinfo'})   # information, never a red line
+
+
+class ReaderKeepsTheCode(unittest.TestCase):
+    def test_suffix(self):
+        from pxrd_review import paper_bonds as PB
+        self.assertEqual([PB._code(t) for t in ('O1vi', '–O3ii', 'O(2)′', 'Al1-O10Hiv', 'O12W', 'O4(×3)')],
+                         ['vi', 'ii', '′', 'iv', None, None])

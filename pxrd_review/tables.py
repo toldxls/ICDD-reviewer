@@ -354,6 +354,7 @@ def _bond_source(st, P):
         if site.element == 'H':
             continue
         cut = max(B.CUTOFF.get(sp.element, 3.2) for sp in site.species)
+        rows = []
         for other, d, code in _neighbours_with_codes(st, site, cut):
             if st.is_cation(other):
                 continue
@@ -362,7 +363,10 @@ def _bond_source(st, P):
             lim = [x for x in lim if x is not None]
             if lim and d > max(lim) + 1e-6:
                 continue
-            out.append((site.label, other.label, '%.3f' % d, code))
+            s = max([P.valence(sp.element, sp.ox, other.element, B.ANION_OX.get(other.element, -2), d) or 0.0
+                     for sp in site.species if sp.ox and sp.ox > 0] or [1.0])
+            rows.append((d, 1, s, (site.label, other.label, '%.3f' % d, code)))
+        out.extend(B.first_shell(rows))       # the report's shell: no contact past the first-shell gap
     return out, False
 
 def _inverse_code(st, code):

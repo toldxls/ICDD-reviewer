@@ -37,7 +37,40 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+- **`pxrd bv --table`: the manuscript's symmetry codes and hydrogen-bond table.** Each table's footnote is read
+  ('(2) ‘–x+1, y+½, –z’', '(3B)', '(i)', '#1', 'i =', primes, ½ and 1/2, any dash; 'the same as in Table N' inherits),
+  and every bond or D–H⋯A distance is recomputed with its printed code on the coordinates the manuscript's own atom
+  table prints (a .cif may hold a site one cell over, which moves every translation that involves it). A distance the
+  code does not reproduce while another image of the atom does is flagged with the operator that does — the .cif's own
+  `_geom_bond` / `_geom_hbond` code first: a wrong operator (named when the space group has no such operator), a code
+  that is not needed, a distance printed with no code that needs one, and a missing lattice translation. Codes carry
+  their translations — 65 of the ~70 corpus papers whose text prints symmetry codes write them in full. A left-out
+  translation is flagged row by row where the document's own rows show that convention, and otherwise once per table
+  ("the symmetry codes are printed without their lattice translations"); a table that prints no codes at all is one
+  line. An H-bond row whose D is not the atom its H is bonded to is flagged; two rows that are one hydrogen bond and its
+  symmetry image are a note, with the text's count of hydrogen bonds when it counts the rows; a superscript the footnote
+  does not define is a note.
+- **`pxrd paper --check`: the symmetry codes of the bond table a paper prints**, against its .cif (`paper_extract.
+  printed_codes_check`, a 'symmetry codes' section; information only). `paper_bonds` now keeps the code a label carries
+  ('O1vi', 'O(2)′'; `Row.code`), the footnote is read the way a pdf's text layer delivers it (`bv_check.repair_op_text`:
+  a font's own glyphs for the signs — 'þ', a control code — and a sign glyph lost outright, decided by the sign the
+  footnote never shows, so 'x1' is x−1 where '+' is printed and x+1 where '−' is, and unread where neither; stacked
+  fractions; an operator broken over a line; the sentence after the last code), and every printed bond is recomputed on
+  the coordinates the paper prints. It says how many bonds are to an image under another operator with no code
+  printed, how many to the atom a cell over, which codes name another operator, which are not needed, which lack their
+  translation, which are defined in no footnote read, and when a table carries codes no footnote was read for. On the
+  corpus (102 papers with a .cif and a readable table): 72 print bonds to another image without a code — seven of their
+  tables rendered and read by eye all omit codes, none was lost in reading; 9 print codes, and one of those has a code
+  that puts its O 13 Å from the Si.
+
 ### Fixed
+- **A contact past a cation's first coordination shell is no bond** (`bv_check.first_shell`): a tetrahedral cation
+  with an O near 2.9 Å (~0.04 vu, over `MIN_S`) had a fifth bond, a mean distance a quarter of an ångström long and a
+  "different bond set?" against the paper's correct mean. The shell ends at a gap of 1.35 × the previous distance after at least three
+  bonds, when everything past it is worth under 0.05 vu — in the report, the sums, the workbooks and the loop-less
+  bond table of `pxrd tables`; an explicit `--cutoff` still keeps everything within it. Lone-pair long bonds
+  (Te4+, Se4+ at ~0.1 vu) and split strong bonds stay.
 - **The .pdf pane's name layer**, from an adversarial read of 0.12.1 measured on two 80-paper corpus samples (misspelling
   underlines 81 → 50 and 45 → 30, species marks 8,985 → 9,072 and 10,062 → 10,093, nothing lost): a name broken at its
   own IMA hyphen at a line end ('magnesio-' / 'hastingsite', 'oxy-' / 'dravite') was carded in red as an "IMA spelling";

@@ -4871,6 +4871,37 @@ def _bv_from_bonds(pdf, ex, text, out):
     return bc
 
 
+_CODE_HEAD = re.compile(r'symmetry\s*(?:codes?|transformations?|operators?|operations?|equivalents?)\s*[:–—-]?|equivalent\s+(?:atoms|positions)\s*[:–—-]|symmetry\s*:', re.I)
+
+def printed_codes_check(pdf, cif):
+    """The symmetry codes of the bond table a paper prints, against its .cif (bv_check.printed_bond_codes):
+    information only — {'n', 'coded', ..., 'lines'}, or None when there is no table or no .cif."""
+    from pxrd_review import bv_check as B, paper_bonds as PB, paper_structure as PS
+    st = B.Structure(cif)
+    tabs = PB.read_tables(pdf)
+    rows = [(r.cation, r.anion, r.dist, r.code) for t in tabs for r in t['bonds'] if r.cation]
+    if len(rows) < 3:
+        return None
+    # the code footnote: the bond table's own pages first (a paper may print another table's codes too)
+    pages = _page_texts(pdf)
+    near = sorted({t['page'] for t in tabs} | {t['page'] + 1 for t in tabs})
+    codes = OrderedDict()
+    for group in ([pages[p - 1].text for p in near if 0 < p <= len(pages)], [pt.text for pt in pages]):
+        for txt in group:                                  # a label the table's pages leave undefined: the rest of the paper
+            for m in _CODE_HEAD.finditer(txt):
+                for k, v in B.parse_code_notes(txt[m.end():m.end() + 900]).items():
+                    codes.setdefault(k, v)
+    try:
+        frame, n_frame, n_diff = B.frame_from_sites(st, [r[:4] for r in PS.paper_sites(pdf)])
+    except Exception:
+        frame, n_frame, n_diff = {}, 0, 0
+    if n_diff > n_frame or n_frame < 3:
+        frame = {}
+    res = B.printed_bond_codes(st, rows, codes, frame)
+    res['codes_defined'] = len(codes); res['frame'] = bool(frame)
+    res['lines'] = B.printed_bond_code_lines(res, frame)
+    return res
+
 def check_paper(pdf, cif=None, out_dir=None):
     """The paper against itself and its .cif: {'extract', 'composition', 'bv', 'bv_status', 'powder',
     'powder_status', 'fields', 'lines'} — the lines are what a manuscript review prints: a 'readers:'
@@ -5001,6 +5032,14 @@ def check_paper(pdf, cif=None, out_dir=None):
                 except Exception as e_:
                     ex['notes'].append('the bond-valence workbook was not written (%s)' % str(e_)[:80])
     out['coords'] = coords_check(pdf, cif, text, out)      # the coordinates table on its own: a record, no lines
+    if cif and pdf.lower().endswith('.pdf'):
+        try:
+            sc = printed_codes_check(pdf, cif)
+        except Exception as e_:                                # a reading that fails never takes the paper check down with it
+            sc = None; ex['notes'].append('the symmetry codes were not checked (%s)' % str(e_)[:80])
+        if sc is not None:
+            out['symcodes'] = {k: v for k, v in sc.items() if k != 'lines'}
+            out['lines'] += sc['lines']
     out.pop('_ps_build', None)
     # the water the formula claims against the hydrogen the structure accounts for — note-grade, and
     # only where a .cif was supplied (the structure the paper prints is not independent of it)
