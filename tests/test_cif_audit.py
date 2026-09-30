@@ -224,5 +224,115 @@ class Occupancies(unittest.TestCase):
         self.assertTrue(any('does not mention twinning' in r['text'] for r in recs))
 
 
+# a monoclinic P 1 21/c 1 cell (β = 100°) with a TWIN law in the .res, swapped per test
+CIF_TWIN = """data_twin
+_chemical_formula_sum 'Ca O'
+_cell_length_a 10
+_cell_length_b 8
+_cell_length_c 12
+_cell_angle_alpha 90
+_cell_angle_beta 100
+_cell_angle_gamma 90
+_cell_formula_units_z 4
+_space_group_name_H-M_alt 'P 1 21/c 1'
+loop_
+_space_group_symop_operation_xyz
+'x, y, z'
+'-x, y+1/2, -z+1/2'
+'-x, -y, -z'
+'x, -y+1/2, z+1/2'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_U_iso_or_equiv
+Ca1 Ca 0.1 0.2 0.3 0.010
+O1 O 0.3 0.1 0.2 0.015
+_shelx_res_file
+;
+TITL twin
+CELL 0.71073 10 8 12 90 100 90
+ZERR 4 0 0 0 0 0 0
+LATT 1
+SYMM -X, 0.5+Y, 0.5-Z
+SFAC CA O
+UNIT 4 4
+TWINLINE
+BASF 0.30
+CA1   1   0.100000  0.200000  0.300000  11.00000  0.01000
+O1    2   0.300000  0.100000  0.200000  11.00000  0.01500
+HKLF 4
+END
+;
+"""
+
+
+class TwinLaw(unittest.TestCase):
+    def _st(self, twin):
+        self.tmp = tempfile.mkdtemp(prefix='ciftwin_')
+        path = os.path.join(self.tmp, 't.cif')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(CIF_TWIN.replace('TWINLINE', twin))
+        return B.Structure(path)
+
+    def tearDown(self):
+        shutil.rmtree(getattr(self, 'tmp', ''), ignore_errors=True)
+
+    @staticmethod
+    def _twofold_about(st, v, direct=True):
+        """The hkl matrix of a 180° rotation about a direct [uvw] (direct=True) or reciprocal (hkl)* direction."""
+        Bd = B.cart_matrix(st); Bi = CA._inv3(Bd); Bs = CA._transpose(Bi); Bsi = CA._inv3(Bs)
+        n = CA._mv(Bd, v) if direct else CA._mv(Bs, v)
+        L = (sum(x * x for x in n)) ** 0.5; n = [x / L for x in n]
+        R = [[2 * n[i] * n[j] - (1.0 if i == j else 0.0) for j in range(3)] for i in range(3)]
+        return CA._mul(CA._mul(Bsi, R), Bs)
+
+    def test_the_law_is_classified_in_the_cells_geometry(self):
+        st = self._st('TWIN -1 0 0 0 -1 0 0 0 -1 2')
+        tl = CA.twin_law(st, [[-1, 0, 0], [0, -1, 0], [0, 0, -1]])
+        self.assertEqual((tl['kind'], tl['symop'], tl['centro']), ('inversion', '+', True))
+        # a twofold about b (the monoclinic axis) is the space group's own operation
+        tl = CA.twin_law(st, [[-1, 0, 0], [0, 1, 0], [0, 0, -1]])
+        self.assertEqual((tl['kind'], tl['symop']), ('twofold', '+'))
+        # a twofold about c*: exact in reciprocal space, irrational in direct space at β = 100°, and no symmetry operation
+        Mcs = self._twofold_about(st, [0, 0, 1], direct=False)
+        tl = CA.twin_law(st, Mcs)
+        self.assertEqual((tl['kind'], tl['symop'], tl['exact'], tl['axis_recip']), ('twofold', None, 'reciprocal', [0, 0, 1]))
+        self.assertFalse(tl['rational'])
+        # a twofold about c (direct)
+        tl = CA.twin_law(st, self._twofold_about(st, [0, 0, 1], direct=True))
+        self.assertEqual((tl['kind'], tl['axis_direct'], tl['exact']), ('twofold', [0, 0, 1], 'direct'))
+        self.assertEqual(CA.twin_law(st, [[1, 0, 0], [0, 1, 0], [0, 0, 1]])['kind'], 'identity')
+        # a reticular law: h -> -h, k -> -k, l -> h/2 + l maps half the lattice points onto lattice points
+        self.assertEqual(CA.twin_law(st, [[-1, 0, 0], [0, -1, 0], [0.5, 0, 1]])['index'], 2)
+
+    def test_findings(self):
+        # the inversion in a centrosymmetric structure: not a twin law at all
+        recs = CA.check_twin(self._st('TWIN -1 0 0 0 -1 0 0 0 -1 2'), [('p', 'The structure was refined as an inversion twin.')])
+        self.assertEqual([r['severity'] for r in recs], ['flag'], recs); self.assertIn('symmetry operation of the space group: not a twin law', recs[0]['text'])
+        # the identity
+        recs = CA.check_twin(self._st('TWIN 1 0 0 0 1 0 0 0 1 2'), None)
+        self.assertIn('the identity', recs[0]['text']); self.assertEqual(recs[0]['severity'], 'flag')
+        # a twofold about c* called an inversion twin in the text; the text's [001] axis is the reciprocal one
+        st0 = self._st('TWIN -1 0 0 0 -1 0 0 0 -1 2'); Mcs = self._twofold_about(st0, [0, 0, 1], direct=False)
+        st = self._st('TWIN ' + ' '.join('%.5f' % x for r in Mcs for x in r) + ' 2')
+        recs = CA.check_twin(st, [('p', 'The crystal was refined as an inversion twin, twofold about [001].')])
+        texts = [r['text'] for r in recs]
+        self.assertTrue(any(r['severity'] == 'flag' and 'calls it an inversion twin, but' in r['text'] for r in recs), texts)
+        self.assertTrue(any('about (001)*' in t for t in texts), texts)
+        self.assertTrue(any('[001] is the reciprocal axis' in t for t in texts), texts)
+        # the text's own matrix: the identity is a flag; 'related by inversion' counts as an inversion twin
+        recs = CA.check_twin(self._st('TWIN -1 0 0 0 -1 0 0 0 -1 2'), [('p', 'Twinning is by reflection on (001), two-fold rotation about [001] or inversion. Twin matrix [1 0 0 / 0 1 0 / 0 0 1]. The two twin components are related by inversion.')])
+        texts = [r['text'] for r in recs]
+        self.assertTrue(any('the text prints, (1 0 0; 0 1 0; 0 0 1), is the identity' in t for t in texts), texts)
+        self.assertFalse(any('describes a rotation or reflection twin' in t for t in texts), texts)
+        self.assertEqual(CA.printed_twin_matrix('twin law ¯101,0¯10,00¯1 for the merohedral twin'), [[-1, 0, 1], [0, -1, 0], [0, 0, -1]])
+        # a twin fraction that refined to nothing
+        recs = CA.check_twin(self._st('TWIN -1 0 0 0 -1 0 0.41680 0 1 2\nBASF 0.004'), None)
+        self.assertTrue(any('second component is absent' in r['text'] for r in recs), [r['text'] for r in recs])
+
+
 if __name__ == '__main__':
     unittest.main()

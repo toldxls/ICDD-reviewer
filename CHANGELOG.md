@@ -71,6 +71,17 @@ package version in `pyproject.toml`.
   manuscript says the crystal was not twinned is a flag; a BASF the manuscript never mentions is a note. A `.pdf`
   manuscript is read for its text. Corpus (209 structures): 9 over-occupied sites in 5 structures; the rest notes.
   The `.res` element table is now read from `SFAC` lines in any case (`SFAC CA MN`), which the riding-H check depends on.
+- **`pxrd cifaudit`: the twin law** (`cif_audit.check_twin`, `twin_law`). The `TWIN` matrix of the `.res`, or the .cif's
+  twin loop, taken as the point operation it is in the cell's own geometry: its kind (inversion, twofold … sixfold, mirror,
+  rotoinversion), its axis in direct and in reciprocal space (a twofold about c* is not one about c, and the text's
+  "[001]" is compared with both), whether it is a symmetry operation of the space group (then it is no twin law — a
+  flag), or one composed with the inversion (in a centrosymmetric structure it changes no intensity, so a twin fraction
+  against it means nothing — a flag; in a non-centrosymmetric one it is the ordinary inversion twin, and nothing is said
+  unless the text credits an R drop to it), its twin index from the coincidence sublattice after near-rational entries
+  are snapped (an approximate law is said to be one), the words of the manuscript's twin sentences against the matrix
+  (an "inversion twin" beside a rotation, a rotation beside the inversion — each a flag), the matrix the text prints
+  (the identity — a flag; a matrix that is not the refined law — a note), and a twin fraction that refined to nothing.
+  On the 52 corpus structures that refine a twin: 29 notes and no flag — the published papers earn none.
 
 ## [0.13.0] — 2026-09-30
 

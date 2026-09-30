@@ -278,6 +278,266 @@ def check_refinement(st, lines=None):
     return recs
 
 
+# ----------------------------------------------------------------------------- the twin law
+
+def _mat3(rows):
+    return [[float(x) for x in r] for r in rows]
+
+def _mul(A, Bm):
+    return [[sum(A[i][k] * Bm[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+def _inv3(A):
+    a, b, c = A[0]; d, e, f = A[1]; g, h, i = A[2]
+    det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    if abs(det) < 1e-12:
+        return None
+    return [[(e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det],
+            [(f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det],
+            [(d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det]]
+
+def _det3(A):
+    a, b, c = A[0]; d, e, f = A[1]; g, h, i = A[2]
+    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+
+def _transpose(A):
+    return [[A[j][i] for j in range(3)] for i in range(3)]
+
+def _mv(A, v):
+    return [sum(A[i][j] * v[j] for j in range(3)) for i in range(3)]
+
+def _small_ints(v, tol=0.03):
+    """A direction as small integers, or None when no multiple up to 12 makes it integral."""
+    m = max(abs(x) for x in v) or 1.0
+    u = [x / m for x in v]
+    for n in range(1, 13):
+        w = [x * n for x in u]
+        if all(abs(x - round(x)) <= tol for x in w) and any(abs(round(x)) > 0 for x in w):
+            ints = [int(round(x)) for x in w]
+            g = 0
+            for x in ints:
+                g = math.gcd(g, abs(x))
+            ints = [x // (g or 1) for x in ints]
+            if sum(1 for x in ints if x < 0) > sum(1 for x in ints if x > 0):
+                ints = [-x for x in ints]
+            return ints
+    return None
+
+def _fmt_dir(ints, brackets):
+    if ints is None:
+        return None
+    s = ''.join(('%d' % abs(x)) if x >= 0 else ('−%d' % abs(x)) for x in ints) if all(abs(x) < 10 for x in ints) else ' '.join(str(x) for x in ints)
+    return brackets[0] + s + brackets[1]
+
+
+def twin_law(st, M):
+    """What a TWIN matrix (acting on hkl) is, in the cell's own geometry: {'det', 'kind' ('identity' | 'inversion' |
+    'twofold' | 'threefold' | 'fourfold' | 'sixfold' | 'mirror' | 'rotoinversion' | 'other'), 'axis_direct' [uvw],
+    'axis_recip' (hkl)*, 'exact' ('direct' | 'reciprocal' | None), 'symop' (a symmetry operation of the space group,
+    ±), 'index' (twin index by the coincidence fraction), 'rational'}."""
+    Bd = B.cart_matrix(st)                                        # fractional direct -> Cartesian (columns a, b, c)
+    Bi = _inv3(Bd)
+    Bs = _transpose(Bi)                                           # reciprocal basis in Cartesian (columns a*, b*, c*)
+    Bsi = _inv3(Bs)
+    Mc = _mul(_mul(Bs, M), Bsi)                                   # the law as a Cartesian point operation
+    det = _det3(Mc); tr = Mc[0][0] + Mc[1][1] + Mc[2][2]
+    out = {'det': round(det, 3), 'M': M}
+    I = [[1.0 if i == j else 0.0 for j in range(3)] for i in range(3)]
+    def close(A, Bm, tol=0.02):
+        return all(abs(A[i][j] - Bm[i][j]) <= tol for i in range(3) for j in range(3))
+    if close(Mc, I):
+        out['kind'] = 'identity'
+    elif close(Mc, [[-x for x in r] for r in I]):
+        out['kind'] = 'inversion'
+    elif abs(det - 1) < 0.05:
+        out['kind'] = {-1: 'twofold', 0: 'threefold', 1: 'fourfold', 2: 'sixfold'}.get(int(round(tr)), 'other')
+    elif abs(det + 1) < 0.05:
+        out['kind'] = {1: 'mirror', 0: 'rotoinversion', -1: 'rotoinversion', -2: 'rotoinversion'}.get(int(round(tr)), 'other')
+    else:
+        out['kind'] = 'other'
+    # the axis (eigenvalue +1 of a rotation; the normal, eigenvalue −1, of a mirror): a null vector of Mc − λI
+    lam = -1.0 if out['kind'] == 'mirror' else 1.0
+    A = [[Mc[i][j] - (lam if i == j else 0.0) for j in range(3)] for i in range(3)]
+    best = None
+    for i in range(3):
+        for j in range(i + 1, 3):
+            r1, r2 = A[i], A[j]
+            v = [r1[1] * r2[2] - r1[2] * r2[1], r1[2] * r2[0] - r1[0] * r2[2], r1[0] * r2[1] - r1[1] * r2[0]]
+            n = math.sqrt(sum(x * x for x in v))
+            if best is None or n > best[0]:
+                best = (n, v)
+    axis = [x / best[0] for x in best[1]] if best and best[0] > 1e-6 else None
+    out['axis_direct'] = out['axis_recip'] = None; out['exact'] = None
+    if axis and out['kind'] not in ('identity', 'inversion', 'other'):
+        d = _small_ints(_mv(Bi, axis)); r = _small_ints(_mv(_transpose(Bd), axis))
+        out['axis_direct'] = d; out['axis_recip'] = r
+        out['exact'] = 'direct' if d and _small_ints(_mv(Bi, axis), 0.005) else ('reciprocal' if r and _small_ints(_mv(_transpose(Bd), axis), 0.005) else None)
+    # a symmetry operation of the space group, or one composed with the inversion
+    out['symop'] = None
+    for rot, _tr in st.ops:
+        Rc = _mul(_mul(Bd, _mat3(rot)), Bi)
+        if close(Mc, Rc):
+            out['symop'] = '+'; break
+        if close(Mc, [[-x for x in r] for r in Rc]):
+            out['symop'] = '-'
+    out['centro'] = any(close(_mul(_mul(Bd, _mat3(rot)), Bi), [[-x for x in r] for r in I]) for rot, _tr in st.ops)
+    # the twin index: entries within 0.02 of k/2, k/3, k/4 or k/6 are that fraction (a refined or cell-derived matrix carries
+    # residues); a matrix rational after that is a lattice law whose index is the order of the coincidence sublattice
+    # {v : M v integral}, counted exactly modulo the common denominator; one that is not is an approximate law with no index
+    from fractions import Fraction
+    snapped = []; rational = True
+    for r in M:
+        row = []
+        for x in r:
+            f = None
+            for q in (1, 2, 3, 4, 6):
+                if abs(x * q - round(x * q)) <= 0.02 * q:
+                    f = Fraction(int(round(x * q)), q); break
+            if f is None:
+                rational = False; row.append(x)
+            else:
+                row.append(f)
+        snapped.append(row)
+    out['rational'] = rational; out['index'] = None
+    if rational:
+        q = 1
+        for r in snapped:
+            for f in r:
+                q = q * f.denominator // math.gcd(q, f.denominator)
+        Mi = [[int(f * q) for f in r] for r in snapped]
+        count = sum(1 for h in range(q) for k in range(q) for l in range(q)
+                    if all((Mi[i][0] * h + Mi[i][1] * k + Mi[i][2] * l) % q == 0 for i in range(3)))
+        out['index'] = int(round(q ** 3 / count)) if count else None
+    return out
+
+
+_TWIN_KIND = [('inversion', re.compile(r'\binversion\b|racemic', re.I)),                # within the twin sentences: 'inversion twin', 'related by inversion', 'or inversion'
+              ('twofold', re.compile(r'two-?fold|2-fold|180\s*°|rotation twin|twin axis', re.I)),
+              ('mirror', re.compile(r'reflection twin|twin plane|mirror', re.I)),
+              ('threefold', re.compile(r'three-?fold|3-fold|120\s*°', re.I)), ('fourfold', re.compile(r'four-?fold|4-fold', re.I)), ('sixfold', re.compile(r'six-?fold|6-fold', re.I))]
+# the axis or plane the text gives its twin: after the twin word, '[001]' or '(104)', not a viewing direction before it
+_TWIN_AXIS = re.compile(r'twin\w*[^.\[(]{0,80}?(?:about|along|around|axis|on|parallel to|by)\s*([\[(])\s*([-−¯‾]?\s?\d)\s*,?\s*([-−¯‾]?\s?\d)\s*,?\s*([-−¯‾]?\s?\d)\s*[\])]', re.I)
+# a twin matrix the text prints: 'twin matrix [1 0 0 / 0 1 0 / 0 0 1]', 'twin law ¯101,0¯10,00¯1', '{1 0 0 / 0 1 0 / 0 0 1}'
+_PRINTED_TWIN = re.compile(r'twin(?:ning)?\s+(?:matrix|law|operation)[^.\d¯‾−\[({-]{0,40}?[\[({]?\s*((?:[-−¯‾]?\s?\d[\s,/;|]*){9})', re.I)
+
+
+def printed_twin_matrix(twin_text):
+    """The 3×3 matrix a manuscript prints for its twin law, or None: nine signed digits in any separators, an overbar as a minus."""
+    m = _PRINTED_TWIN.search(twin_text)
+    if not m:
+        return None
+    body = re.sub(r'[¯‾−]\s?(\d)', r'-\1', m.group(1)); body = re.sub(r'(\d)\u0304', r'-\1', body)
+    nums = re.findall(r'-?\d', body)
+    if len(nums) != 9:
+        return None
+    v = [int(x) for x in nums]
+    return [v[0:3], v[3:6], v[6:9]]
+
+
+_R_DROP = re.compile(r'R\s*1?\s*(?:value|factor|index)?\s*(?:dropped|decreased|fell|improved|reduced|lowered|went)\b[^.]{0,80}?twin|twin[^.]{0,120}?R\s*1?\s*(?:value|factor|index)?\s*(?:dropped|decreased|fell|improved|reduced|lowered)', re.I)
+
+
+def check_twin(st, lines=None):
+    """The twin law in the .res (TWIN + BASF) or the .cif's twin loop, judged in the cell's geometry and against the
+    manuscript's words. Flags: a law that is the identity or a symmetry operation of the space group (no twin), a law
+    that is a symmetry operation composed with the inversion in a centrosymmetric structure (it changes no intensity —
+    a BASF against it is meaningless, and an R drop credited to it has another cause), the manuscript's 'inversion
+    twin' beside a rotation matrix or its 'twofold' beside the inversion. Notes: the axis the matrix has (direct and
+    reciprocal — a twofold about c* is not one about c) against the axis the text names, the twin index of a reticular
+    law, a non-rational (approximate) law, a Friedel-only law in a non-centrosymmetric structure, a twin fraction that
+    refined to nothing."""
+    m = res_model(st)
+    recs = []
+    def rec(text, sev):
+        recs.append({'kind': 'twin', 'severity': sev, 'text': text})
+    laws = []
+    if m and m['twin']:
+        laws.append(('the .res TWIN', m['twin'][0]))
+    items = st.block['items']
+    for tags, rows in st.block.get('loops') or []:
+        tags = [t.lower() for t in tags]
+        if '_twin_individual_twin_matrix_11' in tags:
+            for row in rows:
+                try:
+                    Mx = [[float(row[tags.index('_twin_individual_twin_matrix_%d%d' % (i, j))]) for j in (1, 2, 3)] for i in (1, 2, 3)]
+                except Exception:
+                    continue
+                if any(abs(Mx[i][j] - (1.0 if i == j else 0.0)) > 0.01 for i in range(3) for j in range(3)) and Mx not in [L for _w, L in laws]:
+                    laws.append(("the .cif's twin loop", Mx))
+            break
+    if not laws:
+        return recs
+    text = ' '.join(t for _k, t in (lines or []))
+    twin_text = ' '.join(mm.group(0) for mm in re.finditer(r'[^.]{0,200}\btwin[^.]{0,200}', text, re.I))   # the sentences about the twin, not the whole paper
+    basf = (m or {}).get('basf') or []
+    for where, M in laws:
+        try:
+            tl = twin_law(st, M)
+        except Exception:
+            continue
+        mtxt = '(' + '; '.join(' '.join(('%g' % x) for x in r) for r in M) + ')'
+        axis_txt = ''
+        if tl.get('axis_direct') or tl.get('axis_recip'):
+            d = _fmt_dir(tl['axis_direct'], '[]'); r = _fmt_dir(tl['axis_recip'], '()')
+            axis_txt = ' about %s' % (' = '.join(x for x in ((d if tl['exact'] != 'reciprocal' or not r else None), (r + '*' if r else None)) if x)) if tl['kind'] != 'mirror' \
+                else ' on %s' % (r if r else d)
+        head = '%s %s is %s%s' % (where, mtxt, {'identity': 'the identity', 'inversion': 'the inversion', 'twofold': 'a twofold', 'threefold': 'a threefold', 'fourfold': 'a fourfold',
+                                                'sixfold': 'a sixfold', 'mirror': 'a mirror', 'rotoinversion': 'a rotoinversion', 'other': 'not a point operation in this cell'}[tl['kind']], axis_txt)
+        if tl['kind'] == 'identity':
+            rec('%s: not a twin law — the second component would be the first' % head, 'flag'); continue
+        if tl['symop'] == '+':
+            rec('%s, a symmetry operation of the space group: not a twin law' % head, 'flag'); continue
+        if tl['symop'] == '-' and tl['centro']:
+            rec('%s — a symmetry operation composed with the inversion, in a centrosymmetric structure: it changes no intensity, so a twin fraction refined against it means nothing%s'
+                % (head, ', and the R drop the text credits to twinning has another cause' if _R_DROP.search(twin_text) else ''), 'flag'); continue
+        if tl['symop'] == '-':
+            if _R_DROP.search(twin_text):                          # an inversion twin in a non-centrosymmetric structure is the normal use of TWIN −1: nothing to say, unless R1 is credited to it
+                rec('%s — the inversion composed with a symmetry operation: it relates Friedel mates only and touches R1 only through anomalous scattering; the R drop the text credits to it needs another cause' % head, 'flag')
+        else:
+            rec('%s%s' % (head, ', twin index %d (reticular merohedry)' % tl['index'] if tl.get('index') and tl['index'] > 1 else ''), 'note')
+            if not tl['rational']:
+                rec('%s has non-rational entries: an approximate law (pseudo-merohedry with an obliquity the matrix does not state)' % where, 'note')
+        if twin_text:
+            stated = [k for k, pat in _TWIN_KIND if pat.search(twin_text)]
+            kinds_all = set()
+            for _w2, M2 in laws:
+                try:
+                    t2 = twin_law(st, M2); kinds_all.add('inversion' if t2['kind'] == 'inversion' or t2['symop'] == '-' else t2['kind'])
+                except Exception:
+                    pass
+            if 'inversion' in stated and 'inversion' not in kinds_all and tl['kind'] in ('twofold', 'threefold', 'fourfold', 'sixfold', 'mirror'):
+                rec('the manuscript calls it an inversion twin, but %s' % head, 'flag')
+            if kinds_all == {'inversion'} and tl['kind'] == 'inversion' and any(k in stated for k in ('twofold', 'threefold', 'fourfold', 'sixfold', 'mirror')) and 'inversion' not in stated:
+                rec('the manuscript describes a rotation or reflection twin, but %s' % head, 'flag')
+            ma = _TWIN_AXIS.search(twin_text)
+            if ma and (tl.get('axis_direct') or tl.get('axis_recip')) and tl['kind'] != 'mirror':
+                named = _small_ints([int(re.sub(r'[-−¯‾]\s?', '-', g).replace(' ', '')) for g in ma.groups()[1:]])
+                recip_named = ma.group(1) == '('
+                same = lambda ax: bool(ax) and named in (ax, [-x for x in ax])
+                shown = ('(%s)' if recip_named else '[%s]') % ''.join(str(x) for x in named)
+                if named and not same(tl.get('axis_recip') if recip_named else tl.get('axis_direct')):
+                    other = same(tl.get('axis_direct') if recip_named else tl.get('axis_recip'))
+                    rec('the text puts the twin axis along %s; the matrix is %s%s' % (shown, head.split(' is ', 1)[1],
+                        (' — %s is the %s axis, which coincides with the %s one only at 90°' % (shown, 'direct' if recip_named else 'reciprocal', 'reciprocal' if recip_named else 'direct')) if other else ''), 'note')
+    if twin_text:
+        P = printed_twin_matrix(twin_text)
+        if P is not None:
+            if P == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]:
+                rec('the twin matrix the text prints, (1 0 0; 0 1 0; 0 0 1), is the identity — the law that was refined is %s' % (laws[0][1] if laws else '?') if laws else
+                    'the twin matrix the text prints, (1 0 0; 0 1 0; 0 0 1), is the identity: no twin law', 'flag')
+            elif laws:
+                try:
+                    tp, tr_ = twin_law(st, [[float(x) for x in r] for r in P]), twin_law(st, laws[0][1])
+                    if (tp['kind'], tp.get('axis_direct'), tp.get('axis_recip')) != (tr_['kind'], tr_.get('axis_direct'), tr_.get('axis_recip')) and not (tp['kind'] == 'inversion' and tr_['symop'] == '-'):
+                        what = 'not a point operation in this cell (another convention, or a misprint)' if tp['kind'] == 'other' else tp['kind']
+                        rec('the twin matrix the text prints, (%s), is %s; %s is %s' % ('; '.join(' '.join(str(x) for x in r) for r in P), what, laws[0][0], tr_['kind']), 'note')
+                except Exception:
+                    pass
+    for b in basf:
+        if b < 0.02:
+            rec('the twin fraction refined to %.3f: the second component is absent, and the twin law can be dropped' % b, 'note')
+    return recs
+
+
 # ----------------------------------------------------------------------------- the manuscript
 
 def docx_lines(path):
@@ -524,7 +784,7 @@ def audit(cif, manuscript=None, checkcif=None):
     elif manuscript:
         lines = docx_lines(manuscript)
         recs += check_numbers(st, lines) + check_density(st, lines) + check_labels(st, lines)
-    recs += check_refinement(st, lines)
+    recs += check_refinement(st, lines) + check_twin(st, lines)
     out = {'records': recs, 'lines': []}
     L = out['lines']
     L.append('CIF audit — %s%s' % (os.path.basename(cif), (' vs ' + os.path.basename(manuscript)) if manuscript else ''))
