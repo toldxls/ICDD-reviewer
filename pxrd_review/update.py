@@ -251,7 +251,8 @@ def main(argv=None):
             print('git is not available (%s); pull the checkout by hand, or --force to pip-install a copy' % ex)
             return 3
         if rc == 0 and before and head(co) == before:
-            print('already up to date — nothing changed, nothing to restart.')
+            print('already up to date — nothing changed, nothing to restart.'
+                  + (' (main on GitHub is newer, %s: this checkout follows another branch)' % info['newest'] if info['newer'] else ''))
         elif rc == 0:
             print('done — restart the tool to use the pulled code.')
         else:

@@ -89,9 +89,13 @@ _IDX = None
 
 # letters NFKD does not decompose; a paper's text layer (or its author) writes them plainly
 _PLAIN = str.maketrans({'ø': 'o', 'Ø': 'O', 'ł': 'l', 'Ł': 'L', 'æ': 'ae', 'Æ': 'Ae', 'œ': 'oe', 'ß': 'ss',
-                        'đ': 'd', 'ı': 'i', '’': "'"})
-# the German / Scandinavian transliteration a name is often printed in ('bastnaesite', 'boehmite')
-_TRANSLIT = str.maketrans({'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ø': 'oe', 'å': 'aa'})
+                        'đ': 'd', 'ı': 'i', '’': "'",
+                        '\u00ad': None, '\u2010': '-', '\u2011': '-'})   # a soft hyphen is no letter; the typographic hyphens are '-'
+# the German / Scandinavian transliteration a name is often printed in ('bastnaesite', 'boehmite'), and the
+# Slavic one ('hodrushite' for Hodrušite, 'chechite' for Čechite — 41 snapshot names carry š, č or ž)
+_TRANSLIT = str.maketrans({'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ø': 'oe', 'å': 'aa', 'š': 'sh', 'č': 'ch', 'ž': 'zh', 'ř': 'rz'})
+# what ends a word box that continues on the next line: a hyphen, a soft hyphen, a typographic hyphen
+_HY = '-\u00ad\u2010\u2011'
 
 
 def _fold(s):
@@ -125,7 +129,8 @@ def _index():
             squash.setdefault(key, []).append(n)
         root = _SUFFIX.sub('', n)
         if root != n:
-            roots.setdefault(root, []).append(n)
+            for rk in {root, _fold(root)}:                   # the token is folded ('perboeite'); the norm keeps ø
+                roots.setdefault(rk, []).append(n)
     groups = set(_group_index(recs)['byname'])
     # symmetric-delete index (SymSpell-style) over the names' roots: a query within two edits of a
     # name shares at least one 0/1/2-delete variant with it.
@@ -207,7 +212,8 @@ def lookup(token):
     if token in recs:
         return 'exact', [token]
     hit = squash.get(_squash(token), [])
-    same = [h for h in hit if _fold(h) == token]            # 'nybøite' printed as it is, ø read as o
+    same = [h for h in hit if _fold(h) == token             # 'nybøite' printed as it is, ø read as o
+            or ('-' in token and _squash(_fold(h)) == _squash(token) and '-' not in _fold(h))]   # 'metavar-iscite': a break hyphen the box kept, in a name that has none — the name, not a spelling difference
     if same:
         return 'exact', same
     if hit:
@@ -372,14 +378,19 @@ def classify(words):
             continue
         text = w[4]
         idxs = [i]
-        if text.endswith('-') and i + 1 < n:                # a hyphen at the line end
+        fragment = i > 0 and words[i - 1][4][-1:] in _HY   # the tail of a word broken at the line end that named nothing whole ('tour-' / 'malinite'): no misspelling to offer
+        if text[-1:] in _HY and i + 1 < n:                  # a hyphen (or a soft hyphen) at the line end
             nt = words[i + 1][4]
             joined = _clean(text[:-1] + nt)
-            if joined and (lookup(joined)[0] or joined in byname):
+            jhow = lookup(joined)[0] if joined else None
+            if joined and (jhow == 'exact' or joined in byname):
                 text, idxs = text[:-1] + nt, [i, i + 1]      # a name split inside the word
                 skip.add(i + 1)
-            elif _names_in(text + nt):
-                text, idxs = text + nt, [i, i + 1]           # the name's own hyphen
+            elif _names_in(text[:-1] + '-' + nt):
+                text, idxs = text[:-1] + '-' + nt, [i, i + 1]   # the name's own hyphen ('magnesio-' / 'hastingsite', 'oxy-' / 'dravite'): before the joined spelling, which would read it as the IMA name minus its hyphen
+                skip.add(i + 1)
+            elif jhow:
+                text, idxs = text[:-1] + nt, [i, i + 1]      # split inside the word, the whole a spelling / root / polytype of a name
                 skip.add(i + 1)
             elif nt.strip(_EDGE).lower() in _SUSPENDED:
                 text = text[:-1]                             # 'sphalerite- and …': the name alone
@@ -432,7 +443,7 @@ def classify(words):
                     how, hit = lookup(x)
                     out.append({'i': idxs, 'kind': 'species', 'token': x, 'how': how, 'keys': hit})
                 continue
-            sug = suggest(tok)
+            sug = suggest(tok) if not fragment else []
             if sug:
                 out.append({'i': idxs, 'kind': 'spell', 'token': tok, 'suggest': sug})
     return out

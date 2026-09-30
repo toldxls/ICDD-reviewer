@@ -157,3 +157,43 @@ class Groups(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Audit0122(unittest.TestCase):
+    """The adversarial read of 0.12.1's name layer (2026-09-24): seven ways a name spelt right was
+    marked as a slip, or a slip offered a name."""
+
+    def test_break_at_an_ima_names_own_hyphen_is_exact(self):
+        # magnesio-hastingsite, oxy-dravite, ferro-fluoro-edenite: the hyphen is the IMA name's, the
+        # joined spelling ('magnesiohastingsite') had read it as the name minus its hyphen — a red card
+        for a, b, key in (('magnesio-', 'hastingsite,', 'magnesio-hastingsite'), ('oxy-', 'dravite', 'oxy-dravite'),
+                          ('ferro-fluoro-', 'edenite', 'ferro-fluoro-edenite'), ('clino-', 'suenoite', 'clino-suenoite')):
+            hits = M.classify(_words(a, b))
+            self.assertEqual([(h['kind'], h['how'], h['keys'], h['i']) for h in hits], [('species', 'exact', [key], [0, 1])], a + b)
+
+    def test_soft_hyphen_break_joins_the_name(self):
+        # a soft hyphen (U+00AD) at the line end was not a hyphen: 'rhodo­' / 'chrosite' read as a misspelling of chromite
+        hits = M.classify(_words('rhodo­', 'chrosite'))
+        self.assertEqual([(h['kind'], h['keys'], h['i']) for h in hits], [('species', ['rhodochrosite'], [0, 1])])
+        self.assertEqual(M.classify(_words('fourma­', 'rierite')), [{'i': [0, 1], 'kind': 'species', 'token': 'fourmarierite', 'how': 'exact', 'keys': ['fourmarierite']}])
+
+    def test_the_tail_of_a_broken_word_gets_no_suggestion(self):
+        # 'tour-' / 'malinite' (tourmalinite, a rock) offered malanite for its second half
+        self.assertEqual([h['kind'] for h in M.classify(_words('tour-', 'malinite'))], [])
+        self.assertEqual([h['kind'] for h in M.classify(_words('crys-', 'tallite'))], [])
+
+    def test_root_printed_without_its_o_slash(self):
+        # 'perbøeite' printed plainly is the root of Perbøeite-(Ce)/(La), not a misspelling of it
+        how, keys = M.lookup('perboeite')
+        self.assertEqual(how, 'root'); self.assertEqual(sorted(keys), ['perbøeite-(ce)', 'perbøeite-(la)'])
+        self.assertEqual(M.suggest('perboeite'), [])
+
+    def test_slavic_transliteration_is_the_species(self):
+        # Hodrušite printed 'hodrushite' throughout a paper (17 red underlines)
+        self.assertEqual(M.lookup('hodrushite'), ('spelling', ['hodrusite']))
+        self.assertEqual(M.suggest('hodrushite'), [])
+
+    def test_break_hyphen_kept_inside_one_box_is_the_name(self):
+        # 'metavar-iscite', 'sva-bite': the box kept the line-end hyphen; the IMA name has none
+        self.assertEqual(M.lookup('metavar-iscite'), ('exact', ['metavariscite']))
+        self.assertEqual(M.lookup('magnesiohastingsite'), ('spelling', ['magnesio-hastingsite']))   # a hyphen the name HAS, left out: still a spelling difference

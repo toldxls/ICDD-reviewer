@@ -4769,7 +4769,19 @@ def coords_check(pdf, cif, text, out):
             return {'status': 'none'}
         if cif:
             from pxrd_review import bv_check as B
-            m, n = _coords_on_structure(rows, B.Structure(cif))
+            cst = B.Structure(cif)
+            m, n = _coords_on_structure(rows, cst)
+            if not (n >= 3 and m >= max(3, 0.8 * n)):
+                # a two-mineral paper prints a coordinates table each and the .cif is ONE mineral's:
+                # the table the .cif's sites fall on is the one to judge (betpakdalite-CaMg's 6a read
+                # first, the .cif obradovicite-NaNa's 6b) — the best-matching table stands
+                try:
+                    for rows2, page2 in PS.paper_site_tables(pdf)[1:]:
+                        m2, n2 = _coords_on_structure(rows2, cst)
+                        if n2 >= 3 and m2 / n2 > (m / n if n else 0):
+                            rows, cpage, m, n = rows2, page2, m2, n2
+                except Exception:
+                    pass
             if n >= 3 and m >= max(3, 0.8 * n):
                 return {'status': 'cif', 'matched': m, 'n': n}
             # the .cif is in another setting or origin than the paper's table (a quarter of the corpus

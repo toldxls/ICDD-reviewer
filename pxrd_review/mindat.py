@@ -364,8 +364,11 @@ def refresh(verbose=True, localities=True):
         if gid in groups:
             continue
         try:
-            d = _fetch('%s/geomaterials/%s/?fields=id,name,groupid,strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4'
+            d = _fetch('%s/geomaterials/%s/?fields=id,name,groupid,entrytype,strunz10ed1,strunz10ed2,strunz10ed3,strunz10ed4'
                        % (BASE, gid), key)
+            if str(d.get('entrytype', 5)) != '5' and 'group' not in (d.get('name') or '').lower():
+                groups[gid] = {'name': '', 'strunz': '', 'parent': ''}      # a species id named as a parent: not a group, no members to list
+                continue
             groups[gid] = {'name': d.get('name', ''), 'strunz': _strunz(d), 'parent': _parent(d)}
             if groups[gid]['parent'] and groups[gid]['parent'] not in groups:
                 todo.append(groups[gid]['parent'])

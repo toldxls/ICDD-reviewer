@@ -372,6 +372,7 @@ function badgeEl(b) { return el('span', { class: 'badge ' + b.level }, b.label);
 // ---- open an entry ---------------------------------------------------------
 async function openEntry(key) {
   flushTriage();                    // persist the previous entry's triage before switching
+  mnHideNow();                      // a name card left open on the previous paper (no mouseout fires for a page replaced under the pointer)
   S.key = key;                      // selection intent — stale responses check against it
   let r;
   try {
@@ -998,6 +999,7 @@ async function lookInDocx(fkey) {
 // ---- middle pane: swap between the .pdf render and the docx transcription ----
 function setMidMode(mode) {
   S.midMode = mode;
+  mnPopHide();                      // the card would float over the docx (the tinted word is hidden, so no mouseout comes)
   document.querySelectorAll('#mid-toggle button').forEach(b => b.classList.toggle('on', b.dataset.mid === mode));
   const docx = mode === 'docx';
   $('#pdf-view').classList.toggle('hidden', docx);
@@ -1090,6 +1092,7 @@ async function openInApp() {
 }
 
 function renderPdf(snippet, snipLabel, hlTerms) {
+  mnPopHide();                      // the page stack is rebuilt under the pointer; a pinned group list in the Mindat pane stays
   const a = S.a, view = $('#pdf-view');
   $('#pdf-name').textContent = a.pdf ? a.pdf.name : '';
   if (S.pdfIO) { S.pdfIO.disconnect(); S.pdfIO = null; }
@@ -1175,7 +1178,7 @@ function buildPageStack(a, find) {
       S.pdfRatios[i] = e.isIntersecting ? e.intersectionRatio : 0;
       if (e.isIntersecting) {                       // lazy-load on approach
         const img = e.target.querySelector('img');
-        if (img && !img.src) { img.src = url(i); buildTextLayer(a, i, e.target); }
+        if (img && !img.src) { img.src = url(i); if (!e.target.dataset.tl) { e.target.dataset.tl = '1'; buildTextLayer(a, i, e.target); } }
       }
     }
     let best = S.pdfPage, r = -1;                    // current page = most-visible slot
@@ -1227,7 +1230,9 @@ async function buildTextLayer(a, i, slot) {
 // The entry's OWN mineral is named on nearly every line of its paper, so it is tinted at its first
 // mention on each page only; the repeats stay hoverable (the card still opens) but carry no tint.
 const mnFold = s => (s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-  .replace(/[\s,\-‐]*\bsyn\b\.?$/, '').replace(/[\s\-‐]/g, '');   // 'Fluorapatite-syn' is fluorapatite
+  .replace(/ø/g, 'o').replace(/ł/g, 'l').replace(/æ/g, 'ae').replace(/œ/g, 'oe').replace(/ß/g, 'ss').replace(/đ/g, 'd')   // letters NFKD keeps (mineral_names._PLAIN)
+  .replace(/[\s,\-‐]*\bsyn\b\.?$/, '').replace(/-\d[a-z0-9]*$/, '')   // 'Fluorapatite-syn' is fluorapatite; 'Dioskouriite-2M' is keyed by its base (a polytype hit)
+  .replace(/[\s\-‐]/g, '');
 function markNames(spans, mn) {
   if (!mn || !mn.hits) return;
   const own = mnFold(S.a && S.a.name);
@@ -1262,7 +1267,8 @@ function mnPop() {
   }
   return p;
 }
-function mnHideNow() { clearTimeout(mnHideT); mnPop().classList.add('hidden'); mnPaneRestore(); }
+function mnPopHide() { clearTimeout(mnHideT); mnPop().classList.add('hidden'); }        // the card only; a pinned list stays
+function mnHideNow() { mnPopHide(); mnPaneRestore(); }
 function mnHide() { clearTimeout(mnHideT); mnHideT = setTimeout(mnHideNow, 180); }
 
 // A group too large for the hover card is listed in the Mindat pane instead, while the name is hovered;
@@ -1334,6 +1340,7 @@ function mnShow(span) {
   clearTimeout(mnHideT);
   p.replaceChildren();
   let paneUsed = false;
+  if (mnPinned && !mnPaneUsable()) { mnPinned = false; mnPaneRestore(); }      // the pane was collapsed after the pin: the pane gets its content back, the card lists the group itself
   hits.forEach((hit, k) => {
     if (k) p.append(el('div', { class: 'mn-sep' }));
     if (hit.kind === 'group') {
@@ -1810,7 +1817,7 @@ $('#pdf-view').addEventListener('mouseout', e => {
 });
 $('#pdf-view').addEventListener('scroll', mnHideNow, { passive: true });
 $('#pdf-view').addEventListener('click', e => {
-  const s = e.target.closest && e.target.closest('.text-layer > span.mn-grp');
+  const s = e.target.closest && e.target.closest('.text-layer > span.mn');
   if (!s || !s._mn || CFG.names === false || window.getSelection().toString()) return;
   const g = s._mn.hits.map(h => h.kind === 'group' && s._mn.groups[h.gid]).find(g => g && g.n > SMALL_GROUP);
   if (!g) return;

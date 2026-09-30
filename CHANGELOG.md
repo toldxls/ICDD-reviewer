@@ -37,6 +37,28 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+- **The .pdf pane's name layer**, from an adversarial read of 0.12.1 measured on two 80-paper corpus samples (misspelling
+  underlines 81 → 50 and 45 → 30, species marks 8,985 → 9,072 and 10,062 → 10,093, nothing lost): a name broken at its
+  own IMA hyphen at a line end ('magnesio-' / 'hastingsite', 'oxy-' / 'dravite') was carded in red as an "IMA spelling";
+  a soft hyphen (U+00AD) at a line end was no hyphen, so 'rhodo­chrosite' read as a misspelling of chromite; the tail of
+  any word broken at a line end was offered a species ('tour-' / 'malinite' → malanite); a name with ø printed plainly
+  ('perbøeite' as 'perboeite') was underlined although it is the root of Perbøeite-(Ce)/(La); the Slavic transliteration
+  ('hodrushite' for Hodrušite, 17 underlines in one paper) is now the species; a line-end hyphen kept inside one box
+  ('metavar-iscite') is the name, not a spelling difference; the entry's own mineral is folded on its base, so a
+  polytype entry ('Dioskouriite-2M') and a name with ø are tinted once a page like every other.
+- **GUI**: the name card no longer outlives the page it was opened on (an entry change, a `? look` step or the pane
+  toggle replaces the page under the pointer, and no mouseout comes); a box holding a species and a group
+  ('apatite-supergroup') can be clicked to pin the group; a group pinned in the Mindat pane and then collapsed gives the
+  pane its content back and lists the group on the card; a page image retried after a load error no longer gets a
+  second text layer (doubled tint).
+- `coords_check` with a .cif tries every coordinates table a two-mineral paper prints — the .cif is one mineral's, and
+  the table read first may be the other's (betpakdalite-CaMg's 6a, the .cif obradovicite-NaNa's 6b: 29 of 30 sites
+  on the right table, 17 of 32 on the wrong one). No corpus record changes: the entry-level pairing hands the tool
+  one .cif per paper.
+- The Mindat refresh's straggler fallback filed any id a group named as its parent as a group; a record Mindat does not
+  type as a group is filed empty. `pxrd update` on a checkout that follows another branch says main is newer when it is.
+
 ## [0.12.2] — 2026-09-23
 
 ### Fixed
