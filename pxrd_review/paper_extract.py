@@ -5004,7 +5004,7 @@ _POLY = [(r'\(?\bUO2\b', 'U', 6), (r'S2O3', 'S', 2), (r'\(SO4\)|SO4', 'S', 6), (
          (r'C2O4', 'C', 3), (r'CO3', 'C', 4), (r'NO3', 'N', 5), (r'NH3', 'N', -3), (r'IO3', 'I', 5), (r'SbO4|SbO6|Sb\(OH\)6', 'Sb', 5), (r'VO4|V2O7', 'V', 5), (r'MoO4', 'Mo', 6),
          (r'WO4', 'W', 6), (r'CrO4', 'Cr', 6), (r'SiO4|Si2O7|SiO3', 'Si', 4), (r'BO3|BO4', 'B', 3), (r'NH4', 'N', -3)]
 _MISREAD = 2.0             # more than two O out of balance: the formula was not read whole, not a finding
-CHARGE_FLAG = 0.5          # the O count the charges call for differs from the printed one by half an O or more (one charge): a flag
+CHARGE_FLAG = 0.75         # the O count the charges call for differs from the printed one by three quarters of an O or more: a flag (a whole O is the typo; half an O with the authors' own '(−0.03 H)' beside it is not)
 CHARGE_NOTE = 0.25         # a quarter of an O: information
 
 
@@ -5045,8 +5045,8 @@ def _valences(counts, ox, ex, species, ftxt):
             val[el] = poly[0][1]; src[el] = 'the formula'; continue
         if el in ('S', 'Se', 'Te', 'I') and not has_o:
             val[el] = -2 if el != 'I' else -1; src[el] = 'no O: a sulfide'; continue
-        if el in ('S', 'Se', 'Te', 'I') and table.get(el) and min(table[el]) < 0:
-            return None, 'the valence of %s is not fixed by the formula (no polyanion written) and the analysis gives it as an element' % el
+        if el in ('S', 'Se', 'Te', 'I'):
+            return None, 'the valence of %s is not fixed by the formula (no polyanion written): an SO3 row of the analysis is a convention, and the mineral may be a sulfite, a sulfide or a thiosulfate' % el
         if el in table:
             if len(table[el]) > 1:
                 return None, '%s is analysed in two valence states (%s) and the formula prints it in one' % (el, ', '.join('%+d' % v for v in sorted(table[el])))
@@ -5076,14 +5076,14 @@ def charge_balance_check(text, ex, comp=None):
     if not counts or counts.get('O', 0) <= 0 or len([e for e in counts if e in EP.ATOMIC_WEIGHTS]) < 2:
         return []
     if _issues or re.search(r'\d\s+\d', ftxt) or ftxt.count('(') != ftxt.count(')') or ftxt.count('[') != ftxt.count(']') \
-            or max(counts.values()) > 100:                          # a text layer that lost its brackets and sums; '1.708H2O' read as 1.7 thousand H2O
+            or max(counts.values()) > 100 or re.search(r'[\)\]]\s?[1-9]\d\.\d', ftxt):          # ')61.02': a Σ the text layer printed as 6                          # a text layer that lost its brackets and sums; '1.708H2O' read as 1.7 thousand H2O
         return []                                                    # not read whole: no sum
     counts = dict(counts)
     # an amphibole's site letters — 'A(K0.61…)0.88 BCa2.00 C(Fe2+…) T(Si…) W[(OH)…]' — are not carbon, boron, tungsten: a bare
     # letter before a bracket or an element, in a formula that has two or more such markers
-    markers = set(re.findall(r'(?<![A-Za-z(\[])([ABCTWM])(?=\s?[\(\[]|[A-Z][a-z]?\d)', ftxt))
+    markers = set(re.findall(r'(?<![A-Za-z(\[])([ABCTWMXYZV])(?=\s?[\(\[]|[A-Z][a-z]?\d)', ftxt))   # amphibole A B C T W, tourmaline X Y Z T V W
     if len(markers) >= 2:
-        for el in ('C', 'B', 'W'):
+        for el in ('C', 'B', 'W', 'Y', 'V'):
             if counts.get(el) == 1.0 and el in markers and not any(re.search(pat, ftxt) for pat, e_, _q in _POLY if e_ == el):
                 counts.pop(el)
     for grp, n in re.findall(r'\(((?:[^()]|\([^()]*\))*)\)(\d)(?!\d|\.\d)', ftxt):
@@ -5114,7 +5114,7 @@ def charge_balance_check(text, ex, comp=None):
     line = 'O%.*f printed vs O%.*f from the charges (Σ(+) − Σ(−) = %+.2f%s)' % (dec, counts['O'], dec, o_need, total, '; ' + basis if basis else '')
     if abs(total / 2.0) >= _MISREAD:
         return ['charge balance: not summed — the %s formula as read is %.1f O out of balance, which is a misread, not a finding' % (kind, abs(total / 2.0))]
-    if abs(total / 2.0) >= CHARGE_FLAG and not any(v == 'the ideal formula' for v in src.values()):
+    if abs(total / 2.0) >= CHARGE_FLAG and kind == 'empirical' and not any(v == 'the ideal formula' for v in src.values()):   # a structural formula's occupancies need not balance
         return ['charge balance of the %s formula %s:' % (kind, ftxt[:120]), line]
     if abs(total / 2.0) >= CHARGE_NOTE:
         return ['charge balance of the %s formula %s: Σ(+) − Σ(−) = %+.2f, a quarter of an O or more (information%s)' % (kind, ftxt[:120], total, '; ' + basis if basis else '')]
@@ -5180,6 +5180,147 @@ def gd_grid(ex, comp, stmt, cif=None):
         L.append('stated %+.3f%s%s: nearest %+.3f from K_C of %s with %s — %s' % (x['ci'], ' (%s)' % x['category'] if x.get('category') else '',
                  ' for the %s formula' % x['for'] if x.get('for') in ('empirical', 'ideal', 'endmember', 'simplified') else '', ci, klab, dlab, verdict))
     return L
+
+_N_ANALYSES = re.compile(r'(?:mean|average)s?\s+(?:value\s+)?of\s+(\d{1,3})\s*(?:point |spot |microprobe |EPMA |electron[- ]microprobe )?analys|(\d{1,3})\s+(?:point |spot |microprobe |EPMA |electron[- ]microprobe |WDS |EDS )?analys[ei]s\b|\bn\s*=\s*(\d{1,3})\b', re.I)
+_BEAM = re.compile(r'(?:beam|spot)\s+(?:diameter|size|width)\s*(?:of|was|=|:)?\s*(?:~|ca\.|about|approximately)?\s*(\d{1,3}(?:\.\d)?)\s*(?:µ|μ|u)m|(\d{1,3}(?:\.\d)?)\s*(?:µ|μ|u)m\s+(?:beam|spot)', re.I)
+_GRAIN = re.compile(r'(?:crystals?|grains?|aggregates?|fibres?|fibers?|needles?|plates?|laths?|prisms?|blades?)\s+(?:are\s+|is\s+|were\s+)?(?:up to|to|of|reach(?:ing)?|as (?:large|long) as|typically|about|~)\s*(\d{1,4}(?:\.\d)?)\s*(?:×\s*\d{1,4}(?:\.\d)?\s*)?(?:µ|μ|u)m', re.I)
+
+
+def analyses_count(text, caption='', with_source=False):
+    """The number of analyses the composition rests on, from the table's caption first ('mean of 8 analyses'), else the
+    text; None when it is not printed. with_source: (n, 'caption' | 'text')."""
+    for k, src in enumerate((caption or '', text or '')):
+        for m in _N_ANALYSES.finditer(src):
+            n = int(next(g for g in m.groups() if g))
+            if not (1 <= n <= 200):
+                continue
+            if k == 1 and m.group(3) and not re.search(r'analys|spot|point', src[max(0, m.start() - 80): m.end() + 80], re.I):
+                continue                                             # 'n = 3' about something else
+            if with_source:
+                return n, 'caption' if k == 0 else 'text'
+            return n
+    return (None, None) if with_source else None
+
+
+def epma_table_lint(ex, text):
+    """The analytical table's own arithmetic and scale: a mean outside its range, an s.d. smaller than the range and the
+    number of analyses allow (Samuelson's inequality: the farthest point lies within s·√(n−1) of the mean — a flag when the
+    s.d. would need doubling, information when it is short by a fifth or more), two analyses or fewer, and a beam wider than the grains it was put on. The two arithmetic
+    ones are flag-worded (' vs '); the rest is information. -> lines (the head first)."""
+    e = ex.get('epma') or {}
+    rows = [r for r in e.get('rows') or [] if r.get('mean') is not None]
+    if not rows:
+        return []
+    n, n_src = analyses_count(text, e.get('caption') or '', with_source=True)
+    L = []
+    for r in rows:
+        c, mean, sd, rng = r['constituent'], r['mean'], r.get('sd'), r.get('range')
+        if not rng or len(rng) != 2 or rng[0] is None or rng[1] is None or rng[1] < rng[0] or not mean:
+            continue
+        lo, hi = rng
+        dec = max(len((str(x).split('.') + [''])[1]) for x in (lo, hi))
+        tol = 0.6 * 10 ** -dec; width = max(hi - lo, tol)
+        # a mean outside its range: of the same magnitude (a misaligned column gives another number altogether), and out
+        # by more than a tenth of the range (rounding sits inside that)
+        out_by = max(lo - mean, mean - hi)
+        # a slip sits near its range (within one range-width of it); a mean far outside is another sample's column
+        if out_by > tol and 0.1 * width < out_by <= width and 0.5 * lo <= mean <= 2.0 * hi:
+            L.append('%s: mean %g vs its range %g–%g — the mean lies outside the range' % (c, mean, lo, hi))
+        elif sd and sd >= 0.01 and n and n >= 2 and lo <= mean <= hi:
+            bound = max(hi - mean, mean - lo) / math.sqrt(n - 1)
+            ratio = bound / sd
+            if ratio >= 2.0 and bound - sd > 0.02 + tol and n_src == 'caption':   # the table's own count of analyses; a count read elsewhere may be another set's
+                L.append('%s: s.d. %g vs at least %.2f that the range %g–%g and n = %d allow (the farthest analysis lies within s.d.·√(n−1) of the mean)' % (c, sd, bound, lo, hi, n))
+            elif (ratio >= 1.2 and bound - sd > 0.02 + tol) or (ratio >= 2.0 and bound - sd > 0.02 + tol):
+                L.append('%s: s.d. %g is short of the %.2f its range %g–%g and n = %d call for (information)' % (c, sd, bound, lo, hi, n))
+    if n is not None and n <= 2:
+        L.append('%d analys%s (information)' % (n, 'is' if n == 1 else 'es'))
+    beam = next((float(g) for m in _BEAM.finditer(text or '') for g in m.groups() if g), None)
+    grain = None
+    for m in _GRAIN.finditer(text or ''):
+        v = float(m.group(1))
+        if 0.5 <= v <= 5000:
+            grain = v if grain is None else max(grain, v)
+    if beam and grain and beam >= grain:
+        L.append('the beam (%g µm) is as wide as the largest grains named (%g µm) — the analyses average over the grain and its surroundings (information)' % (beam, grain))
+    if not L:
+        return []
+    return ['analytical table: %d constituents%s' % (len(rows), ', n = %d' % n if n else ', n not printed')] + L
+
+
+DOM_CLEAR = 0.30          # a leader ahead of the runner-up by more than this share of the two together is not in doubt
+_SITE_GROUP = re.compile(r'\(((?:[A-Z][a-z]?(?:\d\+|\+)?\s?\d*\.\d+\s*){2,})\)')
+
+
+def dominance_check(text, ex, cif=None):
+    """Species-defining dominance within the scatter, site by site. Every bracketed group of the empirical formula with
+    two or more cations is a site; where the leader is ahead of the runner-up by less than 30 % of the two together, the
+    margin is set against the analytical scatter (each element's apfu ± its constituent's s.d./mean) — under 1σ is a
+    finding, under 2σ information — and against the two constituents' printed ranges (the low end of the leader under
+    the high end of the runner-up: the ranges cross). With a .cif, a site whose two leading occupancies are within 2σ of
+    each other by their s.u. is information too. -> lines (the head first)."""
+    fs = sorted(_formulas(text, ex.get('name') or ''), key=lambda f: 0 if f[4] == 'empirical' else 1)
+    if not fs:
+        return []
+    ftxt = fs[0][0]
+    rows = {}
+    for r in (ex.get('epma') or {}).get('rows') or []:
+        try:
+            k = EP.parse_constituent('N2H8O' if r['constituent'] == '(NH4)2O' else r['constituent'])
+        except Exception:
+            continue
+        if k.element not in rows and r.get('mean'):
+            rows[k.element] = r
+    L = []
+    for m in _SITE_GROUP.finditer(_journal_to_icdd(ftxt).replace(' ', '')):
+        parts = re.findall(r'([A-Z][a-z]?)(?:\d\+|\+)?(\d*\.\d+)', m.group(1))
+        els = [(el, float(n)) for el, n in parts if el in EP.ATOMIC_WEIGHTS and el not in ('O', 'H', 'F', 'Cl')]
+        if len(els) < 2:
+            continue
+        els.sort(key=lambda t: -t[1])
+        (A, a), (Bel, b) = els[0], els[1]
+        if a + b <= 0 or (a - b) / (a + b) > DOM_CLEAR or A == Bel or a < 0.2:
+            continue                                                  # a site of traces (leader under 0.2 apfu) defines nothing
+        site = '(' + ''.join('%s%g' % t for t in els[:4]) + ('…' if len(els) > 4 else '') + ')'
+        ra, rb = rows.get(A), rows.get(Bel)
+        # an s.d. above 30 % of its mean is a misread column (or an analysis no margin survives): no judgement on it
+        if ra and rb and ra.get('sd') and rb.get('sd') and ra['sd'] <= 0.3 * ra['mean'] and rb['sd'] <= 0.3 * rb['mean']:
+            sa, sb = a * ra['sd'] / ra['mean'], b * rb['sd'] / rb['mean']
+            sig = math.sqrt(sa * sa + sb * sb)
+            z = (a - b) / sig if sig else 99
+            if z < 1.0:
+                L.append('%s: %s leads %s by %.3f apfu vs the analytical scatter ±%.3f (%.1fσ) — the dominant constituent is not established by the analysis' % (site, A, Bel, a - b, sig, z))
+            elif z < 2.0:
+                L.append('%s: %s leads %s by %.3f apfu, %.1fσ of the analytical scatter (±%.3f) (information)' % (site, A, Bel, a - b, z, sig))
+        if ra and rb and ra.get('range') and rb.get('range') and all(x is not None for x in ra['range'] + rb['range']) \
+                and ra['range'][0] >= 0.5 * ra['mean'] and rb['range'][1] <= 2.0 * rb['mean']:      # ranges of the same magnitude as their means: this table's, not another column's
+            a_lo = a * ra['range'][0] / ra['mean']; b_hi = b * rb['range'][1] / rb['mean']
+            if a_lo < b_hi:
+                L.append('%s: at the low end of %s and the high end of %s (%.3f vs %.3f apfu) the order reverses — the ranges cross (information)' % (site, A, Bel, a_lo, b_hi))
+    if cif:
+        try:
+            from pxrd_review import bv_check as B
+            st = B.Structure(cif)
+            tags, rws = B._loop(st.block, '_atom_site_occupancy')
+            occ = {}
+            if rws:
+                for lab, o in zip(B._col(tags, rws, '_atom_site_label'), B._col(tags, rws, '_atom_site_occupancy')):
+                    occ[lab] = (B._num(o), B._esd(o))
+            for s_ in st.sites:
+                sp = sorted(s_.species, key=lambda z_: -z_.occ)
+                if len(sp) < 2 or sp[0].element == sp[1].element:
+                    continue
+                labs = s_.label.split('/')
+                e1, e2 = (occ.get(l_, (None, None))[1] for l_ in (labs[0], labs[1] if len(labs) > 1 else labs[0]))
+                if e1 and e2:
+                    sig = math.sqrt(e1 * e1 + e2 * e2)
+                    if sp[0].occ - sp[1].occ < 2 * sig:
+                        L.append('%s in the .cif: %s %.3f(%d) vs %s %.3f(%d) — the leading occupancy is within 2σ of the next (information)' % (
+                            s_.label, sp[0].element, sp[0].occ, round(e1 * 10 ** 3), sp[1].element, sp[1].occ, round(e2 * 10 ** 3)))
+        except Exception:
+            pass
+    return (['dominance within the scatter, site by site:'] + L) if L else []
+
 
 def basis_free_ratios(ex, ideal_counts, n_points=None):
     """The molar ratios of the ideal formula's major elements as the analysis gives them, with the uncertainty the
@@ -5253,6 +5394,8 @@ def check_paper(pdf, cif=None, out_dir=None):
         ex['_text'] = text
         out['lines'] += _section(ideal_wt_check(text, ex))
         out['lines'] += _section(charge_balance_check(text, ex, out['composition']))
+        out['lines'] += _section(epma_table_lint(ex, text))
+        out['lines'] += _section(dominance_check(text, ex, cif))
         idf_ = ideal_formula(text)
         if idf_ and ex.get('epma'):
             out['lines'] += _section(basis_free_ratios(ex, idf_[1], (ex.get('epma') or {}).get('n_points')))

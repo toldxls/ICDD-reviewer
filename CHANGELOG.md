@@ -52,12 +52,13 @@ package version in `pyproject.toml`.
   over the formula the paper prints, each cation at the valence the formula itself fixes (a superscript, a polyanion —
   sulfate, thiosulfate, oxalate, uranyl, ammonium …, an element printed in two states counted state by state), else the
   analysis's oxide, else the species' ideal formula (information only), else the one valence the element has in a
-  mineral; and the O count the charges call for beside the O printed. Half an O apart is a finding ('O2.03 printed vs
-  O3.03 from the charges'), a quarter is information. It stops and says why for a variable-valence element no source
-  fixes, sulfur with O but no polyanion written, an element in two polyanions, an anion group whose integer reads as a
-  sum or a multiplier, a formula the text layer garbled, and more than two O out of balance (a misread, never a
-  finding). On 1,041 corpus papers: 2 flags (printed formulas out of balance by one to two charges), 6 information
-  lines, 56 stops with a reason, the rest silent.
+  mineral; and the O count the charges call for beside the O printed. Three quarters of an O apart is a finding ('O2.03
+  printed vs O3.03 from the charges' — a whole O is the typo), a quarter is information. It stops and says why for a
+  variable-valence element no source fixes, sulfur / selenium / tellurium with O but no polyanion written (an SO3 row
+  is the analysis's convention, and the mineral may be a sulfite), an element in two polyanions, an anion group whose
+  integer reads as a sum or a multiplier, a formula the text layer garbled, and more than two O out of balance (a
+  misread, never a finding); a structural formula's occupancies need not balance, so it is information at most. On the
+  whole corpus: 2 flags (printed formulas out of balance by one to two charges), the rest information, stops or silence.
 - **`pxrd cifaudit`: the .res occupancies and a refinement-quality triage** (`cif_audit.check_occupancies`,
   `check_refinement`, `res_model`). From the embedded `.res` — each site occupancy from its SHELXL code (fixed, a free
   variable, one minus a free variable) over the site's symmetry factor: a site whose species add to more than 1 is a
@@ -97,6 +98,32 @@ package version in `pyproject.toml`.
   every cation–anion pair is fitted on its own (`paper_extract.set_fit_lines`: each set asked for the valence at each
   printed distance, rms ≤ 0.012 = the rounding) and named — Brese & O'Keeffe's reprint of a Brown & Altermatt value is
   said to be one number under two names — or reported as following no set the tool carries.
+- **`pxrd paper --check`: the analytical table's own arithmetic** (`paper_extract.epma_table_lint`). A mean printed outside
+  its own range (a flag, when the two are of one magnitude and the mean is out by more than a tenth of the range); an
+  s.d. smaller than the range and the number of analyses allow — Samuelson's inequality, the farthest analysis lies
+  within s.d.·√(n−1) of the mean — a flag when the s.d. would need doubling, information when it is short by a fifth or
+  more; two analyses or fewer, and a beam as wide as the largest grains the text names (information). The number of
+  analyses is read from the table's caption or a sentence about the analyses (`analyses_count`); the scatter of a
+  constituent on its own is not judged — the s.d. column is not read reliably enough to make a coefficient of
+  variation a finding. Whole corpus: 12 means outside their range, 3 s.d. flags, 57 information lines.
+- **`pxrd paper --check`: species-defining dominance within the scatter, site by site** (`paper_extract.dominance_check`).
+  Every bracketed site of the empirical formula whose leader is ahead of the runner-up by less than 30 % of the two
+  together is set against the analytical scatter — each element's apfu ± its constituent's s.d. over its mean: a
+  margin under 1σ is a finding ("(Mn0.524Ca0.476): Mn leads Ca by 0.048 apfu vs the analytical scatter ±0.06 (0.8σ) — the
+  dominant constituent is not established by the analysis"), under 2σ information — and against the printed ranges (the
+  leader's low end under the runner-up's high end: the ranges cross, information). With a .cif, a site whose two
+  leading occupancies lie within 2σ of each other by their s.u. is information. A site whose leader holds under 0.2
+  apfu, or a constituent whose s.d. exceeds 30 % of its mean (a misread column), is not judged. Whole corpus: 11 flags,
+  every one a site decided by less than the analytical scatter.
+- **`pxrd cifaudit`: the formula the sites give, and F(000)** (`cif_audit.check_site_formula`, `check_f000`). Occupancy ×
+  multiplicity over Z, cation by cation, against the .cif's own formula sum (a flag when an element is out by more
+  than 5 % and 0.05 apfu — the program's F(000), μ and density follow the formula sum, not the sites; an element in the
+  sum but on no site is a note) and against the structural formula the manuscript prints (a flag; an empirical formula
+  need not match the sites). Anions, H and N are left out: a mixed F/OH site is typed one way in the .cif and split in
+  the sum. F(000)
+  recomputed from the sites (Σ multiplicity × occupancy × atomic number) against the .cif's, beyond 2 % a note — the
+  manuscript's printed F(000) is already compared with the .cif's. μ is not recomputed (no mass-attenuation table shipped).
+  Corpus (209 structures): 10 formula sums the sites do not give, 4 elements on no site, 30 F(000) notes.
 
 ## [0.13.0] — 2026-09-30
 

@@ -151,5 +151,43 @@ O2 O 0 0.235 0
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class EpmaTableLint(unittest.TestCase):
+    def test_range_sd_n_and_beam(self):
+        text = ('Chemical analyses (mean of 6 analyses) were made with a 10 μm beam diameter. Crystals are up to 8 μm across. '
+                'The composition is given in Table 1.')
+        ex = {'epma': {'caption': 'Table 1. Chemical data (wt%) for testite (mean of 6 analyses).',
+                       'rows': [{'constituent': 'MgO', 'mean': 21.5, 'sd': 0.25, 'range': (22.1, 23.9)},        # the mean outside its range
+                                {'constituent': 'As2O5', 'mean': 50.0, 'sd': 0.20, 'range': (47.0, 53.0)},      # s.d. 0.20 vs at least 3/√5 = 1.34
+                                {'constituent': 'CoO', 'mean': 2.0, 'sd': 1.4, 'range': (0.5, 3.6)},           # within the bound
+                                {'constituent': 'H2O', 'mean': 30.0, 'sd': None, 'range': None}]}}
+        L = PE.epma_table_lint(ex, text)
+        self.assertTrue(L and L[0].startswith('analytical table: 4 constituents, n = 6'), L)
+        self.assertTrue(any(x.startswith('MgO: mean 21.5 vs its range 22.1–23.9') for x in L), L)
+        self.assertTrue(any(x.startswith('As2O5: s.d. 0.2 vs at least 1.34') for x in L), L)
+        self.assertFalse(any('CoO' in x for x in L), L)                                                    # scatter alone is not judged: the s.d. column is not read reliably enough
+        self.assertTrue(any('beam (10 µm) is as wide as the largest grains named (8 µm)' in x for x in L), L)
+        # within Samuelson's bound, no n printed: nothing
+        ex2 = {'epma': {'rows': [{'constituent': 'MgO', 'mean': 22.9, 'sd': 0.7, 'range': (22.1, 23.9)}]}}
+        self.assertEqual(PE.epma_table_lint(ex2, 'No count here.'), [])
+        self.assertEqual(PE.analyses_count('The mean of 12 analyses is given.'), 12); self.assertEqual(PE.analyses_count('nothing'), None)
+
+
+class Dominance(unittest.TestCase):
+    def test_a_leader_inside_the_scatter_is_a_finding(self):
+        text = 'The empirical formula, based on 4 O apfu, is (Mn0.524Ca0.476)Σ1.00(Mg0.90Fe2+0.10)Σ1.00Si1.00O4.'
+        ex = {'name': None, 'epma': {'rows': [{'constituent': 'MnO', 'mean': 18.1, 'sd': 1.2, 'range': (16.2, 19.8)},
+                                              {'constituent': 'CaO', 'mean': 13.0, 'sd': 1.0, 'range': (11.7, 14.5)},
+                                              {'constituent': 'MgO', 'mean': 17.7, 'sd': 0.3, 'range': (17.2, 18.1)},
+                                              {'constituent': 'FeO', 'mean': 3.5, 'sd': 0.2, 'range': (3.2, 3.8)},
+                                              {'constituent': 'SiO2', 'mean': 29.3, 'sd': 0.3, 'range': None}]}}
+        L = PE.dominance_check(text, ex)
+        self.assertTrue(L and L[0].startswith('dominance within the scatter'), L)
+        self.assertTrue(any(x.startswith('(Mn0.524Ca0.476): Mn leads Ca by 0.048 apfu vs the analytical scatter') and 'not established' in x for x in L), L)
+        self.assertTrue(any('the ranges cross' in x and 'Mn' in x for x in L), L)
+        self.assertFalse(any('Mg' in x for x in L), L)                                          # 0.90 vs 0.10: not in doubt
+        # a clear leader: nothing
+        self.assertEqual(PE.dominance_check('The empirical formula is (Mn0.80Ca0.20)Σ1.00Si1.00O3.', ex), [])
+
+
 if __name__ == '__main__':
     unittest.main()
