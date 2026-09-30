@@ -124,6 +124,11 @@ package version in `pyproject.toml`.
   recomputed from the sites (Σ multiplicity × occupancy × atomic number) against the .cif's, beyond 2 % a note — the
   manuscript's printed F(000) is already compared with the .cif's. μ is not recomputed (no mass-attenuation table shipped).
   Corpus (209 structures): 10 formula sums the sites do not give, 4 elements on no site, 30 F(000) notes.
+- **`pxrd lint`: evidence** (`lints.evidence`, notes). A valence the formula assigns to Fe, Mn, Ti, V, Cu, Cr, Ce, Co or Eu
+  with no valence-sensitive method named (Mössbauer, XPS, XANES, EELS, titration …) — the argument the text does give
+  (bond-valence sums, charge balance, colour) is quoted; H₂O or OH in the formula with no O–H band, thermal analysis,
+  water determination or difference calculation named. Reminders for the reviewer, never findings: on published papers
+  the valence note is common (most rest on bond-valence sums, and say so).
 
 ## [0.13.0] — 2026-09-30
 

@@ -47,6 +47,15 @@ class Lints(unittest.TestCase):
         # a docx lint carries the flag separately from the notes
         self.assertEqual(LI._numbers('3a, b'), ['3']); self.assertEqual(LI._numbers('2–4'), ['2', '3', '4']); self.assertEqual(LI._numbers('S1 and S3'), ['S1', 'S3'])
 
+    def test_evidence(self):
+        t = 'The empirical formula is Ca2Fe3+2(SO4)3(OH)2·2H2O. Fe is trivalent by bond-valence sums. Analyses were made by EPMA.'
+        f = [m for m, _a in LI.evidence(t)]
+        self.assertEqual(len(f), 2, f)
+        self.assertTrue(any('assigns a valence to Fe (Fe3+)' in m and 'rests on bond-valence' in m for m in f), f)
+        self.assertTrue(any('carries H2O or OH' in m for m in f), f)
+        self.assertEqual(LI.evidence(t + ' Mössbauer spectroscopy confirms Fe3+. The Raman band at 3450 cm-1 is the O–H stretch.'), [])
+        self.assertEqual(LI.evidence('The formula is CaSO4. No water.'), [])
+
 
 class Proposal(unittest.TestCase):
     def test_review_writes_report_and_copy(self):

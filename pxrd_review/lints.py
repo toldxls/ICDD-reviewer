@@ -10,7 +10,9 @@ weigh — none is a verdict:
             (hkl) is meant; a table caption printed twice under one number; one symmetry-code number
             defined as two operators in two tables;
   crossrefs a table or figure the text cites that has no caption (the one lint that is a flag: the
-            document's own captions are the oracle), and a caption the text never cites (a note).
+            document's own captions are the oracle), and a caption the text never cites (a note);
+  evidence  a valence the formula assigns with no valence-sensitive method named; H2O / OH in the
+            formula with no O–H band, thermal analysis or water determination named.
 Each finding carries the sentence it comes from and an anchor for a Word comment.
 """
 import os, re, sys, argparse
@@ -221,6 +223,35 @@ def crossrefs(paragraphs, docx=True):
     return out
 
 
+_VALENCE_IN_FORMULA = re.compile(r'(?<![A-Za-z])(Fe|Mn|Ti|V|Cu|Ce|Eu|Cr|Co|Ni|Sb|As|U|Se|Te|Mo|W|Nb|Sn|Pb|Tl|Bi|S)\s?(\d)\s?[+⁺](?!\s?[a-z])|(?<![A-Za-z])(Fe|Mn|Ti|V|Cu|Ce|Eu|Cr|Co|Ni|Sb|As|U|Se|Te|Mo|W|Nb|Sn|Pb|Tl|Bi)[²³⁴⁵⁶]⁺')   # 'Ca2Fe3+2': no word boundary between the 2 and the Fe
+_VALENCE_METHOD = re.compile(r'Mössbauer|Moessbauer|Mossbauer|\bXPS\b|X-ray photoelectron|XANES|XAFS|EXAFS|\bEELS\b|electron energy[- ]loss|wet[- ]chemi|titrat|\bEPR\b|\bESR\b|colorimetr|K ?β|Kβ|flank method|spectrophotometr', re.I)
+_VALENCE_ARGUMENT = re.compile(r'bond[- ]valence|charge[- ]balance|electroneutrality|colou?r|pleochro|crystal[- ]chemical|site geometry|bond lengths?|coordination', re.I)
+_HYDROUS_FORMULA = re.compile(r'\(OH\)|\bOH\d|H2O|H₂O|\(H3O\)|H3O\b')                      # the formula's own tokens, not the words 'water' / 'hydroxyl' of the prose
+_OH_EVIDENCE = re.compile(r'(3[0-7]\d\d)\s*(?:cm|cm[-–−]1|cm\s*[-–−]\s*1)|O[-–—]?H stretch|stretching vibrations? of (?:the )?(?:O[-–—]?H|water|hydroxyl)|thermogravimetr|\bTGA?\b|\bDTA\b|\bDSC\b|weight loss|mass loss|loss on ignition|\bLOI\b|H2O was calculated|calculated (?:from|by|on the basis of)|by difference|Penfield|Karl[- ]Fischer|CHN|hydrogen analys|neutron', re.I)
+
+
+def evidence(text):
+    """[(message, anchor)] — a valence the formula assigns with no valence-sensitive method named (the argument the text
+    gives, if any, is quoted); H2O / OH in the formula with no spectroscopic, thermal or analytical evidence named.
+    Notes: a valence can rest on bond-valence sums and hydrogen on the structure, and the text may say so in words the
+    lint does not read."""
+    out = []
+    t = text.replace('\xa0', ' ')
+    vals = {}
+    for m in _VALENCE_IN_FORMULA.finditer(t):
+        el = m.group(1) or m.group(3)
+        vals.setdefault(el, m.group(0))
+    vals = {el: v for el, v in vals.items() if el in ('Fe', 'Mn', 'Ti', 'V', 'Cu', 'Cr', 'Ce', 'Co', 'Eu')}   # the elements whose state a probe cannot give and a mineral takes in more than one
+    if vals and not _VALENCE_METHOD.search(t):
+        args = sorted({a.lower() for a in _VALENCE_ARGUMENT.findall(t)})
+        out.append(('evidence: the formula assigns a valence to %s and the text names no valence-sensitive method (Mössbauer, XPS, XANES, EELS, titration) — %s'
+                    % (', '.join('%s (%s)' % (el, v.strip()) for el, v in list(vals.items())[:4]),
+                       'the assignment rests on ' + ', '.join(args[:3]) if args else 'no argument for it is read'), next(iter(vals.values())).strip()))
+    if _HYDROUS_FORMULA.search(t) and re.search(r'formula', t, re.I) and not _OH_EVIDENCE.search(t):
+        out.append(('evidence: the formula carries H2O or OH and the text names no O–H band, thermal analysis, water determination or difference calculation as its evidence', 'H2O'))
+    return out
+
+
 def lint(path):
     """The lint families over a .docx or .pdf: {'findings': [(message, anchor)], 'flags': [(message, anchor)], 'lines': [...]} —
     'findings' is everything (the flags included); a line is prefixed 'note: ' unless it is a flag."""
@@ -239,7 +270,7 @@ def lint(path):
         text = PE.text_of(path)                               # one folded line: the band and laser sentences
         raw = C.pdf_text(path) or text                        # the page's lines kept: a caption starts one
         paras = re.split(r'\n\s*\n|\n(?=\s*(?:Table|Figure|Fig\.)\s*S?\d)', raw, flags=re.I); notes = None
-    found = [(m, a, 'note') for m, a in spectro(text) + notation(paras, notes)] + crossrefs(paras, docx=path.lower().endswith('.docx'))
+    found = [(m, a, 'note') for m, a in spectro(text) + notation(paras, notes) + evidence(text)] + crossrefs(paras, docx=path.lower().endswith('.docx'))
     head = 'Lints — %s' % os.path.basename(path)
     return {'findings': [(m, a) for m, a, _s in found], 'flags': [(m, a) for m, a, s in found if s == 'flag'],
             'lines': [head] + (['  ' + ('' if s == 'flag' else 'note: ') + m for m, _a, s in found] or ['  nothing to report'])}
