@@ -39,6 +39,7 @@ LASERS = {
 _LASER_LINE = re.compile(r'(\d{3}(?:\.\d)?)\s*[- ]?nm\b(?![^.]{0,25}\bgrating)', re.I)
 _BAND = re.compile(r'(\d{3,4})(?:\s*\(\s*sh\s*\))?\s*(?:cm|cm[-–−]1|cm\s*[-–−]\s*1)', re.I)
 _OH_WORDS = re.compile(r'O[-–—]?H|hydroxyl|water|H2O|hydrogen[- ]bond|ν\s*\(?\s*O', re.I)
+_AXIS_AS_PLANE = re.compile(r'\b(prism(?:s|atic)?|needles?|fibres?|fibers?|laths?|elongat\w+|striat\w+|acicular)\b[^.]{0,60}?\b(?:along|parallel to|down|on)\s*(\(\s*\d\s*\d\s*\d\s*\))', re.I)   # 'prism along (100)': a direction is [uvw]
 _ZONE = re.compile(r'\b(cleavage|parting|twin plane|composition plane|platy|tabular|flattened)\b[^.]{0,80}?(\[\s*[-–−]?\d\s*[-–−]?\d\s*[-–−]?\d\s*\])', re.I)   # a twin AXIS is a direction: 'twin' alone is not linted
 
 
@@ -84,6 +85,10 @@ def notation(paragraphs, tables_codes=None):
             sym = re.sub(r'\s', '', m.group(2))
             out.append(("notation: %s given as the zone symbol %s — a cleavage, parting or twin plane is a form {hkl} or a plane (hkl); [uvw] is a direction"
                         % (m.group(1).lower(), sym), m.group(2)))
+    for p in paragraphs:
+        for m in _AXIS_AS_PLANE.finditer(p):
+            out.append(('notation: %s given as the plane %s — an axis of elongation or a prism direction is a zone [uvw]; (hkl) is a face or a plane'
+                        % (m.group(1).lower(), re.sub(r'\s', '', m.group(2))), m.group(2)))
     caps = {}
     for p in paragraphs:
         m = re.match(r'^\s*(Table|Figure|Fig\.)\s+(\d+)[.:]\s*(.{0,120})', p)

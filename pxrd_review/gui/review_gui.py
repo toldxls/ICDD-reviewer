@@ -2745,9 +2745,8 @@ def _ms_structure_findings(key, path):
     tables' symmetry codes (bv_check --table), the .cif audit, the powder-table audit and the lints — as
     manuscript findings: 'calc' where a line is a flag, 'calcinfo' otherwise. Nothing is written: the
     modules are called directly, never `proposal.review` (which writes a report and a copy)."""
-    if not path.lower().endswith('.docx'):
-        return []
     from pxrd_review import paper_extract as PE, proposal as PR
+    is_docx = path.lower().endswith('.docx')                   # a .pdf gets every check but the docx-table ones (symmetry codes)
     cif = _ms_cif_for(key, PE.mineral_name(PE.text_of(path)))
     out = []
     def add(label, lines, flag_of=None):
@@ -2760,18 +2759,24 @@ def _ms_structure_findings(key, path):
             out.append({'kind': kind, 'fkey': 'calc:' + hashlib.sha1(s.encode('utf-8')).hexdigest()[:12], 'label': label, 'msg': s,
                         'para': None, 'start': None, 'end': None, 'text': '', 'page': None, 'pdf': None, 'find': None})
     if cif:
+        from pxrd_review import bv_check as B
         try:
-            from pxrd_review import bv_check as B
-            st = B.Structure(cif); tables = B.read_tables(path); notes, paras = B.read_table_notes(path)
-            recs = B.check_symmetry_codes(st, tables, notes, paras)
-            add('symmetry codes', [r['text'] for r in recs], flag_of=lambda s_: any(r['text'] == s_ and r['severity'] == 'flag' for r in recs))
+            st = B.Structure(cif)
         except Exception as ex:
-            add('symmetry codes', ['could not run (%s)' % str(ex)[:80]])
-        try:
-            result, anion_sum, cells, _hb = B.compute(st, B.Params())
-            add('anion assignment', B.anion_assignment(st, result, cells, anion_sum), flag_of=lambda s_: False)
-        except Exception as ex:
-            add('anion assignment', ['could not run (%s)' % str(ex)[:80]])
+            st = None; add('.cif', ['could not build the structure (%s)' % str(ex)[:80]])
+        if st is not None and is_docx:
+            try:
+                tables = B.read_tables(path); notes, paras = B.read_table_notes(path)
+                recs = B.check_symmetry_codes(st, tables, notes, paras)
+                add('symmetry codes', [r['text'] for r in recs], flag_of=lambda s_: any(r['text'] == s_ and r['severity'] == 'flag' for r in recs))
+            except Exception as ex:
+                add('symmetry codes', ['could not run (%s)' % str(ex)[:80]])
+        if st is not None:
+            try:
+                result, anion_sum, cells, _hb = B.compute(st, B.Params())
+                add('anion assignment', B.anion_assignment(st, result, cells, anion_sum), flag_of=lambda s_: False)
+            except Exception as ex:
+                add('anion assignment', ['could not run (%s)' % str(ex)[:80]])
         try:
             from pxrd_review import cif_audit as CA
             res = CA.audit(cif, path, None)

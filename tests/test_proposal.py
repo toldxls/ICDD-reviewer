@@ -25,8 +25,9 @@ class Lints(unittest.TestCase):
         codes = {0: {'caption': 5, 'codes': {'2': ([[-1, 0, 0], [0, 1, 0], [0, 0, -1]], [1, 0, 1], '-x+1, y, -z+1')}},
                  1: {'caption': 6, 'codes': {'2': ([[-1, 0, 0], [0, 1, 0], [0, 0, -1]], [0, 0, 0], '-x, y, -z')}}}
         codes[2] = {'caption': 7, 'codes': codes[1]['codes']}                       # inherited: not a second definition
-        f = [m for m, _a in LI.notation(paras, codes)]
+        f = [m for m, _a in LI.notation(paras + ['Prisms are elongated along (100) and striated parallel to (001).'], codes)]
         self.assertEqual(sum('zone symbol [110]' in m for m in f), 1, f)             # the cleavage, not the twin axis
+        self.assertEqual(sum('given as the plane' in m for m in f), 2, f)              # a direction written as (hkl)
         self.assertTrue(any('Table 2 has 2 captions' in m for m in f), f)
         self.assertEqual(sum('symmetry code (2)' in m for m in f), 1, f)
 
@@ -84,6 +85,28 @@ class Proposal(unittest.TestCase):
             from docx import Document as D
             d2 = D(res['copy']); self.assertTrue(any('comments.xml' in str(p.partname) for p in d2.part.package.parts))
             self.assertEqual(len(Document(path).paragraphs), 5)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_pdf_manuscript_gets_a_report_and_no_copy(self):
+        import pymupdf
+        tmp = tempfile.mkdtemp(prefix='prop_pdf_')
+        try:
+            _write(tmp, 'testite.cif', RUTILE)
+            doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
+            y = 72
+            for line in ('Testite, ideal formula TiO2, is a new mineral (Smith et al., 2020).', 'Density (calc.) = 4.250 g/cm3 for the ideal formula.',
+                         'The Ti2 site is octahedral. See Table 3.', 'Table 1. Data.', 'References', 'Jones, A. (2019) Another paper. Journal, 1, 1-2.'):
+                page.insert_text((72, y), line, fontsize=10); y += 16
+            path = os.path.join(tmp, 'testite proposal.pdf'); doc.save(path); doc.close()
+            docx, cif, cc = PR.find_files(tmp)
+            self.assertEqual((os.path.basename(docx), os.path.basename(cif)), ('testite proposal.pdf', 'testite.cif'))
+            res = PR.review(tmp, quiet=True)
+            self.assertIsNone(res['copy'])
+            text = open(res['report'], encoding='utf-8').read()
+            self.assertIn('report only — a .pdf manuscript takes no comments', text)
+            self.assertIn('== .cif audit', text); self.assertIn('== lints', text)
+            self.assertIn('Table 3 is cited', text)                                          # the lints run on a .pdf; the docx-only label check does not
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

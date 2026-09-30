@@ -1,7 +1,10 @@
 """Private regression of `pxrd proposal`: run it on the fixture folder $PXRD_PROPOSAL_FIXTURES and check the
-report against `proposal_expected.json` kept THERE (never in this repo — the fixture is an unpublished
-manuscript). The JSON: {"present": [substrings the report must contain], "absent": [substrings it must not],
-"comments_min": n}. Each entry is a plain substring of the report text.
+report against `proposal_expected.json` kept THERE (never in this repo — the fixtures are unpublished
+manuscripts). Two shapes:
+  one case   {"manuscript": "x.docx", "cif": "x.cif", "checkcif": "x.pdf", "present": [...], "absent": [...], "comments_min": n}
+  several    {"cases": [ {the same keys, plus "name"}, ... ]}   — one line of results per case
+Each "present" / "absent" entry is a plain substring of the report text. A .pdf manuscript gets a report and no copy.
+A second file, `memo_expected.json`, is read the same way when it exists (the folder's review memo as the answer key).
 
     PXRD_PROPOSAL_FIXTURES=/path/to/folder python3 tools/proposal_regression.py
 """
@@ -11,14 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pxrd_review import proposal as PR
 
 
-def main():
-    folder = os.environ.get('PXRD_PROPOSAL_FIXTURES')
-    if not folder or not os.path.isdir(folder):
-        print('set PXRD_PROPOSAL_FIXTURES to the fixture folder'); return 2
-    exp_path = os.path.join(folder, 'proposal_expected.json')
-    if not os.path.exists(exp_path):
-        print('no proposal_expected.json in the fixture folder'); return 2
-    exp = json.load(open(exp_path, encoding='utf-8'))
+def run_case(folder, exp):
     tmp = tempfile.mkdtemp(prefix='proposal_reg_')
     try:
         target = exp.get('manuscript')
@@ -37,10 +33,27 @@ def main():
             fails.append('COMMENTS %d < %d' % (res['comments'], exp['comments_min']))
         for f in fails:
             print('FAIL  ' + f)
-        print('%s: %d checks, %d failed; %d comments written, %d flags unplaced' % (os.path.basename(res['docx']), len(exp.get('present', [])) + len(exp.get('absent', [])), len(fails), res['comments'], len(res['unplaced'])))
-        return 1 if fails else 0
+        print('%s: %d checks, %d failed; %d comments written, %d flags unplaced' % (exp.get('name') or os.path.basename(res['docx']), len(exp.get('present', [])) + len(exp.get('absent', [])), len(fails), res['comments'], len(res['unplaced'])))
+        return len(fails)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def main():
+    folder = os.environ.get('PXRD_PROPOSAL_FIXTURES')
+    if not folder or not os.path.isdir(folder):
+        print('set PXRD_PROPOSAL_FIXTURES to the fixture folder'); return 2
+    n_fail = 0; ran = 0
+    for name in ('proposal_expected.json', 'memo_expected.json'):
+        exp_path = os.path.join(folder, name)
+        if not os.path.exists(exp_path):
+            continue
+        exp = json.load(open(exp_path, encoding='utf-8'))
+        for case in (exp.get('cases') or [exp]):
+            n_fail += run_case(folder, case); ran += 1
+    if not ran:
+        print('no proposal_expected.json / memo_expected.json in the fixture folder'); return 2
+    return 1 if n_fail else 0
 
 
 if __name__ == '__main__':

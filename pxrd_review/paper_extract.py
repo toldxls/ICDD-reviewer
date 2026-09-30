@@ -4923,12 +4923,14 @@ def printed_codes_check(pdf, cif):
     res['lines'] = B.printed_bond_code_lines(res, frame)
     return res
 
-_IDEAL_F = re.compile(r'(?:ideal(?:ized)?|end-?member|simplified)\s+formula\s*(?:(?:of|for)\s+[\w-]+\s+)?(?:is|[:=])\s*([^\s,;]{4,90}(?:\s*[·•]\s*\d*\s*H2O)?)', re.I)
+_IDEAL_F = re.compile(r'(?:ideal(?:ized)?|end-?member|simplified)\s+formula\s*(?:(?:of|for)\s+[\w-]+\s+)?(?:is|[:=])\s*(\S{4,90}(?:\s*[·•]\s*\d*\s*H2O)?)', re.I)   # a comma may sit inside the brackets: 'Ba3(Mg,Fe)…'
 
 def ideal_formula(text):
     """The ideal formula the paper states ('Ideal formula: …', 'The ideal formula is …'): (text, {element: apfu}) or None."""
     for m in _IDEAL_F.finditer(text or ''):
-        f = m.group(1).rstrip(',.;')
+        f = m.group(1).rstrip(',.;:')
+        if f.count('(') != f.count(')') or f.count('[') != f.count(']') or f.endswith(('(', '[')):
+            continue                                                 # cut short (a line break, a footnote): not the formula
         try:
             counts = EP.parse_icdd_formula(_journal_to_icdd(f))[0]
         except Exception:
@@ -5396,6 +5398,9 @@ def check_paper(pdf, cif=None, out_dir=None):
         out['lines'] += _section(charge_balance_check(text, ex, out['composition']))
         out['lines'] += _section(epma_table_lint(ex, text))
         out['lines'] += _section(dominance_check(text, ex, cif))
+        o_ = ex.get('optics') or {}
+        if o_.get('n') and not (gd_statement(text) or {}).get('ci') and not re.search(r'compatib', text, re.I):
+            out['lines'].append('compatibility index: none is stated although the refractive indices (n = %.3f) allow one (information)' % o_['n'])
         idf_ = ideal_formula(text)
         if idf_ and ex.get('epma'):
             out['lines'] += _section(basis_free_ratios(ex, idf_[1], (ex.get('epma') or {}).get('n_points')))

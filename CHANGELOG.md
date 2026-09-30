@@ -39,6 +39,24 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+- **`pxrd proposal` and the GUI's Manuscript mode take a `.pdf` manuscript.** A proposal that comes as a .pdf gets the
+  whole review — references, the bond-valence table against the .cif, the .cif audit (its numbers and density read
+  from the text as prose, notes unless anchored), the powder table, the paper checks, the lints — as one report; no
+  copy is annotated (a .pdf takes no Word comments) and the docx-only table checks (symmetry codes, site labels) are
+  left out. `tools/proposal_regression.py` runs several cases from one folder and reads a second answer key,
+  `memo_expected.json` — a folder's review memo as the oracle.
+- **From the memo regression**: an under-bonded plain O is reported as information even where the structure assigns no
+  hydrogen (`pxrd bv`); a Gaussian or analytical correction whose Tmin lies below exp(−2 μ dmax) — a path no crystal
+  of that size has — is a flag, and one flatter than the crystal's shape allows a note (`pxrd cifaudit`); a prism or
+  elongation direction written as a plane, '(100)', is a notation note; a paper with refractive indices and no
+  compatibility index is told so (`pxrd paper --check`).
+
+### Fixed
+- An ideal formula with a comma inside its brackets ('Ba3(Mg,Fe)…') was cut at the comma and read as 'Ba3(Mg' — a wrong
+  calculated density and a wrong ideal wt% followed from it (both readers, `paper_extract` and `cif_audit`, now require
+  balanced brackets). 'Twinning: not observed' in a data table now counts as the manuscript denying a twin.
+
 ## [0.14.0] — 2026-09-30
 
 **The rest of the manuscript review's list, each rule gated on the corpus.** Cross-references, the empirical formula's

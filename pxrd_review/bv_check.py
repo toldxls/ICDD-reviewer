@@ -2590,7 +2590,12 @@ def anion_assignment(st, result, cells, anion_sum):
     labelled = any(_HYDROUS_LABEL.match(a.label) for a in st.anions if a.element == 'O')
     located_all = w['located'] is not None and w['H'] > 0 and w['located'] >= 0.8 * w['H']
     if not (labelled or located_all):
-        return []
+        # the structure assigns no hydrogen at all: no verdict on names, but an O far under 2 vu with nothing to explain it is still
+        # worth a line — the X anion (OH? F? a vacancy beside it?) is what a reviewer asks about
+        under = ['%s %.2f' % (lab, v) for lab, v, _k in w['sites'] if 1.0 < v < UNASSIGNED_OH and anion_sum.get(lab, v) < 1.80
+                 and re.match(r'^O\d+$', lab) and next((a.occ_total for a in st.anions if a.label == lab), 0) >= 0.98]
+        return ['note: %s receive%s under %.2f vu from cations (information: no H located and no OH/OW label anywhere, so the structure assigns nothing — an OH, an F, or an under-bonded O)'
+                % (', '.join(under[:8]), 's' if len(under) == 1 else '', UNASSIGNED_OH)] if under else []
     low, high, wet = [], [], []
     for lab, v, _kind in w['sites']:
         a = next((x for x in st.anions if x.label == lab), None)

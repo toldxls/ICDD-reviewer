@@ -215,7 +215,7 @@ def check_occupancies(st):
     return recs
 
 
-_NO_TWIN = re.compile(r'no twinning|not twinned|twinning (?:was|is) not (?:observed|detected|found|present)|absence of twinning|untwinned|no evidence (?:of|for) twinning', re.I)
+_NO_TWIN = re.compile(r'no twinning|not twinned|twinning\s*:?\s*(?:was |is )?not (?:observed|detected|found|present)|twinning\s*:\s*none|absence of twinning|untwinned|no evidence (?:of|for) twinning', re.I)   # 'Twinning: not observed' in a data table too
 _TWIN_WORD = re.compile(r'\btwin', re.I)
 REFINE_RULES = {'R1_vs_Rint': 3.0, 'wR2_over_R1': 3.5, 'wght_a': 0.15, 'completeness': 0.95, 'observed_fraction': 0.5, 'data_per_parameter': 8.0, 'flack': (0.15, 0.85)}
 
@@ -256,15 +256,24 @@ def check_refinement(st, lines=None):
         note('Flack parameter %s: an inversion twin not modelled, or the wrong absolute structure' % items.get('_refine_ls_abs_structure_flack'))
     mu, dmax = num('_exptl_absorpt_coefficient_mu'), num('_exptl_crystal_size_max')
     tmin, tmax = num('_exptl_absorpt_correction_t_min'), num('_exptl_absorpt_correction_t_max')
+    dmin = num('_exptl_crystal_size_min')
     if mu and dmax and tmin and tmax and tmax > 0:
         floor = math.exp(-2.0 * mu * dmax)
         ctype = (items.get('_exptl_absorpt_correction_type') or '').lower()
+        if dmin and tmin / tmax > 0.95 and math.exp(-mu * (dmax - dmin)) < 0.85:
+            note('Tmin/Tmax = %.3f for μ %.2f mm⁻¹ on a %.3f × %.3f mm crystal: the paths differ by exp(−μ·Δd) = %.2f, so a correction this flat does not follow the crystal\'s shape (%s)'
+                 % (tmin / tmax, mu, dmax, dmin, math.exp(-mu * (dmax - dmin)), ctype or 'correction type unstated'))
         if tmin / tmax < floor * 0.999:
             # a numerical / analytical correction's Tmin and Tmax are transmissions and must fit the crystal; a multi-scan
             # or empirical correction's carry scaling too (SADABS' are not transmissions) — information there
             physical = bool(re.search(r'analyt|numer|integrat|gauss|sphere|cylind', ctype))
             note('Tmin/Tmax = %.3f vs exp(−2 μ dmax) = %.3f for μ %.2f mm⁻¹ and a %.3f mm crystal (%s correction): the range spans more absorption than the crystal can produce%s'
                  % (tmin / tmax, floor, mu, dmax, ctype or 'unstated', '' if physical else ' — or the crystal size is misstated'), 'flag' if physical else 'note')
+        elif re.search(r'analyt|numer|integrat|gauss|sphere|cylind', ctype) and tmin < floor * 0.999:
+            # a correction that computes transmissions: its Tmin is a transmission along a path the crystal has — no path is longer than
+            # twice the longest dimension, so Tmin cannot lie below exp(−2 μ dmax)
+            note('Tmin = %.3f vs exp(−2 μ dmax) = %.3f for μ %.2f mm⁻¹ and a %.3f mm crystal (%s correction): the minimum transmission is below what the longest path through the crystal allows (path %.3f mm)'
+                 % (tmin, floor, mu, dmax, ctype, -math.log(tmin) / mu), 'flag')
     basf = (m or {}).get('basf') or []
     twinned = bool(basf) or bool((m or {}).get('twin')) or items.get('_twin_individual_mass_fraction_refined') not in (None, '', '?')
     if twinned and lines:
@@ -769,7 +778,7 @@ def _short(s, n=110):
 # ----------------------------------------------------------------------------- density
 
 _DENS = re.compile(r'(?:Density\s*\(?\s*calc\.?\s*\)?|D\s*\(?\s*calc\.?\s*\)?|Dcalc|D\s*x|calculated density|Density \(for above formula\)|Density)\s*[=:]?\s*(\d\.\d{2,3})\s*(?:g|Mg)', re.I)
-_IDEAL = re.compile(r'(?:ideal(?:ized)?|end-?member|simplified)\s+formula\s*(?:is|of\s+\w+\s+is|[:=])\s*([^\s,;.]{4,80}(?:·\s*\d*\s*H2O)?)', re.I)
+_IDEAL = re.compile(r'(?:ideal(?:ized)?|end-?member|simplified)\s+formula\s*(?:is|of\s+\w+\s+is|[:=])\s*(\S{4,80}(?:·\s*\d*\s*H2O)?)', re.I)   # a comma may sit inside the brackets: 'Ba3(Mg,Fe)…'
 
 
 def ideal_formula(lines):
@@ -779,7 +788,9 @@ def ideal_formula(lines):
         m = _IDEAL.search(raw)
         if not m:
             continue
-        f = m.group(1).rstrip(',.;')
+        f = m.group(1).rstrip(',.;:')
+        if f.count('(') != f.count(')') or f.count('[') != f.count(']') or f.endswith(('(', '[')):
+            continue                                                 # cut short: not the formula
         try:
             counts = EP.parse_icdd_formula(PE._journal_to_icdd(f))[0]
         except Exception:
@@ -871,6 +882,7 @@ def audit(cif, manuscript=None, checkcif=None):
     if manuscript and manuscript.lower().endswith('.pdf'):
         from pxrd_review import cell_lambda_check as C
         lines = [('p', p) for p in re.split(r'\n\s*\n', C.pdf_text(manuscript) or '') if p.strip()]
+        recs += check_numbers(st, lines) + check_density(st, lines)     # a .pdf has no table rows to read cell by cell: its numbers are prose (notes unless anchored), its labels are not judged
     elif manuscript:
         lines = docx_lines(manuscript)
         recs += check_numbers(st, lines) + check_density(st, lines) + check_labels(st, lines)

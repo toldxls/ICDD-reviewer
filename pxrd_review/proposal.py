@@ -1,4 +1,4 @@
-"""One review of a new-mineral manuscript and its files (`pxrd proposal <folder|manuscript.docx> [--cif X] [--checkcif Y]`).
+"""One review of a new-mineral manuscript and its files (`pxrd proposal <folder|manuscript.docx|.pdf> [--cif X] [--checkcif Y]`).
 
 Runs every check the tool has for a manuscript with a structure beside it, and writes ONE report and ONE
 annotated COPY of the manuscript (the source is never touched):
@@ -26,6 +26,8 @@ def find_files(target, cif=None, checkcif=None):
         folder = target
         docs = [p for p in glob.glob(os.path.join(folder, '*.docx')) if not os.path.basename(p).startswith('~$') and 'review_out' not in p
                 and not re.search(r'_(refs|proposal|bv|pxrd|tables)\.docx$', p)]
+        if not docs:                                        # a proposal that comes as a .pdf: the report is written, no copy is annotated
+            docs = [p for p in glob.glob(os.path.join(folder, '*.pdf')) if not re.search(r'checkcif|check_cif|_supp|supplement|report|memorandum', os.path.basename(p), re.I)]
         docs.sort(key=lambda p: -os.path.getsize(p))
         docx = docs[0] if docs else None
     else:
@@ -93,7 +95,9 @@ def annotate(docx, findings, out_path, base=None):
 def review(target, cif=None, checkcif=None, out_dir=None, annotate_copy=True, quiet=False):
     docx, cif, checkcif = find_files(target, cif, checkcif)
     if not docx:
-        raise ValueError('no manuscript .docx in %s' % target)
+        raise ValueError('no manuscript .docx or .pdf in %s' % target)
+    is_pdf = docx.lower().endswith('.pdf')
+    annotate_copy = annotate_copy and not is_pdf                 # a .pdf takes no Word comments: report only
     out_dir = out_dir or os.path.join(os.path.dirname(os.path.abspath(docx)), 'review_out')
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(docx))[0]
@@ -177,7 +181,7 @@ def review(target, cif=None, checkcif=None, out_dir=None, annotate_copy=True, qu
     # -- the report
     head = ['PROPOSAL REVIEW — %s' % os.path.basename(docx), '  .cif: %s' % (os.path.basename(cif) if cif else 'none'),
             '  checkCIF: %s' % (os.path.basename(checkcif) if checkcif else 'none'),
-            '  %d flags: %s; the rest notes' % (len(flags), ('%d written as comments in the copy%s' % (n, ', %d in the report only' % len(unplaced) if unplaced else '')) if annotate_copy else 'report only'), '']
+            '  %d flags: %s; the rest notes' % (len(flags), ('%d written as comments in the copy%s' % (n, ', %d in the report only' % len(unplaced) if unplaced else '')) if annotate_copy else ('report only — a .pdf manuscript takes no comments' if is_pdf else 'report only')), '']
     body = []
     for title, lines in sections:
         body.append('== ' + title)

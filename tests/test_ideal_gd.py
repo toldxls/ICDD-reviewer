@@ -25,6 +25,11 @@ class Readers(unittest.TestCase):
         self.assertEqual(g['ci'], -0.043); self.assertEqual(g['category'], 'good')
         self.assertEqual([(x['ci'], x['category'], x['for']) for x in g['all']], [(-0.043, 'good', 'empirical'), (0.031, 'excellent', 'ideal')])
 
+    def test_an_ideal_formula_with_a_comma_in_its_brackets_is_read_whole(self):
+        f, counts = PE.ideal_formula('The ideal formula is Ba3(Mg,Fe)Si2O8, which requires BaO 60.')
+        self.assertEqual(f, 'Ba3(Mg,Fe)Si2O8'); self.assertIn('Ba', counts)
+        self.assertIsNone(PE.ideal_formula('The ideal formula is Ba3(Mg'))                     # cut short: not read
+
     def test_ideal_formula_and_its_wt(self):
         f, counts = PE.ideal_formula(TEXT)
         self.assertEqual(f, 'Mg(AsO3OH)·4H2O'); self.assertEqual(counts, {'Mg': 1.0, 'As': 1.0, 'O': 8.0, 'H': 9.0})
