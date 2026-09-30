@@ -2732,10 +2732,58 @@ def _ms_paper_findings(key, path):
             find = '|'.join(constituents_of(m.group(1))[:3]) or None if m else None
         out.append({'kind': kind, 'fkey': fkey, 'label': section or 'paper', 'msg': s, 'para': None, 'start': None, 'end': None, 'text': '',
                     'page': page if pdf_name else None, 'pdf': pdf_name, 'find': find})
+    out += _ms_structure_findings(key, path)
     if path.lower().endswith('.docx'):
         _ms_docx_anchors(path, out)                                  # '? look' lands on the cell in the docx view (a pdf's findings show the page instead)
     elif pdf_name:
         _ms_pdf_pages(path, out)                                     # … and a line naming no table gets the page its words are on
+    return out
+
+
+def _ms_structure_findings(key, path):
+    """The structure-side checks of a manuscript .docx with a .cif beside it — the bond and hydrogen-bond
+    tables' symmetry codes (bv_check --table), the .cif audit, the powder-table audit and the lints — as
+    manuscript findings: 'calc' where a line is a flag, 'calcinfo' otherwise. Nothing is written: the
+    modules are called directly, never `proposal.review` (which writes a report and a copy)."""
+    if not path.lower().endswith('.docx'):
+        return []
+    from pxrd_review import paper_extract as PE, proposal as PR
+    cif = _ms_cif_for(key, PE.mineral_name(PE.text_of(path)))
+    out = []
+    def add(label, lines, flag_of=None):
+        for ln in lines:
+            s = ln.strip()
+            if not s or s.startswith('=='):
+                continue
+            note = s.startswith('note:')
+            kind = 'calc' if (flag_of(s) if flag_of else (not note and PR._FLAG.search(s))) else 'calcinfo'
+            out.append({'kind': kind, 'fkey': 'calc:' + hashlib.sha1(s.encode('utf-8')).hexdigest()[:12], 'label': label, 'msg': s,
+                        'para': None, 'start': None, 'end': None, 'text': '', 'page': None, 'pdf': None, 'find': None})
+    if cif:
+        try:
+            from pxrd_review import bv_check as B
+            st = B.Structure(cif); tables = B.read_tables(path); notes, paras = B.read_table_notes(path)
+            recs = B.check_symmetry_codes(st, tables, notes, paras)
+            add('symmetry codes', [r['text'] for r in recs], flag_of=lambda s_: any(r['text'] == s_ and r['severity'] == 'flag' for r in recs))
+        except Exception as ex:
+            add('symmetry codes', ['could not run (%s)' % str(ex)[:80]])
+        try:
+            from pxrd_review import cif_audit as CA
+            res = CA.audit(cif, path, None)
+            add('.cif audit', [r['text'] for r in res['records']], flag_of=lambda s_: any(r['text'] == s_ and r['severity'] == 'flag' for r in res['records']))
+        except Exception as ex:
+            add('.cif audit', ['could not run (%s)' % str(ex)[:80]])
+        try:
+            from pxrd_review import pxrd_audit as PA
+            res = PA.audit(path, cif)
+            add('powder table', res['lines'][1:], flag_of=lambda s_: any(r['text'] == s_ and r['severity'] == 'flag' for r in res['records']))
+        except Exception as ex:
+            add('powder table', ['could not run (%s)' % str(ex)[:80]])
+    try:
+        from pxrd_review import lints as LI
+        add('lints', [m for m, _a in LI.lint(path)['findings']], flag_of=lambda s_: False)
+    except Exception as ex:
+        add('lints', ['could not run (%s)' % str(ex)[:80]])
     return out
 
 @app.route('/api/ms/pdf/<key>/page/<int:n>.png')

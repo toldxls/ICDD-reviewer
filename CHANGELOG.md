@@ -115,6 +115,23 @@ package version in `pyproject.toml`.
   (`basis_free_ratios`; 2–3σ is shown as information). `pxrd epma --basis-sensitivity` prints the formula on the
   standard alternative bases beside the one asked for.
 
+- **`pxrd lint <manuscript>`** (`lints.py`, notes only): a vibrational band assigned to O–H / water that lies in the C–H
+  stretching window (2840–2965 cm⁻¹) or on an atmospheric CO2 / N2 / O2 band or in a diamond cell's two-phonon absorption;
+  a Raman laser line the named instrument is not supplied with (a curated table of systems and their lines); a cleavage,
+  parting or twin plane given as a zone symbol [uvw]; a table caption printed twice under one number; one symmetry-code
+  number defined as two operators in two tables (a footnote that says 'the same as in Table N' is inheritance, not a
+  second definition).
+- **`pxrd proposal <folder|manuscript.docx> [--cif X] [--checkcif Y]`** (`proposal.py`): one run of every check the tool
+  has for a manuscript with its structure — references, the bond and hydrogen-bond tables with their symmetry codes, the
+  .cif audit and the checkCIF report, the powder table, the composition / ideal wt% / Gladstone–Dale / cell checks, the
+  lints — into `review_out/<stem>_proposal_report.txt` and an annotated COPY `<stem>_proposal.docx` in which every flag
+  is a Word comment on the cell or sentence it concerns (built on the reference check's own copy, so its comments stay;
+  a flag with no place in the text is listed at the end of the report). The files are found by name beside the
+  manuscript. **The GUI's Manuscript mode** lists the same structure-side findings when a .cif sits beside the .docx
+  (symmetry codes, .cif audit, powder table, lints), flags as red findings and the rest as information.
+  `tools/proposal_regression.py` runs the whole of it on a private fixture folder ($PXRD_PROPOSAL_FIXTURES) against a
+  `proposal_expected.json` kept there.
+
 ### Fixed
 - **A contact past a cation's first coordination shell is no bond** (`bv_check.first_shell`): a tetrahedral cation
   with an O near 2.9 Å (~0.04 vu, over `MIN_S`) had a fifth bond, a mean distance a quarter of an ångström long and a

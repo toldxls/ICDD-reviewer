@@ -83,7 +83,7 @@ Opens the review GUI in your browser — **localhost only**, auto-picks a free p
 **The `pxrd` command.** A launcher, so you type neither folder prefixes nor ports.
 Entries: `gui`, `review` (write comments/highlights), `sweep`, `lambda`, `extras`,
 `candidates`, `check` (regression), `refresh` / `mindat`, `update`. Papers and structures:
-`refs`, `paper`, `bv`, `tables`, `epma`, `gd`, `pxrd`. A folder sub-command takes an
+`refs`, `paper`, `bv`, `tables`, `epma`, `gd`, `pxrd`, `cifaudit`, `checkcif`, `powder`, `pxrdaudit`, `lint`, `proposal`. A folder sub-command takes an
 explicit folder, else the current directory when it holds entry `.docx` files, else the
 folder **remembered per sub-command** (pass it once, omit after); the GUI picks a free
 port; extra flags (`--id`, `--port`, …) pass through. Without installing, run

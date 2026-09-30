@@ -35,6 +35,12 @@ long module paths, or ports.
     pxrd powder <structure.cif> [--lambda Cu|Mo|1.5406] [--dmin 1.0] [--ions] [--no-adp]
                                    the powder pattern computed from the .cif (d, I, 2θ, hkl, multiplicity);
                                    `pxrd pxrd obs.txt structure.cif` builds the table from it directly
+    pxrd proposal <folder|manuscript.docx> [--cif X] [--checkcif Y] [--no-annotate]
+                                   every check for a manuscript with its structure: references, bond tables
+                                   and symmetry codes, .cif audit + checkCIF, powder table, composition and
+                                   Gladstone–Dale, lints -> review_out/<stem>_proposal_report.txt and an
+                                   annotated COPY <stem>_proposal.docx (flags as Word comments)
+    pxrd lint <manuscript.docx|.pdf> spectroscopy and notation lints (notes)
     pxrd pxrdaudit <manuscript.docx|paper.pdf> --cif structure.cif [--lambda Mo]
                                    the manuscript's powder table vs the .cif: the cell its dcalc column was
                                    computed from, strong lines left out, Icalc vs the computed pattern,
@@ -83,6 +89,8 @@ MODULE = {
     'cifaudit':   'pxrd_review.cif_audit',    # takes a .cif (+ --manuscript, --checkcif) — not folder-resolved
     'powder':     'pxrd_review.powder_calc',  # takes a .cif — not folder-resolved
     'pxrdaudit':  'pxrd_review.pxrd_audit',   # takes a manuscript + --cif — not folder-resolved
+    'lint':       'pxrd_review.lints',        # takes a manuscript — not folder-resolved
+    'proposal':   'pxrd_review.proposal',     # takes a folder or a manuscript — its own discovery, not folder-resolved
     'checkcif':   'pxrd_review.checkcif',     # takes a checkCIF report — not folder-resolved
 }
 NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'sweep', 'check'}
