@@ -5358,6 +5358,8 @@ def optics_2v_lines(text):
     (cos²Vz = (1/β² − 1/γ²)/(1/α² − 1/γ²)): two stated values more than 5° apart are a finding; a stated value more than
     15° from the computed one is information (the indices' rounding moves 2V a lot). -> lines (the head first)."""
     t = (text or '').replace('\xa0', ' ')
+    for glyph, ch in (('\uf061', 'α'), ('\uf062', 'β'), ('\uf067', 'γ'), ('\uf0b0', '°'), ('\uf077', 'ω'), ('\uf065', 'ε')):   # a Symbol font's private-use glyphs in the text layer
+        t = t.replace(glyph, ch)
     stated = []
     for m in _2V.finditer(t):
         v = float(m.group(3))
@@ -5382,6 +5384,10 @@ def optics_2v_lines(text):
     if len(meas) >= 2 and meas[-1] - meas[0] > TWO_V_APART:
         L.append('2V is given as %s in different places%s' % (' vs '.join('%g°' % v for v in meas), ' (information: the paper describes more than one mineral)' if several else ''))
     if calc is not None:
+        # a 2V the paper says it CALCULATED from these indices must follow from them: 3° is the rounding of the indices
+        wrong_calc = [v for v, q in stated if q == 'calc' and abs(v - calc[0]) > 3.0]
+        if wrong_calc:
+            L.append('2V(calc) %s stated vs %.1f° from the indices α %.3f, β %.3f, γ %.3f — the calculated value does not follow from the indices printed' % (', '.join('%g°' % v for v in wrong_calc), calc[0], calc[2], calc[3], calc[4]))
         far = [v for v, q in stated if q != 'calc' and abs(v - calc[0]) > TWO_V_CALC]
         if far:
             L.append('2V from the indices α %.3f, β %.3f, γ %.3f is %.1f° (%s); the text gives %s (information: the indices\' rounding moves it)' % (calc[2], calc[3], calc[4], calc[0], calc[1], ', '.join('%g°' % v for v in far)))

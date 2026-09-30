@@ -66,7 +66,9 @@ package version in `pyproject.toml`.
 
 - **`pxrd paper --check`: 2V in every place it is stated** (`optics_2v_lines`) — two stated values more than 5° apart
   ('2V is given as 63° vs 70.5° in different places') are a finding; a stated value more than 15° from the one the three
-  indices give (cos²Vz = (1/β² − 1/γ²)/(1/α² − 1/γ²)) is information, the indices' rounding moving 2V as it does.
+  indices give (cos²Vz = (1/β² − 1/γ²)/(1/α² − 1/γ²)) is information, the indices' rounding moving 2V as it does;
+  a value the paper calls CALCULATED more than 3° from the one its own indices give is a finding (a calculated 2V has no
+  scatter to hide behind). Optics printed in the Symbol font (α β γ ° ω ε as private-use glyphs) are read as the letters.
 - The BASF-against-"no twinning" flag is a note when the denying sentence names another mineral (a comparison paper).
 
 ### Fixed

@@ -202,6 +202,8 @@ class TwoV(unittest.TestCase):
         self.assertTrue(L and L[0].startswith('optics: 2V stated 70.5° (meas), 63°, 71.6° (calc); from the indices 71.3°'), L)
         self.assertTrue(any(x.startswith('2V is given as 63° vs 70.5° in different places') for x in L), L)
         self.assertEqual(PE.optics_2v_lines('Optically biaxial (+), α = 1.600, β = 1.610, γ = 1.630, 2V(meas.) = 72°.'), [])
+        L = PE.optics_2v_lines('Biaxial (−): α = 1.617(3) β = 1.632(3) \uf067 = 1.637(3) 2Vx (calc.) = 70.5\uf0b0 Dispersion: none.')   # a Symbol-font γ and °
+        self.assertTrue(any(x.startswith('2V(calc) 70.5° stated vs 59.5° from the indices') for x in L), L)
         self.assertTrue(any('from the indices' in x and 'information' in x for x in PE.optics_2v_lines('α = 1.600, β = 1.610, γ = 1.630, 2V = 40°.')))
 
 
