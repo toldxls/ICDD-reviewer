@@ -80,6 +80,27 @@ package version in `pyproject.toml`.
   G/C tier, the PUBL* A-level metadata alerts are demoted, and a residual peak 0.6–1.05 Å from an O is pointed out as a
   possible unmodelled H. Both read only.
 
+- **`pxrd powder <cif>`** (`powder_calc.py`): the powder pattern computed from a structure .cif in pure Python — F(hkl)
+  over the cell's atoms from the .cif's operators, International Tables scattering factors shipped as
+  `data/ff_it92.json.gz` (built dev-time from gemmi by `tools/build_ff.py`, neutral atoms and ions), isotropic or
+  anisotropic displacement factors rotated with each equivalent, lines merged by their Laue equivalence class (so
+  absences and multiplicities fall out of the sum), Debye–Scherrer Lp with an optional monochromator term. Validated
+  against 98 corpus papers' own Icalc columns: median rms 4 on the 100 scale (the tail is two-mineral tables and
+  observed columns), and to 1.1 on a table of 108 lines. `pxrd pxrd obs.txt structure.cif` builds the combined table
+  from it, with no JADE export.
+- **`pxrd pxrdaudit <manuscript.docx|paper.pdf> --cif structure.cif`** (`pxrd_audit.py`): the manuscript's powder table
+  against the structure. The cell its dcalc column was computed from is back-fitted by least squares on 1/d² (the
+  crystal system from the space-group symbol, esds from the fit) and compared with the .cif's cell and every cell the
+  manuscript prints, to the printed rounding and 3 esd: a column that follows from a cell the manuscript does not
+  report is a flag (corpus: 8 of 112 papers; a fourth-decimal difference is not one). Reflections of the computed
+  pattern under a listed observed line but in no line of the table are a flag when strong (≥ 10, or stronger than
+  everything listed under that line) in a .docx read cell by cell, a note otherwise — after checking that the
+  intensity is not carried in a neighbouring line's Icalc, since programs merge near-coincident lines under one index
+  (the corpus is full of these). The printed Icalc against the computed pattern (rms; the worst lines when large),
+  Iobs/ΣIcalc per observed line against the table's own median, a systematic dobs offset (the powder cell against the
+  cell behind dcalc) and a dobs outside its group are notes. A pdf's negative indices come through the text layer
+  without their overbar; each row is matched to the pattern line among its sign variants whose d is the printed dcalc.
+
 ### Fixed
 - **A contact past a cation's first coordination shell is no bond** (`bv_check.first_shell`): a tetrahedral cation
   with an O near 2.9 Å (~0.04 vu, over `MIN_S`) had a fifth bond, a mean distance a quarter of an ångström long and a

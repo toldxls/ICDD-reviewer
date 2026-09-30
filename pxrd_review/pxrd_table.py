@@ -56,7 +56,12 @@ def _num(s):
         return None
 
 def load_lines(path, wavelength=None):
-    """[Line] from a JADE list or any headed / bare list."""
+    """[Line] from a JADE list or any headed / bare list — or, for a .cif, the pattern computed from the
+    structure (powder_calc; λ = `wavelength`, Cu Kα1 by default, lines of I ≥ 0.5 down to d = 1 Å), so a
+    table can be built with no JADE export."""
+    if path.lower().endswith('.cif'):
+        from pxrd_review import powder_calc as PC
+        return [Line(x['d'], x['I'], tuple(x['hkl']), x['tth'], None) for x in PC.pattern(path, wavelength or 1.5406, 1.0) if x['I'] >= 0.5]
     with open(path, encoding='utf-8-sig', errors='replace') as f:
         rows = [ln.rstrip('\n') for ln in f]
     header = None; cols = {}; out = []

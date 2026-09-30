@@ -32,6 +32,13 @@ long module paths, or ports.
                                    atom, refinement numbers (R1, Rint, cell …) that differ, the stated
                                    density vs the ideal formula, site labels the .cif lacks
     pxrd checkcif <report.pdf|.txt> a checkCIF report re-tiered by review significance
+    pxrd powder <structure.cif> [--lambda Cu|Mo|1.5406] [--dmin 1.0] [--ions] [--no-adp]
+                                   the powder pattern computed from the .cif (d, I, 2θ, hkl, multiplicity);
+                                   `pxrd pxrd obs.txt structure.cif` builds the table from it directly
+    pxrd pxrdaudit <manuscript.docx|paper.pdf> --cif structure.cif [--lambda Mo]
+                                   the manuscript's powder table vs the .cif: the cell its dcalc column was
+                                   computed from, strong lines left out, Icalc vs the computed pattern,
+                                   Iobs/ΣIcalc and dobs against their groups
     pxrd paper <paper.pdf>             what the Tables mode reads from a paper: the analytical table, basis,
                                    calculated constituents, optics, bond-valence set, powder table
     pxrd update [--check] [--release]  is a newer version on GitHub? install it (the GUI's version
@@ -74,6 +81,8 @@ MODULE = {
     'update':     'pxrd_review.update',       # options only: --check / --release
     'paper':      'pxrd_review.paper_extract',# takes a .pdf — not folder-resolved
     'cifaudit':   'pxrd_review.cif_audit',    # takes a .cif (+ --manuscript, --checkcif) — not folder-resolved
+    'powder':     'pxrd_review.powder_calc',  # takes a .cif — not folder-resolved
+    'pxrdaudit':  'pxrd_review.pxrd_audit',   # takes a manuscript + --cif — not folder-resolved
     'checkcif':   'pxrd_review.checkcif',     # takes a checkCIF report — not folder-resolved
 }
 NEEDS_FOLDER = {'gui', 'review', 'lambda', 'extras', 'candidates', 'sweep', 'check'}
