@@ -76,11 +76,32 @@ def _cell_text(tc):
     fields but collapsible by the caller."""
     return ''.join(el.text or '' for el in tc.iter() if _t(el) == 't')
 
-def _rows(path):
+def _cell_text_before(tc):
+    """The cell as it read BEFORE the tracked changes: insertions dropped, deleted text kept —
+    the entry as it was submitted, for a copy a reviewer has marked up. Only `parse_entry(before=True)`
+    reads this way (the hint oracle, `tools/hint_oracle.py`); every check reads the current text."""
+    parts = []
+    def walk(el, in_ins):
+        for ch in el:
+            tag = _t(ch)
+            if tag == 'ins':
+                walk(ch, True)
+            elif tag == 't':
+                if not in_ins:
+                    parts.append(ch.text or '')
+            elif tag == 'delText':
+                parts.append(ch.text or '')
+            else:
+                walk(ch, in_ins)
+    walk(tc, False)
+    return ''.join(parts)
+
+def _rows(path, before=False):
     root = _xml_fromstring(_zread(zipfile.ZipFile(path), 'word/document.xml'))
+    read = _cell_text_before if before else _cell_text
     out = []
     for tr in root.iter(W + 'tr'):
-        out.append([_cell_text(tc) for tc in tr.findall(W + 'tc')])
+        out.append([read(tc) for tc in tr.findall(W + 'tc')])
     return out
 
 def _sq(s):                       # squeeze whitespace
@@ -100,8 +121,10 @@ _COMMENT_LABELS = {k.lower(): k for k in (
     'IMA Number', 'Mohs Hardness', 'Strunz-mindat classification', 'Warning', 'Temperature', 'Structure',
     'Refraction Index', 'Reflectance', 'Sample Prep', 'Absolute Configuration', 'Unit Cell')}
 
-def parse_entry(path):
-    rows = _rows(path)
+def parse_entry(path, before=False):
+    """The entry's fields from the docx. `before=True` reads every cell as it stood before the
+    document's tracked changes (a reviewer's marked-up copy read as the submission it was)."""
+    rows = _rows(path, before=before)
     name = primary = None
     subfiles = []                 # [(class, subclass)]
     formulas = {}                 # Chemical/General/Analytical/Structural/Empirical -> str

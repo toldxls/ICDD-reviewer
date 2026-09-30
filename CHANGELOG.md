@@ -59,6 +59,15 @@ package version in `pyproject.toml`.
 - The Mindat refresh's straggler fallback filed any id a group named as its parent as a group; a record Mindat does not
   type as a group is filed empty. `pxrd update` on a checkout that follows another branch says main is newer when it is.
 
+### Added
+- **The hint oracle** (`tools/hint_oracle.py`, dev script): the human reviewers' tracked changes as an answer key. A
+  marked-up docx holds the submission (`parse_entry(before=True)`: insertions dropped, deletions kept) and the reviewed
+  state; the checks run on the submission and every flag is scored — RESOLVED by the reviewer's edit or PERSISTS, and
+  a printed value CONFIRMED / OTHER / LEFT. First run over the 383 distinct human-marked new-template entries
+  (`review_out/hint_oracle_r1.txt`): the primary-name and instrument-vocabulary hints are what the reviewers wrote
+  (14 of 18, 24 of 28); the codes no reviewer acted on are a worklist, not false positives — the reviews predate the
+  rules, and the ones read (a missing F constituent, a wt% list dropped from the Analysis) are real.
+
 ## [0.12.2] — 2026-09-23
 
 ### Fixed

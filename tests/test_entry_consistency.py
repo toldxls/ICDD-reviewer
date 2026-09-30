@@ -771,3 +771,30 @@ class IsotropicIndex(unittest.TestCase):
         self.assertEqual(len(m), 1); self.assertIn('Refraction Index', m[0]); self.assertIn('1.9250', m[0]); self.assertIn('1.9520', m[0])
         self.assertEqual(msgs(X.check31_gd_entry(self.e('n=1.952(3) (589nm).'), t)), [])
         self.assertEqual(msgs(X.check31_gd_entry(self.e('1.95 (calculated using the Gladstone-Dale relationship).'), t)), [])
+
+
+class BeforeTrackedChanges(unittest.TestCase):
+    """`parse_entry(before=True)` reads a reviewer's marked-up copy as the submission it was: tracked
+    insertions dropped, deleted text kept — the two states the hint oracle (tools/hint_oracle.py) scores
+    the checks between. The default read is unchanged: insertions applied, deletions dropped."""
+
+    def test_before_and_after_of_a_tracked_cell(self):
+        import tempfile, os
+        from docx import Document
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+        d = Document(); tb = d.add_table(rows=0, cols=2)
+        r = tb.add_row(); r.cells[0].merge(r.cells[1]).text = 'Comments'
+        r = tb.add_row(); r.cells[0].text = 'IMA Number'; r.cells[1].text = '2024-015'
+        # the reviewer struck '2024-015' and typed '2024-051'
+        p = r.cells[1].paragraphs[0]._p
+        run = p.find(qn('w:r'))
+        dele = OxmlElement('w:del'); dele.set(qn('w:id'), '1'); dele.set(qn('w:author'), 'A. Reviewer'); dele.set(qn('w:date'), '2026-09-24T00:00:00Z')
+        p.remove(run); t = run.find(qn('w:t')); t.tag = qn('w:delText'); dele.append(run); p.append(dele)
+        ins = OxmlElement('w:ins'); ins.set(qn('w:id'), '2'); ins.set(qn('w:author'), 'A. Reviewer'); ins.set(qn('w:date'), '2026-09-24T00:00:00Z')
+        nr = OxmlElement('w:r'); nt = OxmlElement('w:t'); nt.text = '2024-051'; nr.append(nt); ins.append(nr); p.append(ins)
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'I000001(Testite).docx'); d.save(path)
+            self.assertEqual(X.parse_entry(path).comments.get('IMA Number'), '2024-051')
+            self.assertEqual(X.parse_entry(path, before=True).comments.get('IMA Number'), '2024-015')
+            self.assertEqual([r[1] for r in X._rows(path, before=True) if r and r[0] == 'IMA Number'], ['2024-015'])
