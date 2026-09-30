@@ -5726,10 +5726,73 @@ TWO_V_APART = 5.0          # two stated 2V values this far apart are two values
 TWO_V_CALC = 15.0          # a stated 2V this far from the one the indices give is information (third-decimal rounding of the indices swings it)
 
 
-def optics_2v_lines(text):
+_2V_VAL = re.compile(r'^~?(\d{1,3}(?:\.\d)?)(?:\(\d+\))?[°◦∘]?[,;]?$')
+
+
+def comparison_2v(path, name, with_others=False):
+    """2V as a COMPARISON table gives it for this mineral — the column under the mineral's own name in the header:
+    [(value, qualifier, 'Table N')]. The linear text cannot tell the columns apart ('2V (°) 40 ~90 70(5) 63' is five
+    minerals' values in a row), so the row is read by x: the value nearest the own name's column, and nearer to it than
+    to any other heading. A row with fewer than two values is no comparison and is left to the text reader.
+    `with_others`: -> (own, the other columns' values) — the text reader drops those, they are other minerals' 2V."""
+    stem = re.sub(r'-\(.*\)$', '', name or '').lower().strip()
+    if len(stem) < 5:
+        return ([], []) if with_others else []
+    out = []; others = []
+    try:
+        pages = _pages(path)
+    except Exception:
+        return []
+    for lines in pages:
+        for ci, ln in enumerate(lines):
+            ws = ln['w']
+            if len(ws) < 3 or not re.match(r'^(?:Table|TABLE)$', ws[0][4]) or not re.match(r'^\d{1,2}[.:]?$', ws[1][4]):
+                continue
+            cap = ' '.join(w[4] for w in ws)
+            if not re.search(r'compar|related|other|\bvs\.?\b|versus|group', cap, re.I):
+                continue                                                 # 'Comparison of…', '…for X and related minerals', '…of the Y group'
+            num = ws[1][4].rstrip('.:')
+            hdr = None
+            for j in range(ci + 1, min(ci + 10, len(lines))):
+                own = [w for w in lines[j]['w'] if stem[:8] in w[4].lower().strip(',;:*†()')]
+                if own:
+                    hdr = (j, own[0], [w for w in lines[j]['w'] if w is not own[0] and re.match(r'^[A-Za-z][A-Za-z-]{4,}', w[4])])
+                    if len(own) > 1:
+                        hdr = None                                       # 'Mangani-eckermannite | Eckermannite': which column is this paper's is not for a name match to say
+                    break
+            if hdr is None:
+                continue
+            own_x = (hdr[1][0] + hdr[1][2]) / 2
+            for j in range(hdr[0] + 1, min(hdr[0] + 80, len(lines))):
+                toks = lines[j]['w']
+                if not toks:
+                    continue
+                if _ANY_CAPTION.match(' '.join(w[4] for w in toks[:2])):
+                    break
+                if not re.match(r'^2V', toks[0][4]):
+                    continue
+                label = ' '.join(w[4] for w in toks[:4]).lower()
+                q = 'calc' if 'calc' in label else 'meas' if re.search(r'meas|obs', label) else ''
+                vals = [(w, _2V_VAL.match(w[4])) for w in toks[1:] if _2V_VAL.match(w[4])]
+                vals = [(w, m) for w, m in vals if 5 <= float(m.group(1)) <= 90]
+                if len(vals) < 2:
+                    continue
+                cx = lambda w: (w[0] + w[2]) / 2
+                best = min(vals, key=lambda v: abs(cx(v[0]) - own_x))
+                d_own = abs(cx(best[0]) - own_x)
+                if d_own > 120 or any(abs(cx(best[0]) - cx(o)) < d_own for o in hdr[2]):
+                    continue                                             # nearer another heading than the own name: not this mineral's column
+                out.append((float(best[1].group(1)), q, 'Table %s' % num))
+                others += [float(m.group(1)) for w, m in vals if w is not best[0]]
+    return (out, others) if with_others else out
+
+
+def optics_2v_lines(text, table=(), others=()):
     """2V as the text states it, in every place, against itself and against the value the three indices give
     (cos²Vz = (1/β² − 1/γ²)/(1/α² − 1/γ²)): two stated values more than 5° apart are a finding; a stated value more than
-    15° from the computed one is information (the indices' rounding moves 2V a lot). -> lines (the head first)."""
+    15° from the computed one is information (the indices' rounding moves 2V a lot). `table`: the values a comparison
+    table gives this mineral (`comparison_2v`), counted as stated; `others`: the other columns' values of that row, which
+    the linear text presents as this paper's and are dropped. -> lines (the head first)."""
     t = (text or '').replace('\xa0', ' ')
     for glyph, ch in (('\uf061', 'α'), ('\uf062', 'β'), ('\uf067', 'γ'), ('\uf0b0', '°'), ('\uf077', 'ω'), ('\uf065', 'ε')):   # a Symbol font's private-use glyphs in the text layer
         t = t.replace(glyph, ch)
@@ -5738,7 +5801,12 @@ def optics_2v_lines(text):
         v = float(m.group(3))
         if 5 <= v <= 90:                                                # '2V' read off a stray '2 °' is not an angle
             q = (m.group(1) or m.group(2) or '').lower().rstrip('.')
+            if any(abs(v - o) < 0.05 for o in others or ()) and not any(abs(v - o) < 0.05 for o, _q, _s in table or ()):
+                continue                                                # another mineral's column of the comparison table
             stated.append((v, 'calc' if q.startswith('calc') else 'meas' if q.startswith(('meas', 'obs')) else q or ''))
+    for v, q, src in table or ():
+        if not any(abs(v - v0) < 0.05 for v0, _q in stated):
+            stated.append((v, ('%s, %s' % (q, src)) if q else src))
     calc = None
     m = _ABG.search(t)
     if m:
@@ -5751,17 +5819,18 @@ def optics_2v_lines(text):
     if not stated and calc is None:
         return []
     L = []
-    vals = sorted({v for v, _q in stated})
-    meas = sorted({v for v, q in stated if q != 'calc'})
+    meas = sorted({v for v, q in stated if not q.startswith('calc')})
+    if not any(q in ('', 'meas') for v, q in stated) and any('Table' in q for v, q in stated):
+        meas = sorted({v for v, q in stated})                           # the text gives only a calculated 2V: the table's bare value must be it
     several = len(set(re.findall(r'IMA\s*(20\d\d[-–]\d{2,3}[a-z]?)', t))) >= 2      # a paper describing two minerals states two 2V: information, not a difference
     if len(meas) >= 2 and meas[-1] - meas[0] > TWO_V_APART:
         L.append('2V is given as %s in different places%s' % (' vs '.join('%g°' % v for v in meas), ' (information: the paper describes more than one mineral)' if several else ''))
     if calc is not None:
         # a 2V the paper says it CALCULATED from these indices must follow from them: 3° is the rounding of the indices
-        wrong_calc = [v for v, q in stated if q == 'calc' and abs(v - calc[0]) > 3.0]
+        wrong_calc = [v for v, q in stated if q.startswith('calc') and abs(v - calc[0]) > 3.0]
         if wrong_calc:
             L.append('2V(calc) %s stated vs %.1f° from the indices α %.3f, β %.3f, γ %.3f — the calculated value does not follow from the indices printed' % (', '.join('%g°' % v for v in wrong_calc), calc[0], calc[2], calc[3], calc[4]))
-        far = [v for v, q in stated if q != 'calc' and abs(v - calc[0]) > TWO_V_CALC]
+        far = [v for v, q in stated if not q.startswith('calc') and abs(v - calc[0]) > TWO_V_CALC]
         if far:
             L.append('2V from the indices α %.3f, β %.3f, γ %.3f is %.1f° (%s); the text gives %s (information: the indices\' rounding moves it)' % (calc[2], calc[3], calc[4], calc[0], calc[1], ', '.join('%g°' % v for v in far)))
     if not L:
@@ -5845,7 +5914,8 @@ def check_paper(pdf, cif=None, out_dir=None):
         out['lines'] += _section(dominance_check(text, ex, cif))
         out['lines'] += _section(site_scattering_check(pdf, ex, cif))
         out['lines'] += _section(epfu_lines(text, ex))
-        out['lines'] += _section(optics_2v_lines(text))
+        own_2v, other_2v = comparison_2v(pdf, ex.get('name'), with_others=True)
+        out['lines'] += _section(optics_2v_lines(text, own_2v, other_2v))
         o_ = ex.get('optics') or {}
         if o_.get('n') and not (gd_statement(text) or {}).get('ci') and not re.search(r'compatib', text, re.I):
             out['lines'].append('compatibility index: none is stated although the refractive indices (n = %.3f) allow one (information)' % o_['n'])

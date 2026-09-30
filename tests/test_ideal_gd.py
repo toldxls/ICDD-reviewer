@@ -206,6 +206,33 @@ class TwoV(unittest.TestCase):
         self.assertTrue(any(x.startswith('2V(calc) 70.5° stated vs 59.5° from the indices') for x in L), L)
         self.assertTrue(any('from the indices' in x and 'information' in x for x in PE.optics_2v_lines('α = 1.600, β = 1.610, γ = 1.630, 2V = 40°.')))
 
+    def test_comparison_table_column(self):
+        import pymupdf
+        d = tempfile.mkdtemp()
+        try:
+            pdf = os.path.join(d, 'c.pdf')
+            doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
+            page.insert_text((40, 60), 'Table 7. Structural and optical data for testite and related minerals.', fontsize=9)
+            for x, t in ((40, 'Mineral'), (130, 'Firstite'), (260, 'Secondite'), (400, 'Testite')):
+                page.insert_text((x, 80), t, fontsize=9)
+            for x, t in ((40, 'a (Å)'), (130, '12.03'), (260, '11.36'), (400, '12.92')):
+                page.insert_text((x, 96), t, fontsize=9)
+            for x, t in ((40, '2V (°)'), (130, '40'), (260, '~90'), (400, '63')):
+                page.insert_text((x, 112), t, fontsize=9)
+            doc.save(pdf); doc.close()
+            self.assertEqual(PE.comparison_2v(pdf, 'testite'), [(63.0, '', 'Table 7')])
+            self.assertEqual(PE.comparison_2v(pdf, 'firstite'), [(40.0, '', 'Table 7')])
+            self.assertEqual(PE.comparison_2v(pdf, 'nosuchite'), [])
+            L = PE.optics_2v_lines('Biaxial (−), α = 1.617(3), β = 1.632(3), γ = 1.637(3), 2V(calc) = 70.5°.', PE.comparison_2v(pdf, 'testite'))
+            self.assertTrue(L[0].startswith('optics: 2V stated 70.5° (calc), 63° (Table 7)'), L)
+            self.assertTrue(any(x.startswith('2V is given as 63° vs 70.5° in different places') for x in L), L)   # the text's only 2V is calculated: the table's must be it
+            L = PE.optics_2v_lines('2V(meas.) = 62°, 2V(calc) = 70.5°.', PE.comparison_2v(pdf, 'testite'))
+            self.assertFalse(any('different places' in x for x in L), L)      # a measured value in the text: calc stands apart
+            L = PE.optics_2v_lines('2V(meas.) = 70.5°.', PE.comparison_2v(pdf, 'testite'))
+            self.assertTrue(any(x.startswith('2V is given as 63° vs 70.5° in different places') for x in L), L)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
 
 SS_CIF = """data_ss
 _cell_length_a 8

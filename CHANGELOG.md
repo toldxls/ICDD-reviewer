@@ -83,6 +83,11 @@ package version in `pyproject.toml`.
   indices give (cos²Vz = (1/β² − 1/γ²)/(1/α² − 1/γ²)) is information, the indices' rounding moving 2V as it does;
   a value the paper calls CALCULATED more than 3° from the one its own indices give is a finding (a calculated 2V has no
   scatter to hide behind). Optics printed in the Symbol font (α β γ ° ω ε as private-use glyphs) are read as the letters.
+  A COMPARISON table's 2V row is read by column (`comparison_2v`): the value under the mineral's own name in the header,
+  and nearer to it than to any other heading — the linear text cannot tell five minerals' values apart — and counts as
+  a stated value ('2V is given as 63° vs 70.5° in different places'); the OTHER columns' values are dropped from the text
+  reading (the linear text had presented a comparison table's five 2V as this paper's), and a name that matches two
+  headings ('Mangani-eckermannite | Eckermannite') picks no column.
 - The BASF-against-"no twinning" flag is a note when the denying sentence names another mineral (a comparison paper).
 
 ### Fixed
