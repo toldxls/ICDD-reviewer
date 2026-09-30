@@ -607,6 +607,23 @@ class LocatedHydrogen(unittest.TestCase):
         self.assertLessEqual(B._located_h(st, 1), 2.0)
 
 
+class AnionAssignment(unittest.TestCase):
+    def test_plain_o_with_an_oh_sum_is_noted_only_where_the_structure_assigns_hydrogen(self):
+        tmp = tempfile.mkdtemp(prefix='bv_an_')
+        try:
+            P = B.Params()
+            # H located on OW1 and OW labelled: the structure says which oxygens are hydrous — the plain O sites, all
+            # far under 1.70 vu on one Ca, are noted as OH by their sums; OW1 is not
+            st = B.Structure(_write(tmp, 'h.cif', HYDRATE_H.replace('_chemical_name_mineral testhydrate', "_chemical_name_mineral testhydrate\n_chemical_formula_sum 'Ca O4 H'"))); res, an, cells, _ = B.compute(st, P)
+            L = B.anion_assignment(st, res, cells, an)
+            self.assertEqual(len(L), 1, L); self.assertIn('plain O label', L[0]); self.assertIn('O1 ', L[0]); self.assertNotIn('OW1', L[0])
+            # no H and no hydrous label: the structure assigns nothing, so nothing is said
+            st = B.Structure(_write(tmp, 'n.cif', HYDRATE.replace('OW1 O', 'O4 O').replace('_chemical_name_mineral testhydrate', "_chemical_name_mineral testhydrate\n_chemical_formula_sum 'Ca O4'"))); res, an, cells, _ = B.compute(st, P)
+            self.assertEqual(B.anion_assignment(st, res, cells, an), [])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -2571,6 +2571,51 @@ WATER_MAX = 0.5          # below this an oxygen is a water molecule
 HYDROXYL_MAX = 1.5       # below this it is a hydroxyl
 
 
+UNASSIGNED_OH = 1.70     # a plain O with no H, receiving less than this from cations (and under 1.80 with the H bonds it accepts): an OH or H2O by its sum
+OH_AS_O = 1.85           # an O carrying one H, or labelled OH, receiving more than this from cations before its H: an O²⁻ by its sum
+WATER_OVER = 0.60        # a water (two H, or labelled OW) receiving more than this from cations
+_HYDROUS_LABEL = re.compile(r'^(OH|OW|Ow|W\d|Wat|H2O|Hw|OH2)', re.I)
+
+
+def anion_assignment(st, result, cells, anion_sum):
+    """Notes on oxygens whose bond-valence sum disagrees with what they are called: a plain 'O' with no H located
+    that receives an OH's valence, an OH (by a located H or its label) that receives an O²⁻'s, a water that receives
+    more than a water can. Judged only where the structure SAYS which oxygens are hydrous — H located for most of
+    the hydrogen the sums imply, or OH/OW labels — since a structure with no H and plain labels assigns nothing.
+    Split or partly occupied sites are left alone. -> ['note: …'] (one line per kind, the anions listed)."""
+    w = water_from_structure(st, result, cells)
+    if not w:
+        return []
+    hs = [s for s in st.sites if s.element == 'H']
+    labelled = any(_HYDROUS_LABEL.match(a.label) for a in st.anions if a.element == 'O')
+    located_all = w['located'] is not None and w['H'] > 0 and w['located'] >= 0.8 * w['H']
+    if not (labelled or located_all):
+        return []
+    low, high, wet = [], [], []
+    for lab, v, _kind in w['sites']:
+        a = next((x for x in st.anions if x.label == lab), None)
+        if a is None or a.occ_total < 0.98 or v > 4:
+            continue
+        nh = round(sum(min(h.occ_total, 1.0) for h in hs for _o, _d, _q in st.images(h.positions[0], 1.25, [a])))
+        tot = anion_sum.get(lab, v)
+        plain = bool(re.match(r'^O\d+$', lab))
+        if nh == 0 and plain and v < UNASSIGNED_OH and tot < 1.80:
+            low.append('%s %.2f%s' % (lab, v, ' (%.2f with the H bonds it accepts)' % tot if tot - v > 0.02 else ''))
+        elif (nh == 1 or (nh == 0 and re.match(r'^OH', lab, re.I))) and v > OH_AS_O:
+            high.append('%s %.2f' % (lab, v))
+        elif (nh == 2 or (nh == 0 and re.match(r'^(OW|Ow|W\d|Wat|H2O)', lab))) and v > WATER_OVER:
+            wet.append('%s %.2f' % (lab, v))
+    out = []
+    if low:
+        out.append('note: %s receive%s under %.2f vu from cations with no H located and a plain O label — an OH (or H2O) by the sum, or an under-bonded O'
+                   % (', '.join(low[:8]), 's' if len(low) == 1 else '', UNASSIGNED_OH))
+    if high:
+        out.append('note: %s receive%s over %.2f vu from cations before the H — an O²⁻ by the sum, or the H is misplaced' % (', '.join(high[:8]), 's' if len(high) == 1 else '', OH_AS_O))
+    if wet:
+        out.append('note: %s receive%s over %.2f vu from cations for a water molecule' % (', '.join(wet[:8]), 's' if len(wet) == 1 else '', WATER_OVER))
+    return out
+
+
 def water_from_structure(st, result, cells):
     """How much hydrogen the STRUCTURE holds, from the anion bond-valence sums — countable whether
     or not the refinement located the H. -> {'H', 'OH', 'H2O', 'Z', 'sites': [(label, sum, kind)],
@@ -3255,6 +3300,12 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
             text += '\n  ' + '\n  '.join(check_bvs_table(st, result, cells, anion_sum, tables, PARAM_NAMES[params]))
         if site_lines:
             text += '\n  ' + '\n  '.join(site_lines)
+    try:
+        assign = anion_assignment(st, result, cells, anion_sum)
+    except Exception as ex_:
+        assign = []; st.notes.append('anion assignment not judged (%s)' % str(ex_)[:80])
+    if assign:
+        text += '\n\nANION ASSIGNMENT (oxygens whose sums disagree with what they are called)\n  ' + '\n  '.join(assign)
     if not quiet:
         print(text)
     out_dir = out_dir or os.path.join(os.path.dirname(os.path.abspath(cif)), 'review_out')

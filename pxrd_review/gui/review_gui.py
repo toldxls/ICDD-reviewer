@@ -2768,6 +2768,11 @@ def _ms_structure_findings(key, path):
         except Exception as ex:
             add('symmetry codes', ['could not run (%s)' % str(ex)[:80]])
         try:
+            result, anion_sum, cells, _hb = B.compute(st, B.Params())
+            add('anion assignment', B.anion_assignment(st, result, cells, anion_sum), flag_of=lambda s_: False)
+        except Exception as ex:
+            add('anion assignment', ['could not run (%s)' % str(ex)[:80]])
+        try:
             from pxrd_review import cif_audit as CA
             res = CA.audit(cif, path, None)
             add('.cif audit', [r['text'] for r in res['records']], flag_of=lambda s_: any(r['text'] == s_ and r['severity'] == 'flag' for r in res['records']))

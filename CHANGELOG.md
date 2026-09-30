@@ -82,6 +82,13 @@ package version in `pyproject.toml`.
   (an "inversion twin" beside a rotation, a rotation beside the inversion — each a flag), the matrix the text prints
   (the identity — a flag; a matrix that is not the refined law — a note), and a twin fraction that refined to nothing.
   On the 52 corpus structures that refine a twin: 29 notes and no flag — the published papers earn none.
+- **`pxrd bv`: oxygens whose sums disagree with what they are called** (`bv_check.anion_assignment`, an ANION ASSIGNMENT
+  block in the report; the GUI's Manuscript mode lists it). A plain 'O' with no H located that receives under 1.70 vu
+  from cations (and under 1.80 with the hydrogen bonds it accepts) is an OH or H2O by its sum; an O carrying one H, or
+  labelled OH, that receives over 1.85 vu before its H is an O²⁻ by its sum; a water that receives over 0.60 vu. Judged
+  only where the structure says which oxygens are hydrous — H located for most of the hydrogen the sums imply, or OH/OW
+  labels — because a structure with no H and plain labels has assigned nothing; split and partly occupied sites are left
+  alone. Notes only, one line per kind; 20 of 209 corpus structures carry one.
 
 ## [0.13.0] — 2026-09-30
 
