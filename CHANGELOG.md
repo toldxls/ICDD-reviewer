@@ -89,6 +89,14 @@ package version in `pyproject.toml`.
   only where the structure says which oxygens are hydrous — H located for most of the hydrogen the sums imply, or OH/OW
   labels — because a structure with no H and plain labels has assigned nothing; split and partly occupied sites are left
   alone. Notes only, one line per kind; 20 of 209 corpus structures carry one.
+- **Which bond-valence parameter set a table really used.** Both table checks already choose the set whose valences the
+  table agrees with best; now, when the set the text cites is clearly not the one the numbers came from — the winner
+  within the usual slips, the cited set off on half the cells or more — the report says so as a finding: "the table's
+  valences follow Brese & O'Keeffe 1991 (1 of 40 cells differ) vs the Gagné & Hawthorne 2015 the text cites (28 of 40
+  differ under it)" (`pxrd bv --table`, `pxrd paper --check`). For a paper that prints a valence beside each distance,
+  every cation–anion pair is fitted on its own (`paper_extract.set_fit_lines`: each set asked for the valence at each
+  printed distance, rms ≤ 0.012 = the rounding) and named — Brese & O'Keeffe's reprint of a Brown & Altermatt value is
+  said to be one number under two names — or reported as following no set the tool carries.
 
 ## [0.13.0] — 2026-09-30
 

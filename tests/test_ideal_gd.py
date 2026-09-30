@@ -107,5 +107,49 @@ class ChargeBalance(unittest.TestCase):
         self.assertEqual(PE.charge_balance_check(t, {'name': None, 'epma': {'rows': [{'constituent': 'As2O5', 'mean': 50.0}]}}), [])
 
 
+class ParameterSetFit(unittest.TestCase):
+    URANYL = """data_u
+_cell_length_a 10
+_cell_length_b 10
+_cell_length_c 10
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_name_H-M_alt 'P 1'
+loop_
+_space_group_symop_operation_xyz
+'x, y, z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+U1 U6+ 0 0 0
+O1 O 0.18 0 0
+O2 O 0 0.235 0
+"""
+
+    def test_the_set_behind_printed_valences_is_named_and_a_cited_other_set_is_a_finding(self):
+        import math, tempfile, shutil, os
+        from pxrd_review import bv_check as B
+        tmp = tempfile.mkdtemp(prefix='setfit_')
+        try:
+            path = os.path.join(tmp, 'u.cif'); open(path, 'w').write(self.URANYL)
+            st = B.Structure(path); P = B.Params()
+            rows = {rid: (r0, b) for r0, b, rid, det in P.table[('U', 6, 'O', -2)]}
+            Rs = (1.78, 1.80, 2.30, 2.45, 2.50)
+            burns = [('U1', 'O1', R, round(math.exp((rows['r'][0] - R) / rows['r'][1]), 2)) for R in Rs]
+            L = PE.set_fit_lines(burns, st, cited=None)
+            self.assertEqual(len(L), 2, L); self.assertIn('Burns et al. (1997)', L[1]); self.assertNotIn(' vs ', L[1])
+            L = PE.set_fit_lines(burns, st, cited='gh')                      # the text cites Gagné & Hawthorne; the numbers are Burns'
+            self.assertIn('follow Burns et al. (1997)', L[1]); self.assertIn(' vs the Gagné and Hawthorne (2015) the text cites', L[1])
+            gh = [('U1', 'O1', R, round(math.exp((rows['bs'][0] - R) / rows['bs'][1]), 2)) for R in Rs]
+            L = PE.set_fit_lines(gh, st, cited='gh'); self.assertIn('Gagné and Hawthorne (2015)', L[1]); self.assertNotIn(' vs ', L[1])
+            L = PE.set_fit_lines([('U1', 'O1', R, 0.9) for R in (1.8, 2.4)], st, None); self.assertIn('no set the tool carries reproduces', L[1])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()

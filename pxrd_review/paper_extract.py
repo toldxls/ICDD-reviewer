@@ -5347,6 +5347,11 @@ def check_paper(pdf, cif=None, out_dir=None):
             if bc.get('workbook'):
                 out['bv']['held'] = bc['workbook']['held']
             out['lines'] += [bc['head']] + ['  ' + ln for ln in bc['lines']]
+            if cif:
+                try:
+                    out['lines'] += _section(bv_set_fit(pdf, cif, ex))
+                except Exception as e_:
+                    ex['notes'].append('the parameter-set fit was not run (%s)' % str(e_)[:80])
             if out_dir and bc.get('workbook'):
                 # the table beside the structure, cell by cell, with THIS verdict on its check sheet (never another)
                 try:
@@ -6065,6 +6070,12 @@ def bv_check_paper(path, cif, ex, text=None, structure=None, inferred=None, anio
             return {'workbook': wbk, 'status': 'unmatched', 'head': head, 'lines': doubted + [ln for ln in st.notes if "from the paper's formula" in ln] + left_out, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad, 'sums': sites, 'table': tab_info}
         head = 'bond valence: %s vs the .cif — agrees best with %s%s' % (
             where, P.note(), '' if (key, u6) == cited else ' (the paper cites %s%s)' % (B.PARAM_NAMES.get(cited[0], cited[0]), ', U6+ from Burns' if cited[1] == 'burns' else ''))
+        # the set the table follows against the set the text cites: a finding when the cited set is clearly not the one the
+        # numbers came from — the winner within the usual slips, the cited set off on half the cells or more
+        if ex['bv'].get('params') and (key, u6) != cited and cited_n and cited_bad is not None and n \
+                and bad <= max(1, 0.1 * n) and cited_bad >= max(4, 0.5 * cited_n):
+            kept.append("the table's valences follow %s (%d of %d cells differ) vs the %s the text cites (%d of %d differ under it)"
+                        % (B.PARAM_NAMES[key], bad, n, B.PARAM_NAMES.get(cited[0], cited[0]), cited_bad, cited_n))
         kept += [ln for ln in st.notes if "from the paper's formula" in ln] + left_out
         return {'workbook': wbk, 'status': 'checked', 'head': head, 'lines': kept + doubted, 'tables': len(tabs), 'params': key, 'u6': u6, 'cited': cited, 'compared': n, 'disagree': bad, 'cited_n': cited_n, 'cited_bad': cited_bad, 'sums': sites, 'table': tab_info}
     except Exception as ex_:
@@ -6553,6 +6564,110 @@ def bv_bond_column(pdf, st):
     for a in ans:
         rows.append([a] + [(' '.join('%.2f' % x for x in cells.get((a, c), [])) or '') for c in cats])
     return [{'page': None, 'rows': rows, 'kind': 'grid', 'caption': 'bond valences printed beside the distances'}]
+
+
+SET_FIT_OK = 0.012        # rms between a set's valences and the printed ones (rounded to 0.01) that means the set was used
+SET_FIT_NOT = 0.03        # rms above which a set was certainly not used
+_SET_RID = {'gh': 'bs', 'bo': 'b', 'ba': 'a'}
+
+
+def printed_bond_valences(pdf, st):
+    """[(cation label, anion label, R, s)] — every distance the paper prints with a bare two-decimal valence beside it
+    (the `bv_bond_column` scan, kept bond by bond instead of folded into a grid)."""
+    from pxrd_review import paper_bonds as PB
+    try:
+        tabs = PB.read_tables(pdf)
+    except Exception:
+        return []
+    known = {(r.page, r.line, round(r.dist, 4)): r for t in tabs for r in t['bonds']}
+    out = []
+    for pno, lines in enumerate(_pages(pdf)):
+        for li, ln in enumerate(lines):
+            ws = ln['w']
+            for i, w in enumerate(ws):
+                m = PB.DIST.match(w[4].strip())
+                if not m or i + 1 >= len(ws):
+                    continue
+                row = known.get((pno + 1, li, round(float(m.group(1)), 4)))
+                k = i + 1
+                if row is not None and k + 1 < len(ws) and re.fullmatch(r'[×x]\s?\d|\(?[×x]\d\)?', ws[k][4].strip()):
+                    k += 1
+                if row is None or not re.fullmatch(r'[0-3]\.\d\d', ws[k][4].strip()):
+                    continue
+                v = float(ws[k][4])
+                if 0.02 <= v <= 3.0:
+                    out.append((row.cation, row.anion, float(m.group(1)), v))
+    return out
+
+
+def set_fit_lines(pairs, st, cited=None):
+    """Which parameter set the printed valences follow, cation–anion pair by pair: each set the tool carries is asked
+    for the valence at every printed distance, and the set whose valences match the printed ones (rms ≤ 0.012 — the
+    rounding to 0.01) is the one that was used. A pair whose valences follow a set other than the one the text cites,
+    while the cited set is clearly off (rms > 0.03), is a finding; a pair no set reproduces is information. `cited`:
+    'gh' | 'bo' | 'ba' | None. -> lines (the head first)."""
+    from pxrd_review import bv_check as B
+    if not pairs:
+        return []
+    P = B.Params()
+    groups = {}
+    for cat, an, R, s in pairs:
+        cs = st.site(cat) or next((x for x in st.cations if x.label.upper() == cat.upper()), None)
+        a_s = st.site(an) or next((x for x in st.anions if x.label.upper() == an.upper() or an.upper() in [y.upper() for y in x.label.split('/')]), None)
+        if cs is None or a_s is None or not cs.species:
+            continue
+        sp = max(cs.species, key=lambda z: z.occ)
+        if not sp.ox or sp.ox <= 0 or sp.element == 'H':
+            continue
+        aox = -1 if a_s.element in ('F', 'Cl', 'Br', 'I') else -2
+        groups.setdefault((sp.element, int(sp.ox), a_s.element, aox), []).append((R, s))
+    if not groups:
+        return []
+    verdicts = []                                                   # (pair label, {rid: rms}, n)
+    for (cat, cox, an, aox), pts in groups.items():
+        if len(pts) < 2 or max(R for R, _ in pts) - min(R for R, _ in pts) < 0.04:
+            continue
+        rows = []
+        for key in ((cat, cox, an, aox), (cat, 9, an, aox), (cat, cox, an, 9)):
+            rows += P.table.get(key) or []
+        if not rows:
+            continue
+        rms = {}
+        for r0, b, rid, det in rows:
+            if 'unchecked' in det:
+                continue
+            e = [math.exp((r0 - R) / b) - s for R, s in pts]
+            rms.setdefault(rid, math.sqrt(sum(x * x for x in e) / len(e)))
+        if rms:
+            verdicts.append(('%s%s–%s' % (cat, ('%d+' % cox if cox > 1 else '+') if cox != 9 else '', an), rms, len(pts)))
+    if not verdicts:
+        return []
+    def name(rid):
+        return P.short_ref(rid) + (" (the value Brese and O'Keeffe 1991 reprint)" if rid == 'a' else '')
+    L = ['bond-valence parameters behind the printed valences (%d bonds over %d cation–anion pairs):' % (sum(n for _p, _r, n in verdicts), len(verdicts))]
+    for pair, rms, n in verdicts:
+        best = min(rms, key=rms.get)
+        fits = sorted([rid for rid, v in rms.items() if v <= SET_FIT_OK], key=rms.get)
+        cited_rid = next((r for r in B.PREFER.get(cited, []) if r in rms), None)   # the row the cited set would give this pair (Brese & O'Keeffe falls back on Brown & Altermatt's)
+        if fits:
+            used = ' = '.join(dict.fromkeys(name(r) for r in fits))
+            if cited_rid and cited_rid not in fits and rms.get(cited_rid, 0) > SET_FIT_NOT:
+                L.append('%s (%d bonds): the printed valences follow %s (rms %.3f) vs the %s the text cites (rms %.3f)' % (pair, n, used, rms[fits[0]], name(cited_rid), rms[cited_rid]))
+            else:
+                L.append('%s (%d bonds): %s (rms %.3f)' % (pair, n, used, rms[fits[0]]))
+        else:
+            L.append('%s (%d bonds): no set the tool carries reproduces the printed valences — nearest %s, rms %.3f (another source, or the valences were not computed from these distances)' % (pair, n, name(best), rms[best]))
+    return L
+
+
+def bv_set_fit(pdf, cif, ex):
+    """The set-fit lines for a paper with a .cif (`set_fit_lines` on the valences it prints beside its distances)."""
+    from pxrd_review import bv_check as B
+    try:
+        st = B.Structure(cif)
+    except Exception:
+        return []
+    return set_fit_lines(printed_bond_valences(pdf, st), st, ((ex or {}).get('bv') or {}).get('params'))
 
 
 def bv_grids_by_rows(pdf, st):

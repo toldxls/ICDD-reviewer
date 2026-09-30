@@ -624,6 +624,49 @@ class AnionAssignment(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class ParameterSetCited(unittest.TestCase):
+    PB = """data_pb
+_cell_length_a 10
+_cell_length_b 10
+_cell_length_c 10
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_name_H-M_alt 'P 1'
+loop_
+_space_group_symop_operation_xyz
+'x, y, z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+Pb1 Pb2+ 0 0 0
+O1 O 0.22 0 0
+O2 O 0 0.225 0
+O3 O 0 0 0.23
+O4 O 0.166 0.166 0
+"""
+
+    def test_a_table_computed_with_one_set_while_the_text_cites_another_is_a_finding(self):
+        import math
+        tmp = tempfile.mkdtemp(prefix='bv_cite_')
+        try:
+            cif = _write(tmp, 'pb.cif', self.PB)
+            st = B.Structure(cif); P = B.Params()
+            rows = {rid: (r0, b) for r0, b, rid, det in P.table[('Pb', 2, 'O', -2)]}
+            r0, b = rows['a']                                        # Brown & Altermatt's Pb2+–O (b 0.37): at short bonds a tenth of a vu from Gagné & Hawthorne's
+            cells = [[an.label, '%.2f' % math.exp((r0 - st.dist(st.cations[0].frac, an.frac)) / b)] for an in st.anions]
+            docx = _ms_docx(os.path.join(tmp, 'm.docx'), [('Table 1. Bond-valence sums (vu).', [['Atom', 'Pb1']] + cells, '')],
+                            paras=['Bond-valence parameters are from Gagné and Hawthorne (2015).'])
+            text = B.run(cif, table=docx, out_dir=tmp, quiet=True)[4]
+            self.assertIn("the table's valences follow Brese & O'Keeffe 1991", text)                    # the tie between the two sets that share the value goes to the first key
+            self.assertIn('vs the Gagné & Hawthorne 2015 the text cites', text)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -3280,6 +3280,24 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
                                (PARAM_NAMES[best], scores[best][0], scores[params][0] if params in scores else -1,
                                 PARAM_NAMES[params], params))
                 params = best
+        # the set the table follows against the set the manuscript's text cites: a finding when the cited set is clearly
+        # not the one the numbers came from (the winner within the usual slips, the cited set off on half the cells or more)
+        try:
+            from pxrd_review import paper_extract as _PE
+            if table.lower().endswith('.docx'):
+                from pxrd_review import cif_audit as _CA
+                mtext = ' '.join(t_ for _k, t_ in _CA.docx_lines(table))
+            else:
+                mtext = _PE.text_of(table)
+            cited = (_PE.bv_statement(mtext) or {}).get('params')
+        except Exception:
+            cited = None
+        if cited and cited in scores and scores:
+            best = min(scores, key=lambda k: scores[k][:2])
+            (n_b, bad_b), (n_c, bad_c) = scores[best][4], scores[cited][4]
+            if best != cited and bad_b <= max(1, 0.1 * n_b) and bad_c >= max(4, 0.5 * n_c):
+                chosen_note += "  the table's valences follow %s (%d of %d cells differ) vs the %s the text cites (%d of %d differ under it)\n" % (
+                    PARAM_NAMES[best], bad_b, n_b, PARAM_NAMES[cited], bad_c, n_c)
     text = report_text(st, P, result, anion_sum, cells, geom_self_check(st, result), hbonds)
     if table:
         text += '\n\nMANUSCRIPT TABLE CHECK — %s\n' % os.path.basename(table) + chosen_note + '  '
