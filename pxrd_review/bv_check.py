@@ -1682,6 +1682,7 @@ def check_symmetry_codes(st, tables, notes, paragraphs=()):
         def rec(ri, kind, sev, text, fix=None, **extra):
             r = {'table': ti, 'row': ri, 'kind': kind, 'severity': sev, 'text': '%s row %d: %s' % (where, ri + 1, text), 'fix': fix}
             r.update(extra); recs.append(r)
+        unread = set()
         def resolve(ri, code, cell):
             if code is None:
                 return None, True
@@ -1689,6 +1690,8 @@ def check_symmetry_codes(st, tables, notes, paragraphs=()):
                 return codes[code][:2], True
             if codes:
                 rec(ri, 'undefined', 'note', '%s — code (%s) is not defined in the table\'s symmetry-code footnote' % (cell, code))
+            else:
+                unread.add(code)
             return None, False
         def search(p_fixed, site, want, want2=None, p2=None, pair=None, printed_op=None):
             """The image of `site` reproducing distance `want` from p_fixed (and `want2` from p2): the
@@ -1872,6 +1875,10 @@ def check_symmetry_codes(st, tables, notes, paragraphs=()):
                     % (a[0] + 1, b[0] + 1, a[1], b[1], optxt, n_rows, n_unique, said))
         n_bad = sum(1 for r in recs if r['table'] == ti and r['kind'] in ('operator', 'translation'))
         stats[ti] = (n_ok, n_bad)
+        if unread:
+            recs.append({'table': ti, 'row': None, 'kind': 'unread', 'severity': 'note', 'fix': None,
+                         'text': '%s: the labels carry symmetry codes (%s) but no code footnote was read for the table — those rows are unchecked'
+                                 % (where, ', '.join(sorted(unread)[:8]))})
         if n_ok or n_bad:
             recs.append({'table': ti, 'row': None, 'kind': 'count', 'severity': 'info', 'fix': None,
                          'text': '%s: %d coded distances reproduce with the printed symmetry codes, %d do not' % (where, n_ok, n_bad)})

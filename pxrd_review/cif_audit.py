@@ -158,7 +158,9 @@ def check_numbers(st, lines):
     """The manuscript's refinement numbers against the .cif's."""
     recs = []
     seen = set(); compared = set()
-    for i, (kind, raw) in enumerate(lines):
+    order = [i for i, (k, _t) in enumerate(lines) if k == 'table'] + [i for i, (k, _t) in enumerate(lines) if k != 'table']
+    for i in order:                                              # the tables first: a value the abstract repeats must not absorb the table's flag
+        kind, raw = lines[i]
         text = raw.translate(_D)
         before = ' '.join(t for _k, t in lines[max(0, i - 4):i])
         # a cell statement is judged whole: a line whose axes are far from the .cif's, or one under a

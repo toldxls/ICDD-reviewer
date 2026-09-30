@@ -120,6 +120,12 @@ class Audit(unittest.TestCase):
         self.assertEqual(len(notes), 1, recs); self.assertIn('0.0410', notes[0]['text'])
         self.assertIn('8 kinds read', recs[0]['text']); self.assertIn('Rint', recs[0]['text']); self.assertTrue(recs[0]['text'].rstrip('; 3 differ').endswith('a)'), recs[0]['text'])
 
+    def test_a_prose_repeat_never_hides_the_table_flag(self):
+        d = _docx(os.path.join(self.tmp, 'm.docx'), [('p', 'The structure refined to R1 = 0.0450 at an early stage.'),
+                                                       ('table', ['Final R indices [I > 2σI]', 'R1 = 0.0450, wR2 = 0.0647'])])
+        recs = [r for r in CA.check_numbers(self.st, CA.docx_lines(d)) if r['kind'] == 'number']
+        self.assertEqual([r['severity'] for r in recs], ['flag'], recs)                      # the table's, judged first
+
     def test_density_from_the_ideal_formula(self):
         # Mg(OH)2 · … : the ideal formula's mass 58.32 with Z = 1 in 512 Å³ gives 0.189 g/cm³
         d = _docx(os.path.join(self.tmp, 'm.docx'), [

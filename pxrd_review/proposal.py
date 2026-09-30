@@ -166,9 +166,15 @@ def review(target, cif=None, checkcif=None, out_dir=None, annotate_copy=True, qu
         section('lints (notes)', LI.lint(docx)['lines'][1:])
     except Exception as e:
         section('lints', ['could not run (%s)' % str(e)[:100]])
+    # -- the annotated copy first, so the report can say how many flags it holds
+    n = 0; unplaced = []
+    copy = os.path.join(out_dir, stem + '_proposal.docx')
+    if annotate_copy:
+        n, unplaced = annotate(docx, flags, copy, base=refs_copy)
     # -- the report
     head = ['PROPOSAL REVIEW — %s' % os.path.basename(docx), '  .cif: %s' % (os.path.basename(cif) if cif else 'none'),
-            '  checkCIF: %s' % (os.path.basename(checkcif) if checkcif else 'none'), '  %d flags (written as comments), the rest notes' % len(flags), '']
+            '  checkCIF: %s' % (os.path.basename(checkcif) if checkcif else 'none'),
+            '  %d flags: %s; the rest notes' % (len(flags), ('%d written as comments in the copy%s' % (n, ', %d in the report only' % len(unplaced) if unplaced else '')) if annotate_copy else 'report only'), '']
     body = []
     for title, lines in sections:
         body.append('== ' + title)
@@ -178,13 +184,9 @@ def review(target, cif=None, checkcif=None, out_dir=None, annotate_copy=True, qu
     rep = os.path.join(out_dir, stem + '_proposal_report.txt')
     with open(rep, 'w', encoding='utf-8') as f:
         f.write(report_txt + '\n')
-    n = 0; unplaced = []
-    copy = os.path.join(out_dir, stem + '_proposal.docx')
-    if annotate_copy:
-        n, unplaced = annotate(docx, flags, copy, base=refs_copy)
-        if unplaced:
-            with open(rep, 'a', encoding='utf-8') as f:
-                f.write('\n== flags with no place in the text (report only)\n' + '\n'.join('  ' + u for u in unplaced) + '\n')
+    if unplaced:
+        with open(rep, 'a', encoding='utf-8') as f:
+            f.write('\n== flags with no place in the text (report only)\n' + '\n'.join('  ' + u for u in unplaced) + '\n')
     if not quiet:
         print(report_txt)
         print('  report → %s' % rep)

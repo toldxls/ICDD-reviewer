@@ -139,6 +139,9 @@ def pattern(cif, lam=1.5406, dmin=1.0, ions=False, adp=True, pol=1.0, structure=
             rots.append(r)
     a, b, c = st.cell[:3]
     hmax = [int(math.ceil(x / dmin)) + 1 for x in (a, b, c)]
+    while (2 * hmax[0] + 1) * (2 * hmax[1] + 1) * (2 * hmax[2] + 1) > 300000:
+        dmin *= 1.25                                            # a huge (or mis-scaled) cell: the enumeration is capped, as paper_extract._reflection_ds caps it
+        hmax = [int(math.ceil(x / dmin)) + 1 for x in (a, b, c)]
     lines = {}
     for h in range(-hmax[0], hmax[0] + 1):
         for k in range(-hmax[1], hmax[1] + 1):

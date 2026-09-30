@@ -104,6 +104,11 @@ class Audit(unittest.TestCase):
         self.assertEqual(PA._system((10.0, 15.0, 5.0, 90, 106.9, 90), 'C 2/m'), 'monoclinic-b')
         self.assertEqual(PA._system((5.0, 5.0, 5.0, 90, 90, 90), 'F m -3 m'), 'cubic')
 
+    def test_a_cubic_cell_is_stated_by_its_a_alone(self):
+        cells = PA.manuscript_cells(['Unit cell: a = 10.123(2) Å, V = 1037.4 Å3'], 'cubic')
+        self.assertEqual([c[1][:3] for c in cells], [(10.123, 10.123, 10.123)])
+        self.assertEqual(PA.manuscript_cells(['Unit cell: a = 10.123(2) Å'], 'tetragonal'), [])   # needs its c
+
     def test_dcalc_from_another_cell_is_a_flag(self):
         other = (4.6100, 4.6100, 2.9587, 90, 90, 90)                                   # a 0.35 % longer
         path = _docx_table(os.path.join(self.tmp, 'm.docx'), self.table_from(self.pat, cell=other), [])

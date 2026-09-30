@@ -109,10 +109,8 @@ def read_docx_powder(path):
                 dobs = _num(dobs_c); iobs = _num(iobs_c)
                 if dobs is not None and dobs_m != 'continue':
                     group += 1; last = (dobs, iobs)
-                elif dobs_m == 'continue' or (dobs is None and last is not None and False):
-                    pass
-                elif dobs is None:
-                    last = None
+                elif dobs_m != 'continue' and dobs is None:
+                    last = None                                 # an empty cell that is no merge continuation: a calculated line under no observed one
                 g = group if (dobs is not None or dobs_m == 'continue') and last else None
                 out.append({'iobs': last[1] if g else None, 'dobs': last[0] if g else None, 'dcalc': dcalc,
                             'icalc': _num(get('icalc')[0]) if 'icalc' in b else None, 'hkl': hkl, 'group': g})
@@ -301,9 +299,10 @@ def manuscript_cells(text_lines, system_hint):
         need = {'monoclinic-a': [al], 'monoclinic-b': [be], 'monoclinic-c': [ga], 'triclinic': [al, be, ga]}.get(system_hint, [])
         if any(v[0] is None for v in need):
             continue                                        # a cell printed without the angle its system needs: not this one
-        if not (a[0] and c[0]):
-            continue
+        if not a[0] or (not c[0] and system_hint != 'cubic'):
+            continue                                        # a cubic cell is stated as 'a = …' alone
         b = b if b[0] else a
+        c = c if c[0] else a
         vals = (a, b, c, al if al[0] else (90.0, None), be if be[0] else (90.0, None), ga if ga[0] else ((120.0, None) if system_hint == 'hexagonal' else (90.0, None)))
         cell = tuple(v[0] for v in vals); esd = tuple(v[1] for v in vals)
         if not any(all(abs(x - y) < 1e-6 for x, y in zip(cell, o[1])) for o in out):
@@ -490,7 +489,7 @@ def audit(manuscript, cif, lam=None):
         if off:
             recs.append({'kind': 'dobs', 'severity': 'note',
                          'text': 'dobs outside its group%s: %s' % (' (beyond the table\'s own offset)' if abs(med) > GROUP_TOL else '',
-                                 '; '.join('%.3f vs %s (%+.2f %%)' % (dobs, ('%.3f–%.3f' % (hi, lo)) if hi != lo else '%.3f' % lo, 100 * o) for o, dobs, lo, hi in off[:10]))})
+                                 '; '.join('%.3f vs %s (%+.2f %%)' % (dobs, ('%.3f–%.3f' % (lo, hi)) if hi != lo else '%.3f' % lo, 100 * o) for o, dobs, lo, hi in off[:10]))})
     for r in recs:
         L.append('  %s%s' % ('note: ' if r['severity'] == 'note' else '', r['text']))
     return {'records': recs, 'lines': L, 'rows': rows, 'pattern': pat}
