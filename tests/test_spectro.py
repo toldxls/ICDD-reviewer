@@ -250,6 +250,151 @@ class Libowitzky(unittest.TestCase):
         self.assertEqual([(x['status'], x['grade']) for x in S.check_claims(t1)], [('off', 'info')])
 
 
+HEAD = 'Testite, a new mineral. The ideal formula is %s. '
+RAMAN = ('The Raman spectrum shows a strong band at 832 cm–1 assigned to the ν1 (UO2)2+ stretch. Bands at 1010 and 1105 cm–1 are assigned to ν1 and ν3 of (SO4)2–, respectively. ')
+OHS = 'Broad bands at 3250 and 3480 cm–1 are assigned to O–H stretching vibrations. '
+
+
+class Absent(unittest.TestCase):
+    """A band the sentence says the spectrum does NOT show is no band of the spectrum."""
+
+    def test_forms(self):
+        for t, lo, hi in (('There is no absorption band at ca. 1650 cm–1 in the spectrum.', 1650, 1650),
+                          ('The H–O–H bend near 1600 cm–1 is absent.', 1600, 1600),
+                          ('No bands were observed in the region of bending vibrations of water molecules (~1600 cm–1).', 1600, 1600),
+                          ('Bands of H–O–H bending vibrations, seen in related minerals in the range 1700–1600 cm–1, were not detected.', 1600, 1700),
+                          ('The absence of bands at 1430 cm–1 rules out carbonate.', 1430, 1430)):
+            self.assertEqual([(a, b) for a, b, _s in S.absent_bands(t)], [(lo, hi)], t)
+            self.assertEqual(S.bands(t), [], t)
+
+    def test_what_is_there_stays(self):
+        t = 'There are no hydroxyl bands, but stretches of molecular H2O are seen as a broad band at 3310 cm–1. A band at 1640 cm–1, which is not split, is assigned to H2O bending.'
+        self.assertEqual(sorted(b.pos for b in S.bands(t)), [1640.0, 3310.0]); self.assertEqual(S.absent_bands(t), [])
+
+    def test_a_region_is_no_band(self):
+        for t in ('Bands below 320 cm–1 are assigned to lattice modes.', 'No significant Raman bands were observed above 1700 cm–1.', 'Bands at wavenumbers lower than 500 cm–1 are lattice modes.'):
+            self.assertEqual(S.bands(t), [], t)
+        self.assertEqual(S.absent_bands('No significant Raman bands were observed above 1700 cm–1.'), [])
+
+
+class Formula(unittest.TestCase):
+    """The formula's hydrogen species and light groups beside the bands stated: information, every line."""
+
+    def _lines(self, formula, body, **kw):
+        return S.species_lines(HEAD % formula + body, name='testite', **kw)
+
+    def test_species_a_formula_writes(self):
+        self.assertEqual(S.formula_species('Ca2(UO2)3(SO4)2(OH)6·4H2O'), {'H2O', 'OH'})
+        self.assertEqual(S.formula_species('(NH4)2(H3O)[Al(CO3)2]'), {'NH4', 'H3O', 'CO3'})
+        self.assertEqual(S.formula_species('Ca5(PO4)3F'), set())
+        self.assertEqual(S.formula_species('Cu<sub>2</sub>(OH)<sub>3</sub>Cl'), {'OH'})
+
+    def test_water_without_its_bending_band(self):
+        ln = self._lines('Ca2(UO2)3(SO4)2(OH)6·4H2O', RAMAN + OHS)
+        self.assertEqual(len(ln), 1); self.assertIn('O–H stretching bands are stated (3250, 3480 cm⁻¹) and no H–O–H bending band', ln[0]); self.assertIn('weak in a Raman spectrum', ln[0])
+        self.assertNotIn('weak in a Raman', self._lines('Ca2(UO2)3(SO4)2(OH)6·4H2O', RAMAN.replace('Raman', 'infrared') + OHS)[0])
+        for bend in ('A band at 1632 cm–1 is assigned to the H–O–H bending vibration. ', 'The band at 1615 is assigned to the ν2 (δ) bending vibrations of H2O. ',
+                     'Bands in the range 1700–1600 cm–1 are due to water. '):
+            self.assertEqual(self._lines('Ca2(UO2)3(SO4)2(OH)6·4H2O', RAMAN + OHS + bend), [], bend)
+        self.assertEqual(self._lines('Ca(UO2)(SO4)F2', RAMAN + OHS.replace('O–H stretching vibrations', 'overtones')), [])
+
+    def test_the_text_says_the_bend_is_not_there(self):
+        ln = self._lines('Na(UO2)(SO4)(OH)·2H2O', RAMAN + OHS + 'No bands were observed in the region of bending vibrations of water molecules (~1600 cm–1). ')
+        self.assertEqual(len(ln), 1); self.assertIn('the text states that the spectrum shows no band near 1600 cm⁻¹', ln[0]); self.assertIn('‘No bands were observed', ln[0])
+        # a range the sentence does not tie to water is not about water; another mineral's spectrum is not this one's
+        self.assertNotIn('shows no band', ' '.join(self._lines('Na(UO2)(SO4)(OH)·2H2O', RAMAN + OHS + 'Bands of carbonate (in the range 1350–1560 cm–1) are absent. ')))
+        self.assertEqual([x for x in self._lines('Na(UO2)(SO4)(OH)·2H2O', RAMAN + OHS + 'Unlike that of otherite, the spectrum of testite has no peaks in the region 1500–1600 cm–1 (H–O–H bending). ')
+                          if 'shows no band' in x], [])
+
+    def test_a_spectrum_that_reaches_no_hydrogen_band(self):
+        ln = self._lines('Ca2(UO2)3(SO4)2(OH)6·4H2O', RAMAN)
+        self.assertEqual(len(ln), 1); self.assertIn('the formula carries H2O and OH', ln[0]); self.assertIn('the 3 bands stated (832–1105 cm⁻¹) reach neither', ln[0])
+        self.assertEqual(self._lines('Ca(UO2)(SO4)F2', RAMAN), [])
+
+    def test_water_stated_where_the_formula_has_hydroxyl(self):
+        water = 'A band at 1634 cm–1 is assigned to the H–O–H bending vibration of H2O. '
+        ln = self._lines('Cu(UO2)(SO4)(OH)2', RAMAN + OHS + water)
+        self.assertEqual(len(ln), 1); self.assertIn('a band at 1634 cm⁻¹ is stated as molecular water; the formula carries OH and no H2O', ln[0])
+        for guard in (water.replace('A band', 'A band of adsorbed water'), water.replace('is assigned', 'may be assigned'),
+                      'In otherite a band at 1634 cm–1 is assigned to the H–O–H bending vibration of H2O. ', water + 'Otherite, Cu(UO2)(SO4)(OH)2·2H2O, is its hydrate. '):
+            self.assertEqual(self._lines('Cu(UO2)(SO4)(OH)2', RAMAN + OHS + guard), [], guard)
+
+    def test_hydrogen_bands_and_a_formula_without_hydrogen(self):
+        ln = self._lines('Ca(UO2)(SO4)F2', RAMAN + OHS)
+        self.assertEqual(len(ln), 1); self.assertIn('bands at 3250, 3480 cm⁻¹ are assigned to O–H or H2O; the formula carries no hydrogen (Ca(UO2)(SO4)F2)', ln[0])
+        self.assertEqual(self._lines('Ca(UO2)(SO4)F2', RAMAN + OHS.replace('are assigned', 'of adsorbed moisture are assigned')), [])
+
+    def test_a_light_group_with_no_band(self):
+        ln = self._lines('(NH4)2(UO2)(SO4)2', RAMAN)
+        self.assertEqual(len(ln), 1); self.assertIn('ammonium: the formula carries NH4', ln[0]); self.assertIn('1380–1490 cm⁻¹', ln[0])
+        self.assertEqual(self._lines('(NH4)2(UO2)(SO4)2', RAMAN + 'A band at 1432 cm–1 is assigned to the ν4 bending of NH4. '), [])
+        self.assertEqual(self._lines('(NH4)2(UO2)(SO4)2', RAMAN + 'A weak band is seen at 1440 cm–1. '), [])        # a band where it would stand, whatever it is called
+        self.assertIn('carbonate: the formula carries CO3', self._lines('Na2Ca(CO3)2', 'Raman bands occur at 155, 260, 301 and 715 cm–1. ')[0])
+
+    def test_a_group_the_mineral_has_no_element_for(self):
+        body = RAMAN + 'Further bands are at 420 and 580 cm–1. '
+        ln = self._lines('Ca(UO2)2(PO4)2', body)
+        self.assertEqual(len(ln), 1); self.assertIn('bands at 1010, 1105 cm⁻¹ are assigned to SO4; neither the formula (Ca(UO2)2(PO4)2) nor the rest of the text carries S', ln[0])
+        for guard in ('The analysis gave SO3 0.41 wt%. ', 'Minor sulfate substitutes for phosphate. '):
+            self.assertEqual(self._lines('Ca(UO2)2(PO4)2', body + guard), [], guard)
+        self.assertEqual(self._lines('Ca(UO2)2(PO4)2', body.replace('are assigned to ν1 and ν3', 'of an impurity are assigned to ν1 and ν3')), [])
+
+    def test_the_section(self):
+        lines = S.check_lines(HEAD % 'Ca2(UO2)3(SO4)2(OH)6·4H2O' + RAMAN + OHS)
+        self.assertEqual(lines[0], 'spectroscopy: the stated bands beside the formula'); self.assertEqual(len(lines), 2)
+        self.assertEqual(S.check_lines(HEAD % 'Ca2(UO2)3(SO4)2(OH)6·4H2O' + RAMAN + OHS + 'The H–O–H bending band is at 1630 cm–1. '), [])
+        self.assertEqual(S.check_lines('No formula here. ' + RAMAN + OHS), [])
+
+
+class Table(unittest.TestCase):
+    """A band-assignment table of a manuscript .docx: band and assignment paired by row."""
+
+    @classmethod
+    def setUpClass(cls):
+        import docx
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        cls.tmp = tempfile.mkdtemp()
+        d = docx.Document()
+        d.add_paragraph('Testite, a new mineral. The ideal formula is Na2Ca(UO2)(CO3)3·6H2O. The Raman band at 1086 cm–1 is assigned to the ν3 antisymmetric stretch of (CO3)2–, '
+                        'and the band at 829 cm–1 to the ν1 (UO2)2+ stretch. A band at 3400 cm–1 is assigned to O–H stretching vibrations.')
+        rows = [('Otherite', 'Testite', 'Calculated', 'Vibrational modes'), ('3700–3300', '3700–3100', '', 'O–H stretching'), ('1410', '1413 s', '1420', '§3 (CO3)2– asym. stretching'),
+                ('1090', '1086', '1080', '§1 (CO3)2– sym. stretching'), ('888', '893', '', '§2 (CO3)2– bending or §3 (UO2)2+ asym. stretching'), ('825', '829 vs', '830', '§1 (UO2)2+ sym. stretching'),
+                ('750', '752, 746', '', '4 (CO3)2– bending'), ('', '1150', '', '§4 (CO3)2– bending'), ('170', '189', '', 'lattice modes')]
+        t = d.add_table(rows=len(rows), cols=4)
+        for i, r in enumerate(rows):
+            for j, c in enumerate(r):
+                par = t.cell(i, j).paragraphs[0]
+                for k, piece in enumerate(c.split('§')):
+                    if k:                                           # the ν as Word sets it from the Symbol font: python-docx's .text drops it
+                        sym = OxmlElement('w:sym'); sym.set(qn('w:font'), 'Symbol'); sym.set(qn('w:char'), 'F06E')
+                        par.add_run()._r.append(sym)
+                    par.add_run(piece)
+        cls.path = os.path.join(cls.tmp, 'testite.docx'); d.save(cls.path)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_rows(self):
+        tb = S.table_bands(self.path, 'testite')
+        got = [(b.pos, b.family, b.mode, b.shape) for b in tb]
+        self.assertEqual(got, [(1413.0, 'CO3', 3, 's'), (1086.0, 'CO3', 1, ''), (893.0, None, None, ''), (829.0, 'UO2', 1, 'vs'), (752.0, 'CO3', 4, ''), (746.0, 'CO3', 4, ''),
+                               (1150.0, 'CO3', 4, ''), (189.0, 'lattice', 'lattice', '')])     # its own column; the ν Word keeps as a symbol; a ν lost altogether; two things in one row left open
+        self.assertEqual(len(S.table_bands(self.path, '')), 14)                                   # no name to choose by: both minerals' columns, never the calculated one
+        self.assertEqual(S.table_bands(os.path.join(self.tmp, 'nothing.pdf')), [])
+
+    def test_beside_the_text_and_against_itself(self):
+        from pxrd_review import paper_extract as PE
+        text = PE.text_of(self.path)
+        lines = S.check_lines(text, None, None, self.path)
+        self.assertEqual(lines[0], 'spectroscopy: the stated bands beside the formula and the assignment table')
+        self.assertTrue(any('table: the band at 1086 cm⁻¹ is ν1 CO3 in the table and ν3 CO3 in the text' in ln for ln in lines), lines)
+        self.assertTrue(any('table: ν1 of CO3 at 1086 cm⁻¹ stands below ν4 at 1150 cm⁻¹' in ln for ln in lines), lines)
+        self.assertFalse(any('829' in ln for ln in lines if ln.startswith('table:')))               # where table and text agree nothing is said
+        self.assertTrue(any(ln.startswith('water:') for ln in lines))                              # the table's bands count: an O–H stretch stated, no bend
+
+
 class Wording(unittest.TestCase):
     """Two regexes decide from a line's WORDS whether it is a finding (proposal._FLAG for the Word comments,
     review_gui._CALC_FLAG for the GUI): every finding must match both, every information line neither."""
@@ -273,13 +418,24 @@ class Wording(unittest.TestCase):
                      'hbonds': [('O3', 'O7', 2.80, 'H'), ('O4', 'O8', 2.95, 'H')]}
         infos += S.structure_lines(structure, [822.0], [856.0], [2840.0, 3400.0, 3600.0])
         infos += S.structure_lines({'uranyl': [('U1', [1.75, 1.76], 1.755)], 'source': 'the bond table the paper prints'}, [850.0, 861.0], [], [])
+        # the formula beside the bands, and the assignment table: information, every template
+        water = 'A band at 1634 cm–1 is assigned to the H–O–H bending vibration of H2O. '
+        for formula, body in (('Ca2(UO2)3(SO4)2(OH)6·4H2O', RAMAN + OHS), ('Ca2(UO2)3(SO4)2(OH)6·4H2O', RAMAN),
+                              ('Na(UO2)(SO4)(OH)·2H2O', RAMAN + OHS + 'No bands were observed in the region of bending vibrations of water molecules (~1600 cm–1). '),
+                              ('Cu(UO2)(SO4)(OH)2', RAMAN + OHS + water), ('Ca(UO2)(SO4)F2', RAMAN + OHS), ('(NH4)2(UO2)(SO4)2', RAMAN),
+                              ('Ca(UO2)2(PO4)2', RAMAN + 'Further bands are at 420 and 580 cm–1. ')):
+            got = S.species_lines(HEAD % formula + body, name='testite')
+            assert got, (formula, body)
+            infos += got
+        infos += S.table_lines([S.Band(1086.0, None, '', 'CO3', 1, 'row', True), S.Band(1150.0, None, '', 'CO3', 4, 'row', True)],
+                               [S.Band(1086.0, 'raman', '', 'CO3', 3, 'The band at 1086 cm-1 is assigned to ν3 of CO3.', True)])
         return flags, infos
 
     def test_flags_and_information(self):
         from pxrd_review import proposal as PR
         from pxrd_review.gui import review_gui as G
         flags, infos = self._lines()
-        self.assertGreaterEqual(len(flags), 3); self.assertGreaterEqual(len(infos), 6)
+        self.assertGreaterEqual(len(flags), 3); self.assertGreaterEqual(len(infos), 15)
         for ln in flags:
             self.assertTrue(PR._FLAG.search(ln), ln); self.assertEqual(G._calc_kind(ln), 'calc', ln)
         for ln in infos:

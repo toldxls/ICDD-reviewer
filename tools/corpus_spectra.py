@@ -34,6 +34,7 @@ EXCLUDE = re.compile(r'CNMNC|proposal|review_out|pxrd-review', re.I)     # unpub
 WINDOW_MODES = {1, 2, 3, 4}                          # the numbered modes of a polyatomic group …
 WINDOW_EXTRA = {('OH', 'stretch'), ('H2O', 'bend'), ('H2O', 2)}          # … and the two water / hydroxyl bands every hydrated mineral has
 PCTS = (5, 25, 50, 75, 95)
+FORMULA_KINDS = ('water:', 'hydrogen:', 'carbonate:', 'ammonium:', 'nitrate:', 'hydronium:', 'assignment:', 'table:')     # spectro.species_lines / table_lines
 TRIM = 5.0                                           # robust sigmas (1.4826 MAD) from the median beyond which a position is dropped:
                                                      # the reader mispairs a band with a group a few times in a hundred, and those
                                                      # land far from the rest — the percentiles are of what remains
@@ -177,8 +178,18 @@ def main(pdf_dirs, out_dir, tag, baseline=None, only=None, subset=None, limit=No
     L += ['', 'INFORMATION lines on stated distances (not findings):']
     for rec in recs:
         for ln in rec['lines'][1:]:
-            if ' vs ' not in ln and not ln.startswith(('uranyl:', 'hydrogen bonds:')):
+            if ' vs ' not in ln and not ln.startswith(('uranyl:', 'hydrogen bonds:') + FORMULA_KINDS):
                 L.append('  %-34s %s' % (rec['paper'][:34], ln))
+    kinds = collections.Counter(ln.split(':')[0] + (' (no bend)' if 'no H–O–H bending band' in ln else ' (said absent)' if 'shows no band' in ln else ' (as molecular water)' if 'as molecular water' in ln
+                                                    else ' (no O–H region)' if 'reach neither' in ln else ' (no hydrogen in the formula)' if 'no hydrogen' in ln else '')
+                                for rec in recs for ln in rec['lines'][1:] if ln.startswith(FORMULA_KINDS))
+    L += ['', 'THE FORMULA BESIDE THE BANDS (information lines; every one read against its paper before a rule ships) — %d lines on %d papers:' % (
+        sum(kinds.values()), sum(1 for rec in recs if any(ln.startswith(FORMULA_KINDS) for ln in rec['lines'][1:])))]
+    L += ['  %4d  %s' % (v, k) for k, v in sorted(kinds.items())]
+    for rec in recs:
+        for ln in rec['lines'][1:]:
+            if ln.startswith(FORMULA_KINDS):
+                L.append('  %-30s %s' % (rec['paper'][:30], ln))
     w = windows(windows_recs)
     L += ['', 'BAND WINDOWS (group, mode, technique: bands / papers, 5th–25th–50th–75th–95th percentile; a bin needs %d papers):' % MIN_PAPERS]
     for key, entry in w.items():

@@ -20,7 +20,15 @@ What is said (`check_lines`), by grade:
                                                            itself on the paper's other pairs or the sibling
                                                            relation reproduces the stated value exactly;
   the same without that proof                              information;
-  the inferred distance beside the structure's own         information (a correlation's scatter is not an error).
+  the inferred distance beside the structure's own         information (a correlation's scatter is not an error);
+  the formula's hydrogen and light groups beside the       information (`species_lines`): H2O in the formula with O–H
+  bands stated                                             stretches stated and no H–O–H bending band; the text itself
+                                                           saying no band stands there; a spectrum that reaches no O–H
+                                                           region; water stated where the formula has only hydroxyl;
+                                                           ammonium / carbonate / nitrate / hydronium with no band;
+  an assignment table (.docx) beside the prose             information (`table_bands`, `table_lines`).
+A band the sentence says the spectrum does NOT show ('no absorption band at ca. 1650 cm-1') and a region ('bands below
+320 cm-1') are not bands of the spectrum (`absent_bands`, `band_ranges`).
 The structure side (`uranyl_sites`, `hbond_distances`) reads the .cif through bv_check; nothing here is written
 into a document, and the text never leaves the machine.
 """
@@ -315,8 +323,9 @@ def _band_groups(s):
             pm = re.search(r'(\d{3,4})\s?(?:-|to)\s?[~∼≈]?\s?$', pre)
             if pm:                                               # '3200-2700 cm-1' split by the list walk
                 rng = True; items = [(float(pm.group(1)), ''), items[0]]; start = max(0, start - 30) + pm.start()
-        if re.search(r'[<>≤≥]\s?[~∼≈]?\s?$', s[max(0, start - 3): start]):
-            rng = True                                           # '<400 cm-1' is a region
+        if re.search(r'[<>≤≥]\s?[~∼≈]?\s?$', s[max(0, start - 3): start]) or \
+                re.search(r'\b(?:above|below|beyond|over|under|up to|down to|(?:higher|lower|greater|less) than)\s?[~∼≈]?\s?$', s[max(0, start - 14): start], re.I):
+            rng = True                                           # '<400 cm-1', 'above 1700 cm-1': a region, not a band
         out.append((start, m.end(), items, rng))
     for m in _AT.finditer(s):
         if any(g[0] <= m.start(1) < g[1] for g in out):
@@ -406,6 +415,23 @@ def _tech_for(sent, g):
 
 _SHAPE_CODE = ('sh', 'vs', 'vw', 's', 'm', 'w', 'br', 'vvw', 'm-s', 's-vs', 'w-m', 'vbr', 'b')
 
+# 'no absorption band at ca. 1650 cm-1', 'the H-O-H bend near 1600 cm-1 is absent', 'the absence of bands at …': the
+# sentence states that the spectrum has NO band there. Read within the clause the numbers stand in.
+_CLAUSE = re.compile(r';|,\s(?:but|while|whereas|although|though)\b|\bbut\b|\bwhereas\b')
+_NEG_BEFORE = re.compile(r'\b(?:no|absence of|lack(?:s|ing)? (?:of )?|lack of|without|devoid of|free of|neither)\b[^;]{0,90}$', re.I)
+_NEG_AFTER = re.compile(r'^[^;]{0,70}?\b(?:(?:is|are|was|were|being)\s+(?:completely\s+|entirely\s+)?(?:absent|missing|lacking)|(?:is|are|was|were)\s+not\s+(?:observed|present|detected|seen|found|visible|recorded|apparent)|'
+                        r'(?:is|are|was|were)\s+absent|not\s+(?:observed|detected|present))\b', re.I)
+
+
+def _negated(sent, g):
+    """A run of bands the sentence says the spectrum does NOT show."""
+    lo = 0
+    for m in _CLAUSE.finditer(sent, 0, g[0]):
+        lo = m.end()
+    m = _CLAUSE.search(sent, g[1])
+    hi = m.start() if m else len(sent)
+    return bool(_NEG_BEFORE.search(sent[lo: g[0]]) or _NEG_AFTER.search(sent[g[1]: hi]))
+
 
 def _sentence_bands(sent, tech=None):
     """[Band] of one normalised sentence; `tech` is the technique the sentences before it left standing."""
@@ -418,7 +444,7 @@ def _sentence_bands(sent, tech=None):
     own = not _FOREIGN.search(sent)
     out = []
     for k, g in enumerate(groups):
-        if g[3]:
+        if g[3] or _negated(sent, g):
             continue
         gt = _tech_for(sent, g) or tech
         near = _shape_near(sent, g[0])
@@ -442,6 +468,25 @@ def bands(text):
     """[Band] — every band position the prose states, with what its sentence assigns it to (family and mode
     None where it names none, or names several with no way to tell which is whose)."""
     return _bands_of(split(text)[1])
+
+
+def absent_bands(text, _split=None):
+    """[(low, high, sentence as printed)] — where the text states that its spectrum shows NO band ('no absorption band
+    at ca. 1650 cm-1', 'no peaks in the region of 1500-1600 cm-1'): a position (low = high) or a range. Evidence of its
+    own kind, kept apart from the bands the spectrum has."""
+    raw, norm = _split or split(text)
+    out = []
+    for r, sent in zip(raw, norm):
+        if 'cm-1' not in sent or _tabular(sent):
+            continue
+        for g in _band_groups(sent):
+            if not _negated(sent, g):
+                continue
+            if g[3] and len(g[2]) == 2:
+                out.append((min(g[2][0][0], g[2][1][0]), max(g[2][0][0], g[2][1][0]), r))
+            elif not g[3]:
+                out += [(p, p, r) for p, _sh in g[2]]
+    return out
 
 
 def _shape_near(clause, start):
@@ -798,7 +843,7 @@ def _judge_lib(cs, sents, k):
 
 def _short(s, around, n=70):
     """A stretch of the sentence around a term, for a Word comment's anchor."""
-    i = s.find(around)
+    i = s.find(around) if around else 0
     if i < 0:
         return s[:n].strip()
     a = max(0, i - n // 2); b = min(len(s), a + n)
@@ -817,7 +862,19 @@ def check_lines(text, ex=None, cif=None, path=None, structure=None):
     if not any('cm-1' in x for x in sp[1]):
         return []
     res = check_claims(text, sp) if re.search(r'Bartlett|Libowitzky', text or '') else []
-    own = [b for b in _bands_of(sp[1]) if b.own]
+    prose = [b for b in _bands_of(sp[1]) if b.own]
+    name = (ex or {}).get('name')
+    if not name:
+        try:
+            from pxrd_review import paper_extract as PE
+            name = PE.mineral_name(text)
+        except Exception:
+            name = ''
+    try:
+        tab = table_bands(path, name) if path else []
+    except Exception:
+        tab = []
+    own = prose + tab
     nu1 = sorted({b.pos for b in own if b.family == 'UO2' and b.mode == 1})
     nu3 = sorted({b.pos for b in own if b.family == 'UO2' and b.mode == 3})
     oh = sorted({b.pos for b in own if b.family == 'OH' and b.mode == 'stretch' and 2000 <= b.pos <= 3800})
@@ -838,6 +895,16 @@ def check_lines(text, ex=None, cif=None, path=None, structure=None):
             lines.append("%s ‘%s’" % (r['line'], _short(r['raw'], c.text)))
     if structure:
         lines += structure_lines(structure, nu1, nu3, oh)
+    beside = bool(lines) and not res
+    try:
+        about = species_lines(text, ex, name, sp, tab)
+    except Exception:
+        about = []
+    try:
+        about += table_lines(tab, prose)
+    except Exception:
+        pass
+    lines += about
     if not res and not lines:
         return []
     if res:
@@ -848,8 +915,285 @@ def check_lines(text, ex=None, cif=None, path=None, structure=None):
             len(res), '' if len(res) == 1 else 's', ' and '.join(x for x in ((BC if n_bc else ''), (LIB if n_lib else '')) if x), n_ok,
             ', %d with no single band to recompute from' % n_open if n_open else '')
     else:
-        head = 'spectroscopy: the stated bands beside the structure'
+        head = 'spectroscopy: the stated bands beside the %s' % ' and the '.join(x for x in (('structure' if beside else ''), ('formula' if any(not ln.startswith('table:') for ln in about) else ''),
+                                                                                              ('assignment table' if any(ln.startswith('table:') for ln in about) else '')) if x)
     return [head] + lines
+
+
+# ----------------------------------------------------------------------------- the formula beside the bands
+#
+# What a reviewer reads a spectrum of a new mineral FOR is, first of all, its hydrogen and its light groups: the
+# things the microprobe cannot see. Is the water of the formula molecular water (a H-O-H bending band near 1600-1650
+# cm-1 says so, and its absence says hydroxyl)? Is there any O-H band at all? Does the ammonium, the carbonate, the
+# hydronium the formula invokes show? These lines set the formula the paper states beside the bands it states.
+# INFORMATION, every one: a paper need not list every band it measured, a formula may be cut short by the reader, and
+# on the corpus a band assigned to a group the formula lacks is nearly always a real minor substituent.
+
+BEND = (1550.0, 1700.0)         # where H-O-H bends (the corpus window is 1569-1675, 5th-95th percentile)
+STRETCH_LO = 2700.0             # an O-H stretch is above this
+# a light group of the formula and where its bands stand (carbonate from the corpus windows; ammonium and nitrate and
+# hydronium from the literature's usual positions — Farmer 1974)
+LIGHT = (('CO3', 'carbonate', ((1350.0, 1560.0), (1040.0, 1120.0)), r'carbonat|CO3'),
+         ('NH4', 'ammonium', ((1380.0, 1490.0),), r'ammoni|NH4|N-H'),
+         ('NO3', 'nitrate', ((1300.0, 1450.0), (1035.0, 1065.0)), r'nitrat|NO3'),
+         ('H3O', 'hydronium', ((1650.0, 1780.0),), r'hydroni|oxoni|H3O'))
+# the element a group cannot be without, and how an analysis names it
+GROUP_ELEMENT = {'UO2': 'U', 'SO4': 'S', 'PO4': 'P', 'AsO4': 'As', 'VO4': 'V', 'CO3': 'C', 'SiO4': 'Si', 'BO3': 'B', 'BO4': 'B', 'MoO4': 'Mo', 'WO4': 'W',
+                 'CrO4': 'Cr', 'SeO3': 'Se', 'SeO4': 'Se', 'TeO3': 'Te', 'NO3': 'N', 'NH4': 'N'}
+_ELEMENT_WORD = {'U': r'\buran', 'S': r'\bsul[fp]', 'P': r'\bphosph', 'As': r'\barsen', 'V': r'\bvanad', 'C': r'\bcarbonat', 'Si': r'\bsilicat', 'B': r'\bbor(?:on|at)',
+                 'Mo': r'\bmolybd', 'W': r'\btungst|\bwolfram', 'Cr': r'\bchrom', 'Se': r'\bselen', 'Te': r'\btellur', 'N': r'\bnitrat|\bammoni'}
+# a sentence that puts the band down to something that is not the mineral
+_NOT_THE_MINERAL = re.compile(r'adsorb|absorbed|moisture|\bKBr\b|impurit|\btrace|\bminor\b|inclusion|admix|contaminat|humid|hygroscop|surface water|atmospher|'
+                              r'substitut|-bearing|\bepoxy|\bresin|\bglue|organic', re.I)
+_OTHER_MINERAL = re.compile(r'\b([a-zà-ÿ]{5,}ite)(?:-\([A-Za-z0-9]+\)|-\d[A-Za-z])?\b')
+
+
+def formula_species(formula):
+    """{'H2O', 'OH', 'H3O', 'NH4', 'CO3', 'NO3'} — the hydrogen species and light groups a formula WRITES."""
+    f = re.sub(r'<[^>]+>|&#\d+;|\s|[\x00-\x1f]', '', formula or '')
+    out = {k for k in ('H2O', 'H3O', 'NH4', 'CO3', 'NO3') if k in f}
+    if 'OH' in f.replace('H2O', '').replace('H3O', ''):
+        out.add('OH')
+    return out
+
+
+def paper_formulas(text, name=''):
+    """[(formula as printed, {element: count}, 'ideal' | 'empirical')] — the formulas the paper states for its mineral:
+    the ideal one first, then the empirical ones."""
+    from pxrd_review import paper_extract as PE
+    out = []
+    try:
+        idf = PE.ideal_formula(text)
+        if idf:
+            out.append((idf[0], dict(idf[1]), 'ideal'))
+    except Exception:
+        pass
+    try:
+        for f in PE._formulas(text, name or '')[:2]:
+            if f[0] and f[1]:
+                out.append((f[0], dict(f[1]), 'empirical'))
+    except Exception:
+        pass
+    return out
+
+
+def _wn(v):
+    return ', '.join('%g' % p for p in v[:6]) + (' …' if len(v) > 6 else '')
+
+
+def species_lines(text, ex=None, name='', _split=None, extra_bands=()):
+    """The formula's hydrogen species and light groups beside the bands the paper states -> lines (information).
+    `extra_bands`: bands read from somewhere other than the prose (an assignment table)."""
+    sp = _split or split(text)
+    raw, norm = sp
+    quote = {n: r for r, n in zip(raw, norm)}
+    own = [b for b in _bands_of(norm) if b.own] + [b for b in extra_bands if b.own]
+    if len({b.pos for b in own}) < 3:
+        return []
+    forms = paper_formulas(text, name or (ex or {}).get('name') or '')
+    if not forms:
+        return []
+    ftxt = re.sub(r'\s+', ' ', forms[0][0]).strip()
+    shown = ftxt if len(ftxt) <= 60 else ftxt[:57] + '…'
+    each = [formula_species(f) for f, _c, _k in forms]
+    elements = set().union(*[set(c) for _f, c, _k in forms])
+    try:                                                         # what the analysis measured counts as carried
+        from pxrd_review import epma as EP
+        for c in ((ex or {}).get('epma') or {}).get('wt') or {}:
+            try:
+                elements.add(EP.parse_constituent(c).element)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    has = lambda k: k in each[0] and all(k in e or kind != 'ideal' for e, (_f, _c, kind) in zip(each, forms))     # the first formula writes it …
+    anywhere = lambda k: any(k in e for e in each)
+    hydrogen = 'H' in elements or anywhere('H2O') or anywhere('OH') or anywhere('H3O') or anywhere('NH4')
+    pos = sorted({b.pos for b in own})
+    ranges = [(lo, hi) for lo, hi, _s in band_ranges(text)]
+    inside = lambda lo, hi: [p for p in pos if lo <= p <= hi]
+    reaches = lambda lo, hi: bool(inside(lo, hi)) or any(a <= hi and b >= lo for a, b in ranges)
+    said = lambda pat: any('cm-1' in x and re.search(pat, x, re.I) for x in norm)
+    stretch = [p for p in pos if STRETCH_LO <= p <= 3800.0]
+    stretch_any = bool(stretch) or pos[-1] >= STRETCH_LO or any(b >= STRETCH_LO and a <= 3800.0 for a, b in ranges) or any(b.family == 'OH' and b.mode == 'stretch' for b in own)
+    bend_any = reaches(*BEND) or said(r'H-O-H|(?:bend|deform|scissor)\w*[^.;]{0,50}(?:water|H2O)|(?:water|H2O)[^.;]{0,70}(?:bend|deform|scissor)|δ\s?\(?\s?H2O') or \
+        any(re.search(r'(?:\bat|near|around|about|ca\.?|[~∼≈])\s?1(?:5[5-9]|6\d)\d(?![\d.])', x) and re.search(r'H-O-H|\bwater\b|H2O|bend', x, re.I) for x in norm)    # 'a band at 1615 is assigned to the bending of H2O', the unit left out
+    stem = re.sub(r'-\(.*\)$', '', (name or (ex or {}).get('name') or '').lower())[:7]
+    other = lambda sent: any(not stem or not m.group(1).startswith(stem) for m in _OTHER_MINERAL.finditer(sent.lower()))    # the sentence is about another mineral's spectrum
+    # the text saying that NO band stands where water bends: a position there, or a range the sentence itself ties to water
+    water_bend = r'H\s?-\s?O\s?-\s?H|(?:bend|deform|scissor)\w*[^.;]{0,60}(?:water|H2O)|(?:water|H2O)[^.;]{0,80}(?:bend|deform|scissor)'
+    gone = [(lo if lo == hi else 0.5 * (lo + hi), r) for lo, hi, r in absent_bands(text, sp)
+            if (lo == hi and BEND[0] <= lo <= BEND[1]) or (lo < hi and lo <= BEND[1] and hi >= BEND[0] and re.search(water_bend, normalise(r), re.I))]
+    gone = [g for g in gone if not other(g[1])]              # 'unlike the spectrum of X, that of Y shows no peak …': which of two minerals the formula is, is not known
+    # a formula cut short by the reader lacks its water: the text writing '·2H2O' or '(H2O)4' anywhere says the mineral
+    # (or one it is compared with) is hydrated, and the lines that rest on 'no H2O in the formula' are then not written
+    wet_text = bool(re.search(r'[·⋅•\x02]\s?\d*(?:\.\d+)?\s?H2O|\(H2O\)|\d\s?H2O\b', text))
+    lines = []
+    q = lambda sent: " ‘%s’" % _short(quote.get(sent, sent), '', 90) if sent else ''
+    if has('H2O'):
+        if gone:
+            lines.append("water: the formula carries H2O (%s) and the text states that the spectrum shows no band near %.0f cm⁻¹, where H–O–H bends (information) ‘%s’"
+                         % (shown, gone[0][0], _short(gone[0][1].strip(), '', 110)))
+        elif stretch_any and not bend_any:
+            raman_only = not re.search(r'infrared|\bFTIR\b|\bFT-IR\b|\bIR\b', text)
+            lines.append('water: the formula carries H2O (%s); O–H stretching bands are stated%s and no H–O–H bending band near 1600–1650 cm⁻¹ — the band that tells molecular water from hydroxyl%s (information)'
+                         % (shown, ' (%s cm⁻¹)' % _wn(stretch) if stretch else '', '; it is weak in a Raman spectrum, and an infrared spectrum shows it' if raman_only else ''))
+    if (has('H2O') or has('OH')) and not stretch_any and not bend_any and not gone:
+        lines.append('hydrogen: the formula carries %s (%s); the %d bands stated (%g–%g cm⁻¹) reach neither the H–O–H bending region nor the O–H stretching region (information)'
+                     % (' and '.join(k for k in ('H2O', 'OH') if has(k)), shown, len(pos), pos[0], pos[-1]))
+    if has('OH') and not anywhere('H2O') and not wet_text:
+        wb = [b for b in own if BEND[0] <= b.pos <= BEND[1] and not _NOT_THE_MINERAL.search(b.sentence) and not other(b.sentence) and
+              not re.search(r'overtone|combination|at best|indication|\bmay\b|\bmight\b|possibl|tentativ', b.sentence, re.I) and
+              (b.family == 'H2O' or re.search(r'H-O-H|\bwater\b|H2O', b.sentence))]
+        if wb:
+            lines.append('water: a band at %s cm⁻¹ is stated as molecular water; the formula carries OH and no H2O (%s) (information)%s' % (_wn(sorted({b.pos for b in wb})), shown, q(wb[0].sentence)))
+    if not hydrogen and not wet_text and not re.search(r'\(OH\)|\bOH\d', text):
+        hb = [b for b in own if b.family in ('OH', 'H2O') and not _NOT_THE_MINERAL.search(b.sentence) and not other(b.sentence)]
+        if hb:
+            lines.append('hydrogen: bands at %s cm⁻¹ are assigned to O–H or H2O; the formula carries no hydrogen (%s) (information)%s' % (_wn(sorted({b.pos for b in hb})), shown, q(hb[0].sentence)))
+    for key, word, wins, pat in LIGHT:
+        if has(key) and not any(b.family == key for b in own) and not said(pat) and not any(reaches(lo, hi) for lo, hi in wins):
+            lines.append('%s: the formula carries %s (%s); no band is stated for it — it would stand near %s cm⁻¹, and the %d bands stated run %g–%g cm⁻¹ (information)'
+                         % (word, key, shown, ' or '.join('%g–%g' % w for w in wins), len(pos), pos[0], pos[-1]))
+    # a band assigned to a group that neither the formula nor the analysis carries
+    by = {}
+    for b in own:
+        el = GROUP_ELEMENT.get(b.family)
+        if not el or el in elements:
+            continue
+        rest = text.replace(quote.get(b.sentence, b.sentence), '')
+        if re.search(r'\b%s\d*O\d*\b' % el, rest) or re.search(_ELEMENT_WORD[el], rest, re.I):
+            continue                                             # the analysis or the description names the element elsewhere: a constituent after all
+        if _NOT_THE_MINERAL.search(b.sentence) or other(b.sentence):
+            continue                                             # an admixture, a substituent, or another mineral's spectrum
+        by.setdefault(b.family, []).append(b)
+    for fam, bs in by.items():
+        lines.append('assignment: bands at %s cm⁻¹ are assigned to %s; neither the formula (%s) nor the rest of the text carries %s (information)%s'
+                     % (_wn(sorted({b.pos for b in bs})), fam, shown, GROUP_ELEMENT[fam], q(bs[0].sentence)))
+    return lines
+
+
+# ----------------------------------------------------------------------------- an assignment table (.docx)
+#
+# A table pairs a band with its assignment by ROW: no grammar to follow, no mispairing. Few manuscripts carry one (and a
+# .pdf's is not read: its rows come apart in the text layer) — where one does, its bands join the prose's, and the two
+# are set beside each other.
+
+_SYMBOL_FONT = {'F06E': 'ν', 'F064': 'δ', 'F075': 'υ', 'F072': 'ρ', 'F067': 'γ', 'F074': 'τ', 'F077': 'ω', 'F0B1': '±', 'F0B0': '°', 'F07E': '~'}
+_TAB_SKIP = re.compile(r'calc|DFT|theor|comput|simulat|literature|\bref|synthetic|assign|vibration|mode|irrep|symmetr|intensit|description|tentative', re.I)
+_CELL_NUM = re.compile(r'(?<![\d.–-])(\d{2,4}(?:\.\d)?)\s?(?:\(?\s?(vs|vw|sh|br|vbr|s|m|w|b)\s?\)?)?(?![\d.]|\s?[–-]\s?\d)')
+TET = ('SO4', 'PO4', 'AsO4', 'VO4', 'SiO4', 'MoO4', 'WO4', 'CrO4', 'SeO4')
+
+
+def _cell_text(cell):
+    """A table cell's text with the symbol-font characters python-docx drops (a ν or δ set as w:sym) put back."""
+    out = []
+    for el in cell._tc.iter():
+        tag = el.tag.rsplit('}', 1)[-1]
+        if tag == 't':
+            out.append(el.text or '')
+        elif tag == 'sym':
+            code = (el.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}char') or '').upper()
+            out.append(_SYMBOL_FONT.get(code, ''))
+        elif tag in ('br', 'p') and out and not out[-1].endswith(' '):
+            out.append(' ')
+    return re.sub(r'\s+', ' ', ''.join(out)).strip()
+
+
+def _row_assignment(cell):
+    """(family, mode) of an assignment cell — both None when it names none, or names two things ('ν2 CO3 bending or ν3
+    UO2 stretching': which of them the band is, the table leaves open)."""
+    t = normalise(cell)
+    t = re.sub(r'(?<![\dA-Za-zν.])([1-4])\s?(?:\(\s?[δd]?\s?\)\s?)?(?=[\(\[]?\s?(?:' + _GROUPS + r'))', r'ν\1 ', t)     # the ν lost: '3 (CO3)2- asym. stretching'
+    a = _assignments(t)
+    kinds = {(x[2], x[3]) for x in a}
+    return next(iter(kinds)) if len(kinds) == 1 else (None, None)
+
+
+def table_bands(path, name=''):
+    """[Band] from the band-assignment tables of a manuscript .docx: a column of assignments and one or more columns
+    of wavenumbers. In a table that sets several minerals side by side the column of the paper's own is the one read;
+    a calculated or literature column never is. [] for anything but a .docx, and for a .docx without such a table."""
+    if not str(path).lower().endswith('.docx'):
+        return []
+    try:
+        import docx
+        doc = docx.Document(path)
+    except Exception:
+        return []
+    stem = re.sub(r'-\(.*\)$', '', (name or '').lower())[:7]
+    out = []
+    for t in doc.tables:
+        try:
+            rows = []
+            for r in t.rows:
+                cells = []; seen = set()
+                for c in r.cells:
+                    if id(c._tc) in seen:                        # a merged cell comes once per column it spans
+                        continue
+                    seen.add(id(c._tc)); cells.append(_cell_text(c))
+                rows.append(cells)
+        except Exception:
+            continue
+        ncol = max((len(r) for r in rows), default=0)
+        if len(rows) < 4 or ncol < 2:
+            continue
+        rows = [r + [''] * (ncol - len(r)) for r in rows]
+        body = rows[1:]
+        asg = [sum(1 for r in body if _row_assignment(r[k])[0] or re.search(r'stretch|bend|lattice|libr|deform|[νδ]', r[k], re.I)) for k in range(ncol)]
+        num = [sum(1 for r in body if _CELL_NUM.search(r[k]) and not re.search(r'[A-Za-z]{4,}', r[k])) for k in range(ncol)]
+        ak = max(range(ncol), key=lambda k: asg[k])
+        if asg[ak] < max(3, 0.5 * len(body)):
+            continue
+        head = rows[0]
+        if not re.search(r'cm|wavenumber|Raman|\bIR\b|infrared|FTIR|band|peak|assign|vibration|mode|shift', ' '.join(head), re.I) and sum(num) < 2 * len(body):
+            continue
+        cols = [k for k in range(ncol) if k != ak and num[k] >= max(3, 0.4 * len(body)) and not _TAB_SKIP.search(head[k])]
+        mine = [k for k in cols if stem and stem in head[k].lower().replace(' ', '')]
+        cols = mine or cols
+        for r in body:
+            fam, mode = _row_assignment(r[ak])
+            for k in cols:
+                tech = 'raman' if re.search(r'raman', head[k], re.I) else 'ir' if re.search(r'\bIR\b|infrared|FTIR', head[k], re.I) else None
+                for m in _CELL_NUM.finditer(r[k]):
+                    p = float(m.group(1))
+                    if 30 <= p <= 4500:
+                        out.append(Band(p, tech, (m.group(2) or '').lower(), fam, mode, 'table row: %s | %s' % (r[k], r[ak]), True))
+    return out
+
+
+def _mode_name(fam, mode):
+    return '%s %s' % ('ν%d' % mode if isinstance(mode, int) else (mode or ''), fam)
+
+
+def table_lines(tbands, pbands):
+    """An assignment table beside the prose, and against itself -> lines (information): a band the table gives to one
+    group or mode and the text to another; within the table, a stretching mode of a group standing below one of its
+    bending modes."""
+    lines = []
+    done = set()
+    for t in tbands:
+        if not t.family:
+            continue
+        for p in pbands:
+            if not p.own or not p.family or abs(p.pos - t.pos) > 1.0 or (t.pos, p.family, p.mode) in done:
+                continue
+            both_num = isinstance(t.mode, int) and isinstance(p.mode, int)
+            if p.family in _BOND_KINDS or t.family in _BOND_KINDS or {p.family, t.family} == {'OH', 'H2O'}:
+                continue
+            if p.family != t.family or (both_num and p.mode != t.mode):
+                done.add((t.pos, p.family, p.mode))
+                lines.append("table: the band at %g cm⁻¹ is %s in the table and %s in the text (information) ‘%s’" % (t.pos, _mode_name(t.family, t.mode).strip(), _mode_name(p.family, p.mode).strip(), _short(p.sentence, '%g' % p.pos, 90)))
+    by = {}
+    for t in tbands:
+        if t.family in TET + ('CO3', 'UO2') and isinstance(t.mode, int):
+            by.setdefault(t.family, {}).setdefault(t.mode, []).append(t.pos)
+    for fam, m in by.items():
+        stretch = [(p, k) for k in (1, 3) for p in m.get(k, [])]; bend = [(p, k) for k in (2, 4) for p in m.get(k, [])]
+        if stretch and bend and min(stretch)[0] < max(bend)[0]:
+            lo, hi = min(stretch), max(bend)
+            lines.append('table: ν%d of %s at %g cm⁻¹ stands below ν%d at %g cm⁻¹ — a stretching mode under a bending mode of the same group (information)' % (lo[1], fam, lo[0], hi[1], hi[0]))
+    return lines
 
 
 # ----------------------------------------------------------------------------- the structure side
@@ -998,7 +1342,7 @@ def review(path, cif=None):
     """{'bands': [Band], 'claims': [...], 'lines': [...]} for a manuscript .docx or a paper .pdf."""
     from pxrd_review import paper_extract as PE
     text = PE.text_of(path)
-    return {'bands': bands(text), 'claims': check_claims(text), 'lines': check_lines(text, cif=cif, path=path)}
+    return {'bands': bands(text) + table_bands(path, PE.mineral_name(text)), 'claims': check_claims(text), 'lines': check_lines(text, cif=cif, path=path)}
 
 
 def main(argv=None):
@@ -1016,7 +1360,7 @@ def main(argv=None):
             print('  %7g  %-5s %-8s %-8s %s%s' % (b.pos, b.technique or '', b.family or '', 'ν%d' % b.mode if isinstance(b.mode, int) else (b.mode or ''), b.shape,
                                                '' if b.own else '  (another work\'s value)'))
     if not r['lines']:
-        print('  %d bands read; no distance is credited to %s or to %s, and no structure to set them beside' % (len(r['bands']), BC, LIB))
+        print('  %d bands read; no distance is credited to %s or to %s, there is no structure to set them beside, and the formula raises nothing' % (len(r['bands']), BC, LIB))
         return 0
     print('  ' + r['lines'][0])
     for ln in r['lines'][1:]:
