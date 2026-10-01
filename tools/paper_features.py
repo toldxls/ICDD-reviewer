@@ -64,6 +64,25 @@ def features(text):
             'optics': bool(_OPTICS.search(t))}
 
 
+# --- spectroscopy (tools/corpus_spectra.py): what a paper states, by three regexes that share nothing with
+# pxrd_review.spectro — the denominators of its reader
+_CM1 = r'cm\s?[-–−\x01-\x08]?\s?1'
+_SP_BANDS = re.compile(r'\d{3,4}\s?' + _CM1)
+_SP_BC = re.compile(r'Bartlett[^.]{0,400}?1\.[6-9]\d|1\.[6-9]\d[^.]{0,200}?Bartlett')
+_SP_LIB = re.compile(r'Libowitzky[^.]{0,400}?[23]\.\d{1,3}\s?Å|[23]\.\d{1,3}\s?Å[^.]{0,250}?Libowitzky')
+
+
+def spectro_features(text):
+    """{'bands': the paper states three band positions or more, 'bc' / 'lib': it credits a distance to
+    Bartlett & Cooney / to Libowitzky} — on the text before the reference list."""
+    t = text or ''
+    cut = max(t.rfind('References'), t.rfind('REFERENCES'))
+    if cut > len(t) * 0.5:
+        t = t[:cut]
+    t = t.replace('\n', ' ')
+    return {'bands': len(_SP_BANDS.findall(t)) >= 3, 'bc': bool(_SP_BC.search(t)), 'lib': bool(_SP_LIB.search(t))}
+
+
 def is_target(has):
     """The gauntlet's subset: a paper that prints all five."""
     return bool(has) and all(has.get(k) for k in HAS_KEYS)

@@ -5924,6 +5924,11 @@ def check_paper(pdf, cif=None, out_dir=None):
             out['lines'] += _section(basis_free_ratios(ex, idf_[1], (ex.get('epma') or {}).get('n_points')))
     except Exception as e_:                                          # a reader that fails never takes the check down with it
         ex['notes'].append('the ideal-formula checks were not run (%s)' % str(e_)[:80])
+    try:                                                             # a block of its own: the spectroscopy neither stands nor falls with the checks above
+        from pxrd_review import spectro as _SP
+        out['lines'] += _section(_SP.check_lines(text, ex, cif, pdf))
+    except Exception as e_:
+        ex['notes'].append('the spectroscopy checks were not run (%s)' % str(e_)[:80])
     bc = None
     # Nine papers in ten come without a .cif, and two things in the paper itself can stand in for
     # one — for the BOND-VALENCE check only, never for the cell check or verify, which must not be

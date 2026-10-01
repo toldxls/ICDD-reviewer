@@ -10,6 +10,16 @@ import paper_features as PF
 import corpus_paper_extract as CPE
 
 
+class Spectro(unittest.TestCase):
+    def test_denominators(self):
+        f = PF.spectro_features('Bands at 3540 cm–1, 1630 cm-1 and 845 cm−1 are present. Using Bartlett and Cooney (1989) the U–O bond length is 1.77 Å.\n'
+                                'According to Libowitzky (1999) the O···O distance is 2.85 Å.')
+        self.assertEqual(f, {'bands': True, 'bc': True, 'lib': True})
+        self.assertEqual(PF.spectro_features('A band at 845 cm–1 only.'), {'bands': False, 'bc': False, 'lib': False})
+        body = 'Text. ' * 400
+        self.assertFalse(PF.spectro_features(body + 'References Bartlett, J.R. and Cooney, R.P. (1989) ... 1.76')['bc'])    # a reference-list entry states nothing
+
+
 class Features(unittest.TestCase):
     def test_each_feature(self):
         f = PF.features('Electron microprobe analyses (wt.%): SiO2 46.30, MgO 29.05, CaO 20.10, FeO 0.40, H2O 3.20.\n'
