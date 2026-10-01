@@ -33,7 +33,7 @@ where = ["."]
 include = ["pxrd_review*"]
 
 [tool.setuptools.package-data]
-"pxrd_review.gui" = ["index.html", "static/*"]
+"pxrd_review.gui" = ["index.html", "spectra.html", "static/*"]
 # Mindat snapshot (gzipped, ~385 KB) so the group / chemistry / cell cross-checks work with NO
 # API key. Rebuild before each release: python3 -m pxrd_review.mindat --refresh --bundle
 "pxrd_review" = ["data/*.json.gz", "data/*.cif", "data/*.json"]   # + bvparm2020.cif (bond valence), gd_constants.json

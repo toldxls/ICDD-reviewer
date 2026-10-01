@@ -248,12 +248,15 @@ function msRow(f, t) {
   const look = el('button', { class: 'tbtn look', onclick: ev => { ev.stopPropagation(); msLook(f); } }, f.para == null && f.page ? '? look (pdf p. ' + f.page + ')' : '? look');
   const note = el('input', { class: 'tnote', type: 'text', placeholder: 'note…', value: t.note || '',
     onclick: ev => ev.stopPropagation(), oninput: ev => { rec().note = ev.target.value; msSaveTriage(); } });
+  // a spectroscopy line: the spectrum window, with this manuscript's stated bands beside whatever spectrum is opened there
+  const spectra = (f.label || '').startsWith('spectro')
+    ? el('button', { class: 'tbtn look', title: 'Open the spectrum window with this manuscript beside it', onclick: ev => { ev.stopPropagation(); openSpectra('?ms=' + enc(MSS.key || '')); } }, 'spectrum ↗') : null;
   return el('div', { class: 'finding lvl-' + sev, 'data-fkey': f.fkey, onclick: () => msLook(f) },
     top,
     el('div', { class: 'f-msg' }, f.label + ' — ' + f.msg),
     f.entry && f.kind !== 'uncited' ? el('div', { class: 'f-anchor' }, '↳ ' + f.entry) : null,
     f.text ? el('div', { class: 'f-text' }, '¶' + (f.para + 1) + '  ' + f.text) : null,
-    el('div', { class: 'triage' }, mk('confirm', '✓ confirm'), mk('dismiss', '✗ dismiss'), look, note));
+    el('div', { class: 'triage' }, mk('confirm', '✓ confirm'), mk('dismiss', '✗ dismiss'), look, spectra, note));
 }
 $('#ms-hide-dismissed').addEventListener('change', () => { if (MSS.a) msRenderFindings(); });
 

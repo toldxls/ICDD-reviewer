@@ -1,0 +1,184 @@
+"""The spectrum window of the review GUI — the /spectra page and the /api/sp/* routes, through Flask's test client.
+
+    python3 -m unittest tests.test_gui_sp -v
+
+A synthetic Raman spectrum (three known bands, a sloping background, three cosmic rays), a synthetic uranyl .cif and a
+one-paragraph manuscript in a temp folder; no browser. The page's own script is exercised live, on a scratch folder.
+"""
+import io, json, os, shutil, tempfile, unittest
+
+from tests.test_spectrum import synth, TRUTH
+from tests.test_spectro import URANYL
+
+
+class SpectrumWindow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from pxrd_review.gui import review_gui as G
+        cls.G = G
+        G._ALLOWED_HOSTS = set()
+        cls.tmp = tempfile.mkdtemp(prefix='spgui_')
+        x, y, _ = synth(21, TRUTH, lo=300, hi=1300, base=lambda v: 400 + 0.3 * v, spikes=3)
+        cls.text = ''.join('%.2f\t%.3f\n' % r for r in zip(x, y))
+        for name, body in (('testite raman.txt', cls.text), ('uranyl.cif', URANYL), ('empty.jdx', '##TITLE=t\n##XYDATA=(X++(Y..Y))\n##END=\n')):
+            with open(os.path.join(cls.tmp, name), 'w', encoding='utf-8') as f:
+                f.write(body)
+        import docx
+        d = docx.Document()
+        d.add_paragraph('The ν1 (UO2)2+ symmetric stretching vibration is present as a very strong band at 832 cm–1 with a shoulder at 846 cm–1. '
+                        'A weak band at 880 cm–1 is assigned to the ν3 (UO2)2+ antisymmetric stretching vibration.')
+        d.save(os.path.join(cls.tmp, 'testite.docx'))
+        cls.c = G.app.test_client()
+        assert G.ms_set_folder(cls.tmp)
+        if G.MS['athread']:
+            G.MS['athread'].join(60)
+        cls.body = {'name': 'testite raman.txt', 'kind': 'raman', 'despike': True, 'baseline': 'als'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _post(self, url, body, status=200):
+        r = self.c.post(url, json=body)
+        self.assertEqual(r.status_code, status, r.data[:300])
+        return json.loads(r.data)
+
+    def test_page_and_state(self):
+        r = self.c.get('/spectra')
+        self.assertEqual(r.status_code, 200); self.assertIn(b'/static/sp.js', r.data)
+        self.assertIn("script-src 'self'", r.headers.get('Content-Security-Policy', ''))
+        self.assertIn('no-cache', r.headers.get('Cache-Control', ''))
+        r.close()
+        s = json.loads(self.c.get('/api/sp/state').data)
+        self.assertEqual([f['name'] for f in s['files']][:2], ['empty.jdx', 'testite raman.txt'])     # an instrument format the Tables mode does not list, and a text file
+        self.assertEqual((s['cifs'], s['manuscripts']), (['uranyl'], ['testite']))
+        self.assertIn('UO2 ν1', s['windows'])
+        self.assertNotIn('empty.jdx', self.G.MS['data'])                                               # … and it stays out of the EPMA / PXRD file lists
+
+    def test_series_and_refusals(self):
+        s = json.loads(self.c.get('/api/sp/series?name=testite%20raman.txt').data)['series']
+        self.assertEqual((len(s), s[0]['n'], s[0]['x0'], s[0]['x1']), (1, 2001, 300.0, 1300.0))
+        self.assertEqual(self.c.get('/api/sp/series?name=../../etc/passwd').status_code, 404)            # a name is a key of the folder, never a path
+        self.assertEqual(self.c.get('/api/sp/series').status_code, 400)
+        r = self.c.get('/api/sp/series?name=empty.jdx')
+        self.assertEqual(r.status_code, 400); self.assertIn('no ##XYDATA', json.loads(r.data)['error'])
+
+    def test_process_with_the_structure_and_the_manuscript_beside(self):
+        d = self._post('/api/sp/process', dict(self.body, cif='uranyl', ms='testite'))
+        self.assertEqual(len(d['x']), 2001); self.assertEqual(len(d['spikes']), 3)
+        self.assertEqual([round(t['pos']) for t in d['ticks']], [841, 920, 3402])                        # ν1 and ν3 of the 1.77 Å uranyl, the O–H of the 2.80 Å bond
+        self.assertEqual(sorted(b['pos'] for b in d['stated']), [832.0, 846.0, 880.0])
+        self.assertEqual([(b['family'], b['mode']) for b in d['stated'] if b['pos'] == 880.0], [('UO2', 'ν3')])
+        self.assertLess(abs(d['noise'] - 4.0), 0.8)
+        raw = self._post('/api/sp/process', {'name': 'testite raman.txt'})
+        self.assertEqual((raw['spikes'], raw['baseline'][0]), ([], 0.0))
+        self._post('/api/sp/process', {}, 400); self._post('/api/sp/process', {'name': 'nosuch.txt'}, 404)
+        self._post('/api/sp/process', {'name': 'testite raman.txt', 'series': 4}, 400)
+
+    def test_fit_auto_then_the_page_s_own_bands(self):
+        r = self._post('/api/sp/fit', dict(self.body, lo=780, hi=960, ms='testite'))
+        f = r['fit']
+        self.assertEqual([round(c['pos']) for c in f['comps']], [831, 846, 915])
+        self.assertEqual(r['trials'][0]['n'], 3)
+        self.assertEqual(len(f['x']), len(f['model'])); self.assertEqual(len(f['x']), len(f['residual']))
+        self.assertIn('UO2 ν1', f['comps'][0]['suggest']); self.assertTrue(f['comps'][0]['distance'].startswith('U–O 1.78'))
+        self.assertEqual([m[0] for m in f['stated']['matched']], [832.0, 846.0])                       # the manuscript's bands the fit has
+        self.assertEqual((f['stated']['not_fitted'], [round(v) for v in f['stated']['not_stated']]), ([880.0], [915]))
+        two = self._post('/api/sp/fit', dict(self.body, lo=780, hi=960, comps=f['comps'][:2]))['fit']   # the bands the page sends, refined as they are
+        self.assertEqual(len(two['comps']), 2)
+        held = dict(f['comps'][0], pos=830.0, fix=['pos'])
+        self.assertEqual(self._post('/api/sp/fit', dict(self.body, lo=780, hi=960, comps=[held] + f['comps'][1:]))['fit']['comps'][0]['pos'], 830.0)
+        self.assertIn('a region to fit is needed', self._post('/api/sp/fit', self.body, 400)['error'])
+        self._post('/api/sp/fit', dict(self.body, lo=5000, hi=5100), 400)
+        self._post('/api/sp/fit', {}, 400)
+
+    def test_refining_a_fit(self):
+        body = dict(self.body, lo=780, hi=960)
+        one = self._post('/api/sp/fit', dict(body, n=1))['fit']
+        self.assertEqual(len(one['comps']), 1)
+        self.assertTrue(one['next'] and any(abs(n['pos'] - 846) < 12 or abs(n['pos'] - 831) < 12 for n in one['next']), one['next'])   # where the residual still holds a band
+        more = self._post('/api/sp/fit', dict(body, comps=one['comps'], add=True))                      # '+ band'
+        self.assertEqual(len(more['fit']['comps']), 2); self.assertEqual([t['n'] for t in more['trials']], [1, 2])
+        self.assertLess(more['fit']['bic'], one['bic'])
+        full = self._post('/api/sp/fit', body)['fit']
+        self.assertIn('holds no further band', self._post('/api/sp/fit', dict(body, comps=full['comps'], add=True), 400)['error'])
+        capped = self._post('/api/sp/fit', dict(body, comps=full['comps'], max_fwhm=8))['fit']          # the region's width limit
+        self.assertTrue(all(c['fwhm'] <= 8.0001 for c in capped['comps'])); self.assertTrue(any(c['at_limit'] == 'max' for c in capped['comps']))
+        self.assertTrue(any('rests on the width limit' in w for w in capped['warnings']))
+        own = [dict(full['comps'][0], wmax=9.0)] + full['comps'][1:]                                    # … and one band's own
+        self.assertLessEqual(self._post('/api/sp/fit', dict(body, comps=own))['fit']['comps'][0]['fwhm'], 9.0001)
+        d2 = self._post('/api/sp/d2', dict(self.body, lo=780, hi=960, width=12))
+        self.assertEqual(len(d2['x']), len(d2['d2'])); self.assertAlmostEqual(max(d2['d2']), 1.0, 5)
+        self.assertLess(abs(d2['x'][d2['d2'].index(max(d2['d2']))] - 831), 4)                           # the strongest band is the highest bump
+        self._post('/api/sp/d2', {}, 400); self._post('/api/sp/d2', dict(self.body, lo=5000, hi=5001), 400)
+
+    def test_export_writes_the_fit_on_the_screen(self):
+        body = dict(self.body, lo=780, hi=960)
+        full = self._post('/api/sp/fit', body)['fit']
+        moved = [dict(full['comps'][0], pos=full['comps'][0]['pos'] + 1.5)] + full['comps'][1:]         # bands as a hand left them: NOT at the minimum
+        shown = self._post('/api/sp/fit', dict(body, comps=moved, evaluate=True))['fit']
+        self.assertAlmostEqual(shown['comps'][0]['pos'], moved[0]['pos'], 9)                            # evaluated as they stand, no step taken
+        self.assertGreater(shown['chi2'], full['chi2'])
+        r = self._post('/api/sp/export', dict(self.body, fmt='xlsx', regions=[{'lo': 780, 'hi': 960, 'comps': moved, 'local': 'linear', 'converged': False}]))
+        self.assertTrue(r['folder'].endswith('review_out'))
+        sess = json.loads(self.c.get('/api/sp/file?as=json&name=' + r['files']['json']).data)
+        self.assertAlmostEqual(sess['fits'][0]['components'][0]['pos'], moved[0]['pos'], 9)             # … and written as they stood
+        self.assertEqual((sess['pxrd_spectrum_session'], sess['options']['name'], sess['options']['regions'][0]['lo']), (1, 'testite raman.txt', 780))
+        self.assertTrue(any('had not converged when it was written' in w for w in sess['fits'][0]['warnings']))
+        import openpyxl
+        wb = openpyxl.load_workbook(os.path.join(self.tmp, 'review_out', r['files']['xlsx']))
+        self.assertEqual(wb.sheetnames, ['bands', 'curves', 'spectrum'])
+        head = [c.value for c in wb['curves'][1]]
+        self.assertEqual(head[:5], ['wavenumber (cm⁻¹)', 'spectrum', 'fit', 'residual', 'local baseline']); self.assertEqual(len(head), 5 + 3)
+        self.assertEqual(wb['spectrum'].max_row, 2002)
+        txt = self.c.get('/api/sp/file?name=' + r['files']['txt'])
+        self.assertEqual(txt.status_code, 200); self.assertTrue(txt.mimetype.startswith('text/plain'))
+        for bad in ('/api/sp/file?name=../testite.docx', '/api/sp/file?name=' + r['files']['xlsx'], '/api/sp/file?name=nothing_sp.txt', '/api/sp/file'):
+            self.assertEqual(self.c.get(bad).status_code, 404, bad)
+        self.assertEqual(self.c.post('/api/sp/reveal?file=../x_sp.txt').status_code, 404)
+
+    def test_dead_bands_twins_and_one_shape(self):
+        body = dict(self.body, lo=780, hi=960)
+        full = self._post('/api/sp/fit', body)['fit']
+        # a band the data have no use for (on top of another, a point wide) is driven to zero — and taken out, and said
+        extra = full['comps'] + [dict(full['comps'][0], pos=880.0, height=0.0, fwhm=1.2, fix=['pos', 'fwhm'])]
+        f = self._post('/api/sp/fit', dict(body, comps=extra))['fit']
+        if len(f['comps']) == 3:
+            self.assertTrue(any('driven to zero height' in w for w in f['warnings']), f['warnings'])
+        one = self._post('/api/sp/fit', dict(body, comps=full['comps'], share_eta=True))['fit']
+        self.assertEqual(len({round(c['eta'], 9) for c in one['comps']}), 1)                              # one η, three widths
+        self.assertEqual(len({round(c['fwhm'], 3) for c in one['comps']}), 3)
+        self.assertEqual(one['k'], full['k'] - 2)
+
+    def test_upload_stays_in_memory(self):
+        before = sorted(os.listdir(self.tmp))
+        r = self.c.post('/api/sp/upload', data={'file': (io.BytesIO(self.text.encode()), '../sneaky name.txt')}, content_type='multipart/form-data')
+        self.assertEqual(json.loads(r.data), {'ok': True, 'name': 'sneaky name.txt', 'n': 1})
+        self.assertEqual(sorted(os.listdir(self.tmp)), before)                                         # nothing is written into the folder
+        self.assertEqual(self._post('/api/sp/process', {'name': 'sneaky name.txt'})['name'], 'sneaky name.txt')
+        self.assertIn({'name': 'sneaky name.txt', 'source': 'upload'}, json.loads(self.c.get('/api/sp/state').data)['files'])
+        bad = self.c.post('/api/sp/upload', data={'file': (io.BytesIO(b'no numbers here\n'), 'words.txt')}, content_type='multipart/form-data')
+        self.assertEqual(bad.status_code, 400); self.assertIn('words.txt', json.loads(bad.data)['error'])
+        self.assertEqual(self.c.post('/api/sp/upload', data={}, content_type='multipart/form-data').status_code, 400)
+
+    def test_export_and_open_guard(self):
+        f = self._post('/api/sp/fit', dict(self.body, lo=780, hi=960))['fit']
+        r = self._post('/api/sp/export', dict(self.body, cif='uranyl', fmt='xlsx', regions=[{'lo': 780, 'hi': 960, 'comps': f['comps'], 'local': 'linear'}]))
+        self.assertEqual(r['files'], {'txt': 'testite_raman_sp.txt', 'svg': 'testite_raman_sp.svg', 'json': 'testite_raman_sp.json', 'xlsx': 'testite_raman_sp.xlsx'})
+        out = os.path.join(self.tmp, 'review_out')
+        self.assertIn('831.', open(os.path.join(out, 'testite_raman_sp.txt'), encoding='utf-8').read())
+        sess = json.load(open(os.path.join(out, 'testite_raman_sp.json'), encoding='utf-8'))
+        self.assertEqual((sess['options']['baseline'], len(sess['fits'][0]['components'])), ('als', 3))
+        self.assertIn('testite_raman_sp.xlsx', json.loads(self.c.get('/api/sp/state').data)['outputs'])
+        self.assertIn('nothing fitted yet', self._post('/api/sp/export', self.body, 400)['error'])
+        for name in ('../testite.docx', 'testite.docx', 'nothing_sp.txt', ''):                          # only this window's own outputs, and only ones that exist
+            self.assertEqual(self.c.post('/api/sp/open?file=' + name).status_code, 404, name)
+        keep, self.G.MS['out_dir'] = self.G.MS['out_dir'], None
+        try:
+            self.assertIn('no folder is open', self._post('/api/sp/export', dict(self.body, regions=[{'lo': 780, 'hi': 960}]), 409)['error'])
+        finally:
+            self.G.MS['out_dir'] = keep
+
+
+if __name__ == '__main__':
+    unittest.main()

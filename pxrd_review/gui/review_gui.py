@@ -78,7 +78,9 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0      # don't let the browser cache a
 # Populated at launch once the port is known (see main()); empty => not yet configured (allow).
 _ALLOWED_HOSTS = set()
 _AUTH_TOKEN = None
-_AUTH_COOKIE = 'pxrd_token'
+_AUTH_COOKIE = 'pxrd_token'                           # main() adds the port: a cookie belongs to a HOST, not a port, so two GUIs on
+                                                      # 127.0.0.1 with one name overwrote each other's session (the tab of the first
+                                                      # was refused the moment the second was opened)
 
 _last_seen = None                                    # monotonic time of the most recent client request
 _closing_at = None                                   # monotonic time a tab reported it is unloading
@@ -138,12 +140,12 @@ def _no_cache_ui(resp):
     """A localhost dev tool: never cache the UI assets, so edits show on a plain
     reload (no hard-refresh). The expensive PDF renders (/api/pdf/.../*.png) stay
     cacheable — they don't change."""
-    if request.path == '/' or request.path.startswith('/static/'):
+    if request.path in ('/', '/spectra') or request.path.startswith('/static/'):
         resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         resp.headers['Pragma'] = 'no-cache'
         resp.headers['Expires'] = '0'
     resp.headers['X-Content-Type-Options'] = 'nosniff'
-    if request.path == '/':
+    if request.path in ('/', '/spectra'):
         # defence-in-depth for the innerHTML-heavy docx view: everything is served from
         # this origin; style needs 'unsafe-inline' for the per-author --au style attributes.
         resp.headers['Content-Security-Policy'] = (
@@ -1899,6 +1901,7 @@ MS = {
     'cifs': {},                    # key (cif stem) -> path  (the tables mode)
     'pdfs': {},                    # key (file name) -> path  (papers to fill the tables mode from)
     'data': {},                    # file name -> path: probe / peak-list files for the EPMA and PXRD tabs
+    'spectra': {},                 # file name -> path: instrument files only the spectrum window reads (.jdx, .spc, .spa, OPUS …)
     'tb_opts': {},                 # tables mode: per-tab options remembered in review_out/tables_opts.json
     'cache': {},                   # key -> {'fp': fingerprint, 'data': serialized analysis}
     'triage': {},                  # key -> {'findings': {fkey: {verdict, note, label}}, 'reviewed', 'companions'}
@@ -1931,6 +1934,9 @@ def _ms_remember(folder):
         pass
 
 _DATA_EXT = ('.txt', '.csv', '.tsv', '.xlsx', '.xlsm', '.dat', '.prn')
+# what only the spectrum window reads. Kept out of _DATA_EXT: MS['data'] feeds the EPMA and PXRD tabs' file lists
+_SPECTRA_EXT = ('.jdx', '.dx', '.jcamp', '.jcm', '.spc', '.spa', '.asc', '.xy', '.rruff', '.dpt')   # .dpt: OPUS's data-point table, two columns of text
+_OPUS_NAME = re.compile(r'\.\d{1,3}$')                 # an OPUS file is numbered, not named: 'sample.0', 'sample.12'
 
 def ms_set_folder(folder):
     """Point the manuscript mode at a folder: every .docx that is not a tool output is a
@@ -1939,7 +1945,7 @@ def ms_set_folder(folder):
     folder = os.path.abspath(folder)
     if not os.path.isdir(folder):
         return False
-    files, cifs, data, pdfs = {}, {}, {}, {}
+    files, cifs, data, pdfs, spectra = {}, {}, {}, {}, {}
     try:
         names = sorted(os.listdir(folder), key=str.lower)
     except OSError:
@@ -1956,14 +1962,16 @@ def ms_set_folder(folder):
             data[fn] = os.path.join(folder, fn)                 # keyed by the full name: obs.txt ≠ obs.xlsx
         elif low.endswith('.pdf'):
             pdfs[fn] = os.path.join(folder, fn)                 # papers the Tables mode can be filled from
+        elif low.endswith(_SPECTRA_EXT) or _OPUS_NAME.search(low):
+            spectra[fn] = os.path.join(folder, fn)
     for fn, path in pdfs.items():
         files.setdefault(os.path.splitext(fn)[0], path)   # a paper .pdf is a manuscript too
-    if not files and not cifs and not data:
+    if not files and not cifs and not data and not spectra:
         return False
     with MS['lock']:
         MS['folder'] = folder
         MS['out_dir'] = os.path.join(folder, 'review_out')
-        MS['files'] = files; MS['order'] = list(files); MS['cifs'] = cifs; MS['data'] = data; MS['pdfs'] = pdfs
+        MS['files'] = files; MS['order'] = list(files); MS['cifs'] = cifs; MS['data'] = data; MS['pdfs'] = pdfs; MS['spectra'] = spectra
         MS['cache'] = {}; MS['gen'] += 1
         _ms_load_triage()
         _tb_load_opts()
@@ -2669,6 +2677,14 @@ def _ms_docx_anchors(path, findings):
             key = next((k for k in _ANCHOR_PROSE if lab.startswith(k)), None)
             if key:
                 f['para'] = prose(_ANCHOR_PROSE[key])            # 'Gladstone–Dale: …', 'the paper states +0.011': the compatibility sentence
+            elif lab.startswith('spectro'):                     # the sentence the line quotes, else the paragraph that prints its band
+                m = re.search(r'‘([^’]{8,})’\s*$', msg)
+                para = prose(re.escape(m.group(1))) if m else None
+                for t in ([] if para is not None else terms_of(f)):
+                    para = prose(r'(?<![\d.])' + re.escape(t) + r'(?![\d.]\d)')
+                    if para is not None:
+                        break
+                f['para'] = para
             elif lab == 'cell':
                 m = re.search(r'\ba=(\d+(?:\.\d+)?)', msg)      # 'cell: a=16.2184, …' (or 'a=16': %g prints no decimals): the paragraph (or the crystal-data cell) that prints that a
                 if m:
@@ -2694,7 +2710,7 @@ def _ms_docx_anchors(path, findings):
             f['para'] = para
 
 # the calculation findings of a .pdf manuscript that name no table, and the words that find their page
-_MS_PAGE_TERMS = {'gladstone': ['compatibility', 'Gladstone'], 'density': ['density'], 'name': ['IMA']}
+_MS_PAGE_TERMS = {'gladstone': ['compatibility', 'Gladstone'], 'density': ['density'], 'name': ['IMA'], 'spectro': ['cm', 'Raman']}
 
 def _ms_pdf_pages(path, findings):
     """A page for the calculation findings of a .pdf manuscript that name no table ('Gladstone–Dale:
@@ -2722,6 +2738,8 @@ def _ms_pdf_pages(path, findings):
                 v = m.group(1); terms = [v]
                 if '.' in v and len(v) > v.index('.') + 4:
                     terms.append(v[:v.index('.') + 4])
+        if lab.startswith('spectro') and f.get('find'):               # the band and the distance the line names, where it names them
+            terms = [t for t in f['find'].split('|') if t]
         if not terms:
             continue
         tally = {}
@@ -2756,7 +2774,8 @@ def _ms_paper_findings(key, path):
         return [{'kind': 'calcinfo', 'fkey': 'calc:error', 'label': 'paper checks', 'msg': 'could not run (%s: %s)' % (type(ex).__name__, ex),
                  'para': None, 'start': None, 'end': None, 'text': ''}]
     epma = (chk.get('extract') or {}).get('epma') or {}
-    if chk['composition'] is None and not epma and chk.get('bv_status') in (None, 'none') and chk.get('powder_status') in (None, 'none'):
+    if chk['composition'] is None and not epma and chk.get('bv_status') in (None, 'none') and chk.get('powder_status') in (None, 'none') \
+            and not any(ln.startswith('spectroscopy') for ln in chk['lines']):
         return []                                                   # nothing to check: no analytical, bond-valence or powder table (a manuscript without tables) — a failed or foreign check still reports
     from pxrd_review import epma as EP
     def constituents_of(el):                                        # 'Si' -> ['SiO2']: the element's constituents as the paper's table writes them
@@ -2792,6 +2811,9 @@ def _ms_paper_findings(key, path):
         elif section.startswith('powder'):                                 # '2.2696 (2 0 0) does not follow …', 'observed 3.456: …': the d as printed
             m = re.match(r'(?:observed )?(\d+\.\d+)', s)
             find = m.group(1) if m else None
+        elif section.startswith('spectro'):                                # 'U–O 1.76 Å from ν3 at 856 cm⁻¹ vs …': the band and the distance as printed
+            nums = re.findall(r'(\d{3,4}) cm⁻¹', s)[:2] + re.findall(r'(?<![\d.])(\d\.\d{2,3}) Å', s)[:1]
+            find = '|'.join(dict.fromkeys(nums)) or None
         else:                                                              # 'Si: paper 2.99, …' -> 'SiO2': the bare symbol would light every 'si' on the page
             m = re.match(r'([A-Z][a-z]?)(?: \(informational\))?:', s)
             find = '|'.join(constituents_of(m.group(1))[:3]) or None if m else None
@@ -3079,6 +3101,445 @@ def api_ms_export():
     os.replace(tmp, path)
     return jsonify({'ok': True, 'path': path})
 
+# ------------------------------------------------------------------ the spectrum window
+# A page of its own (/spectra, opened from the top bar in a second browser window): a Raman or infrared spectrum
+# imported, cleaned, baselined and fitted by pxrd_review.spectrum — the same functions `pxrd spectrum` runs, so the
+# window and the command line cannot disagree. Same rules as the Tables mode: the page sends file NAMES (keys of the
+# open folder, or of what it uploaded), never paths; an upload is parsed and kept in memory, and nothing is written
+# until Export, which writes only into review_out.
+from pxrd_review import spectrum as SPM, spectrum_formats as SPF, spectro as SPC
+import tempfile
+from collections import OrderedDict
+
+_SP_UPLOAD_MAX = 48 * 1024 * 1024
+_SP_KEEP = 6                                            # uploads / prepared spectra kept in memory (the oldest dropped)
+_SP = {'uploads': OrderedDict(), 'prep': OrderedDict(), 'lock': threading.Lock()}
+_SP_OUTPUT = re.compile(r'[^/\\]+_sp\.(docx|xlsx|txt|svg|json)')
+_SP_KINDS = ('', 'raman', 'ir-absorbance', 'ir-transmittance')
+
+
+@app.route('/spectra')
+def spectra_page():
+    return send_file(os.path.join(HERE, 'spectra.html'))
+
+
+def _sp_files():
+    """{name: path} of the open folder's files a spectrum may be in (the instrument formats, then the text and
+    workbook files the Tables mode also lists)."""
+    out = dict(MS.get('spectra') or {})
+    out.update(MS.get('data') or {})
+    return out
+
+
+def _sp_series(name, sheet=None):
+    """[Series] of a folder file or an upload, by NAME -> (series, None) or (None, (message, status))."""
+    if not name:
+        return None, ('no file named', 400)
+    with _SP['lock']:
+        up = _SP['uploads'].get(name)
+    if up is not None:
+        return ([t for t in up if not sheet or (' | %s' % sheet) in t.name] or up), None
+    path = _sp_files().get(name)
+    if not path:
+        return None, ('no such spectrum file in the open folder: %s' % name, 404)
+    try:
+        return SPF.load(path, sheet or None), None
+    except ValueError as ex:
+        return None, (str(ex), 400)
+    except Exception as ex:
+        return None, (E.explain(ex, path), 500)
+
+
+def _sp_num(d, key, lo, hi, default=None):
+    try:
+        v = float(d.get(key))
+    except (TypeError, ValueError):
+        return default
+    return v if lo <= v <= hi and v == v else default
+
+
+def _sp_opts(d):
+    """The processing options of a request body, each one checked: what is not a valid value is the default."""
+    anchors = d.get('anchors') if isinstance(d.get('anchors'), list) else []
+    kind = d.get('kind') if d.get('kind') in _SP_KINDS else ''
+    return {'series': int(_sp_num(d, 'series', 0, 500, 0)), 'kind': kind or None, 'despike': bool(d.get('despike')),
+            'threshold': _sp_num(d, 'threshold', 3.0, 100.0, 8.0), 'resolution': _sp_num(d, 'resolution', 0.05, 100.0),
+            'baseline': d.get('baseline') if d.get('baseline') in SPM.BASELINES else 'none',
+            'anchors': [float(a) for a in anchors[:200] if isinstance(a, (int, float)) and 0 <= a <= 20000],
+            'lam': _sp_num(d, 'lam', 1.0, 1e14, 1e7), 'p': _sp_num(d, 'p', 1e-5, 0.5, 0.01), 'width': _sp_num(d, 'width', 1.0, 5000.0, 150.0),
+            'laser': _sp_num(d, 'laser', 200.0, 2000.0), 'sheet': str(d.get('sheet') or '')[:80] or None}
+
+
+def _sp_prepare(d):
+    """The cleaned spectrum a request asks for -> (prep, opts, None) or (None, None, (message, status)). The last few
+    are kept: a fit asks for the same spectrum it was just shown."""
+    name = str(d.get('name') or '')[:300]
+    o = _sp_opts(d)
+    series, err = _sp_series(name, o['sheet'])
+    if err:
+        return None, None, err
+    key = json.dumps([name, o], sort_keys=True)
+    with _SP['lock']:
+        hit = _SP['prep'].get(key)
+        if hit is not None:
+            _SP['prep'].move_to_end(key)
+            return hit, o, None
+    if not 0 <= o['series'] < len(series):
+        return None, None, ('the file holds %d spectr%s; there is no number %d' % (len(series), 'um' if len(series) == 1 else 'a', o['series'] + 1), 400)
+    try:
+        prep = SPM.prepare_series(series, o['series'], None, None, o['kind'], o['despike'], o['threshold'], o['resolution'], o['baseline'], o['anchors'],
+                                  o['lam'], o['p'], o['width'], o['laser'])
+    except ValueError as ex:
+        return None, None, (str(ex), 400)
+    except Exception as ex:
+        return None, None, ('%s: %s' % (type(ex).__name__, str(ex)[:200]), 500)
+    with _SP['lock']:
+        _SP['prep'][key] = prep
+        while len(_SP['prep']) > _SP_KEEP:
+            _SP['prep'].popitem(last=False)
+    return prep, o, None
+
+
+def _sp_r(v, nd=3):
+    return [round(t, nd) for t in v]
+
+
+def _sp_cif(key):
+    return (MS.get('cifs') or {}).get(key) if key else None
+
+
+def _sp_context(d):
+    """The structure's expected positions and the manuscript's stated bands a request names (by key)."""
+    ticks = []; stated = []; notes = []
+    cif = _sp_cif(str(d.get('cif') or ''))
+    if cif:
+        try:
+            ticks = SPM.expected_bands(SPC.structure_distances(cif))
+        except Exception as ex:
+            notes.append('the .cif could not be used (%s)' % str(ex)[:120])
+    ms = (MS.get('files') or {}).get(str(d.get('ms') or ''))
+    if ms:
+        try:
+            from pxrd_review import paper_extract as PE
+            seen = set()
+            for b in SPC.bands(PE.text_of(ms)):
+                if b.own and (b.pos, b.family, b.mode) not in seen:
+                    seen.add((b.pos, b.family, b.mode))
+                    stated.append({'pos': b.pos, 'technique': b.technique, 'family': b.family, 'mode': 'ν%d' % b.mode if isinstance(b.mode, int) else b.mode,
+                                   'shape': b.shape, 'sentence': b.sentence[:400]})
+        except Exception as ex:
+            notes.append('the manuscript could not be read (%s)' % str(ex)[:120])
+    return ticks, stated, notes
+
+
+@app.route('/api/sp/state')
+def api_sp_state():
+    out = MS['out_dir'] or ''
+    files = [{'name': k, 'source': 'folder'} for k in sorted(_sp_files(), key=str.lower)]
+    with _SP['lock']:
+        files += [{'name': k, 'source': 'upload'} for k in _SP['uploads']]
+    outputs = sorted(fn for fn in os.listdir(out) if _SP_OUTPUT.fullmatch(fn)) if out and os.path.isdir(out) else []
+    return jsonify({'folder': MS['folder'], 'files': files, 'cifs': sorted(MS.get('cifs') or {}, key=str.lower),
+                    'manuscripts': sorted(MS.get('files') or {}, key=str.lower), 'outputs': outputs,
+                    'windows': SPC.band_windows(), 'shapes': list(SPM.SHAPES), 'baselines': list(SPM.BASELINES),
+                    'regions': [{'name': 'uranyl', 'lo': 700, 'hi': 1000}, {'name': 'O–H', 'lo': 2800, 'hi': 3800}]})
+
+
+@app.route('/api/sp/upload', methods=['POST'])
+def api_sp_upload():
+    """A spectrum file from the browser's own chooser (or dropped on the page): parsed and kept in memory under its
+    name. Nothing is written into the folder."""
+    up = request.files.get('file')
+    if up is None:
+        return jsonify({'ok': False, 'error': 'no file was sent'}), 400
+    raw = up.read(_SP_UPLOAD_MAX + 1)
+    if len(raw) > _SP_UPLOAD_MAX:
+        return jsonify({'ok': False, 'error': 'that file is over %d MB — too large to be one spectrum' % (_SP_UPLOAD_MAX // (1024 * 1024))}), 400
+    name = os.path.basename((up.filename or 'spectrum').replace('\\', '/'))[:200] or 'spectrum'
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(name)[1] or '.txt', prefix='pxrd_sp_')
+        with os.fdopen(fd, 'wb') as f:
+            f.write(raw)
+        series = SPF.load(tmp)
+    except ValueError as ex:
+        return jsonify({'ok': False, 'error': str(ex).replace(os.path.basename(tmp or '') or '\x00', name)}), 400
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': '%s: %s' % (type(ex).__name__, str(ex)[:200])}), 500
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    tbase = os.path.basename(tmp)
+    series = [SPF.Series(t.name.replace(tbase, name), t.x, t.y, dict(t.meta, source=name)) for t in series]
+    with _SP['lock']:
+        _SP['uploads'][name] = series; _SP['uploads'].move_to_end(name)
+        while len(_SP['uploads']) > _SP_KEEP:
+            _SP['uploads'].popitem(last=False)
+        for k in [k for k in _SP['prep'] if json.loads(k)[0] == name]:
+            del _SP['prep'][k]
+    return jsonify({'ok': True, 'name': name, 'n': len(series)})
+
+
+@app.route('/api/sp/series')
+def api_sp_series():
+    series, err = _sp_series(request.args.get('name') or '')
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    return jsonify({'ok': True, 'series': [{'i': k, 'name': t.name, 'n': len(t.x), 'x0': t.x[0], 'x1': t.x[-1], 'x_unit': t.meta.get('x_unit') or '',
+                                             'kind': SPF.guess_kind(t), 'notes': t.meta.get('notes') or [], 'unverified': t.meta.get('unverified') or '',
+                                             'offset_copy': bool(t.meta.get('offset_copy'))} for k, t in enumerate(series)]})
+
+
+@app.route('/api/sp/process', methods=['POST'])
+def api_sp_process():
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    prep, _o, err = _sp_prepare(d)
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    ticks, stated, notes = _sp_context(d)
+    try:
+        peaks = SPM.find_peaks(prep['x'], prep['y'])[:60]
+    except Exception:
+        peaks = []
+    return jsonify({'ok': True, 'name': prep['series'].name, 'x': _sp_r(prep['x']), 'raw': _sp_r(prep['raw'], 5), 'cleaned': _sp_r(prep['cleaned'], 5),
+                    'baseline': _sp_r(prep['baseline'], 5), 'y': _sp_r(prep['y'], 5), 'spikes': prep['spikes'], 'noise': prep['noise'], 'kind': prep['kind'],
+                    'notes': prep['notes'] + notes, 'peaks': [{'pos': round(q['pos'], 2), 'height': q['height'], 'fwhm': round(q['fwhm'], 2)} for q in peaks],
+                    'ticks': [{'pos': round(a, 1), 'label': b} for a, b in ticks], 'stated': stated})
+
+
+def _sp_fit_json(f, xs, ys, technique, share=SPM.MIN_SHARE):
+    m = SPM.model(xs, f.comps, f.base, f.x0)
+    try:                                                  # where the residual still holds a band: what '+ band' would add, drawn as marks
+        nxt = [{'pos': round(c['pos'], 1), 'height': c['height'], 'fwhm': round(c['fwhm'], 1)} for c in SPM.residual_bands(xs, ys, f, share)[:4]]
+    except Exception:
+        nxt = []
+    head, rows = SPM.band_rows(f, technique)
+    info = SPM.inferred(f.comps, technique)
+    return {'lo': f.lo, 'hi': f.hi, 'n': f.n, 'k': f.k, 'chi2': f.chi2, 'r2': f.r2, 'bic': f.bic, 'sigma': f.sigma, 'converged': f.converged,
+            'iterations': f.iterations, 'base': list(f.base), 'x0': f.x0, 'warnings': list(f.warnings), 'head': head, 'rows': rows,
+            'comps': [{'shape': c['shape'], 'pos': c['pos'], 'height': c['height'], 'fwhm': c['fwhm'], 'eta': c['eta'], 'area': c['area'],
+                       'esd': c['esd'], 'suggest': i['suggest'], 'distance': i['distance'], 'fix': sorted(c.get('fix') or []),
+                       'wmax': c.get('wmax'), 'wmin': c.get('wmin'), 'at_limit': c.get('at_limit') or ''} for c, i in zip(f.comps, info)],
+            'x': _sp_r(xs), 'model': _sp_r(m, 5), 'residual': _sp_r([a - b for a, b in zip(ys, m)], 5), 'next': nxt}
+
+
+def _sp_comps(raw):
+    """The components a page sends, checked -> a list for spectrum.fit, or None when it sends none."""
+    if not isinstance(raw, list) or not raw:
+        return None
+    out = []
+    for c in raw[:40]:
+        if not isinstance(c, dict):
+            continue
+        pos, h, w = _sp_num(c, 'pos', 0.0, 20000.0), _sp_num(c, 'height', 0.0, 1e30), _sp_num(c, 'fwhm', 1e-3, 5000.0)
+        if pos is None or h is None or w is None:
+            continue
+        one = {'shape': c.get('shape') if c.get('shape') in SPM.SHAPES else 'pvoigt', 'pos': pos, 'height': h, 'fwhm': w,
+               'eta': _sp_num(c, 'eta', 0.0, 1.0, 0.5), 'fix': [k for k in (c.get('fix') or []) if k in ('pos', 'height', 'fwhm', 'eta')]}
+        for k in ('wmin', 'wmax'):
+            v = _sp_num(c, k, 1e-3, 5000.0)
+            if v:
+                one[k] = v
+        out.append(one)
+    return out or None
+
+
+def _sp_run_fit(prep, d):
+    """One region fitted as the request asks -> (Fit, trials, xs, ys). ValueError says what is wrong with the request."""
+    lo, hi = _sp_num(d, 'lo', 0.0, 20000.0), _sp_num(d, 'hi', 0.0, 20000.0)
+    if lo is None or hi is None or hi <= lo:
+        raise ValueError('a region to fit is needed: its two ends in cm⁻¹')
+    xs, ys = SPM.crop(prep['x'], prep['y'], lo, hi)
+    if len(xs) > 6000:
+        raise ValueError('the region holds %d points — fit a region at a time (the uranyl stretches, the O–H stretches), not the whole spectrum' % len(xs))
+    local = d.get('local') if d.get('local') in ('none', 'const', 'linear') else 'linear'
+    shape = d.get('shape') if d.get('shape') in SPM.SHAPES else 'pvoigt'
+    res = _sp_num(d, 'resolution', 0.05, 100.0)
+    comps = _sp_comps(d.get('comps'))
+    wmax, wmin = _sp_num(d, 'max_fwhm', 0.5, 5000.0), _sp_num(d, 'min_fwhm', 0.05, 5000.0)
+    share = (_sp_num(d, 'min_share', 0.0, 50.0, 100.0 * SPM.MIN_SHARE)) / 100.0
+    if comps:
+        # 'refine': what a fit may move for EVERY band — heights only, or with the widths, or with the positions (a band's own holds add to it)
+        hold = {'heights': ('pos', 'fwhm', 'eta'), 'widths': ('pos',), 'positions': ('fwhm', 'eta')}.get(d.get('refine'), ())
+        kw = dict(local_baseline=local, share_width=bool(d.get('share_width')), share_eta=bool(d.get('share_eta')), resolution=res, max_fwhm=wmax, min_fwhm=wmin, fix=hold)
+        if d.get('evaluate'):
+            # the bands AS THEY STAND — their curve, statistics and uncertainties, with no step taken: what an export writes
+            # and what a session opens on (fitting again would write another fit than the one on the screen)
+            f = SPM.fit(xs, ys, comps, max_iter=0, **kw)
+            if d.get('converged') is False:
+                f.warnings.insert(0, 'this fit had not converged when it was written: ‘Fit these’ would still move it')
+            return f, [], xs, ys
+        f, _dropped = SPM.without_dead(xs, ys, SPM.fit(xs, ys, comps, **kw), **kw)
+        if d.get('add'):
+            # one more band, where the residual of these still holds one: each of its three largest swells is tried,
+            # the best kept — and said plainly when the residual holds none
+            best = None
+            for c in SPM.residual_bands(xs, ys, f, share)[:3]:
+                if any(abs(q['pos'] - c['pos']) < 0.25 * q['fwhm'] and 0.6 < c['fwhm'] / q['fwhm'] < 1.6 for q in f.comps):
+                    continue                                    # a twin of a band already there: two bands the data cannot tell apart
+                new = [SPM._bare(q) for q in f.comps] + [{'shape': shape, 'pos': c['pos'], 'height': max(c['height'], 1e-9), 'fwhm': min(c['fwhm'], wmax or c['fwhm']), 'eta': 0.5}]
+                try:
+                    f2 = SPM.without_dead(xs, ys, SPM.fit(xs, ys, new, **kw), **kw)[0]
+                except ValueError:
+                    continue
+                if len(f2.comps) <= len(f.comps):
+                    continue                                    # the fit drove the new band (or another) to nothing: no band gained
+                if best is None or f2.bic < best.bic:
+                    best = f2
+            if best is None:
+                raise ValueError('the residual of these bands holds no further band of %.0f %% of the curve — add one by hand (band), or lower ‘smallest band’' % (100 * share))
+            return best, [(len(f.comps), f.bic, f.chi2), (len(best.comps), best.bic, best.chi2)], xs, ys
+        return f, [], xs, ys
+    seeds = [t['pos'] for t in d.get('seeds') or [] if isinstance(t, dict) and isinstance(t.get('pos'), (int, float))][:20] if isinstance(d.get('seeds'), list) else None
+    n = _sp_num(d, 'n', 1, 16)
+    f, trials = SPM.auto_fit(xs, ys, n=int(n) if n else None, max_n=int(_sp_num(d, 'max_n', 1, 16, 8)), shape=shape, local_baseline=local, resolution=res, seeds=seeds,
+                             max_fwhm=wmax, min_fwhm=wmin, min_share=share, share_eta=bool(d.get('share_eta')))
+    return f, trials, xs, ys
+
+
+@app.route('/api/sp/fit', methods=['POST'])
+def api_sp_fit():
+    """Fit one region: the components the page sends, refined — or, with none, as many as the data support."""
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    prep, _o, err = _sp_prepare(d)
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    try:
+        f, trials, xs, ys = _sp_run_fit(prep, d)
+    except ValueError as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 400
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': '%s: %s' % (type(ex).__name__, str(ex)[:200])}), 500
+    tech = 'raman' if prep['kind'] == 'raman' else 'ir' if (prep['kind'] or '').startswith('ir') else None
+    out = _sp_fit_json(f, xs, ys, tech, _sp_num(d, 'min_share', 0.0, 50.0, 100.0 * SPM.MIN_SHARE) / 100.0)
+    _t, stated, _n = _sp_context(dict(d, cif=''))
+    if stated:
+        own = sorted({b['pos'] for b in stated if f.lo <= b['pos'] <= f.hi})
+        out['stated'] = SPM.compare_stated(f.comps, own, max(6.0, _sp_num(d, 'resolution', 0.05, 100.0) or 0.0))
+    return jsonify({'ok': True, 'fit': out, 'trials': [{'n': n, 'bic': b, 'chi2': c} for n, b, c in trials]})
+
+
+@app.route('/api/sp/d2', methods=['POST'])
+def api_sp_d2():
+    """The second derivative of the cleaned spectrum (bands up) over a stretch, at one smoothing width — the curve a
+    hidden component of an envelope shows in."""
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    prep, _o, err = _sp_prepare(d)
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    lo, hi = _sp_num(d, 'lo', 0.0, 20000.0), _sp_num(d, 'hi', 0.0, 20000.0)
+    xs, ys = SPM.crop(prep['x'], prep['y'], lo, hi)
+    if len(xs) < 7:
+        return jsonify({'ok': False, 'error': 'fewer than seven points there'}), 400
+    width = _sp_num(d, 'width', 1.0, 1000.0, 25.0)
+    v = SPM.second_derivative(xs, ys, width)
+    top = max(abs(t) for t in v) or 1.0
+    return jsonify({'ok': True, 'x': _sp_r(xs), 'd2': [round(t / top, 5) for t in v], 'width': width})
+
+
+@app.route('/api/sp/export', methods=['POST'])
+def api_sp_export():
+    """Write the band table, the figure and the session of the regions the page has fitted into review_out."""
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    if not MS['out_dir']:
+        return jsonify({'ok': False, 'error': 'no folder is open — the table is written into its review_out; open the folder that holds the manuscript first'}), 409
+    regions = d.get('regions') if isinstance(d.get('regions'), list) else []
+    if not regions:
+        return jsonify({'ok': False, 'error': 'nothing fitted yet: fit a region first'}), 400
+    prep, o, err = _sp_prepare(d)
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    fits = []
+    try:
+        kept = []
+        for r in regions[:12]:
+            if isinstance(r, dict):
+                fits.append(_sp_run_fit(prep, dict(r, resolution=d.get('resolution'), evaluate=True))[0])
+                kept.append({k: r.get(k) for k in ('lo', 'hi', 'local', 'share_width', 'share_eta', 'max_fwhm', 'min_fwhm')})
+        ticks, _stated, _notes = _sp_context(d)
+        stem = re.sub(r'[^\w.-]+', '_', os.path.splitext(str(d.get('name') or 'spectrum'))[0]).strip('_')[:80] or 'spectrum'
+        fmt = d.get('fmt')
+        sess = dict(o, name=str(d.get('name') or ''), regions=kept, cif=str(d.get('cif') or ''), ms=str(d.get('ms') or ''), resolution=o.get('resolution'))
+        paths = SPM.export(prep, fits, MS['out_dir'], stem, sess, word=fmt == 'word', xlsx=fmt == 'xlsx', ticks=ticks)
+    except ValueError as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 400
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': E.explain(ex, MS['out_dir'])}), 500
+    return jsonify({'ok': True, 'files': {k: os.path.basename(v) for k, v in paths.items()}, 'folder': MS['out_dir']})
+
+
+def _sp_output(name):
+    """The path of one of this window's own outputs in review_out, by NAME (a basename of the recognised shape that
+    exists there), else None."""
+    if not MS['out_dir'] or not name or not _SP_OUTPUT.fullmatch(name):
+        return None
+    path = os.path.join(MS['out_dir'], name)
+    return path if os.path.isfile(path) else None
+
+
+@app.route('/api/sp/file')
+def api_sp_file():
+    """One of the window's text outputs, to read in a browser tab or to load back: the band table (.txt), the session
+    (.json), the figure (.svg). A workbook or a Word file is opened in its own program (/api/sp/open)."""
+    name = request.args.get('name') or ''
+    path = _sp_output(name)
+    if not path or not name.endswith(('.txt', '.json', '.svg')):
+        abort(404)
+    with open(path, 'rb') as f:
+        body = f.read()
+    kind = 'image/svg+xml' if name.endswith('.svg') else 'application/json' if name.endswith('.json') and request.args.get('as') == 'json' else 'text/plain; charset=utf-8'
+    resp = Response(body, mimetype=kind)
+    resp.headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'"     # a figure is a picture: nothing in it runs
+    return resp
+
+
+@app.route('/api/sp/reveal', methods=['POST'])
+def api_sp_reveal():
+    """Show one of the window's outputs in the file manager (Finder / Explorer), selected."""
+    path = _sp_output(request.args.get('file') or '')
+    if not path:
+        abort(404)
+    try:
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', '-R', path])
+        elif os.name == 'nt':
+            subprocess.Popen(['explorer', '/select,', path])
+        else:
+            subprocess.Popen(['xdg-open', os.path.dirname(path)])
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 500
+    return jsonify({'ok': True})
+
+
+@app.route('/api/sp/open', methods=['POST'])
+def api_sp_open():
+    """Open one of the spectrum window's own outputs (review_out/<x>_sp.docx|xlsx|txt|svg|json)."""
+    path = _sp_output(request.args.get('file') or '')
+    if not path:
+        abort(404)
+    try:
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', path])
+        elif os.name == 'nt':
+            os.startfile(path)                       # type: ignore[attr-defined]  # noqa
+        else:
+            subprocess.Popen(['xdg-open', path])
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 500
+    return jsonify({'ok': True})
+
+
 # ------------------------------------------------------------------ main
 def _auto_exit_watchdog(grace=90):
     """Shut the server down shortly after the browser tab is CLOSED — NOT on idle. A tab beacons
@@ -3198,7 +3659,8 @@ def main():
         args.no_browser = False                               # the old tab cannot find us: open a new one
     if port != args.port:
         print('[review_gui] port %d busy — using %d' % (args.port, port))
-    global _ALLOWED_HOSTS, _AUTH_TOKEN, _GUI_ARGV, _GUI_PORT
+    global _ALLOWED_HOSTS, _AUTH_TOKEN, _AUTH_COOKIE, _GUI_ARGV, _GUI_PORT
+    _AUTH_COOKIE = 'pxrd_token_%d' % port
     _ALLOWED_HOSTS = {'127.0.0.1:%d' % port, 'localhost:%d' % port}   # Host/CSRF allowlist
     # a relaunch after Update now reuses the token so the open tab's cookie still passes
     _AUTH_TOKEN = os.environ.pop('PXRD_GUI_TOKEN', None) or secrets.token_urlsafe(16)

@@ -510,6 +510,83 @@ Tests: `python3 -m unittest tests.test_epma tests.test_gd tests.test_pxrd_table 
 
 ---
 
+## Spectroscopy (`pxrd spectro`, `pxrd spectrum`) — and the GUI's spectrum window
+
+Two tools, one for what a paper SAYS about its spectra and one for the spectrum itself.
+
+**`pxrd spectro <manuscript.docx|paper.pdf> [--cif X] [--bands]`** reads the Raman and infrared bands the text states —
+position, technique, shape words, and the group and mode each is assigned to — and recomputes every distance a sentence
+credits to one of two relations from the band the paper itself gives:
+
+| relation | gives | from |
+|---|---|---|
+| Bartlett & Cooney (1989) | U–O of the uranyl ion: `106.5·ν1^(−2/3) + 0.575` and `91.41·ν3^(−2/3) + 0.804` Å | the ν1 / ν3 stretch |
+| Libowitzky (1999) | O···O: `ν = 3592 − 304·10⁹·exp(−d/0.1321)`; H···O: `ν = 3632 − 1.79·10⁶·exp(−d/0.2146)` | an O–H stretch |
+
+The same section appears in `pxrd paper --check`, `pxrd proposal` and the GUI's Manuscript mode. What it says, by grade:
+
+- **a finding** (written as a Word comment by `pxrd proposal`) only where the sentence pairs the distance and the band
+  itself AND the reading has proved itself — the other uranyl relation gives the stated value for the mode the sentence
+  names; one pair of a list fails while the others reproduce; or another stated pair reproduces elsewhere in the paper;
+- **information** for a stated pair nothing vouches for, and for everything the structure says beside the spectrum: the
+  refined uranyl distances (from the .cif, else from the bond table the paper prints) with the positions the relation
+  expects for them, several independent uranyl ions against one stated ν1 band, the hydrogen bonds' D···A range against
+  the stated O–H bands. Either relation scatters by more than the differences it would be asked to judge, so the
+  structure never makes a finding.
+
+**`pxrd spectrum <file> [--sheet S] [--list] [--range LO HI] [--kind raman|ir-absorbance|ir-transmittance] [--despike]
+[--resolution R] [--baseline als|snip|rubber|anchors] [--fit auto|N] [--shape pvoigt|gauss|lorentz] [--cif X]
+[--manuscript M] [--word] [--xlsx]`** takes the spectrum from the instrument's or the spreadsheet's file to a table of
+fitted bands:
+
+- **import** — text / CSV in any delimiter (a decimal comma is recognised), every x–y block of a workbook sheet, RRUFF and
+  LabSpec text, JCAMP-DX (plain and compressed; the file's own X- and Y-checks are run), Galactic `.spc`, Thermo `.spa`,
+  Bruker OPUS. The three binary readers follow the layouts in open use and have not yet been through a file from an
+  instrument: a spectrum they return says so, and its axis should be checked against the instrument's display once.
+- **clean** — cosmic-ray events (a jump up and back within a few points, narrower than the resolution lets a band be);
+  an infrared transmittance spectrum converted to absorbance.
+- **baseline** — asymmetric least squares (one stiffness means the same at any sampling), SNIP, the rubber band, or
+  anchor points; fitted to the whole spectrum, then the region is cut out.
+- **fit** — Gaussian, Lorentzian or pseudo-Voigt bands by Levenberg–Marquardt, with a constant or sloping local
+  baseline, an optional common width, held parameters, width limits (`--max-fwhm`, `--min-fwhm`), standard uncertainties
+  and correlations. `--fit auto` looks for bands in the second derivative at a ladder of smoothing widths (6 to 200 cm⁻¹
+  — a narrow lattice mode and the 100 cm⁻¹-wide components of an O–H envelope are found at different ones), starts from
+  all of them at once, adds whatever the residual still holds while the BIC falls, and then tests each band for removal.
+  `--min-share` sets how small a band it may propose, `--max-bands` how many. A smooth envelope has no unique
+  decomposition: `--max-fwhm` is what makes the fit use several narrower bands instead of one wide one, and the fit
+  says which bands rest on that limit and which positions the data do not fix.
+- **what a fit should not be trusted for** is printed under it: bands closer than the resolution or than half their
+  width, an uncertainty as large as a separation, parameters correlated above 0.95, a band two points wide or three
+  noise deviations high, long runs of one sign in the residual, a smoothed or interpolated spectrum.
+- **beside each band** — the windows published descriptions place it in (`data/band_windows.json`: aggregated positions
+  per group and mode), the distance either relation gives, the positions the `--cif` expects, and which of the
+  `--manuscript`'s stated bands it matches.
+
+Outputs go to `review_out/<stem>_sp.txt`, `.svg` (the figure) and `.json` (the options and every fitted region, so a fit
+can be done again), plus `.docx` / `.xlsx` on request. Everything is pure Python and runs locally.
+
+**The spectrum window** (`Spectra ↗` in the GUI's top bar, or from a spectroscopy finding) is the same code behind an
+interactive plot in a second browser window: scroll to zoom, drag a region, click to add a baseline anchor. A fit is
+refined by hand on the plot and in the table:
+
+| to | do |
+|---|---|
+| move a band, set its height | drag its ● |
+| set its width | drag its ◆ sideways |
+| add a band where you see one | `band`, then click at its top |
+| add the band the residual holds | click a green ▲ under the plot, or `+ band` |
+| remove one | `×` in its row, Delete when it is selected, or `− band` (the weakest) |
+| make one band two | `split` in its row |
+| keep a position / width / height as it is | the `hold` boxes of its row |
+| keep bands from widening into the envelope | `widest` (and `narrowest`) |
+| see hidden components | the `2nd derivative` layer, at a smoothing width of your choice |
+| go back | `undo` / `redo` (⌘Z) |
+
+With `refit as I edit` on, every change is refitted at once; off, changes are drawn dashed — with their own sum and
+residual — until `Fit these`. The line above the table says whether the last change made the fit better or worse (BIC).
+The structure's expected positions are green ticks, the manuscript's stated bands orange marks. A file comes from the open folder, the browser's chooser, or a drop on the plot; it is read in the
+window only and nothing is written until Export.
+
 ## Writing the review into the .docx
 `pxrd_review/annotate_review.py` runs the same comparison and writes the findings back into
 each entry as **Word comments + yellow highlights**, so they appear

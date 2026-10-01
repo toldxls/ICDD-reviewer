@@ -41,6 +41,64 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+**Spectroscopy.** The Raman and infrared bands a paper states are read and the distances it infers from them recomputed;
+a spectrum file is imported, cleaned and fitted in a window of its own.
+
+### Fixed
+- **GUI: two instances on one machine no longer log each other out.** The session cookie was one name for the host, so
+  opening a second GUI (another port) overwrote the first one's cookie and its open tab was refused on its next
+  request. The cookie now carries the port.
+
+### Added
+- **`pxrd spectro <manuscript.docx|paper.pdf> [--cif X]`, and a spectroscopy section in `pxrd paper --check`, `pxrd proposal`
+  and the GUI's Manuscript mode.** Every distance a sentence credits to Bartlett & Cooney (1989) — U–O of the uranyl ion
+  from ν1 or ν3 — or to Libowitzky (1999) — O···O (or H···O) from an O–H stretch — is recomputed from the band the paper
+  itself gives. A finding is written only where the sentence pairs the distance and the band itself and the reading has
+  proved itself: the other of the two uranyl relations gives the stated value for a mode the sentence names, one pair of
+  a list fails while the rest reproduce (the line says which wavenumber would give the stated distance), or another
+  stated pair reproduces elsewhere in the paper. With a .cif — or, without one, the bond table the paper prints — the
+  refined uranyl distances and hydrogen-bond D···A distances are set beside the spectrum as information: the positions
+  either relation expects, independent uranyl ions against the ν1 bands stated, an O–H band that answers to a distance
+  the structure has none near. On the 1,130-paper corpus: 90 papers get a section, every band-and-distance pair the
+  papers print reproduces the published coefficients, 2 findings (both read against the paper), no other reader's
+  status moved. Recall by seeded faults (`tools/seed_spectra.py`): a stated distance off by 0.05 Å or more is caught or
+  noted in 90–95 % of cases.
+- **`pxrd spectrum <file> [--sheet S] [--range LO HI] [--despike] [--baseline als|snip|rubber|anchors] [--fit auto|N]
+  [--cif X] [--manuscript M]`** — a Raman or infrared spectrum from the file an instrument or a spreadsheet wrote
+  (text / CSV in any delimiter, every x–y block of a workbook sheet, RRUFF, LabSpec text, JCAMP-DX plain and compressed,
+  Galactic .spc, Thermo .spa, Bruker OPUS): cosmic-ray events removed (a jump up and back narrower than the resolution
+  allows a band to be), the baseline taken off (asymmetric least squares, SNIP, rubber band, anchor points), the bands
+  fitted as Gaussian, Lorentzian or pseudo-Voigt components by Levenberg–Marquardt with standard uncertainties. Bands
+  are looked for in the second derivative at a ladder of smoothing widths, so the components of a broad O–H envelope
+  are found as well as a narrow lattice mode; the fit starts from all of them, adds what the residual still holds while
+  the BIC falls, and tests each band for removal. `--max-fwhm` keeps a component from widening into its envelope. A
+  fit says what it should not be trusted for: bands closer than the resolution or than half their width, an uncertainty
+  as large as a separation, parameters correlated above 0.95, structure left in the residual, a smoothed or interpolated
+  spectrum whose noise says nothing. Each band is set beside the windows published descriptions place it in, the distance
+  either relation gives, the positions the structure expects and the bands the manuscript states. Pure Python; checked
+  at development time against scipy (positions to 10⁻⁶ cm⁻¹). Writes `review_out/<stem>_sp.txt / .svg / .json`
+  (+ Word / Excel). The .spc, .spa and OPUS readers follow the layouts in open use and have not yet been through a file
+  from an instrument — a spectrum they return says so.
+- **GUI, the spectrum window** (`Spectra ↗` in the top bar, and from a spectroscopy finding): a second browser window
+  with the spectrum as an interactive plot — scroll to zoom, drag a region, click to add a baseline anchor — and a fit
+  that is refined by hand: drag a band's ● to move it and its ◆ to set its width, click where a band is to add it, click
+  a ▲ to add the band the residual holds, `+ band` / `− band`, split a band, hold a position, width or height, limit the
+  widths, look at the second derivative at any smoothing width, undo and redo; each change is refitted at once or drawn
+  dashed until asked. The structure's expected positions and the manuscript's stated bands are drawn
+  on it, and the fitted bands listed with their uncertainties, warnings and the manuscript's bands they do or do not
+  match. A file is taken from the open folder, from the browser's chooser or dropped on the plot; it is read in the
+  window only, and nothing is written until Export.
+- The spectrum window's export writes the fit as it stands (no fitting on the way out), says where it wrote, opens the
+  workbook or Word file asked for, and the workbook carries the curves to plot (spectrum, fit, residual, each band) beside
+  the band table. Every export writes a session (`…_sp.json`) that reopens the fit — options, regions, bands, holds —
+  from the list of written files or `Open file…`. `refine` chooses what a refit may move (heights only, with widths,
+  with positions, everything); `one η` gives all pseudo-Voigt bands one shape; a band the fit drives to zero height is
+  taken out and said; two bands closer than half their width can be merged; a band in the C–H stretching window is
+  named as such instead of being given an O···O distance.
+- `data/band_windows.json`: where published mineral descriptions place the numbered modes of the common groups, the O–H
+  stretch and the H2O bend (percentiles per group, mode and technique; aggregates of eight papers or more).
+- Dev tools: `tools/corpus_spectra.py` (the band library, the proof of the coefficients, the A/B, the windows),
+  `tools/seed_spectra.py` (recall).
 
 ## [0.15.2] — 2026-09-30
 **The Mindat pane's lists lead somewhere.** A species in any pane list opens its record, ‹ back returns to the list it

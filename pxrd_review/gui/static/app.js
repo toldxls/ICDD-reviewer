@@ -1971,6 +1971,14 @@ document.addEventListener('click', hideCmtPopover);                             
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCmtPopover(); });
 // dashboard 'Log' button: open the tool's change log (annotation_log.txt) in a new tab,
 // falling back to whatever review-out log exists (triage_report / mindat_discrepancies / sweep).
+// The spectrum window: a page of its own in a named second window (opened again, the same window comes forward).
+// Opened from here — never with 'noopener' — so the session cookie this page holds goes with it.
+function openSpectra(query) {
+  const w = window.open('/spectra' + (query || ''), 'pxrd-spectra');
+  if (w) w.focus();
+}
+$('#open-spectra').addEventListener('click', () => openSpectra(''));
+
 $('#open-log').addEventListener('click', async () => {
   let logs = [];
   try { logs = (await fetch('/api/logs').then(x => x.json())).logs || []; } catch (_) {}

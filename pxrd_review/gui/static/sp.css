@@ -1,0 +1,93 @@
+/* The spectrum window (/spectra): app.css gives the theme tokens, the top bar, .seg, .chip, .muted, .hidden */
+body.sp { overflow: hidden; }
+body.sp #topbar select { max-width: 17em; }
+body.sp #topbar button { white-space: nowrap; }
+body.sp #topbar label { white-space: nowrap; }
+#sp-status { max-width: 34em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.sp select, body.sp input[type=number] {
+  background: rgb(var(--panel-rgb) / .9); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit;
+}
+body.sp select:focus, body.sp input[type=number]:focus { outline: none; border-color: var(--accent); }
+body.sp input[type=checkbox] { accent-color: var(--accent); }
+#sp-app { flex: 1; min-height: 0; display: flex; gap: var(--pad); padding: var(--pad); }
+#sp-side {
+  width: 290px; flex: none; overflow-y: auto; padding: var(--pad);
+  background: rgb(var(--panel-rgb) / var(--panel-alpha)); border: 1px solid var(--line); border-radius: var(--radius);
+}
+#sp-side section { margin-bottom: 12px; }
+#sp-side h3 { margin: 0 0 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+#sp-side .row { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-wrap: nowrap; }
+#sp-side .row.wrap { flex-wrap: wrap; gap: 4px 12px; }
+#sp-side input[type=number] { width: 5.2em; }
+#sp-side select { max-width: 100%; }
+#sp-side label { white-space: nowrap; }
+#sp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+#sp-tools { display: flex; align-items: center; gap: 12px; flex: none; }
+#sp-readout { font-variant-numeric: tabular-nums; }
+#sp-plot {
+  flex: 1 1 55%; min-height: 220px; position: relative; cursor: crosshair; user-select: none;
+  background: rgb(var(--panel-rgb) / var(--panel-alpha)); border: 1px solid var(--line); border-radius: var(--radius);
+}
+#sp-plot.drop { outline: 2px dashed var(--accent); }
+#sp-plot svg { display: block; width: 100%; height: 100%; }
+#sp-plot .axis line, #sp-plot .axis path { stroke: var(--muted); }
+#sp-plot text { fill: var(--muted); font-size: 11px; }
+#sp-plot .data { fill: none; stroke: var(--text); stroke-width: 1; }
+#sp-plot .raw { fill: none; stroke: var(--muted); stroke-width: .8; }
+#sp-plot .base { fill: none; stroke: var(--warn); stroke-width: 1; stroke-dasharray: 4 3; }
+#sp-plot .model { fill: none; stroke: var(--danger); stroke-width: 1.4; }
+#sp-plot .comp { fill: rgb(var(--accent-rgb) / .10); stroke: var(--accent); stroke-width: .9; }
+#sp-plot .resid { fill: none; stroke: var(--muted); stroke-width: .9; }
+#sp-plot .region { fill: rgb(var(--accent-rgb) / .07); stroke: rgb(var(--accent-rgb) / .5); stroke-width: 1; }
+#sp-plot .region.cur { fill: rgb(var(--accent-rgb) / .13); }
+#sp-plot .sel { fill: rgb(var(--accent-rgb) / .2); }
+#sp-plot .tick { stroke: var(--ok); stroke-width: 1; stroke-dasharray: 3 3; }
+#sp-plot .tick-l { fill: var(--ok); font-size: 10px; }
+#sp-plot .stated { fill: var(--warn); }
+#sp-plot .peak { stroke: var(--info); stroke-width: 1; }
+#sp-plot .anchor { fill: var(--warn); stroke: var(--bg0); }
+#sp-plot .spike { fill: var(--danger); }
+#sp-plot .lab { fill: var(--accent); font-size: 10px; }
+#sp-plot .comp.sel { stroke-width: 1.8; fill: rgb(var(--accent-rgb) / .22); }
+#sp-plot .comp.draft { stroke-dasharray: 4 3; }
+#sp-plot .model.draft { stroke-dasharray: 5 3; }
+#sp-plot .h-pos { fill: var(--accent); stroke: var(--bg0); stroke-width: 1; cursor: move; }
+#sp-plot .h-w { fill: var(--bg0); stroke: var(--accent); stroke-width: 1.4; cursor: ew-resize; }
+#sp-plot .h-pos.sel, #sp-plot .h-w.sel { stroke: var(--text); }
+#sp-plot .r-edge { cursor: ew-resize; }
+#sp-plot .r-edge line { stroke: var(--accent); stroke-width: 1.5; }
+#sp-plot .r-edge rect { fill: transparent; }
+#sp-plot .r-edge path { fill: var(--accent); stroke: var(--bg0); }
+#sp-plot .r-edge:hover line { stroke-width: 3; }
+#sp-split { flex: none; height: 7px; margin: -2px 0; cursor: row-resize; border-radius: 4px; background: linear-gradient(to bottom, transparent 2px, var(--line) 2px, var(--line) 5px, transparent 5px); }
+#sp-split:hover { background: linear-gradient(to bottom, transparent 2px, var(--accent) 2px, var(--accent) 5px, transparent 5px); }
+#sp-plot .next { fill: var(--ok); cursor: pointer; }
+#sp-plot .next:hover { fill: var(--text); }
+#sp-plot .d2 { fill: none; stroke: var(--info); stroke-width: 1; opacity: .85; }
+#sp-table tr.sel td { background: rgb(var(--accent-rgb) / .12); }
+#sp-table td.hold label { margin-right: 6px; color: var(--muted); }
+#sp-table select { padding: 1px 4px; }
+#sp-table .lim { color: var(--warn); }
+#sp-plot .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--muted); padding: 2em; }
+#sp-notes { flex: none; }
+#sp-notes .note { color: var(--warn); margin: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#sp-result { flex: 1 1 35%; min-height: 90px; overflow: auto; padding: var(--pad);
+  background: rgb(var(--panel-rgb) / var(--panel-alpha)); border: 1px solid var(--line); border-radius: var(--radius); }
+#sp-table { border-collapse: collapse; margin: 6px 0; font-variant-numeric: tabular-nums; }
+#sp-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 2px 10px 2px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+#sp-table td { padding: 2px 10px 2px 0; white-space: nowrap; vertical-align: baseline; }
+#sp-table td.w { white-space: normal; color: var(--muted); }
+#sp-table input[type=number] { width: 6em; }
+#sp-table .esd { color: var(--muted); }
+#sp-table button { padding: 0 6px; }
+#sp-table tr.edited td { color: var(--warn); }
+#sp-warnings .warn { color: var(--warn); margin: 2px 0; }
+#sp-warnings .warn::before { content: '! '; font-weight: 700; }
+#sp-compare { margin-top: 6px; }
+#sp-compare .lost { color: var(--warn); }
+#sp-outputs a { cursor: pointer; text-decoration: underline; display: block; overflow-wrap: anywhere; margin: 2px 0; }
+#sp-exported { border: 1px solid rgb(var(--accent-rgb) / .5); border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; background: rgb(var(--accent-rgb) / .08); }
+#sp-exported .path { font-family: ui-monospace, Menlo, monospace; font-size: .92em; overflow-wrap: anywhere; }
+#sp-exported a { cursor: pointer; text-decoration: underline; margin-right: 12px; }
+#sp-exported button { margin-left: 6px; padding: 1px 8px; }
+button.primary { border-color: rgb(var(--accent-rgb) / .7); }
