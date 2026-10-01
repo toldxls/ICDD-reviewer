@@ -13,6 +13,7 @@
     <select id="sp-file" title="A spectrum file of the open folder, or one opened here.&#10;Text, CSV, a workbook sheet, RRUFF, JCAMP-DX, .spc, .spa or an OPUS file."></select>
     <button id="sp-open" title="Open a spectrum file from anywhere on this machine. It is read into this window only: nothing is copied into the folder, and nothing leaves the machine.">Open file…</button>
     <input type="file" id="sp-upload" class="hidden" title="a spectrum file, or a session (…_sp.json) written by an export">
+    <button id="sp-fig-open" title="Most papers give no data — at best a figure. Read the curve off a figure: a page of a .pdf, an image of a manuscript, or an image file. The frame, two points of the axis and the curve are confirmed by hand; the traced curve then opens here like any spectrum, with the manuscript's stated bands set beside it. Good to about a pixel: for seeing where the curve has a band, not for fitting widths.">From a figure…</button>
     <select id="sp-series" class="hidden" title="Which spectrum of the file (a sheet or a file may hold several)"></select>
     <select id="sp-kind" title="What the spectrum is. An infrared transmittance spectrum is converted to absorbance before anything else.">
       <option value="">kind: as guessed</option>
@@ -25,6 +26,31 @@
     <label class="muted" title="The manuscript or paper: the band positions its text states are drawn as orange marks and set beside the fitted bands.">manuscript <select id="sp-ms"></select></label>
     <span id="sp-status" class="muted"></span>
   </header>
+
+  <div id="sp-fig" class="hidden">
+    <div id="sp-fig-bar">
+      <b>A spectrum from a figure</b>
+      <select id="sp-fig-src" title="A .pdf, a manuscript .docx or an image of the open folder — or one opened here."></select>
+      <button id="sp-fig-file" title="Open an image (.png, .jpg, .tif) or a .pdf from anywhere on this machine. It is kept in this window only.">Open image…</button>
+      <input type="file" id="sp-fig-upload" class="hidden" accept="image/*,.pdf,.tif,.tiff">
+      <select id="sp-fig-page" title="The page (a ★ where a caption names a Raman or infrared spectrum) or the image."></select>
+      <span class="sp-fig-step">axis</span>
+      <label title="The axis value at the LEFT mark (the vertical line with the handle). Drag the mark onto a numbered tick and type that number.">left mark <input type="number" id="sp-fig-v1" step="any" placeholder="cm⁻¹"></label>
+      <label title="The axis value at the RIGHT mark.">right mark <input type="number" id="sp-fig-v2" step="any" placeholder="cm⁻¹"></label>
+      <label title="The bands of the curve point down (a transmittance spectrum). Told from the curve when left alone."><input type="checkbox" id="sp-fig-down"> bands down</label>
+      <span id="sp-fig-swatch" title="The curve's colour: click on the curve in the figure to choose it."></span>
+      <button id="sp-fig-trace" class="primary" title="Follow the curve inside the frame. The result is drawn over the figure in red: look at it before using it.">Trace</button>
+      <button id="sp-fig-use" disabled title="Open the traced curve in the spectrum window.">Use this curve</button>
+      <div class="spacer"></div>
+      <button id="sp-fig-close">Close</button>
+    </div>
+    <div id="sp-fig-help" class="muted">① Drag a box around the plot, from one end of its axis to the other (a found frame is offered: click another dashed one to take it).
+      ② Drag the two vertical marks onto two numbered ticks and type their numbers — a mark dropped near the axis goes onto the nearest tick found (the small strokes), one dropped on a peak after a Trace onto the peak’s top; hold Alt to leave it where it is dropped.
+      ③ Click on the curve wanted — that gives its colour, and says which curve where there are several. Then Trace.</div>
+    <div id="sp-fig-status"></div>
+    <div id="sp-fig-loupe" class="hidden"><i></i></div>
+    <div id="sp-fig-view"><div id="sp-fig-stage"><img id="sp-fig-img" alt=""><svg id="sp-fig-svg" xmlns="http://www.w3.org/2000/svg"></svg></div></div>
+  </div>
 
   <div id="sp-app">
     <aside id="sp-side">

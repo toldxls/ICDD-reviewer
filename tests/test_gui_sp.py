@@ -219,6 +219,72 @@ class SpectrumWindow(unittest.TestCase):
             if self.G.MS['athread']:
                 self.G.MS['athread'].join(60)
 
+    def test_a_spectrum_from_a_figure(self):
+        import fitz
+        from tests.test_figure_trace import make_pdf, BANDS
+        pdf = os.path.join(self.tmp, 'figpaper.pdf')
+        try:
+            X = make_pdf(pdf, second=False)
+            self.G.ms_set_folder(self.tmp)
+            st = json.loads(self.c.get('/api/sp/state').data)
+            self.assertIn('figpaper.pdf', st['figures']); self.assertIn('testite.docx', st['figures'])
+            src = json.loads(self.c.get('/api/sp/fig/sources?name=figpaper.pdf').data)['sources']
+            self.assertEqual([(s_['index'], s_['spectrum']) for s_ in src], [(0, True), (1, False)])
+            img = self.c.get('/api/sp/fig/image?name=figpaper.pdf&i=0')
+            self.assertEqual((img.status_code, img.mimetype, img.data[:4]), (200, 'image/png', b'\x89PNG'))
+            det = self._post('/api/sp/fig/detect', {'name': 'figpaper.pdf', 'i': 0})
+            self.assertEqual(len(det['frames']), 1); self.assertTrue(det['vector'])
+            f = det['frames'][0]
+            self.assertEqual([t[1] for t in f['ticks']], [200.0, 1200.0])
+            body = {'name': 'figpaper.pdf', 'i': 0, 'box': f['box'], 'x1': f['ticks'][0][0], 'v1': 200, 'x2': f['ticks'][1][0], 'v2': 1200}
+            tr = self._post('/api/sp/fig/trace', body)
+            self.assertEqual((tr['how'], tr['down']), ('vector', False)); self.assertNotIn('name', tr); self.assertGreater(len(tr['trace']), 500)
+            z = det['w'] / 595.0
+            col = self._post('/api/sp/fig/colour', {'name': 'figpaper.pdf', 'i': 0, 'x': X(600) * z, 'y': (330 - 0.04 / 1.15 * 210) * z})
+            self.assertGreater(col['colour'][2], col['colour'][0] + 60)                                    # the blue curve
+            self.assertIn('nothing is drawn there', self._post('/api/sp/fig/colour', {'name': 'figpaper.pdf', 'i': 0, 'x': 30, 'y': 30}, 400)['error'])
+            used = self._post('/api/sp/fig/trace', dict(body, use=True))
+            name = used['name']
+            self.assertIn('(figure)', name)
+            self.assertIn({'name': name, 'source': 'upload'}, json.loads(self.c.get('/api/sp/state').data)['files'])
+            d = self._post('/api/sp/process', {'name': name, 'ms': 'testite'})                              # … and opens like any spectrum, the manuscript's bands beside it
+            self.assertTrue(d['figure']); self.assertIn('read off a figure', d['notes'][0]); self.assertFalse(any('smoothed or interpolated' in n for n in d['notes']))
+            self.assertEqual(sorted(p[0] for p in d['on_curve']['found']), [832.0, 846.0]); self.assertEqual(d['on_curve']['none'], [880.0])
+            top = d['x'][d['y'].index(max(d['y']))]
+            self.assertAlmostEqual(top, 464.0, delta=2.5)
+            px = self._post('/api/sp/fig/trace', dict(body, v2=None))                                      # the curve alone, before the axis is scaled: its peaks to drop a mark on
+            self.assertTrue(px['pixels_only']); self.assertGreaterEqual(len(px['peaks']), 5); self.assertNotIn('lo', px)
+            self.assertAlmostEqual(min(px['peaks'], key=lambda p: abs(p - X(464) * z)), X(464) * z, delta=1.5)
+            self.assertIn('axis needs two points', self._post('/api/sp/fig/trace', dict(body, v2=None, use=True), 400)['error'])
+            self.assertEqual(len(f['marks']), 6)                                                           # the six ticks of the axis, evenly spaced
+            for m_, v_ in zip(f['marks'], range(200, 1300, 200)):
+                self.assertAlmostEqual(m_, X(v_) * z, delta=1.0)
+            own = self._post('/api/sp/fig/detect', {'name': 'figpaper.pdf', 'i': 0, 'box': [f['box'][0] + 20, f['box'][1] + 30, f['box'][2] - 20, f['box'][3]]})
+            self.assertEqual((own['frames'], len(own['own']['marks'])), ([], 6))                          # a frame of the user's own: the ticks on its axis
+            self.assertIn('drag a frame', self._post('/api/sp/fig/trace', dict(body, box=None), 400)['error'])
+            self._post('/api/sp/fig/detect', {'name': 'nosuch.pdf', 'i': 0}, 404)
+            self.assertEqual(self.c.get('/api/sp/fig/image?name=../testite.docx&i=0').status_code, 404)
+            # an image opened from the browser: kept in memory, traced by its pixels
+            with fitz.open(pdf) as doc:
+                png = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes('png')
+            before = sorted(os.listdir(self.tmp))
+            up = self.c.post('/api/sp/fig/upload', data={'file': (io.BytesIO(png), 'shot.png')}, content_type='multipart/form-data')
+            self.assertEqual(json.loads(up.data), {'ok': True, 'name': 'shot.png', 'n': 1}); self.assertEqual(sorted(os.listdir(self.tmp)), before)
+            det = self._post('/api/sp/fig/detect', {'name': 'shot.png', 'i': 0})
+            self.assertEqual((len(det['frames']), det['frames'][0]['ticks'], det['vector']), (1, [], False))
+            tr = self._post('/api/sp/fig/trace', {'name': 'shot.png', 'i': 0, 'box': det['frames'][0]['box'], 'x1': X(200) * 2, 'v1': 200, 'x2': X(1200) * 2, 'v2': 1200})
+            self.assertEqual(tr['how'], 'raster'); self.assertGreater(tr['coverage'], 0.95)
+            bad = self.c.post('/api/sp/fig/upload', data={'file': (io.BytesIO(b'words'), 'notes.txt')}, content_type='multipart/form-data')
+            self.assertEqual(bad.status_code, 400)
+            bad = self.c.post('/api/sp/fig/upload', data={'file': (io.BytesIO(b'not a picture'), 'broken.png')}, content_type='multipart/form-data')
+            self.assertEqual(bad.status_code, 400)
+        finally:
+            if os.path.exists(pdf):
+                os.remove(pdf)
+            self.G.ms_set_folder(self.tmp)
+            if self.G.MS['athread']:
+                self.G.MS['athread'].join(60)
+
     def test_upload_stays_in_memory(self):
         before = sorted(os.listdir(self.tmp))
         r = self.c.post('/api/sp/upload', data={'file': (io.BytesIO(self.text.encode()), '../sneaky name.txt')}, content_type='multipart/form-data')

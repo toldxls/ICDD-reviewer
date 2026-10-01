@@ -50,10 +50,38 @@ body.sp input[type=checkbox] { accent-color: var(--accent); }
 #sp-plot .axis line, #sp-plot .axis path { stroke: var(--muted); }
 #sp-plot text { fill: var(--muted); font-size: 11px; }
 #sp-plot .data { fill: none; stroke: var(--text); stroke-width: 1; }
+/* the figure panel: a page or an image, the frame, the two axis marks and the traced curve over it */
+#sp-fig { position: fixed; inset: 0; z-index: 30; background: var(--bg0); display: flex; flex-direction: column; }
+#sp-fig-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex: none; white-space: nowrap; }
+#sp-fig-bar select { max-width: 20em; }
+#sp-fig-bar input[type=number] { width: 6.2em; }
+#sp-fig-bar .spacer { flex: 1; }
+#sp-fig-status { padding: 0 12px 5px; flex: none; min-height: 1.4em; color: var(--accent); }
+.sp-fig-step { color: var(--muted); }
+#sp-fig-swatch { display: inline-block; width: 16px; height: 16px; border: 1px solid var(--line); border-radius: 3px; }
+#sp-fig-help { padding: 5px 12px; flex: none; }
+#sp-fig-view { flex: 1; overflow: auto; padding: 8px 12px; }
+#sp-fig-stage { position: relative; display: inline-block; background: #fff; }
+#sp-fig-img { display: block; user-select: none; -webkit-user-drag: none; }
+#sp-fig-svg { position: absolute; left: 0; top: 0; cursor: crosshair; }
+#sp-fig-svg .f-box { fill: rgba(40, 120, 220, .06); stroke: #1f6fd0; stroke-width: 2; vector-effect: non-scaling-stroke; }
+#sp-fig-svg .f-other { fill: transparent; stroke: #1f6fd0; stroke-width: 1; stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; cursor: pointer; }
+#sp-fig-svg .f-mark line { stroke: #d17a00; stroke-width: 2; vector-effect: non-scaling-stroke; }
+#sp-fig-svg .f-mark path { fill: #d17a00; cursor: ew-resize; }
+#sp-fig-svg .f-mark rect { fill: transparent; cursor: ew-resize; }
+#sp-fig-svg .f-mark text { fill: #a85f00; font-weight: 600; paint-order: stroke; stroke: #fff; stroke-width: 4px; }
+#sp-fig-svg .f-tick { stroke: #d17a00; stroke-width: 2; vector-effect: non-scaling-stroke; opacity: .75; }
+#sp-fig-svg .f-apex { fill: #e0261a; opacity: .8; }
+#sp-fig-loupe { position: fixed; z-index: 40; width: 220px; height: 150px; border: 2px solid #d17a00; border-radius: 6px; background-color: #fff; background-repeat: no-repeat; box-shadow: 0 4px 18px rgba(0, 0, 0, .5); pointer-events: none; image-rendering: pixelated; }
+#sp-fig-loupe i { position: absolute; left: 50%; top: 0; bottom: 0; width: 0; border-left: 1px solid #d17a00; }
+#sp-fig-svg .f-trace { fill: none; stroke: #e0261a; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+#sp-fig-svg .f-seed { fill: none; stroke: #e0261a; stroke-width: 2; vector-effect: non-scaling-stroke; }
+#sp-fig-svg .f-drag { fill: rgba(40, 120, 220, .10); stroke: #1f6fd0; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+#sp-notes .on-curve { color: var(--muted); margin: 1px 0; }
 #sp-plot .ruler line { stroke: var(--muted); stroke-width: 1; }
 #sp-plot .ruler text { fill: var(--muted); font-size: 10px; }
 #sp-plot .ruler .name { fill: var(--text); }
-#sp-plot .ruler circle { fill: var(--accent); stroke: var(--bg); stroke-width: 1; }
+#sp-plot .ruler circle { fill: var(--accent); stroke: var(--bg0); stroke-width: 1; }
 #sp-plot .rawdata { fill: none; stroke: var(--danger); stroke-width: .8; opacity: .55; }
 #sp-tools button:disabled, #sp-side button:disabled, #sp-export button:disabled { opacity: .45; cursor: default; }
 #sp-plot .raw { fill: none; stroke: var(--muted); stroke-width: .8; }

@@ -1108,7 +1108,7 @@ def prepare_series(every, series=0, lo=None, hi=None, kind=None, despike_on=Fals
     base = baseline(x, y, baseline_kind, anchors, lam, p, width)
     sig = noise(y)
     top = sorted(y)[-max(1, len(y) // 100)] - sorted(y)[len(y) // 100]
-    if sig and top / sig > SMOOTHED_SNR:
+    if sig and top / sig > SMOOTHED_SNR and s.meta.get('format') != 'figure':     # a curve read off a figure says what it is already
         notes.append('the point-to-point noise is under 1/%d of the signal: a smoothed or interpolated spectrum — χ² is then not on a noise scale, and the '
                      'uncertainties measure the misfit of the model, not the noise of the measurement' % SMOOTHED_SNR)
     keep = [i for i, v in enumerate(x) if (lo is None or v >= lo) and (hi is None or v <= hi)]

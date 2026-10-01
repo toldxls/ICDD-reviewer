@@ -534,6 +534,25 @@ The same section appears in `pxrd paper --check`, `pxrd proposal` and the GUI's 
   the stated O–H bands. Either relation scatters by more than the differences it would be asked to judge, so the
   structure never makes a finding.
 
+**The formula beside the bands** (information lines in the same section). What a spectrum of a new mineral is read for,
+first of all, is its hydrogen and its light groups — what the microprobe cannot see:
+
+- the formula carries H2O, O–H stretching bands are stated, and no H–O–H bending band near 1600–1650 cm⁻¹ is — the band
+  that tells molecular water from hydroxyl (weak in Raman: the line says so when no infrared spectrum is mentioned);
+- the text itself states that no band stands where water bends, and the formula carries H2O;
+- the formula carries H2O or OH and the bands stated reach neither the bending nor the stretching region;
+- a band is stated as molecular water and the formula carries OH and no H2O; bands are assigned to O–H or H2O and the
+  formula carries no hydrogen;
+- the formula carries NH4, CO3, NO3 or H3O and no band is stated where it would stand;
+- a band is assigned to a group whose element neither the formula nor the rest of the text carries.
+
+A sentence that says the spectrum shows NO band ('no absorption band at ca. 1650 cm⁻¹') or names a region ('bands below
+320 cm⁻¹') is not read as a band. From a manuscript `.docx`, a band-assignment table is read by row (the ν and δ Word
+sets from its symbol font included): its bands join the prose's, a band the table gives to one mode and the text to
+another is said, and so is a stretching mode standing below a bending mode of the same group. All of this is
+information: a paper need not list every band it measured, and on the corpus a band assigned to a group the formula
+lacks is nearly always a real minor substituent. Corpus rates: 28 lines on 26 of the 541 papers that state bands.
+
 **`pxrd spectrum <file> [--sheet S] [--list] [--range LO HI] [--kind raman|ir-absorbance|ir-transmittance] [--despike]
 [--resolution R] [--baseline als|snip|rubber|anchors] [--fit auto|N] [--shape pvoigt|gauss|lorentz] [--cif X]
 [--manuscript M] [--word] [--xlsx]`** takes the spectrum from the instrument's or the spreadsheet's file to a table of
@@ -602,6 +621,29 @@ wavenumber (Libowitzky 1999, 2.60–3.20 Å) and the uranyl U–O distance a ban
 Cooney 1989; switched on by itself when the structure beside the spectrum has a uranyl ion). The pointer reads the
 distance, and each fitted band is marked on the ruler. The structure's expected positions are green ticks, the
 manuscript's stated bands orange marks.
+
+**A spectrum from a figure** (`From a figure…`). Most papers give no data — at best a figure. The window shows a page
+of a `.pdf` of the folder (pages whose caption names a Raman or infrared spectrum are starred), an image of a manuscript
+`.docx`, or an image opened or dropped here, and three things are confirmed on it by hand: the plot's **frame** (a found
+one is offered; drag another), two points of its **axis** with their values (two marks dragged onto numbered ticks —
+set by themselves where the page keeps the axis numbers as text; the tick strokes of the axis are found and a mark
+dropped near the axis goes onto the nearest one, with a loupe while it is dragged), and the **curve** (a click on it
+gives its colour and says which of several is meant). `Trace` draws what was followed over the figure in red; `Use this curve` opens it in
+the window like any spectrum, the manuscript's stated bands and the distance rulers over it, with a list of the stated
+bands the traced curve shows a feature for and those it shows none for. Where the page draws the curve as a path its
+own coordinates are taken; otherwise its pixels are followed, the one continuous line through the plot — text set over
+the peaks, tick marks and other curves are not continuous with it. A page is rendered at the resolution of the finest
+picture set on it, a drawn plot at 400 dpi.
+
+How good a trace is was measured on figures set against the data they were drawn from (`tools/figure_oracle.py`): with
+the axis scaled on its ticks, a peak of the traced curve lies a quarter to a half of a pixel from the data's — 0.2–0.4
+cm⁻¹ on Raman figures of 0.6–0.9 cm⁻¹ a pixel, 1 cm⁻¹ on a broad-band infrared figure of 2 cm⁻¹ a pixel — and the
+shape follows the data with R² 0.99–0.9998. What costs more than the trace is the axis: a mark put two pixels off its
+tick by hand doubles to quadruples the error, which is why the ticks are found and the marks snap to them. Scaling on
+the numbers printed over a figure's peaks is the fallback for an axis with no usable ticks, not the better way: those
+numbers are rounded, and on the same figures it was off by 2–3 cm⁻¹. So: for seeing where the curve has a band, a
+shoulder or nothing, and how the stated positions sit on it — not for fitting widths from a figure of a few hundred
+pixels, and nothing it shows is a finding.
 
 The work in hand is kept: the bands of every region, as they stand, are remembered in the browser per spectrum (band
 parameters and options only), so another file, a reload or a closed window loses nothing and a spectrum opens on the

@@ -109,6 +109,25 @@ a spectrum file is imported, cleaned and fitted in a window of its own.
   read. The cosmic-ray filter leaves a sharp band two or three points wide alone; a band is looked for above the floor
   the curve stands on (a background that was not taken off no longer hides it); the local baseline, the width limits
   and what was refined go into an export with the bands, so the file written is the fit on the screen.
+- **The formula beside the bands** (`pxrd spectro`, and with it `pxrd paper --check`, `pxrd proposal` and the GUI's
+  Manuscript mode; information lines): H2O in the formula with O–H stretches stated and no H–O–H bending band; the text
+  itself saying that no band stands where water bends; a spectrum whose stated bands reach no O–H region; water stated
+  where the formula has only hydroxyl; O–H or H2O bands and a formula without hydrogen; ammonium, carbonate, nitrate or
+  hydronium in the formula with no band where it would stand; a band assigned to a group whose element neither the
+  formula nor the rest of the text carries. A sentence stating that a band is ABSENT, and a region ('bands below 320
+  cm⁻¹', 'above 1700 cm⁻¹'), are no longer read as bands. A band-assignment table of a manuscript .docx is read by row
+  and set beside the prose. On the corpus: 28 lines on 26 of 541 papers, no stated-distance verdict changed.
+- **A spectrum from a figure** (the spectrum window's `From a figure…`; `pxrd_review/figure_trace.py`): the curve of a
+  plot on a .pdf page, in an image of a manuscript .docx or in an image file, traced back into a spectrum. The frame,
+  two points of the axis and the curve are confirmed on the figure by hand (the frame is found, the axis scaled from
+  the numbers under it where the page keeps them as text); a curve the page draws as a path is taken exactly, otherwise
+  its pixels are followed as the one continuous line of its colour. The traced curve opens like any spectrum with the
+  manuscript's stated bands beside it and a list of those it shows a feature for and those it shows none for. The
+  axis's tick strokes are found (the evenly spaced ones, each at its fitted place) and a mark snaps to them, with a
+  loupe; a page is rendered at the resolution of its finest picture; a curve drawn in pieces is joined; a thick line's
+  middle is taken along its slope; a baseline hidden in the axis line is zero, not missing. Measured on figures set
+  against the data they were drawn from (`tools/figure_oracle.py`, private cases, and a synthetic ladder of
+  resolutions): a traced peak lies a quarter to a half of a pixel from the data's, the shape at R² 0.99–0.9998.
 - `data/band_windows.json`: where published mineral descriptions place the numbered modes of the common groups, the O–H
   stretch and the H2O bend (percentiles per group, mode and technique; aggregates of eight papers or more).
 - Dev tools: `tools/corpus_spectra.py` (the band library, the proof of the coefficients, the A/B, the windows),

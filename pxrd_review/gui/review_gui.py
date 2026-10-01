@@ -3107,14 +3107,14 @@ def api_ms_export():
 # window and the command line cannot disagree. Same rules as the Tables mode: the page sends file NAMES (keys of the
 # open folder, or of what it uploaded), never paths; an upload is parsed and kept in memory, and nothing is written
 # until Export, which writes only into review_out.
-from pxrd_review import spectrum as SPM, spectrum_formats as SPF, spectro as SPC
+from pxrd_review import spectrum as SPM, spectrum_formats as SPF, spectro as SPC, figure_trace as FT
 import tempfile
 from collections import OrderedDict
 
 _SP_UPLOAD_MAX = 48 * 1024 * 1024
 _SP_FIT_MAX = 60000                                     # points × bands of one fit
 _SP_KEEP = 6                                            # uploads / prepared spectra kept in memory (the oldest dropped)
-_SP = {'uploads': OrderedDict(), 'prep': OrderedDict(), 'series': OrderedDict(), 'lock': threading.Lock()}
+_SP = {'uploads': OrderedDict(), 'prep': OrderedDict(), 'series': OrderedDict(), 'figup': OrderedDict(), 'figs': OrderedDict(), 'lock': threading.Lock()}
 _SP_OUTPUT = re.compile(r'[^/\\]+_sp\.(docx|xlsx|txt|svg|json)')
 _SP_KINDS = ('', 'raman', 'ir-absorbance', 'ir-transmittance')
 
@@ -3249,7 +3249,8 @@ def _sp_context(d):
         try:
             from pxrd_review import paper_extract as PE
             seen = set()
-            for b in SPC.bands(PE.text_of(ms)):
+            text = PE.text_of(ms)
+            for b in SPC.bands(text) + SPC.table_bands(ms, PE.mineral_name(text)):      # the prose's bands and, from a .docx, its assignment table's
                 if b.own and (b.pos, b.family, b.mode) not in seen:
                     seen.add((b.pos, b.family, b.mode))
                     stated.append({'pos': b.pos, 'technique': b.technique, 'family': b.family, 'mode': 'ν%d' % b.mode if isinstance(b.mode, int) else b.mode,
@@ -3268,6 +3269,7 @@ def api_sp_state():
     outputs = sorted(fn for fn in os.listdir(out) if _SP_OUTPUT.fullmatch(fn)) if out and os.path.isdir(out) else []
     return jsonify({'folder': MS['folder'], 'files': files, 'cifs': sorted(MS.get('cifs') or {}, key=str.lower),
                     'manuscripts': sorted(MS.get('files') or {}, key=str.lower), 'outputs': outputs,
+                    'figures': sorted(_sp_fig_sources(), key=str.lower),
                     'windows': SPC.band_windows(), 'rulers': SPM.distance_rulers(), 'shapes': list(SPM.SHAPES), 'baselines': list(SPM.BASELINES),
                     'regions': [{'name': 'uranyl', 'lo': 700, 'hi': 1000}, {'name': 'O–H', 'lo': 2800, 'hi': 3800}]})
 
@@ -3333,10 +3335,249 @@ def api_sp_process():
         peaks = SPM.find_peaks(prep['x'], prep['y'])[:60]
     except Exception:
         peaks = []
+    on_curve = None
+    meta = prep['series'].meta
+    if meta.get('format') == 'figure' and stated:                  # a curve read off a figure: which of the stated bands it shows a feature for
+        try:
+            r = FT.stated_on_curve(prep['x'], prep['cleaned'], [b['pos'] for b in stated], meta.get('cm_per_px') or 1.0)
+            on_curve = {'found': [[a, round(b, 1)] for a, b in r['found']], 'none': r['none'], 'outside': r['outside'], 'tol': round(r['tol'], 1)}
+        except Exception:
+            on_curve = None
     return jsonify({'ok': True, 'name': prep['series'].name, 'x': _sp_r(prep['x']), 'raw': _sp_r(prep['raw'], 5), 'cleaned': _sp_r(prep['cleaned'], 5),
+                    'on_curve': on_curve, 'figure': meta.get('format') == 'figure',
                     'baseline': _sp_r(prep['baseline'], 5), 'y': _sp_r(prep['y'], 5), 'spikes': prep['spikes'], 'noise': prep['noise'], 'kind': prep['kind'],
                     'notes': prep['notes'] + notes, 'peaks': [{'pos': round(q['pos'], 2), 'height': q['height'], 'fwhm': round(q['fwhm'], 2)} for q in peaks],
                     'ticks': [{'pos': round(a, 1), 'label': b} for a, b in ticks], 'stated': stated})
+
+
+# ---- a spectrum read off a figure (pxrd_review.figure_trace) ------------------------------------------------
+# The window shows a page of a paper (or an image) and the user confirms three things on it — the plot's frame, two
+# points of its axis with their values, the curve — before anything is traced: a figure holds several plots and several
+# curves, and which one is meant is not in the picture. The file is named, never a path; an image opened from the
+# browser is kept in memory.
+
+_SP_FIG_KEEP = 3
+
+
+def _sp_fig_sources():
+    """{name: path} — what a figure can be taken from in the open folder: its .pdf files, its manuscript .docx files and
+    its image files; and (path None) the images / .pdf files opened here."""
+    out = {}
+    for fn, path in (MS.get('pdfs') or {}).items():
+        out[fn] = path
+    for _k, path in (MS.get('files') or {}).items():
+        if path.lower().endswith('.docx'):
+            out[os.path.basename(path)] = path
+    folder = MS.get('folder')
+    if folder and os.path.isdir(folder):
+        try:
+            for fn in os.listdir(folder):
+                if fn.lower().endswith(FT.IMAGE_EXT) and not fn.startswith(('.', '~$')):
+                    out[fn] = os.path.join(folder, fn)
+        except OSError:
+            pass
+    with _SP['lock']:
+        for name in _SP['figup']:
+            out.setdefault(name, None)
+    return out
+
+
+def _sp_fig(name, index):
+    """The Figure of a named source and page / image number -> (figure, None) or (None, (message, status)); the last few kept."""
+    src = _sp_fig_sources()
+    if name not in src:
+        return None, ('no such figure source: %s' % name, 404)
+    path = src[name]
+    with _SP['lock']:
+        data = _SP['figup'].get(name) if path is None else None
+    try:
+        st = os.stat(path) if path else None
+        key = json.dumps([name, int(index), [st.st_size, st.st_mtime_ns] if st else len(data or b'')])
+    except OSError:
+        return None, ('that file is no longer there: %s' % name, 404)
+    with _SP['lock']:
+        hit = _SP['figs'].get(key)
+        if hit is not None:
+            _SP['figs'].move_to_end(key)
+            return hit, None
+    got = PW.run(FT.page_data, path or name, int(index), None, data, default=None, timeout=90)     # MuPDF decodes in a worker: a bad image cannot take the server down
+    if got is None:
+        return None, ('%s could not be opened: the reader stopped on it' % name, 400)
+    if got.get('error'):
+        return None, (got['error'], 400)
+    try:
+        fig = FT.Figure.from_data(got)
+    except Exception as ex:
+        return None, ('%s could not be opened (%s)' % (name, type(ex).__name__), 500)
+    if fig.w * fig.h > 60e6:
+        return None, ('that image is %d × %d pixels — too large to trace; crop it to the plot first' % (fig.w, fig.h), 400)
+    with _SP['lock']:
+        _SP['figs'][key] = fig
+        while len(_SP['figs']) > _SP_FIG_KEEP:
+            _SP['figs'].popitem(last=False)
+    return fig, None
+
+
+@app.route('/api/sp/fig/upload', methods=['POST'])
+def api_sp_fig_upload():
+    """An image (or a .pdf) from the browser's chooser, or dropped on the figure panel: kept in memory under its name."""
+    up = request.files.get('file')
+    if up is None:
+        return jsonify({'ok': False, 'error': 'no file was sent'}), 400
+    raw = up.read(_SP_UPLOAD_MAX + 1)
+    if len(raw) > _SP_UPLOAD_MAX:
+        return jsonify({'ok': False, 'error': 'that file is over %d MB' % (_SP_UPLOAD_MAX // (1024 * 1024))}), 400
+    name = os.path.basename((up.filename or 'figure.png').replace('\\', '/'))[:200] or 'figure.png'
+    if not name.lower().endswith(FT.IMAGE_EXT + ('.pdf',)):
+        return jsonify({'ok': False, 'error': '%s is not an image or a .pdf — a figure is taken from a .png, .jpg, .tif or a page of a .pdf' % name}), 400
+    got = PW.run(FT.sources_data, name, raw, default=None, timeout=60)
+    if not got or got.get('error'):
+        return jsonify({'ok': False, 'error': (got or {}).get('error') or '%s could not be read' % name}), 400
+    n = len(got['sources'])
+    if not name.lower().endswith('.pdf'):                          # an image is opened once here: a file that is no picture is refused now, not when it is shown
+        first = PW.run(FT.page_data, name, 0, None, raw, default=None, timeout=60)
+        if not first or first.get('error'):
+            return jsonify({'ok': False, 'error': (first or {}).get('error') or '%s could not be read as an image' % name}), 400
+    with _SP['lock']:
+        _SP['figup'][name] = raw; _SP['figup'].move_to_end(name)
+        while len(_SP['figup']) > _SP_FIG_KEEP:
+            _SP['figup'].popitem(last=False)
+        for k in [k for k in _SP['figs'] if json.loads(k)[0] == name]:
+            del _SP['figs'][k]
+    return jsonify({'ok': True, 'name': name, 'n': n})
+
+
+@app.route('/api/sp/fig/sources')
+def api_sp_fig_sources():
+    """The pages of a .pdf (those whose caption names a Raman / infrared spectrum marked), the images of a .docx, the
+    one image of an image file."""
+    name = request.args.get('name') or ''
+    src = _sp_fig_sources()
+    if name not in src:
+        return jsonify({'ok': False, 'error': 'no such figure source: %s' % name}), 404
+    with _SP['lock']:
+        data = _SP['figup'].get(name) if src[name] is None else None
+    got = PW.run(FT.sources_data, src[name] or name, data, default=None, timeout=60)
+    if not got or got.get('error'):
+        return jsonify({'ok': False, 'error': (got or {}).get('error') or '%s could not be read' % name}), 400
+    return jsonify({'ok': True, 'sources': got['sources']})
+
+
+@app.route('/api/sp/fig/image')
+def api_sp_fig_image():
+    fig, err = _sp_fig(request.args.get('name') or '', _sp_num(request.args, 'i', 0, 5000, 0))
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    resp = Response(fig.png(), mimetype='image/png')
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@app.route('/api/sp/fig/detect', methods=['POST'])
+def api_sp_fig_detect():
+    """What the tool sees on a figure, for the user to confirm or change: the plot frames, and for each the axis numbers
+    the page keeps as text (none for a picture: the two axis points are then given by hand)."""
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    fig, err = _sp_fig(str(d.get('name') or ''), _sp_num(d, 'i', 0, 5000, 0))
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    def seen(box):
+        tk = FT.ticks(fig, box)
+        return {'box': list(box), 'ticks': [[round(a, 2), b] for a, b in tk], 'marks': [round(m, 2) for m in FT.tick_marks(fig, box)]}
+    out = []; own = None
+    try:
+        raw = d.get('box')
+        if isinstance(raw, list) and len(raw) == 4 and all(isinstance(v, (int, float)) and not isinstance(v, bool) and v == v for v in raw):
+            x0, y0, x1, y1 = [int(round(v)) for v in raw]             # a frame of the user's own: the ticks on ITS axis
+            if 0 <= x0 < x1 < fig.w and 0 <= y0 < y1 < fig.h:
+                own = seen((x0, y0, x1, y1))
+        else:
+            out = [seen(box) for box in FT.frames(fig)]
+    except Exception:
+        out = []
+    return jsonify({'ok': True, 'w': fig.w, 'h': fig.h, 'frames': out, 'own': own, 'vector': bool(fig.paths or fig.strokes)})
+
+
+@app.route('/api/sp/fig/trace', methods=['POST'])
+def api_sp_fig_trace():
+    """The curve of a confirmed frame as a spectrum. With `use`, it is kept (in memory, like a file opened here) under a
+    name the window then opens like any other spectrum."""
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    name = str(d.get('name') or ''); index = _sp_num(d, 'i', 0, 5000, 0)
+    fig, err = _sp_fig(name, index)
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    box = d.get('box') if isinstance(d.get('box'), list) and len(d.get('box')) == 4 else None
+    nums = lambda v: [float(t) for t in v] if isinstance(v, list) and all(isinstance(t, (int, float)) and not isinstance(t, bool) and t == t for t in v) else None
+    box = nums(box); seed = nums(d.get('seed')) if isinstance(d.get('seed'), list) and len(d.get('seed')) == 2 else None
+    colour = nums(d.get('colour')) if isinstance(d.get('colour'), list) and len(d.get('colour')) == 3 else None
+    x1, x2 = _sp_num(d, 'x1', -1e6, 1e6), _sp_num(d, 'x2', -1e6, 1e6)
+    v1, v2 = _sp_num(d, 'v1', -1e5, 1e5), _sp_num(d, 'v2', -1e5, 1e5)
+    if box is None:
+        return jsonify({'ok': False, 'error': 'drag a frame around the plot first: from one end of its axis to the other, bottom to top'}), 400
+    kw = dict(colour=colour, tol=_sp_num(d, 'tol', 5.0, 300.0, 70.0), down=d.get('down') if isinstance(d.get('down'), bool) else None, seed=seed)
+    if None in (x1, x2, v1, v2):
+        if d.get('use'):
+            return jsonify({'ok': False, 'error': 'the axis needs two points with their values: put the two marks on two numbered ticks and type the two numbers'}), 400
+        try:                                                    # the curve alone, in pixels: it can be followed before the axis is scaled (and a mark then dropped on one of its peaks)
+            t = FT.trace_pixels(fig, box, **kw)
+        except ValueError as ex:
+            return jsonify({'ok': False, 'error': str(ex)}), 400
+        except Exception as ex:
+            return jsonify({'ok': False, 'error': 'the curve could not be traced (%s)' % type(ex).__name__}), 500
+        return jsonify({'ok': True, 'pixels_only': True, 'n': len(t['pts']), 'how': t['how'], 'coverage': t['coverage'], 'down': t['down'], 'colour': t['colour'],
+                        'trace': [[round(a, 1), round(b, 1)] for a, b in t['pts']], 'peaks': [round(p, 2) for p in FT.apexes(t['pts'], t['down'])]})
+    try:
+        r = FT.digitize(fig, box, x1, v1, x2, v2, **kw)
+    except ValueError as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 400
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': 'the curve could not be traced (%s)' % type(ex).__name__}), 500
+    out = {'ok': True, 'n': len(r['x']), 'how': r['how'], 'cm_per_px': r['cm_per_px'], 'coverage': r['coverage'], 'down': r['down'], 'colour': r['colour'],
+           'trace': r['trace'], 'lo': min(r['x']), 'hi': max(r['x']), 'peaks': r['peaks']}
+    if d.get('use'):
+        ys = [1.0 - v for v in r['y']] if r['down'] else r['y']      # bands up: the positions are what a figure gives, and they are the same either way
+        label = '%s — %s (figure)' % (os.path.splitext(name)[0][:60], 'page %d' % (index + 1) if name.lower().endswith('.pdf') else 'image %d' % (index + 1))
+        notes = ['read off a figure (%s): positions to about ±%.0f cm⁻¹ (a pixel is %.1f cm⁻¹), intensities relative — for setting the stated bands beside the curve, not for fitting widths'
+                 % (fig.label, max(2.0, 1.5 * r['cm_per_px']), r['cm_per_px'])]
+        if r['down']:
+            notes.append('the bands point down in the figure (a transmittance spectrum): shown here the other way up')
+        series = SPF._series(label, r['x'], ys, format='figure', source=label, notes=notes, cm_per_px=r['cm_per_px'], y_unit='relative')
+        with _SP['lock']:
+            _SP['uploads'][label] = [series]; _SP['uploads'].move_to_end(label)
+            while len(_SP['uploads']) > _SP_KEEP:
+                _SP['uploads'].popitem(last=False)
+            for k in [k for k in _SP['prep'] if json.loads(k)[0] == label]:
+                del _SP['prep'][k]
+        out['name'] = label
+    return jsonify(out)
+
+
+@app.route('/api/sp/fig/colour', methods=['POST'])
+def api_sp_fig_colour():
+    """The colour of the curve where the user clicked on it: the darkest pixel within two of the click."""
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    fig, err = _sp_fig(str(d.get('name') or ''), _sp_num(d, 'i', 0, 5000, 0))
+    if err:
+        return jsonify({'ok': False, 'error': err[0]}), err[1]
+    x, y = _sp_num(d, 'x', 0, 1e6), _sp_num(d, 'y', 0, 1e6)
+    if x is None or y is None or not (0 <= x < fig.w and 0 <= y < fig.h):
+        return jsonify({'ok': False, 'error': 'click on the curve'}), 400
+    best = None
+    for yy in range(max(0, int(y) - 2), min(fig.h, int(y) + 3)):
+        for xx in range(max(0, int(x) - 2), min(fig.w, int(x) + 3)):
+            c = fig.at(xx, yy)
+            if best is None or sum(c) < sum(best[0]):
+                best = (c, xx, yy)
+    if sum(best[0]) > 3 * 215:
+        return jsonify({'ok': False, 'error': 'nothing is drawn there: click on the curve itself'}), 400
+    return jsonify({'ok': True, 'colour': list(best[0]), 'seed': [best[1], best[2]]})
 
 
 def _sp_fit_json(f, xs, ys, technique, share=SPM.MIN_SHARE):
