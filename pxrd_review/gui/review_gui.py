@@ -3112,8 +3112,9 @@ import tempfile
 from collections import OrderedDict
 
 _SP_UPLOAD_MAX = 48 * 1024 * 1024
+_SP_FIT_MAX = 60000                                     # points × bands of one fit
 _SP_KEEP = 6                                            # uploads / prepared spectra kept in memory (the oldest dropped)
-_SP = {'uploads': OrderedDict(), 'prep': OrderedDict(), 'lock': threading.Lock()}
+_SP = {'uploads': OrderedDict(), 'prep': OrderedDict(), 'series': OrderedDict(), 'lock': threading.Lock()}
 _SP_OUTPUT = re.compile(r'[^/\\]+_sp\.(docx|xlsx|txt|svg|json)')
 _SP_KINDS = ('', 'raman', 'ir-absorbance', 'ir-transmittance')
 
@@ -3131,8 +3132,23 @@ def _sp_files():
     return out
 
 
+def _sp_stamp(name):
+    """What tells one state of a named spectrum file from another: a folder file's path, size and time of writing
+    (rewritten on disk, it is another file); an upload has none — the upload route clears what was kept of its name."""
+    with _SP['lock']:
+        if name in _SP['uploads']:
+            return None
+    path = _sp_files().get(name)
+    try:
+        st = os.stat(path) if path else None
+    except OSError:
+        st = None
+    return [path, st.st_size, st.st_mtime_ns] if st else None
+
+
 def _sp_series(name, sheet=None):
-    """[Series] of a folder file or an upload, by NAME -> (series, None) or (None, (message, status))."""
+    """[Series] of a folder file or an upload, by NAME -> (series, None) or (None, (message, status)). A folder file
+    is parsed once, and again only when it has changed on disk."""
     if not name:
         return None, ('no file named', 400)
     with _SP['lock']:
@@ -3142,8 +3158,19 @@ def _sp_series(name, sheet=None):
     path = _sp_files().get(name)
     if not path:
         return None, ('no such spectrum file in the open folder: %s' % name, 404)
+    key = json.dumps([_sp_stamp(name), sheet or None])
+    with _SP['lock']:
+        hit = _SP['series'].get(key)
+        if hit is not None:
+            _SP['series'].move_to_end(key)
+            return hit, None
     try:
-        return SPF.load(path, sheet or None), None
+        series = SPF.load(path, sheet or None)
+        with _SP['lock']:
+            _SP['series'][key] = series
+            while len(_SP['series']) > _SP_KEEP:
+                _SP['series'].popitem(last=False)
+        return series, None
     except ValueError as ex:
         return None, (str(ex), 400)
     except Exception as ex:
@@ -3178,7 +3205,7 @@ def _sp_prepare(d):
     series, err = _sp_series(name, o['sheet'])
     if err:
         return None, None, err
-    key = json.dumps([name, o], sort_keys=True)
+    key = json.dumps([name, o, _sp_stamp(name)], sort_keys=True)
     with _SP['lock']:
         hit = _SP['prep'].get(key)
         if hit is not None:
@@ -3241,7 +3268,7 @@ def api_sp_state():
     outputs = sorted(fn for fn in os.listdir(out) if _SP_OUTPUT.fullmatch(fn)) if out and os.path.isdir(out) else []
     return jsonify({'folder': MS['folder'], 'files': files, 'cifs': sorted(MS.get('cifs') or {}, key=str.lower),
                     'manuscripts': sorted(MS.get('files') or {}, key=str.lower), 'outputs': outputs,
-                    'windows': SPC.band_windows(), 'shapes': list(SPM.SHAPES), 'baselines': list(SPM.BASELINES),
+                    'windows': SPC.band_windows(), 'rulers': SPM.distance_rulers(), 'shapes': list(SPM.SHAPES), 'baselines': list(SPM.BASELINES),
                     'regions': [{'name': 'uranyl', 'lo': 700, 'hi': 1000}, {'name': 'O–H', 'lo': 2800, 'hi': 3800}]})
 
 
@@ -3340,7 +3367,7 @@ def _sp_comps(raw):
         if pos is None or h is None or w is None:
             continue
         one = {'shape': c.get('shape') if c.get('shape') in SPM.SHAPES else 'pvoigt', 'pos': pos, 'height': h, 'fwhm': w,
-               'eta': _sp_num(c, 'eta', 0.0, 1.0, 0.5), 'fix': [k for k in (c.get('fix') or []) if k in ('pos', 'height', 'fwhm', 'eta')]}
+               'eta': _sp_num(c, 'eta', 0.0, 1.0, 0.5), 'fix': [k for k in (c.get('fix') if isinstance(c.get('fix'), list) else []) if k in ('pos', 'height', 'fwhm', 'eta')]}
         for k in ('wmin', 'wmax'):
             v = _sp_num(c, k, 1e-3, 5000.0)
             if v:
@@ -3365,16 +3392,25 @@ def _sp_run_fit(prep, d):
     share = (_sp_num(d, 'min_share', 0.0, 50.0, 100.0 * SPM.MIN_SHARE)) / 100.0
     if comps:
         # 'refine': what a fit may move for EVERY band — heights only, or with the widths, or with the positions (a band's own holds add to it)
-        hold = {'heights': ('pos', 'fwhm', 'eta'), 'widths': ('pos',), 'positions': ('fwhm', 'eta')}.get(d.get('refine'), ())
+        if len(xs) * len(comps) > _SP_FIT_MAX:                # points × bands is what a fit costs: 40 bands over 6000 points ran a minute and a half
+            raise ValueError('%d bands over %d points is more than one fit should hold — fit a region at a time (the uranyl stretches, the O–H stretches)' % (len(comps), len(xs)))
+        hold = {'heights': ('pos', 'fwhm', 'eta'), 'widths': ('pos',), 'positions': ('fwhm', 'eta')}.get(d.get('refine') if isinstance(d.get('refine'), str) else '', ())
         kw = dict(local_baseline=local, share_width=bool(d.get('share_width')), share_eta=bool(d.get('share_eta')), resolution=res, max_fwhm=wmax, min_fwhm=wmin, fix=hold)
         if d.get('evaluate'):
             # the bands AS THEY STAND — their curve, statistics and uncertainties, with no step taken: what an export writes
             # and what a session opens on (fitting again would write another fit than the one on the screen)
-            f = SPM.fit(xs, ys, comps, max_iter=0, **kw)
+            # … WITH the local baseline the fit ended on: left at zero, the model written out was another than the one drawn
+            raw = d.get('base') if isinstance(d.get('base'), list) else []
+            b = [_sp_num({'v': v}, 'v', -1e12, 1e12) for v in raw[:2]] if not any(isinstance(v, bool) for v in raw[:2]) else []
+            b = b + [_sp_num(d, 'x0', -1e6, 1e6)] if len(b) == 2 and None not in b else None
+            f = SPM.fit(xs, ys, comps, max_iter=0, base0=b, **kw)
             if d.get('converged') is False:
+                f = f._replace(converged=False)
                 f.warnings.insert(0, 'this fit had not converged when it was written: ‘Fit these’ would still move it')
             return f, [], xs, ys
-        f, _dropped = SPM.without_dead(xs, ys, SPM.fit(xs, ys, comps, **kw), **kw)
+        f = SPM.fit(xs, ys, comps, **kw)
+        if not d.get('keep_dead'):                              # the refit that follows a hand edit removes nothing: the band just placed stays, at whatever height
+            f = SPM.without_dead(xs, ys, f, **kw)[0]
         if d.get('add'):
             # one more band, where the residual of these still holds one: each of its three largest swells is tried,
             # the best kept — and said plainly when the residual holds none
@@ -3397,8 +3433,12 @@ def _sp_run_fit(prep, d):
         return f, [], xs, ys
     seeds = [t['pos'] for t in d.get('seeds') or [] if isinstance(t, dict) and isinstance(t.get('pos'), (int, float))][:20] if isinstance(d.get('seeds'), list) else None
     n = _sp_num(d, 'n', 1, 16)
-    f, trials = SPM.auto_fit(xs, ys, n=int(n) if n else None, max_n=int(_sp_num(d, 'max_n', 1, 16, 8)), shape=shape, local_baseline=local, resolution=res, seeds=seeds,
+    f, trials = SPM.auto_fit(xs, ys, n=int(n) if n else None, max_n=int(_sp_num(d, 'max_n', 1, 16, 12)), shape=shape, local_baseline=local, resolution=res, seeds=seeds,
                              max_fwhm=wmax, min_fwhm=wmin, min_share=share, share_eta=bool(d.get('share_eta')))
+    if d.get('share_width') and len(f.comps) > 1:              # the bands found, then one width (and one η) for all of them, as asked
+        f = SPM.fit(xs, ys, [SPM._bare(c) for c in f.comps], local_baseline=local, share_width=True, resolution=res, max_fwhm=wmax, min_fwhm=wmin)
+        if trials:
+            trials[-1] = (len(f.comps), f.bic, f.chi2)
     return f, trials, xs, ys
 
 
@@ -3419,6 +3459,11 @@ def api_sp_fit():
         return jsonify({'ok': False, 'error': '%s: %s' % (type(ex).__name__, str(ex)[:200])}), 500
     tech = 'raman' if prep['kind'] == 'raman' else 'ir' if (prep['kind'] or '').startswith('ir') else None
     out = _sp_fit_json(f, xs, ys, tech, _sp_num(d, 'min_share', 0.0, 50.0, 100.0 * SPM.MIN_SHARE) / 100.0)
+    if not d.get('evaluate') and not _sp_num(d, 'max_fwhm', 0.5, 5000.0):
+        try:                                                    # one broad band with finer ones inside it: offered as an envelope, never done unasked
+            out['envelope'] = SPM.envelope_hint(xs, ys, f)
+        except Exception:
+            out['envelope'] = None
     _t, stated, _n = _sp_context(dict(d, cif=''))
     if stated:
         own = sorted({b['pos'] for b in stated if f.lo <= b['pos'] <= f.hi})
@@ -3440,7 +3485,7 @@ def api_sp_d2():
     xs, ys = SPM.crop(prep['x'], prep['y'], lo, hi)
     if len(xs) < 7:
         return jsonify({'ok': False, 'error': 'fewer than seven points there'}), 400
-    width = _sp_num(d, 'width', 1.0, 1000.0, 25.0)
+    width = _sp_num(d, 'd2_width', 1.0, 1000.0, 25.0)           # its own key: 'width' is the SNIP baseline's half-width, part of the spectrum asked for
     v = SPM.second_derivative(xs, ys, width)
     top = max(abs(t) for t in v) or 1.0
     return jsonify({'ok': True, 'x': _sp_r(xs), 'd2': [round(t / top, 5) for t in v], 'width': width})
@@ -3465,13 +3510,20 @@ def api_sp_export():
         kept = []
         for r in regions[:12]:
             if isinstance(r, dict):
+                if not _sp_comps(r.get('comps')):               # nothing is fitted on the way out: a region with no bands has nothing to write
+                    continue
                 fits.append(_sp_run_fit(prep, dict(r, resolution=d.get('resolution'), evaluate=True))[0])
-                kept.append({k: r.get(k) for k in ('lo', 'hi', 'local', 'share_width', 'share_eta', 'max_fwhm', 'min_fwhm')})
+                kept.append({k: r.get(k) for k in ('lo', 'hi', 'local', 'share_width', 'share_eta', 'max_fwhm', 'min_fwhm', 'refine')})
+        if not fits:
+            raise ValueError('nothing fitted yet: fit a region first')
         ticks, _stated, _notes = _sp_context(d)
         stem = re.sub(r'[^\w.-]+', '_', os.path.splitext(str(d.get('name') or 'spectrum'))[0]).strip('_')[:80] or 'spectrum'
+        if len(prep['all']) > 1:                                # a file of several spectra: each one's table under its own name
+            stem += '_%d' % (o['series'] + 1)
         fmt = d.get('fmt')
         sess = dict(o, name=str(d.get('name') or ''), regions=kept, cif=str(d.get('cif') or ''), ms=str(d.get('ms') or ''), resolution=o.get('resolution'))
-        paths = SPM.export(prep, fits, MS['out_dir'], stem, sess, word=fmt == 'word', xlsx=fmt == 'xlsx', ticks=ticks)
+        paths = SPM.export(prep, fits, MS['out_dir'], stem, sess, word=fmt == 'word', xlsx=fmt == 'xlsx', ticks=ticks,
+                           reverse=bool(d.get('reverse')) if isinstance(d.get('reverse'), bool) else None)
     except ValueError as ex:
         return jsonify({'ok': False, 'error': str(ex)}), 400
     except Exception as ex:

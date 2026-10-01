@@ -16,7 +16,7 @@
 Everything is pure Python (no numpy at run time): a fit is done region by region, which is also how a spectrum is read.
 The numbers the window shows and the table `export` writes come from here, so the two cannot disagree.
 """
-import os, re, sys, json, math, argparse, functools
+import os, re, sys, json, math, time, argparse, functools
 from collections import namedtuple
 
 from pxrd_review import spectrum_formats as F
@@ -151,40 +151,59 @@ def to_absorbance(y):
     return [-math.log10(max(v, floor) / scale) for v in y]
 
 
-def despike(x, y, threshold=8.0, max_width=3, resolution=None):
+def despike(x, y, threshold=8.0, max_width=2, resolution=None):
     """Cosmic-ray events removed -> (cleaned y, [(first index, last index)] of what was replaced).
 
-    A cosmic ray is a jump UP and a jump back DOWN within a few points — narrower than anything the spectrometer's
+    A cosmic ray is a jump UP and a jump back DOWN within a point or two — narrower than anything the spectrometer's
     resolution lets a real band be. The jumps are found on the first differences by their modified z-score (0.6745 ×
-    deviation / MAD, after Whitaker & Hayes 2018), and a run between an up-jump and the next down-jump is replaced by a
-    straight line only when it is at most `max_width` points wide (or `resolution` cm⁻¹, when the resolution is given)
-    and stands above both neighbours. A sharp real band is wider than that and is left alone."""
+    deviation / MAD, after Whitaker & Hayes 2018). What stands between an up-jump and the next down-jump, above both
+    its neighbours, is replaced by a straight line when its width at half height is
+
+      with `resolution` given    under 0.6 of the resolution (in points): no band can be that narrow;
+      with none                  at most `max_width` (2) points AND it has no flanks.
+
+    The flanks are what tells a sharp band from a cosmic ray when the resolution is not known: a band two or three
+    points wide — every sharp band of a low-dispersion grating — climbs in two steps and falls in two (its neighbours
+    stand part of the way up on BOTH sides); a cosmic ray goes up in one and comes down in one. The first version took
+    out anything up to five points wide and flattened such bands whole. A cosmic ray on the top of a band has the
+    band's flanks and is left: missed is seen, and a band removed is not."""
     n = len(y)
     if n < 8:
         return list(y), []
-    if resolution:
-        dx = abs(x[-1] - x[0]) / (n - 1)
-        max_width = max(1, int(resolution / dx)) if dx > 0 else max_width
+    dx = abs(x[-1] - x[0]) / (n - 1)
+    known = bool(resolution) and dx > 0
+    limit = max(1, int(0.6 * resolution / dx)) if known else max_width
+    reach = limit + 3                                           # the points an event's feet may lie apart
     d = [y[i + 1] - y[i] for i in range(n - 1)]
-    med = _median(d); mad = _median([abs(v - med) for v in d]) or 1e-12
+    med = _median(d); mad = _median([abs(v - med) for v in d])
+    if not mad:                                                 # counts so sparse that most differences are zero: the mean deviation instead
+        mad = 0.845 * sum(abs(v - med) for v in d) / len(d)
+    if not mad:
+        return list(y), []
     z = [0.6745 * (v - med) / mad for v in d]
+    sd = mad / 0.6745
     out = list(y); spikes = []
     i = 0
     while i < n - 1:
         if z[i] > threshold:                                    # a jump up between i and i + 1
             j = i + 1
-            while j < n - 1 and j - i <= max_width and not z[j] < -threshold:
+            while j < n - 1 and j - i <= reach and not z[j] < -threshold:
                 j += 1
-            if j < n - 1 and z[j] < -threshold and j - i <= max_width:
-                a, b = i, j + 1                                  # good points either side of the event i+1 … j
-                while a > 0 and z[a - 1] > threshold:            # a two-step rise
-                    a -= 1
-                while b < n - 1 and z[b] < -threshold:           # a two-step fall
+            if j < n - 1 and z[j] < -threshold and j - i <= reach:
+                a, b = i, j + 1                                  # the feet: good points either side of the event
+                while b < n - 1 and z[b] < -threshold and b - j <= 2:    # a fall in two steps
                     b += 1
-                if b - a - 1 <= max_width + 2 and min(y[a + 1: b]) > max(y[a], y[b]):
-                    for k in range(a + 1, b):
-                        out[k] = y[a] + (y[b] - y[a]) * (k - a) / (b - a)
-                    spikes.append((a + 1, b - 1)); i = b; continue
+                seg = y[a + 1: b]; floor = max(y[a], y[b]); top = max(seg)
+                if min(seg) > floor:
+                    half = sum(1 for v in seg if v - floor > 0.5 * (top - floor))
+                    t = a + 1 + seg.index(top)
+                    ups = [d[k] for k in range(max(0, a - 1), t)]; downs = [-d[k] for k in range(t, min(n - 1, b + 1))]
+                    steps = lambda v: sum(1 for q in v if q > max(0.15 * max(v), 1.5 * sd)) if v else 0
+                    flanked = steps(ups) >= 2 and steps(downs) >= 2
+                    if half <= limit and (known or not flanked):
+                        for k in range(a + 1, b):
+                            out[k] = y[a] + (y[b] - y[a]) * (k - a) / (b - a)
+                        spikes.append((a + 1, b - 1)); i = b; continue
         i += 1
     return out, spikes
 
@@ -213,6 +232,9 @@ def baseline_rubberband(x, y):
     return _interp(x, [p[0] for p in hull], [p[1] for p in hull])
 
 
+SNIP_MAX = 600      # the half-width, in points, SNIP is run at as it stands
+
+
 def baseline_snip(y, half_width=40):
     """SNIP (Ryan et al. 1988; Morháč et al. 1997): each point is clipped to the mean of its neighbours p points either
     side, for p from `half_width` down to 1 — what is left is what no band-sized window could lift. `half_width`
@@ -220,6 +242,12 @@ def baseline_snip(y, half_width=40):
     are: the logarithmic scaling the method was given for counting spectra that span decades bends a straight sloping
     background into a sagging one."""
     n = len(y)
+    if half_width > SNIP_MAX:                                   # points × half-width is the cost: a finely sampled spectrum is
+        k = int(math.ceil(half_width / float(SNIP_MAX)))        # clipped on the mean of every k points and read back between them
+        m = [sum(y[i: i + k]) / len(y[i: i + k]) for i in range(0, n, k)]
+        low = baseline_snip(m, max(1, half_width // k))
+        at = [min(n - 1, i + 0.5 * (min(n, i + k) - i - 1)) for i in range(0, n, k)]
+        return _interp(list(range(n)), at, low) if len(at) > 1 else [low[0]] * n
     v = list(y)
     for p in range(min(half_width, (n - 1) // 2), 0, -1):
         w = list(v)
@@ -283,7 +311,10 @@ def baseline(x, y, kind='als', anchors=None, lam=1e7, p=0.01, width=150.0):
     `width` (cm⁻¹) is SNIP's clipping half-width: wider than the foot of the broadest band to be kept."""
     dx = abs(x[-1] - x[0]) / max(1, len(x) - 1) if len(x) > 1 else 1.0
     if kind == 'als':
-        return baseline_als(y, lam / dx ** 4 if dx > 0 else lam, p)
+        try:
+            return baseline_als(y, lam / dx ** 4 if dx > 0 else lam, p)
+        except (ZeroDivisionError, OverflowError):
+            raise ValueError('the baseline stiffness (%g) is beyond what the arithmetic holds for this spectrum: use a smaller one' % lam)
     if kind == 'snip':
         return baseline_snip(y, max(2, int(round(width / dx))) if dx > 0 else 40)
     if kind == 'rubber':
@@ -299,6 +330,7 @@ def baseline(x, y, kind='als', anchors=None, lam=1e7, p=0.01, width=150.0):
 
 SCALES = (6.0, 12.0, 25.0, 50.0, 100.0, 200.0)      # cm⁻¹: the smoothing widths a band is looked for at
 RIPPLE = 0.6                                         # shoulders this deep on BOTH sides of a dip: a ripple, not a band
+BLOCK = 50                                           # the points a smoothing window is brought down to on a finely sampled spectrum
 MIN_SHARE = 0.03                                     # a band worth a component carries this share of the curve where it stands
 
 
@@ -329,37 +361,57 @@ def find_bands(x, y, sigma=None, ref=None, min_snr=4.0, min_share=MIN_SHARE, sca
         if w in done or w > max(5, n // 3):
             continue
         done.add(w)
-        d2 = savgol(y, w, 3, deriv=2, dx=dx)
-        sd2 = sigma * savgol_noise(w, 3, 2, dx)
-        sm = savgol(y, w, 2)
-        rf = ref if ref is not None else sm
-        for i in range(2, n - 2):
+        # a window of hundreds of points (a wide scale on a finely sampled spectrum) costs points × window and gains
+        # nothing: the spectrum is taken as the mean of every k points, the window with it (BLOCK points at the least)
+        k = w // BLOCK if w > 2 * BLOCK else 1
+        if k > 1:
+            X = [sum(x[i: i + k]) / len(x[i: i + k]) for i in range(0, n, k)]
+            Y = [sum(y[i: i + k]) / len(y[i: i + k]) for i in range(0, n, k)]
+            R = [sum(ref[i: i + k]) / len(ref[i: i + k]) for i in range(0, n, k)] if ref is not None else None
+            N = len(X); DX = dx * k; SG = sigma / math.sqrt(k); w = max(5, int(round(s / DX)) | 1)
+        else:
+            X, Y, R, N, DX, SG = x, y, ref, n, dx, sigma
+        d2 = savgol(Y, w, 3, deriv=2, dx=DX)
+        sd2 = SG * savgol_noise(w, 3, 2, DX)
+        sm = savgol(Y, w, 2)
+        rf = R if R is not None else sm
+        # … above the floor the curve stands on: on a background that was not taken off (the default), 3 % of the curve
+        # was more than a band of forty noise deviations. The floor is the line through the lowest of each end's tenth.
+        m = max(1, N // 10)
+        ia = min(range(m), key=lambda q: rf[q]); ib = min(range(N - m, N), key=lambda q: rf[q])
+        slope = (rf[ib] - rf[ia]) / (X[ib] - X[ia]) if X[ib] != X[ia] else 0.0
+        fl = [min(rf[ia] + slope * (v - X[ia]), q) for v, q in zip(X, rf)]
+        rf = [q - f_ for q, f_ in zip(rf, fl)]
+        if R is None:
+            sm = rf                                              # the curve itself above its floor; a residual (ref given) stands on none
+        rtop_s = max(max(rf), 1e-300)
+        for i in range(2, N - 2):
             if not (d2[i] < d2[i - 1] and d2[i] <= d2[i + 1] and d2[i] < -min_snr * sd2):
                 continue
             a = i
             while a > 0 and d2[a] < 0:
                 a -= 1
             b = i
-            while b < n - 1 and d2[b] < 0:
+            while b < N - 1 and d2[b] < 0:
                 b += 1
             # a band's dip has shallow shoulders (0.45 of its depth for a Gaussian); a ripple's are as deep as the dip
             la = a; lmax = 0.0
             while la > 0 and d2[la] >= 0:
                 lmax = max(lmax, d2[la]); la -= 1
             rb = b; rmax = 0.0
-            while rb < n - 1 and d2[rb] >= 0:
+            while rb < N - 1 and d2[rb] >= 0:
                 rmax = max(rmax, d2[rb]); rb += 1
-            fw = 1.2 * (x[b] - x[a])
-            fw = math.sqrt(max(fw * fw - (0.6 * w * dx) ** 2, (2 * dx) ** 2))
+            fw = 1.2 * (X[b] - X[a])
+            fw = math.sqrt(max(fw * fw - (0.6 * w * DX) ** 2, (2 * dx) ** 2))
             h = min(-d2[i] * fw * fw / (8.0 * LN2), max(sm[i], 0.0))
-            floor = min_share * max(rf[i], 0.5 * rtop)
-            if h < 3.0 * sigma or h < floor:
+            floor = min_share * max(rf[i], 0.5 * rtop_s)
+            if h < 3.0 * SG or h < floor:
                 continue
             if h < 3.0 * floor and min(lmax, rmax) >= RIPPLE * -d2[i]:
                 continue                                         # small AND one swing of a ripple; the components of an envelope, close-set, have deep shoulders too — and are not small
-            if any(x[a] <= q['pos'] <= x[b] for q in kept):
+            if any(X[a] <= q['pos'] <= X[b] for q in kept):
                 continue
-            kept.append({'pos': x[i], 'height': h, 'fwhm': min(fw, 0.5 * span), 'snr': -d2[i] / sd2, 'scale': w * dx})
+            kept.append({'pos': X[i], 'height': h, 'fwhm': min(fw, 0.5 * span), 'snr': -d2[i] / sd2, 'scale': w * DX})
     kept.sort(key=lambda q: -q['height'] * q['fwhm'])
     return kept
 
@@ -481,7 +533,7 @@ def linear_heights(xs, ys, comps, local_baseline='const'):
 
 
 def fit(x, y, comps, lo=None, hi=None, local_baseline='const', share_width=False, fix=(), max_iter=120, sigma=None, resolution=None,
-        max_fwhm=None, min_fwhm=None, share_eta=False, tol=1e-6):
+        max_fwhm=None, min_fwhm=None, share_eta=False, tol=1e-6, base0=None):
     """Least-squares fit of the components to the spectrum between lo and hi (Levenberg–Marquardt, analytic derivatives).
 
     comps           [{'shape': 'pvoigt'|'gauss'|'lorentz', 'pos', 'height', 'fwhm', 'eta'?, 'fix': ['pos', …]?}] — the start
@@ -489,6 +541,8 @@ def fit(x, y, comps, lo=None, hi=None, local_baseline='const', share_width=False
     share_width     every component takes one common width (and one common η) — for a multiplet of one kind
     share_eta       every pseudo-Voigt component takes one common η (the widths stay their own): thirteen overlapping
                     bands do not fix thirteen shapes
+    base0           the local baseline to start from, (constant, slope[, the x it is about]) — with max_iter 0 it is the
+                    baseline of the model, so a fit written out or reopened is the fit that was on the screen
     max_iter        0 = no fitting at all: the model, its statistics and uncertainties AS THE COMPONENTS STAND (what an
                     export writes — the fit on the screen, not another one)
     fix             parameter kinds fixed for every component ('eta', 'fwhm', 'pos')
@@ -506,12 +560,16 @@ def fit(x, y, comps, lo=None, hi=None, local_baseline='const', share_width=False
     lo, hi = xs[0], xs[-1]; x0 = 0.5 * (lo + hi); span = hi - lo
     dx = span / (n - 1)
     comps = [dict(c) for c in comps]
+    frozen = max_iter == 0                                      # nothing is fitted: no value is brought inside a limit or made equal to another either
     for c in comps:
         c.setdefault('shape', 'pvoigt'); c.setdefault('eta', 0.5)
         if c['shape'] not in SHAPES:
             raise ValueError('no band shape %r (one of %s)' % (c['shape'], ', '.join(SHAPES)))
         c['_wlo'] = max(2 * dx, float(c.get('wmin') or min_fwhm or 0.0)); c['_whi'] = max(c['_wlo'], min(span, float(c.get('wmax') or max_fwhm or span)))
-        c['fwhm'] = min(max(float(c['fwhm']), c['_wlo']), c['_whi']); c['height'] = max(float(c['height']), 0.0); c['pos'] = min(max(float(c['pos']), lo), hi)
+        if frozen:
+            c['fwhm'] = max(float(c['fwhm']), 1e-9); c['height'] = float(c['height']); c['pos'] = float(c['pos'])
+        else:
+            c['fwhm'] = min(max(float(c['fwhm']), c['_wlo']), c['_whi']); c['height'] = max(float(c['height']), 0.0); c['pos'] = min(max(float(c['pos']), lo), hi)
     sig = sigma if sigma else (noise(ys) or 1.0)
     # --- the free parameters: (name, getter, setter, lower, upper)
     free = []
@@ -519,33 +577,51 @@ def fit(x, y, comps, lo=None, hi=None, local_baseline='const', share_width=False
         free.append((name, get, put, a, b))
     fixed_all = set(fix)
     one_eta = bool(share_width or share_eta)
-    if one_eta:                                                 # one shape for all: they start from one value
-        pv = [c for c in comps if c['shape'] == 'pvoigt']
-        for c in pv:
-            c['eta'] = pv[0]['eta']
+    # One width (one η) for all: a single parameter that sets every band's — unless a band's own is HELD: then the held
+    # value is the common one and nothing of it is refined (it was refined anyway, and the held band moved with it).
+    held = lambda c, what: what in (set(c.get('fix') or ()) | fixed_all)
+    pvs = [c for c in comps if c['shape'] == 'pvoigt']
+    if share_width and not frozen:
+        hw = [c for c in comps if held(c, 'fwhm')]
+        if hw:
+            for c in comps:
+                c['fwhm'] = hw[0]['fwhm']
+        else:
+            w0 = min(max(comps[0]['fwhm'], max(q['_wlo'] for q in comps)), min(q['_whi'] for q in comps))
+            for c in comps:
+                c['fwhm'] = w0
+    if one_eta and not frozen and pvs:                          # … and they start from one value: the held one, else the first
+        e0 = next((c['eta'] for c in pvs if held(c, 'eta')), pvs[0]['eta'])
+        for c in pvs:
+            c['eta'] = e0
+    free_w = share_width and not any(held(c, 'fwhm') for c in comps)
+    free_e = one_eta and pvs and not any(held(c, 'eta') for c in pvs)
+    if free_w:
+        add('fwhm', (lambda: comps[0]['fwhm']), (lambda v: [q.__setitem__('fwhm', v) for q in comps]), max(q['_wlo'] for q in comps), min(q['_whi'] for q in comps))
+    if free_e:
+        add('eta', (lambda: pvs[0]['eta']), (lambda v: [q.__setitem__('eta', v) for q in pvs]), 0.0, 1.0)
     for k, c in enumerate(comps):
-        cf = set(c.get('fix') or ()) | fixed_all
-        if 'pos' not in cf:
+        if not held(c, 'pos'):
             add('pos%d' % (k + 1), (lambda c=c: c['pos']), (lambda v, c=c: c.__setitem__('pos', v)), lo, hi)
-        if 'height' not in cf:
+        if not held(c, 'height'):
             add('height%d' % (k + 1), (lambda c=c: c['height']), (lambda v, c=c: c.__setitem__('height', v)), 0.0, float('inf'))
-        if 'fwhm' not in cf and not (share_width and k > 0):
-            if share_width:
-                add('fwhm', (lambda: comps[0]['fwhm']), (lambda v: [q.__setitem__('fwhm', v) for q in comps]), max(q['_wlo'] for q in comps), min(q['_whi'] for q in comps))
-            else:
-                add('fwhm%d' % (k + 1), (lambda c=c: c['fwhm']), (lambda v, c=c: c.__setitem__('fwhm', v)), c['_wlo'], c['_whi'])
-        if c['shape'] == 'pvoigt' and 'eta' not in cf and not (one_eta and any(q['shape'] == 'pvoigt' for q in comps[:k])):
-            if one_eta:
-                add('eta', (lambda c=c: c['eta']), (lambda v: [q.__setitem__('eta', v) for q in comps if q['shape'] == 'pvoigt']), 0.0, 1.0)
-            else:
-                add('eta%d' % (k + 1), (lambda c=c: c['eta']), (lambda v, c=c: c.__setitem__('eta', v)), 0.0, 1.0)
+        if not share_width and not held(c, 'fwhm'):
+            add('fwhm%d' % (k + 1), (lambda c=c: c['fwhm']), (lambda v, c=c: c.__setitem__('fwhm', v)), c['_wlo'], c['_whi'])
+        if c['shape'] == 'pvoigt' and not one_eta and not held(c, 'eta'):
+            add('eta%d' % (k + 1), (lambda c=c: c['eta']), (lambda v, c=c: c.__setitem__('eta', v)), 0.0, 1.0)
     base = [0.0, 0.0]
+    if base0 and local_baseline in ('const', 'linear'):          # the local baseline a fit ended on, (constant, slope[, about x])
+        b1 = float(base0[1]) if local_baseline == 'linear' else 0.0
+        ref = float(base0[2]) if len(base0) > 2 and base0[2] is not None else x0
+        base = [float(base0[0]) + b1 * (x0 - ref), b1]
+    elif local_baseline in ('const', 'linear') and not frozen:   # a fit starts its local baseline on the floor of the data: from zero under a
+        base[0] = min(ys)                                       # background of 10⁶ the heights went to their bound and stayed there
     if local_baseline in ('const', 'linear'):
         add('b0', (lambda: base[0]), (lambda v: base.__setitem__(0, v)), -float('inf'), float('inf'))
     if local_baseline == 'linear':
         add('b1', (lambda: base[1]), (lambda v: base.__setitem__(1, v)), -float('inf'), float('inf'))
     k_free = len(free)
-    if k_free == 0:
+    if k_free == 0 and not frozen:
         raise ValueError('every parameter is fixed')
     if n <= k_free:
         raise ValueError('%d points for %d parameters' % (n, k_free))
@@ -646,10 +722,10 @@ def fit(x, y, comps, lo=None, hi=None, local_baseline='const', share_width=False
             converged = converged or not stepped
             break
     # --- uncertainties from the curvature at the minimum
-    A, _g = normal(jacobian(), r)
+    A, _g = normal(jacobian(), r) if k_free else ([], [])
     dof = max(1, n - k_free)
     s2 = rss / dof
-    inv = _inverse([[A[a][b] + (1e-12 if a == b else 0.0) for b in range(k_free)] for a in range(k_free)])
+    inv = _inverse([[A[a][b] + (1e-12 if a == b else 0.0) for b in range(k_free)] for a in range(k_free)]) if k_free else None
     cov = [[inv[a][b] * s2 for b in range(k_free)] for a in range(k_free)] if inv else None
     esd = {nm: (math.sqrt(cov[a][a]) if cov and cov[a][a] > 0 else None) for a, nm in enumerate(names)}
     mean = sum(ys) / n; tss = sum((v - mean) ** 2 for v in ys) or 1e-300
@@ -679,6 +755,28 @@ def _runs_z(r):
     return (runs - mu) / math.sqrt(var) if var > 0 else 0.0
 
 
+def twins(a, b):
+    """Two bands the data cannot tell apart: closer than half the narrower one's width AND of like width. A narrow band
+    on a broad one (a sharp O–H on the water envelope) is close to it and is no twin."""
+    lo, hi = sorted((a['fwhm'], b['fwhm']))
+    return abs(b['pos'] - a['pos']) < 0.5 * lo and hi < 2.0 * lo
+
+
+def envelope_hint(xs, ys, f):
+    """A band of the fit that may be an envelope: much wider than two or more finer bands the second derivative sees
+    INSIDE it -> {'pos', 'fwhm', 'inside': [positions], 'cap': a width limit to try} or None. Whether it is one broad
+    band with small features on it or several narrower ones is not in the data — it is offered, never done."""
+    seeds = find_bands(xs, ys)
+    best = None
+    for c in f.comps:
+        inside = [q for q in seeds if abs(q['pos'] - c['pos']) < 0.5 * c['fwhm'] and q['fwhm'] * 2.5 <= c['fwhm']]
+        if len(inside) >= 2 and (best is None or c['fwhm'] > best['fwhm']):
+            cap = max(10.0, round(2.5 * max(q['fwhm'] for q in inside) / 10.0) * 10.0)
+            if cap < 0.8 * c['fwhm']:
+                best = {'pos': c['pos'], 'fwhm': c['fwhm'], 'inside': sorted(q['pos'] for q in inside), 'cap': cap}
+    return best
+
+
 CORR_WARN = 0.95
 RUNS_WARN = -6.0
 
@@ -694,10 +792,10 @@ def diagnose(f, xs, residual, resolution=None):
         sep = b['pos'] - a['pos']; wmean = 0.5 * (a['fwhm'] + b['fwhm'])
         if resolution and sep < resolution:
             out.append('the bands at %.1f and %.1f cm⁻¹ are %.1f apart, closer than the resolution (%.1f)' % (a['pos'], b['pos'], sep, resolution))
-        elif sep < 0.5 * wmean:
+        elif twins(a, b):
             out.append('the bands at %.1f and %.1f cm⁻¹ are %.1f apart, under half their width (%.1f): one band with another shape fits as well' % (a['pos'], b['pos'], sep, wmean))
         ea, eb = a['esd'].get('pos'), b['esd'].get('pos')
-        if ea and eb and math.hypot(ea, eb) > 0.5 * sep:
+        if ea and eb and math.hypot(ea, eb) > 0.5 * sep and max(a['fwhm'], b['fwhm']) < 2.0 * min(a['fwhm'], b['fwhm']):   # of like width: a narrow band on a broad one is told apart by its width
             out.append('the positions %.1f and %.1f cm⁻¹ are uncertain by ±%.1f and ±%.1f, as much as they are apart' % (a['pos'], b['pos'], ea, eb))
     for c in cs:
         if resolution and c['fwhm'] < resolution:
@@ -711,7 +809,7 @@ def diagnose(f, xs, residual, resolution=None):
         if c['fwhm'] >= 0.98 * (f.hi - f.lo):
             out.append('the band at %.1f cm⁻¹ is as wide as the region fitted: it is baseline, not a band' % c['pos'])
         if c['pos'] - f.lo < 0.25 * c['fwhm'] or f.hi - c['pos'] < 0.25 * c['fwhm']:
-            out.append('the band at %.1f cm⁻¹ sits on the edge of the region fitted' % c['pos'])
+            out.append('the band at %.1f cm⁻¹ stands on the edge of the region fitted: the foot of something outside it, or baseline — widen the region to fit it as a band' % c['pos'])
     if f.cov:
         for a in range(len(f.names)):
             for b in range(a + 1, len(f.names)):
@@ -780,7 +878,7 @@ def residual_bands(xs, ys, f, min_share=MIN_SHARE, sigma=None):
     return out
 
 
-def auto_fit(x, y, lo=None, hi=None, n=None, max_n=8, shape='pvoigt', local_baseline='const', min_snr=4.0, resolution=None, seeds=None,
+def auto_fit(x, y, lo=None, hi=None, n=None, max_n=12, shape='pvoigt', local_baseline='const', min_snr=4.0, resolution=None, seeds=None,
              max_fwhm=None, min_fwhm=None, min_share=MIN_SHARE, share_eta=False):
     """A fit that chooses its own components -> (the chosen Fit, [(n, bic, chi2)] for every model tried).
 
@@ -824,8 +922,10 @@ def auto_fit(x, y, lo=None, hi=None, n=None, max_n=8, shape='pvoigt', local_base
     except ValueError:
         raise ValueError('no band found between %g and %g' % (xs[0], xs[-1]))
     trials.append((len(f.comps), f.bic, f.chi2))
-    # 2. what the residual still shows
-    while len(f.comps) < limit:
+    # 2. what the residual still shows — within AUTO_SECONDS: data no model of bands fits (a negative-going curve, a width
+    # limit under every band) send each trial to its last step, and the model in hand is then the answer, said to be so
+    t_end = time.monotonic() + AUTO_SECONDS
+    while len(f.comps) < limit and time.monotonic() < t_end:
         added = None
         for c in residual_bands(xs, ys, f, min_share, sigma)[:3]:       # the largest first; the next only when that one does not pay
             new = [_bare(q) for q in f.comps] + [{'shape': shape, 'pos': c['pos'], 'height': max(c['height'], 1e-9), 'fwhm': min(c['fwhm'], wcap), 'eta': 0.5}]
@@ -844,7 +944,7 @@ def auto_fit(x, y, lo=None, hi=None, n=None, max_n=8, shape='pvoigt', local_base
         f = added; trials.append((len(f.comps), f.bic, f.chi2))
     # 3. each band out in turn: the smaller model whenever it is as good
     pruned = not n
-    while pruned and len(f.comps) > 1:
+    while pruned and len(f.comps) > 1 and time.monotonic() < t_end:
         pruned = False
         for c in sorted(f.comps, key=lambda q: q['height'] * q['fwhm'])[:4]:     # the four smallest: a large band is not in doubt
             try:
@@ -855,11 +955,31 @@ def auto_fit(x, y, lo=None, hi=None, n=None, max_n=8, shape='pvoigt', local_base
                 f = f2; trials.append((len(f2.comps), f2.bic, f2.chi2)); pruned = True
                 break
     f = without_dead(xs, ys, fit(xs, ys, [_bare(q) for q in f.comps], **kw), **kw)[0]
+    # a band the fit has pushed to the region's edge is the foot of something outside it (or baseline), not a band of the
+    # region: left out, and said — the local baseline takes what is left of it
+    # — but only when the fit is as good without it (EDGE_COST): beside a strong band just outside the region the edge
+    # band IS the model of its foot, and without it the real bands next to it are bent to make up for it. It then stays,
+    # and the fit says what it is.
+    edge = [c for c in f.comps if (c['pos'] - xs[0] < 0.25 * c['fwhm'] or xs[-1] - c['pos'] < 0.25 * c['fwhm'])]
+    if edge and len(edge) < len(f.comps) and not n:
+        try:
+            g = without_dead(xs, ys, fit(xs, ys, [_bare(q) for q in f.comps if q not in edge], **kw), **kw)[0]
+        except ValueError:
+            g = None
+        if g is not None and g.rss <= EDGE_COST * f.rss:
+            note = [w for w in f.warnings if 'left out' in w or 'driven to zero' in w]
+            g.warnings[:0] = note + ['%s at the edge of the region left out (%s cm⁻¹): the fit is as good without — the foot of something outside it' % (
+                'a band' if len(edge) == 1 else '%d bands' % len(edge), ', '.join('%.0f' % c['pos'] for c in edge))]
+            f = g
+    if time.monotonic() >= t_end:
+        f.warnings.insert(0, 'the search for bands was stopped after %d s: this is the model it had reached, not the one it would have ended on' % AUTO_SECONDS)
     if trials:
         trials[-1] = (len(f.comps), f.bic, f.chi2)
     return f, trials
 
 
+AUTO_SECONDS = 30    # what auto_fit may spend growing and pruning a model
+EDGE_COST = 1.1      # an edge band is left out when the sum of squares grows by no more than this without it
 DEAD = 1e-9          # of the tallest band: a height the fit has driven to this is no band
 
 
@@ -893,6 +1013,25 @@ def expected_bands(structure):
     return sorted(out)
 
 
+RULER_OO = (2.60, 3.20)     # Å: the O···O ruler's ends — 2750 to 3583 cm⁻¹. Below 2.60 Å the curve runs a thousand wavenumbers
+                            # for a tenth of an ångström (to 1750 cm⁻¹ at 2.50): a ruler across the bending and stretching
+                            # regions of everything else, for hydrogen bonds few minerals have
+
+
+def distance_rulers(step=0.01):
+    """The two relations as rulers along a spectrum's axis -> [{'key', 'name', 'of', 'cite', 'ticks': [[d (Å), cm⁻¹]]}]:
+    the O···O distance behind an O–H stretch (Libowitzky 1999) and the uranyl U–O distance behind ν1 and behind ν3
+    (Bartlett & Cooney 1989), a tick every `step` Å. The window draws them over the plot and reads the distance under
+    the pointer from them: one statement of each relation (spectro's), nothing recomputed in the page."""
+    from pxrd_review import spectro as SP
+    def ticks(inv, lo, hi):
+        return [[round(lo + step * k, 3), round(inv(lo + step * k), 2)] for k in range(int(round((hi - lo) / step)) + 1)]
+    return [{'key': 'oo', 'name': 'O···O Å', 'of': 'the O···O distance of the hydrogen bond whose O–H stretch would stand here', 'cite': 'Libowitzky (1999)',
+             'ticks': ticks(SP.lib_nu, RULER_OO[0], RULER_OO[1])},
+            {'key': 'nu1', 'name': 'U–O Å ν1', 'of': 'the uranyl U–O distance, were the band here ν1 (UO2)2+', 'cite': 'Bartlett & Cooney (1989)', 'ticks': ticks(SP.bc_nu1_inv, 1.70, 1.90)},
+            {'key': 'nu3', 'name': 'U–O Å ν3', 'of': 'the uranyl U–O distance, were the band here ν3 (UO2)2+', 'cite': 'Bartlett & Cooney (1989)', 'ticks': ticks(SP.bc_nu3_inv, 1.70, 1.90)}]
+
+
 def compare_stated(comps, stated, tolerance=6.0):
     """The fitted bands against the positions a manuscript states -> {'matched': [(stated, fitted, difference)],
     'not_fitted': [stated positions with no fitted band within `tolerance`], 'not_stated': [fitted positions]}."""
@@ -916,8 +1055,8 @@ def inferred(comps, technique=None):
         dist = ''
         if CH_WINDOW[0] <= c['pos'] <= CH_WINDOW[1]:
             # the C–H stretches of grease, epoxy or a mounting medium stand here: no O···O distance is read off them
-            names = ['C–H stretching window (%d–%d)' % CH_WINDOW] + names
-            dist = 'no distance: a band here is usually C–H of organic matter (absent from a Raman spectrum of the grain if not the mineral’s)'
+            names = ['C–H window (%d–%d)' % CH_WINDOW] + names
+            dist = 'C–H of organic matter? no O···O distance'
         elif 'UO2 ν1' in names:
             dist = 'U–O %.3f Å if ν1 (UO2)' % SP.bc_nu1(c['pos'])
         elif 'UO2 ν3' in names:
@@ -1009,13 +1148,13 @@ def table_text(f, technique=None, title=''):
 
 
 def figure_svg(x, y, f=None, base=None, ticks=None, width=900, height=420, title='', reverse=False):
-    """The spectrum, its fit and its residual as an SVG (written by `export`; the window draws its own from the same
-    numbers). `reverse`: x runs high to low, as an infrared spectrum is printed."""
+    """The spectrum, its fit(s) and residual as an SVG (written by `export`; the window draws its own from the same
+    numbers). `f`: one Fit or several (one per fitted region). `reverse`: x runs high to low, as an infrared spectrum is printed."""
     pad_l, pad_r, pad_t, pad_b = 56, 14, 22 if title else 10, 34
-    res_h = 60 if f else 0
+    fits = [f] if isinstance(f, Fit) else [q for q in (f or [])]
+    res_h = 60 if fits else 0
     ph = height - pad_t - pad_b - res_h
     x0, x1 = x[0], x[-1]
-    fit_y = model(x, f.comps, f.base, f.x0) if f else None
     ymin = min(min(y), 0.0); ymax = max(y) * 1.05 or 1.0
     X = lambda v: pad_l + ((x1 - v) if reverse else (v - x0)) / (x1 - x0) * (width - pad_l - pad_r)
     Y = lambda v: pad_t + (ymax - v) / (ymax - ymin) * ph
@@ -1028,26 +1167,30 @@ def figure_svg(x, y, f=None, base=None, ticks=None, width=900, height=420, title
     if title:
         o.append('<text x="%d" y="14" font-size="12">%s</text>' % (pad_l, _esc(title)))
     o.append('<path d="%s" fill="none" stroke="#222" stroke-width="1"/>' % path(y))
-    if f:
-        inside = lambda v: f.lo <= v <= f.hi
-        for c in f.comps:
-            vals = [profile(c['shape'], v, c['pos'], c['height'], c['fwhm'], c['eta']) + f.base[0] + f.base[1] * (v - f.x0) for v in x]
-            o.append('<path d="%s" fill="none" stroke="#2a78c2" stroke-width="0.8"/>' % path(vals, sel=inside))
-        o.append('<path d="%s" fill="none" stroke="#d1492e" stroke-width="1.2"/>' % path(fit_y, sel=inside))
-        r = [a - b if inside(v) else 0.0 for v, a, b in zip(x, y, fit_y)]
-        rmax = max(abs(v) for v in r) or 1.0
+    if fits:
+        res = []
+        for f in fits:
+            inside = lambda v, f=f: f.lo <= v <= f.hi
+            fit_y = model(x, f.comps, f.base, f.x0)
+            for c in f.comps:
+                vals = [profile(c['shape'], v, c['pos'], c['height'], c['fwhm'], c['eta']) + f.base[0] + f.base[1] * (v - f.x0) for v in x]
+                o.append('<path d="%s" fill="none" stroke="#2a78c2" stroke-width="0.8"/>' % path(vals, sel=inside))
+            o.append('<path d="%s" fill="none" stroke="#d1492e" stroke-width="1.2"/>' % path(fit_y, sel=inside))
+            res.append(([a - b if inside(v) else 0.0 for v, a, b in zip(x, y, fit_y)], inside))
+            for c in f.comps:
+                o.append('<text x="%.1f" y="%.1f" text-anchor="middle" fill="#2a78c2">%.0f</text>' % (X(c['pos']), max(pad_t + 9, Y(c['height'] + f.base[0]) - 4), c['pos']))
+        rmax = max(abs(v) for r, _i in res for v in r) or 1.0
         ry = lambda v: pad_t + ph + 8 + (res_h - 12) * 0.5 * (1.0 - v / rmax)
         o.append('<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" stroke="#bbb"/>' % (pad_l, width - pad_r, ry(0), ry(0)))
-        o.append('<path d="%s" fill="none" stroke="#666" stroke-width="0.8"/>' % path(r, ry, inside))
-        for c in f.comps:
-            o.append('<text x="%.1f" y="%.1f" text-anchor="middle" fill="#2a78c2">%.0f</text>' % (X(c['pos']), max(pad_t + 9, Y(c['height'] + f.base[0]) - 4), c['pos']))
+        for r, inside in res:
+            o.append('<path d="%s" fill="none" stroke="#666" stroke-width="0.8"/>' % path(r, ry, inside))
     for pos, label in ticks or []:
         if x0 <= pos <= x1:
             o.append('<line x1="%.1f" x2="%.1f" y1="%d" y2="%d" stroke="#2e9e5b" stroke-dasharray="3,2"><title>%s</title></line>' % (X(pos), X(pos), pad_t, pad_t + ph, _esc(label)))
     yb = pad_t + ph + res_h
     o.append('<line x1="%d" x2="%d" y1="%d" y2="%d" stroke="#222"/>' % (pad_l, width - pad_r, yb, yb))
     span = x1 - x0
-    tick = next(t for t in (10, 20, 50, 100, 200, 500, 1000) if span / t <= 10)
+    tick = next((t for t in (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000) if span / t <= 10), 10000)
     v = math.ceil(x0 / tick) * tick
     while v <= x1:
         o.append('<line x1="%.1f" x2="%.1f" y1="%d" y2="%d" stroke="#222"/><text x="%.1f" y="%d" text-anchor="middle">%g</text>' % (X(v), X(v), yb, yb + 4, X(v), yb + 16, v))
@@ -1075,7 +1218,7 @@ def session(prep, fits, opts):
                       'baseline': list(f.base), 'x0': f.x0, 'components': [comp(c) for c in f.comps], 'warnings': list(f.warnings)} for f in fits]}
 
 
-def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=None):
+def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=None, reverse=None):
     """Write the band table (<stem>_sp.txt, always), the figure (<stem>_sp.svg), the session (<stem>_sp.json) and, when
     asked, the table as Word / Excel -> {kind: path}."""
     os.makedirs(out_dir, exist_ok=True)
@@ -1091,11 +1234,13 @@ def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=N
         fh.write('\n'.join(text) + '\n')
     out['svg'] = os.path.join(out_dir, stem + '_sp.svg')
     with open(out['svg'], 'w', encoding='utf-8') as fh:
-        if len(fits) == 1:
-            xs, ys = crop(prep['x'], prep['y'], fits[0].lo - 0.15 * (fits[0].hi - fits[0].lo), fits[0].hi + 0.15 * (fits[0].hi - fits[0].lo))
-            fh.write(figure_svg(xs, ys, fits[0], ticks=ticks, title=prep['series'].name, reverse=tech == 'ir'))
+        rev = tech == 'ir' if reverse is None else bool(reverse)
+        if fits:                                               # every fitted region, from the first one's start to the last one's end
+            a, b = min(f.lo for f in fits), max(f.hi for f in fits)
+            xs, ys = crop(prep['x'], prep['y'], a - 0.15 * (b - a), b + 0.15 * (b - a))
+            fh.write(figure_svg(xs, ys, fits, ticks=ticks, title=prep['series'].name, reverse=rev))
         else:
-            fh.write(figure_svg(prep['x'], prep['y'], None, ticks=ticks, title=prep['series'].name, reverse=tech == 'ir'))
+            fh.write(figure_svg(prep['x'], prep['y'], None, ticks=ticks, title=prep['series'].name, reverse=rev))
     out['json'] = os.path.join(out_dir, stem + '_sp.json')
     with open(out['json'], 'w', encoding='utf-8') as fh:
         json.dump(session(prep, fits, opts or {}), fh, indent=1, ensure_ascii=False)
@@ -1177,7 +1322,7 @@ def main(argv=None):
     ap.add_argument('--anchors', help='anchor positions for --baseline anchors, comma-separated')
     ap.add_argument('--width', type=float, default=150.0, help='the clipping half-width of --baseline snip (cm-1)')
     ap.add_argument('--fit', help="'auto' (as many bands as the data support) or a number of bands")
-    ap.add_argument('--max-bands', type=int, default=8, help="the most bands --fit auto may use")
+    ap.add_argument('--max-bands', type=int, default=12, help="the most bands --fit auto may use")
     ap.add_argument('--max-fwhm', type=float, help='the widest a band may be (cm-1): keeps a component of a broad envelope from widening into it')
     ap.add_argument('--min-fwhm', type=float, help='the narrowest a band may be (cm-1)')
     ap.add_argument('--min-share', type=float, default=100 * MIN_SHARE, help='the smallest band --fit auto proposes: its share of the curve where it stands, in %% (lower finds more)')
@@ -1186,6 +1331,11 @@ def main(argv=None):
     ap.add_argument('--manuscript', help='a manuscript .docx or paper .pdf: its stated bands beside the fitted ones')
     ap.add_argument('--out', help='the folder for the outputs (default: review_out beside the file)'); ap.add_argument('--word', action='store_true'); ap.add_argument('--xlsx', action='store_true')
     a = ap.parse_args(argv)
+    if a.fit and a.fit != 'auto' and not (a.fit.isdigit() and 1 <= int(a.fit) <= 40):
+        raise SystemExit("pxrd spectrum: --fit takes 'auto' or a number of bands from 1 to 40, not %r" % a.fit)
+    for what, path in (('--manuscript', a.manuscript), ('--cif', a.cif)):
+        if path and not os.path.isfile(path):
+            raise SystemExit('pxrd spectrum: no such file for %s: %s' % (what, path))
     try:
         if a.list:
             for k, s in enumerate(F.load(a.path, a.sheet)):
@@ -1227,7 +1377,10 @@ def main(argv=None):
             print('  the residual still holds a band near ' + ', '.join('%.0f' % q['pos'] for q in more[:4]) + ' cm⁻¹')
     if a.manuscript:
         from pxrd_review import spectro as SP, paper_extract as PE
-        stated = sorted({b.pos for b in SP.bands(PE.text_of(a.manuscript)) if b.own and prep['x'][0] <= b.pos <= prep['x'][-1]})
+        try:
+            stated = sorted({b.pos for b in SP.bands(PE.text_of(a.manuscript)) if b.own and prep['x'][0] <= b.pos <= prep['x'][-1]})
+        except Exception as e:
+            stated = []; print('  the manuscript could not be read (%s)' % str(e)[:100])
         if fits:
             c = compare_stated(fits[0].comps, stated)
             print('  stated in the manuscript and fitted: ' + (', '.join('%g (fitted %.1f)' % (s, p) for s, p, _d in c['matched']) or 'none'))
@@ -1237,6 +1390,8 @@ def main(argv=None):
                 print('  fitted, not stated: ' + ', '.join('%.1f' % p for p in c['not_stated']))
         else:
             print('  stated in the manuscript: ' + ', '.join('%g' % s for s in stated))
+    if (a.word or a.xlsx) and not fits:
+        print('  --word / --xlsx write the fitted bands: add --fit auto (or a number of bands)')
     if fits or a.out:
         out_dir = a.out or os.path.join(os.path.dirname(os.path.abspath(a.path)), 'review_out')
         stem = re.sub(r'[^\w.-]+', '_', os.path.splitext(os.path.basename(a.path))[0])

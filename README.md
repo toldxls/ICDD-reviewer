@@ -539,12 +539,16 @@ The same section appears in `pxrd paper --check`, `pxrd proposal` and the GUI's 
 [--manuscript M] [--word] [--xlsx]`** takes the spectrum from the instrument's or the spreadsheet's file to a table of
 fitted bands:
 
-- **import** — text / CSV in any delimiter (a decimal comma is recognised), every x–y block of a workbook sheet, RRUFF and
-  LabSpec text, JCAMP-DX (plain and compressed; the file's own X- and Y-checks are run), Galactic `.spc`, Thermo `.spa`,
+- **import** — text / CSV in any delimiter, every x–y block of a workbook sheet, RRUFF and LabSpec text. Which column is
+  the axis is read, not assumed (its heading, else the first column that runs one way and is no running index); a decimal
+  comma, a thousands separator, quoted cells and a typographic minus are recognised; spectra standing one after another
+  in a file come back as several; an axis headed nm or µm is converted (`--laser` for a Raman spectrum recorded against
+  wavelength); a line that begins with a number and cannot be read is counted and said, never dropped in silence. Also JCAMP-DX (plain and compressed; the file's own X- and Y-checks are run), Galactic `.spc`, Thermo `.spa`,
   Bruker OPUS. The three binary readers follow the layouts in open use and have not yet been through a file from an
   instrument: a spectrum they return says so, and its axis should be checked against the instrument's display once.
-- **clean** — cosmic-ray events (a jump up and back within a few points, narrower than the resolution lets a band be);
-  an infrared transmittance spectrum converted to absorbance.
+- **clean** — cosmic-ray events: a jump up and back narrower than `--resolution` lets a band be; with no resolution
+  given, only what is one or two points wide and has no flanks (a sharp band two or three points wide climbs and falls
+  in steps, and is left alone). An infrared transmittance spectrum is converted to absorbance.
 - **baseline** — asymmetric least squares (one stiffness means the same at any sampling), SNIP, the rubber band, or
   anchor points; fitted to the whole spectrum, then the region is cut out.
 - **fit** — Gaussian, Lorentzian or pseudo-Voigt bands by Levenberg–Marquardt, with a constant or sloping local
@@ -581,11 +585,29 @@ refined by hand on the plot and in the table:
 | keep bands from widening into the envelope | `widest` (and `narrowest`) |
 | see hidden components | the `2nd derivative` layer, at a smoothing width of your choice |
 | go back | `undo` / `redo` (⌘Z) |
+| change the stretch that is fitted | drag a ▮ tab on the region's edge, or type new limits |
+| enlarge the foot of the curve | Shift-scroll (or scroll over the height axis) |
+| read a distance off the spectrum | the `O···O Å` and `U–O Å` rulers over the plot |
 
-With `refit as I edit` on, every change is refitted at once; off, changes are drawn dashed — with their own sum and
-residual — until `Fit these`. The line above the table says whether the last change made the fit better or worse (BIC).
-The structure's expected positions are green ticks, the manuscript's stated bands orange marks. A file comes from the open folder, the browser's chooser, or a drop on the plot; it is read in the
-window only and nothing is written until Export.
+With `heights follow edits` on, every change to a band is followed by a fit of the HEIGHTS only: what was placed by
+hand stays where it was placed, and no band is taken out. `Fit these` then refines whatever `refine` allows (heights
+only, with widths, with positions, everything). Off, changes are drawn dashed — with their own sum and residual — until
+`Fit these`. Undo and redo put a fit back exactly as it was, and reach a cleared or replaced region too. The line above
+the table says whether the last change made the fit better or worse (BIC). When one fitted band is much wider than two
+or more finer bands the second derivative sees inside it, the window offers to fit it as an envelope (a width limit and
+a fresh automatic fit) — offered, never done unasked: one broad band or several narrow ones is not in the data.
+
+The **distance rulers** set the two relations over the plot: the O···O distance whose O–H stretch would stand at each
+wavenumber (Libowitzky 1999, 2.60–3.20 Å) and the uranyl U–O distance a band would mean as ν1 or as ν3 (Bartlett &
+Cooney 1989; switched on by itself when the structure beside the spectrum has a uranyl ion). The pointer reads the
+distance, and each fitted band is marked on the ruler. The structure's expected positions are green ticks, the
+manuscript's stated bands orange marks.
+
+The work in hand is kept: the bands of every region, as they stand, are remembered in the browser per spectrum (band
+parameters and options only), so another file, a reload or a closed window loses nothing and a spectrum opens on the
+fit left on it. A file comes from the open folder, the browser's chooser, or a drop anywhere on the page; it is read
+in the window only and nothing is written until Export — which writes each region as it was fitted and as it stands on
+the screen.
 
 ## Writing the review into the .docx
 `pxrd_review/annotate_review.py` runs the same comparison and writes the findings back into

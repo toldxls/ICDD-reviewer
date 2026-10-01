@@ -52,17 +52,24 @@ def load(path, sheet=None):
     ext = os.path.splitext(path)[1].lower()
     base = os.path.basename(path)
     if ext in ('.xlsx', '.xlsm'):
-        return read_xlsx(path, sheet)
+        try:
+            return read_xlsx(path, sheet)
+        except ValueError:
+            raise
+        except Exception as e:                                   # a text file or another archive under a workbook's name
+            raise ValueError('%s could not be opened as a workbook (%s) — is it an .xlsx? Save it again from the spreadsheet, or export text' % (base, type(e).__name__))
     with open(path, 'rb') as f:
         head = f.read(4096)
     if not head:
         raise ValueError('%s is empty' % base)
-    if head[:4] == b'\x0a\x0a\xfe\xfe':
-        return read_opus(path)
-    if ext == '.spc' or (len(head) > 2 and head[1:2] in (b'\x4b', b'\x4c', b'\x4d') and b'\x00' in head[:64] and ext not in TEXT_EXT + JCAMP_EXT):
-        return read_spc(path)
-    if ext == '.spa' or head[:18].startswith(b'Spectral Data File'):
-        return read_spa(path)
+    binary = read_opus if head[:4] == b'\x0a\x0a\xfe\xfe' else \
+        read_spc if ext == '.spc' or (len(head) > 2 and head[1:2] in (b'\x4b', b'\x4c', b'\x4d') and b'\x00' in head[:64] and ext not in TEXT_EXT + JCAMP_EXT) else \
+        read_spa if ext == '.spa' or head[:18].startswith(b'Spectral Data File') else None
+    if binary:
+        try:
+            return binary(path)
+        except (struct.error, IndexError, OverflowError, MemoryError):     # cut short, or an offset that points outside the file
+            raise ValueError('%s is cut short or damaged: its header points outside the file — export the spectrum again, or as text' % base)
     if ext == '.l6s':
         raise ValueError('%s: a LabSpec .l6s file is not read (its layout is not published) — export the spectrum as text (.txt) from LabSpec' % base)
     if b'\x00' in head[:2048] and ext not in TEXT_EXT + JCAMP_EXT:
@@ -75,31 +82,51 @@ def load(path, sheet=None):
 
 
 def _decode(raw):
-    for enc in ('utf-8-sig', 'utf-16', 'cp1252'):
-        try:
-            t = raw.decode(enc)
-            if enc == 'utf-16' and '\x00' in t:
-                continue
-            return t
-        except UnicodeError:
-            continue
-    return raw.decode('latin-1')
+    """The text of a file's bytes. UTF-16 only on its evidence — a byte-order mark, or a NUL in every second byte: any
+    Windows-1252 file of an even length decodes 'successfully' as UTF-16, into nothing a reader can use."""
+    if raw[:3] == b'\xef\xbb\xbf':
+        return raw[3:].decode('utf-8', 'replace')
+    if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        return raw.decode('utf-16', 'replace')
+    head = raw[:4096]
+    if len(head) >= 8 and head.count(b'\x00') >= 0.3 * len(head):       # UTF-16 with no mark: the NULs say which end comes first
+        return raw.decode('utf-16-le' if head[1::2].count(b'\x00') >= head[0::2].count(b'\x00') else 'utf-16-be', 'replace')
+    try:
+        return raw.decode('utf-8')
+    except UnicodeError:
+        return raw.decode('cp1252', 'replace')
 
 
 # ----------------------------------------------------------------------------- text
 
 _NUMBER = re.compile(r'^[+-]?(?:\d+[.,]?\d*|[.,]\d+)(?:[eE][+-]?\d+)?$')
+_GROUP_COMMA = re.compile(r'^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$')         # 1,000.50
+_GROUP_POINT = re.compile(r'^[+-]?\d{1,3}(?:\.\d{3})+(?:,\d+)?$')         # 1.000,50
+_X_NAME = re.compile(r'wave|shift|raman|cm\s*[-−–^]?\s*[-−–]?\s*1|\bnm\b|nanomet|µm|μm|\bum\b|micron|micromet|frequenc|^x$', re.I)
 
 
 def _cells(line, delim):
     if delim is None:
         return line.split()
+    if '"' in line:                                              # "1,000.00","50.0": the quotes keep a cell's own commas
+        import csv
+        try:
+            return [c.strip() for c in next(csv.reader([line], delimiter=delim))]
+        except (csv.Error, StopIteration):
+            pass
     return [c.strip() for c in line.split(delim)]
 
 
-def _value(c, comma_decimal):
-    c = c.strip().strip('"')
-    if not c or not _NUMBER.match(c):
+def _value(c, comma_decimal, grouped=False):
+    c = c.strip().strip('"').strip()
+    if not c:
+        return None
+    if grouped:                                                  # thousands set off by the mark that is not the decimal one
+        if not comma_decimal and _GROUP_COMMA.match(c):
+            c = c.replace(',', '')
+        elif comma_decimal and _GROUP_POINT.match(c):
+            c = c.replace('.', '')
+    if not _NUMBER.match(c):
         return None
     if comma_decimal:
         c = c.replace(',', '.')
@@ -109,9 +136,39 @@ def _value(c, comma_decimal):
         return None
 
 
+def _one_way(v):
+    """A column that runs one way (98 % of its steps) over a range: what an axis does."""
+    if len(v) < 5 or max(v) == min(v):
+        return False
+    up = sum(1 for p, q in zip(v, v[1:]) if q > p); down = sum(1 for p, q in zip(v, v[1:]) if q < p)
+    return max(up, down) >= 0.98 * (len(v) - 1)
+
+
+def _index_ramp(v):
+    """0, 1, 2 … or 1, 2, 3 …: a running index, not an axis."""
+    return v[0] in (0.0, 1.0) and all(q - p == 1.0 for p, q in zip(v, v[1:]))
+
+
+def _stretches(v):
+    """The row ranges [(first, last + 1)] over which a column runs one way: one for an axis, several where spectra
+    stand one after another in the file (the axis starts again — a step back of more than half its range)."""
+    span = max(v) - min(v)
+    if not span:
+        return [(0, len(v))]
+    up = sum(1 for p, q in zip(v, v[1:]) if q > p) >= sum(1 for p, q in zip(v, v[1:]) if q < p)
+    cuts = [0] + [i + 1 for i, (p, q) in enumerate(zip(v, v[1:])) if (p - q if up else q - p) > 0.5 * span] + [len(v)]
+    return list(zip(cuts, cuts[1:]))
+
+
 def read_text(text, name='spectrum'):
     """Columns of numbers under any header. The delimiter is the one that gives the most rows of two or more numbers; a
-    comma is a decimal mark when the delimiter is something else and the numbers carry no point."""
+    comma is a decimal mark when the delimiter is something else and the numbers carry no point.
+
+    Which column is the axis is READ, not assumed: the one its heading names (wavenumber, Raman shift, cm-1, nm …), else
+    the first that runs one way and is no running index. Where the axis starts again the file holds several spectra,
+    one after another, and they are returned as several. A line that begins with a number and cannot be read is counted
+    and said — never dropped in silence (a thousands separator once cut a spectrum at 1000 cm⁻¹ without a word)."""
+    text = text.replace('−', '-')                           # a typographic minus is a minus
     lines = [ln for ln in text.replace('\r\n', '\n').replace('\r', '\n').split('\n')]
     meta = {'format': 'text', 'source': name, 'notes': []}
     body = []; heading = None
@@ -119,7 +176,7 @@ def read_text(text, name='spectrum'):
         s = ln.strip()
         if not s:
             continue
-        if not body and not s.startswith('#') and not re.match(r'^[+-]?[\d.,]', s):
+        if not body and not s.startswith('#') and not re.match(r'^"?[+-]?[\d.,]', s):
             heading = s                                          # the last line of words before the numbers: the column names
         m = re.match(r'^#{1,2}\s*([^=:\t]+?)\s*[=:]\s*(.*)$', s)       # '##NAMES=…' (RRUFF), '#Acq. time (s)=\t10' (LabSpec)
         if m:
@@ -138,12 +195,15 @@ def read_text(text, name='spectrum'):
         body.append(s)
     if not body:
         raise ValueError('%s: no data lines' % name)
+    joined = '\n'.join(body[:4000])
+    grouped_comma = bool(re.search(r'(?<![\d.,])\d{1,3}(?:,\d{3})+\.\d', joined))      # 1,000.5 somewhere: the comma sets off thousands
+    grouped_point = bool(re.search(r'(?<![\d.,])\d{1,3}(?:\.\d{3})+,\d', joined))      # 1.000,5
     best = None
     for delim in ('\t', ';', ',', None):
         for comma_decimal in ((False, True) if delim != ',' else (False,)):
             rows = []
             for s in body:
-                vals = [_value(c, comma_decimal) for c in _cells(s, delim)]
+                vals = [_value(c, comma_decimal, grouped_point if comma_decimal else grouped_comma) for c in _cells(s, delim)]
                 while vals and vals[-1] is None:
                     vals.pop()
                 if len(vals) >= 2 and vals[0] is not None and vals[1] is not None:
@@ -154,20 +214,100 @@ def read_text(text, name='spectrum'):
     if best is None or best[0][0] < 5:
         raise ValueError('%s: no two columns of numbers found (%d lines read)' % (name, len(body)))
     _score, rows, _delim, comma_decimal = best
+    runs_on = lambda v: _one_way(v) and len(_stretches(v)) == 1
+    if _delim != ',' and not grouped_comma and any(',' in s_ for s_ in body[:4000]) and not runs_on([r[0] for r in rows]):
+        # '999' then '1,000' with no decimals anywhere: a decimal comma makes the axis fall back to 1.0 there, a thousands
+        # separator makes it run on — the reading whose axis runs one way is the right one
+        alt = []
+        for s in body:
+            vals = [_value(c, False, True) for c in _cells(s, _delim)]
+            while vals and vals[-1] is None:
+                vals.pop()
+            if len(vals) >= 2 and vals[0] is not None and vals[1] is not None:
+                alt.append(vals)
+        if len(alt) >= len(rows) and runs_on([r[0] for r in alt]):
+            rows, comma_decimal = alt, False
+            meta['notes'].append('a comma is read as a thousands separator (the axis runs on through 1,000)')
     if comma_decimal:
         meta['notes'].append('a comma is read as the decimal mark')
     ncol = max(set(len(r) for r in rows), key=[len(r) for r in rows].count)
     rows = [r for r in rows if len(r) >= ncol]
-    if len(rows) < len(body) * 0.5:
-        meta['notes'].append('%d of %d lines did not hold %d numbers and were skipped' % (len(body) - len(rows), len(body), ncol))
-    out = []
+    lost = sum(1 for s in body if re.match(r'^"?[+-]?[\d.,]', s)) - len(rows)
+    if lost > 0:
+        meta['notes'].append('%d line%s that begin%s with a number could not be read as %d columns and %s left out — look at the file: a thousands separator, a missing value?'
+                             % (lost, '' if lost == 1 else 's', 's' if lost == 1 else '', ncol, 'was' if lost == 1 else 'were'))
     heads = [c.strip().strip('"') for c in _cells(heading, _delim)] if heading else []
-    for k in range(1, ncol):
-        ys = [r[k] for r in rows]
-        if any(v is None for v in ys):
+    if len(heads) != ncol:
+        heads = [''] * ncol
+    cols = [[r[k] for r in rows] for k in range(ncol)]
+    whole = [k for k in range(ncol) if all(v is not None for v in cols[k])]
+    # --- the axis
+    axis_like = lambda k: all(_one_way(cols[k][a:b]) for a, b in _stretches(cols[k]) if b - a >= 5) and len(_stretches(cols[k])) <= max(1, len(rows) // 5)
+    cand = [k for k in whole if axis_like(k)]
+    if not cand and _delim == ',' and ncol >= 4 and ncol % 2 == 0:
+        # no column runs one way, and the columns come in pairs: the comma is the decimal mark AND the separator
+        # ('100,5,1050,25' = 100.5 and 1050.25) — the pairs are put back together
+        paired = []
+        for s_ in body:
+            cs = [c.strip() for c in s_.split(',')]
+            if len(cs) == ncol and all(re.match(r'^[+-]?\d+$', c) for c in cs[0::2]) and all(re.match(r'^\d+$', c) for c in cs[1::2]):
+                paired.append([float(cs[i] + '.' + cs[i + 1]) for i in range(0, ncol, 2)])
+        if len(paired) >= 0.9 * len(rows) and _one_way([r[0] for r in paired]):
+            rows = paired; ncol //= 2; heads = [''] * ncol
+            cols = [[r[k] for r in rows] for k in range(ncol)]; whole = list(range(ncol)); cand = [k for k in whole if axis_like(k)]
+            meta['notes'].append('the comma is both the decimal mark and the column separator here: each pair of columns was read as one number')
+    named = [k for k in cand if _X_NAME.search(heads[k])]
+    real = [k for k in cand if not _index_ramp(cols[k])]
+    xk = named[0] if named else real[0] if real else cand[0] if cand else 0
+    if xk != 0:
+        meta['notes'].append('the axis is column %d%s, not the first column' % (xk + 1, ' (%s)' % heads[xk] if heads[xk] else ''))
+    hx = heads[xk].lower()
+    if re.search(r'\bnm\b|nanomet', hx):
+        meta['x_unit'] = 'nm'
+    elif re.search(r'µm|μm|\bum\b|micron|micromet', hx):
+        meta['x_unit'] = 'um'
+    xs = cols[xk]
+    parts = [(a, b) for a, b in _stretches(xs)] if xk in cand else [(0, len(rows))]
+    # a first or last line standing far from the run of the axis is a stray pair of numbers (a count, a date), not a point
+    stray = 0
+    if xk in cand:
+        trimmed = []
+        for a, b in parts:
+            if b - a > 12:
+                steps = sorted(abs(q - p) for p, q in zip(xs[a:b], xs[a + 1:b])); med = steps[len(steps) // 2] or 1e-300
+                if abs(xs[a + 1] - xs[a]) > 20 * med:
+                    a += 1; stray += 1
+                if abs(xs[b - 1] - xs[b - 2]) > 20 * med:
+                    b -= 1; stray += 1
+            trimmed.append((a, b))
+        parts = trimmed
+    stray += sum(b - a for a, b in parts if b - a < 5)
+    parts = [(a, b) for a, b in parts if b - a >= 5]
+    if stray and parts:
+        meta['notes'].append('%d line%s of two numbers standing apart from the spectrum left out' % (stray, '' if stray == 1 else 's'))
+    if not parts:
+        parts = [(0, len(rows))]
+    # --- the intensities: every other complete column that is neither a running index nor a constant (a map's stage position)
+    out = []; left = []
+    ycols = []
+    for k in whole:
+        if k == xk:
             continue
-        label = heads[k] if len(heads) == ncol and heads[k] else 'column %d' % (k + 1)
-        out.append(_series(name if ncol == 2 else '%s [%s]' % (name, label), [r[0] for r in rows], ys, **dict(meta, notes=list(meta['notes']))))
+        if _index_ramp(cols[k]) or all(max(cols[k][a:b]) == min(cols[k][a:b]) for a, b in parts):
+            left.append(k); continue
+        ycols.append(k)
+    if left:
+        meta['notes'].append('column%s %s left out (a running index, or one value throughout)' % ('' if len(left) == 1 else 's', ', '.join(str(k + 1) for k in left)))
+    for n, (a, b) in enumerate(parts):
+        for k in ycols:
+            label = heads[k] if heads[k] else 'column %d' % (k + 1)
+            title = name if len(ycols) == 1 else '%s [%s]' % (name, label)
+            if len(parts) > 1:
+                title += ' [spectrum %d of %d]' % (n + 1, len(parts))
+            try:
+                out.append(_series(title, xs[a:b], cols[k][a:b], **dict(meta, notes=list(meta['notes']))))
+            except ValueError:
+                continue
     if not out:
         raise ValueError('%s: no complete column of intensities' % name)
     return out
@@ -199,64 +339,93 @@ def read_xlsx(path, sheet=None):
     return out
 
 
+def _isnum(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v == v
+
+
 def _numeric_run(col):
-    """(first row, last row) of the longest run of numbers in a column, None-tolerant at its ends only."""
-    best = (0, -1); start = None
-    for i, v in enumerate(col + [None]):
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
+    """(first row, last row) of the longest run of numbers in a column. A single cell that is no number (a blank, a
+    '#N/A') inside it does not end it — the rows they stand in are dropped by the caller, and said."""
+    best = (0, -1); start = None; last = None
+    for i, v in enumerate(col + [None, None, None]):
+        if _isnum(v):
             if start is None:
                 start = i
-        elif start is not None:
-            if i - 1 - start > best[1] - best[0]:
-                best = (start, i - 1)
+            last = i
+        elif start is not None and i - last > 1:
+            if last - start > best[1] - best[0]:
+                best = (start, last)
             start = None
     return best
 
 
-def _blocks(rows, name):
+def _blocks(rows, name, _depth=0):
     if not rows:
         return []
     ncol = max(len(r) for r in rows)
-    cols = [[(r[c] if c < len(r) else None) for r in rows] for c in range(ncol)]
+    def cell(v):                                                 # a number typed as text is a number
+        if isinstance(v, str):
+            t = v.strip().replace('\u2212', '-')
+            if _NUMBER.match(t):
+                try:
+                    return float(t.replace(',', '.'))
+                except ValueError:
+                    pass
+        return v
+    cols = [[cell(r[c] if c < len(r) else None) for r in rows] for c in range(ncol)]
     runs = [_numeric_run(col) for col in cols]
     def is_x(c):
         a, b = runs[c]
         if b - a + 1 < 20:
             return False
-        v = cols[c][a: b + 1]
+        v = [q for q in cols[c][a: b + 1] if _isnum(q)]
         up = sum(1 for p, q in zip(v, v[1:]) if q > p); down = sum(1 for p, q in zip(v, v[1:]) if q < p)
-        return max(up, down) >= 0.98 * (len(v) - 1) and 0 <= min(v) and max(v) <= 20000 and max(v) - min(v) >= 20
-    out = []; c = 0
+        return len(v) >= 20 and max(up, down) >= 0.98 * (len(v) - 1) and -5000 <= min(v) and max(v) <= 20000 and max(v) - min(v) >= 20
+    out = []; c = 0; used = []
     while c < ncol:
         if not is_x(c):
             c += 1; continue
-        a, b = runs[c]; xs = cols[c][a: b + 1]
+        a, b = runs[c]; xs = cols[c][a: b + 1]; used.append((a, b))
+        if c + 1 < ncol and is_x(c + 1) and all(_isnum(q) for q in xs) and _index_ramp([float(q) for q in xs]):
+            c += 1; continue                                     # 1, 2, 3 … beside a column that is an axis too: a running index
+        # its intensities: the columns right of it that hold numbers on nine in ten of its rows, up to a blank column or
+        # the next axis — or, with none there, the one column left of it (intensity first, wavenumber second)
+        full = lambda k: sum(1 for q in cols[k][a: b + 1] if _isnum(q)) >= 0.9 * (b - a + 1)
         ys = []; k = c + 1
-        while k < ncol:
-            a2, b2 = runs[k]
-            if b2 - a2 + 1 < 0.9 * (b - a + 1) or a2 > a + 2:
-                break
-            if is_x(k) and ys:                                   # the next block's x: a second column that runs one way, once this x has a y
-                break
+        while k < ncol and full(k) and not (is_x(k) and ys):
             ys.append(k); k += 1
+        if not ys and c > 0 and full(c - 1) and not is_x(c - 1):
+            ys = [c - 1]
         first = None
-        for n, yc in enumerate(ys):
-            a2, b2 = runs[yc]; lo, hi = max(a, a2), min(b, b2)
-            y = cols[yc][lo: hi + 1]; x = cols[c][lo: hi + 1]
-            notes = []
-            head = cols[yc][a2 - 1] if a2 > 0 and isinstance(cols[yc][a2 - 1], str) else None
+        for yc in ys:
+            pairs = list(zip(cols[c][a: b + 1], cols[yc][a: b + 1]))
+            notes = []; offset = False
+            gaps = sum(1 for p, q in pairs if not (_isnum(p) and _isnum(q)))
+            if gaps:
+                notes.append('%d row%s with a cell that is no number left out' % (gaps, '' if gaps == 1 else 's'))
+            x = [p for p, q in pairs if _isnum(p) and _isnum(q)]; y = [q for p, q in pairs if _isnum(p) and _isnum(q)]
+            head = cols[yc][a - 1] if a > 0 and isinstance(cols[yc][a - 1], str) else None
             if first is not None and len(first) == len(y):
                 d = [q - p for p, q in zip(first, y)]
                 if max(d) - min(d) < 1e-6 * max(1.0, abs(d[0])) and abs(d[0]) > 0:
-                    notes.append('the column before it shifted by %g (a plotting offset)' % d[0])
+                    notes.append('the column before it shifted by %g (a plotting offset)' % d[0]); offset = True
             if first is None:
                 first = y
             label = '%s [%s]' % (name, head.strip() if head else 'columns %s:%s' % (_col_letter(c), _col_letter(yc)))
             try:
-                out.append(_series(label, x, y, format='xlsx', source=name, notes=notes, offset_copy=bool(notes)))
+                out.append(_series(label, x, y, format='xlsx', source=name, notes=notes, offset_copy=offset))
             except ValueError:
                 pass
         c = k if ys else c + 1
+    # blocks standing one under another in the same columns: what lies above the first run and below the last is read the same way
+    if used and _depth < 4:
+        top, bottom = min(a for a, _b in used), max(b for _a, b in used)
+        seen = {t.name for t in out}
+        for more in (_blocks(rows[:top], name, _depth + 1) if top >= 20 else []) + (_blocks(rows[bottom + 1:], name, _depth + 1) if len(rows) - bottom - 1 >= 20 else []):
+            label = more.name; n = 2
+            while label in seen:
+                label = '%s (%d)' % (more.name, n); n += 1
+            seen.add(label); out.append(Series(label, more.x, more.y, more.meta))
     return out
 
 
@@ -274,13 +443,22 @@ def _col_letter(c):
 _SQZ = {'@': 0}; _SQZ.update({ch: i + 1 for i, ch in enumerate('ABCDEFGHI')}); _SQZ.update({ch: -(i + 1) for i, ch in enumerate('abcdefghi')})
 _DIF = {'%': 0}; _DIF.update({ch: i + 1 for i, ch in enumerate('JKLMNOPQR')}); _DIF.update({ch: -(i + 1) for i, ch in enumerate('jklmnopqr')})
 _DUP = {ch: i + 1 for i, ch in enumerate('STUVWXYZs')}
-_ASDF_TOKEN = re.compile(r'([@A-Ia-i%J-Rj-rS-Zs])(\d*\.?\d*)|([+-]?(?:\d+\.?\d*|\.\d+)(?:[Ee][+-]?\d+)?)')
+_ASDF_TOKEN = re.compile(r'([@A-Ia-i%J-Rj-rS-Zs])(\d*\.?\d*)|([+-]?(?:\d+\.?\d*|\.\d+)(?:[Ee][+-]\d+)?)')
 
 
-def _asdf_line(s):
-    """The numbers of one XYDATA line in any of the JCAMP forms (AFFN, PAC, SQZ, DIF, DUP) -> (values, last was a DIF)."""
+_PAC_TOKEN = re.compile(r'([@A-Ia-i%J-Rj-rS-Zs])(\d*\.?\d*)|([+-]?(?:\d+\.?\d*|\.\d+)(?:[Ee][+-]?\d+)?)')
+_COMPRESSED = re.compile(r'[@A-DF-Ia-df-i%J-Rj-rS-Zs]')          # a compression character that cannot be an exponent's E
+
+
+def _asdf_line(s, compressed=None):
+    """The numbers of one XYDATA line in any of the JCAMP forms (AFFN, PAC, SQZ, DIF, DUP) -> (values, last was a DIF).
+    E and e are two things: the exponent of a plain number, and the SQZ digits ±5. In COMPRESSED data (`compressed`:
+    the block, else this line, carries a compression character other than E) an E is an exponent only with its sign
+    written — '400E23J5' is 400, 523, 538, not 4·10²⁵; in plain data '4.5E1' is 45."""
+    if compressed is None:
+        compressed = bool(_COMPRESSED.search(s))
     vals = []; prev_dif = False; pos = 0
-    for m in _ASDF_TOKEN.finditer(s):
+    for m in (_ASDF_TOKEN if compressed else _PAC_TOKEN).finditer(s):
         if s[pos: m.start()].strip(' \t,;'):
             raise ValueError('an unexpected %r' % s[pos: m.start()].strip())
         pos = m.end()
@@ -343,24 +521,31 @@ def read_jcamp(text, name='spectrum'):
         xf, yf = num('XFACTOR', 1.0), num('YFACTOR', 1.0)
         if b['form'] == 'XYPOINTS':
             xs, ys = [], []
-            for ln in b['lines']:
-                for pair in re.split(r'[;\s]+(?=[+-]?[\d.])', ln) if ';' in ln else [ln]:
-                    v = [float(t) for t in re.split(r'[,\s]+', pair.strip()) if t]
-                    for k in range(0, len(v) - 1, 2):
-                        xs.append(v[k] * xf); ys.append(v[k + 1] * yf)
+            for ln in b['lines']:                               # 'x, y', 'x,y; x,y', 'x y x y': the numbers of a line, two by two
+                try:
+                    v = [float(t) for t in re.split(r'[,;\s]+', ln.strip()) if t]
+                except ValueError:
+                    raise ValueError('%s: a line of ##XYPOINTS could not be read: %r' % (title, ln[:60]))
+                for k in range(0, len(v) - 1, 2):
+                    xs.append(v[k] * xf); ys.append(v[k + 1] * yf)
         else:
             first, last, npts = num('FIRSTX'), num('LASTX'), num('NPOINTS')
+            dxl = (last - first) / (npts - 1) if first is not None and last is not None and npts and npts > 1 else None
             ys = []; heads = []; carry_dif = False
+            packed = any(_COMPRESSED.search(ln) for ln in b['lines'])
             for ln in b['lines']:
                 try:
-                    vals, last_dif = _asdf_line(ln)
+                    vals, last_dif = _asdf_line(ln, packed)
                 except ValueError as e:
                     raise ValueError('%s: a data line could not be read (%s): %r' % (title, e, ln[:60]))
                 if len(vals) < 2:
                     continue
                 yv = vals[1:]
                 at = len(ys)
-                if carry_dif and ys:                             # the Y-check: the first y repeats the last of the line before
+                # the Y-check: after a line that ends in a difference the first y repeats that line's last — which the x
+                # printed on the line says too (a writer that leaves the check out prints the NEXT point's x there)
+                repeat = carry_dif and ys and (dxl is None or abs(vals[0] * xf - (first + dxl * (len(ys) - 1))) <= abs(vals[0] * xf - (first + dxl * len(ys))))
+                if repeat:
                     if abs(yv[0] - ys[-1]) > 1e-6 * max(1.0, abs(ys[-1])):
                         notes.append('a Y-check failed at x = %g (the file\'s own check on its compression)' % (vals[0] * xf))
                     yv = yv[1:]; at -= 1                         # … and the x printed on the line is that repeated point's
@@ -372,6 +557,8 @@ def read_jcamp(text, name='spectrum'):
             if first is None or last is None:
                 if len(heads) < 2:
                     raise ValueError('%s: no FIRSTX / LASTX and one data line' % title)
+                if heads[-1][0] == heads[0][0]:
+                    raise ValueError('%s: no FIRSTX / LASTX, and the data lines give no axis' % title)
                 step = (heads[-1][1] - heads[0][1]) / (heads[-1][0] - heads[0][0])
                 first = heads[0][1]; last = first + step * (n - 1)
                 notes.append('FIRSTX / LASTX are missing: the axis is taken from the x printed on the data lines')

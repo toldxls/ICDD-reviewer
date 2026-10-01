@@ -95,6 +95,20 @@ a spectrum file is imported, cleaned and fitted in a window of its own.
   with positions, everything); `one η` gives all pseudo-Voigt bands one shape; a band the fit drives to zero height is
   taken out and said; two bands closer than half their width can be merged; a band in the C–H stretching window is
   named as such instead of being given an O···O distance.
+- The spectrum window, distance rulers: the O···O distance behind an O–H stretch (Libowitzky 1999) and the uranyl U–O
+  distance behind ν1 and ν3 (Bartlett & Cooney 1989) as rulers over the plot; the pointer reads the distance and every
+  fitted band is marked on them.
+- The spectrum window keeps the work in hand (the bands of every region, per spectrum, in the browser): another file,
+  a reload or a closed window loses nothing. After a hand edit only the heights are fitted again and no band is taken
+  out; undo and redo restore a fit exactly and reach a cleared or replaced region; a fitted region's limits, typed or
+  dragged, never swallow another region; one broad band with finer bands inside it is offered as an envelope; the plot
+  zooms vertically; a spectrum on an axis in nm takes a laser line.
+- The importer reads the axis instead of assuming the first column (heading, direction, no running index), splits
+  spectra that stand one after another in a file, recognises thousands separators, quoted cells, a typographic minus
+  and an axis in nm / µm, tolerates a blank or non-numeric cell in a workbook column, and says every line it could not
+  read. The cosmic-ray filter leaves a sharp band two or three points wide alone; a band is looked for above the floor
+  the curve stands on (a background that was not taken off no longer hides it); the local baseline, the width limits
+  and what was refined go into an export with the bands, so the file written is the fit on the screen.
 - `data/band_windows.json`: where published mineral descriptions place the numbered modes of the common groups, the O–H
   stretch and the H2O bend (percentiles per group, mode and technique; aggregates of eight papers or more).
 - Dev tools: `tools/corpus_spectra.py` (the band library, the proof of the coefficients, the A/B, the windows),

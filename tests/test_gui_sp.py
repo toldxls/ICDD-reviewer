@@ -150,6 +150,75 @@ class SpectrumWindow(unittest.TestCase):
         self.assertEqual(len({round(c['fwhm'], 3) for c in one['comps']}), 3)
         self.assertEqual(one['k'], full['k'] - 2)
 
+    def test_the_file_is_the_fit_on_the_screen(self):
+        # no baseline taken off: the region's own sloping baseline is part of the model, and goes wherever the bands go
+        body = {'name': 'testite raman.txt', 'kind': 'raman', 'baseline': 'none', 'lo': 780, 'hi': 960}
+        f = self._post('/api/sp/fit', body)['fit']
+        self.assertGreater(abs(f['base'][1]), 0.1)
+        as_fitted = {'lo': 780, 'hi': 960, 'comps': f['comps'], 'local': 'linear', 'base': f['base'], 'x0': f['x0'], 'converged': f['converged']}
+        same = self._post('/api/sp/fit', dict(body, **as_fitted, evaluate=True))['fit']
+        self.assertAlmostEqual(same['chi2'], f['chi2'], 6)
+        self.assertGreater(self._post('/api/sp/fit', dict(body, comps=f['comps'], evaluate=True))['fit']['chi2'], 100 * f['chi2'])
+        r = self._post('/api/sp/export', dict(body, fmt='txt', regions=[as_fitted]))
+        sess = json.loads(self.c.get('/api/sp/file?as=json&name=' + r['files']['json']).data)
+        self.assertAlmostEqual(sess['fits'][0]['chi2'], f['chi2'], 6); self.assertAlmostEqual(sess['fits'][0]['baseline'][1], f['base'][1], 9)
+        # heights only: the file says so too (its parameters, its uncertainties), and nothing is clamped to the limits of another region
+        h = self._post('/api/sp/fit', dict(body, comps=f['comps'], refine='heights', keep_dead=True))['fit']
+        r = self._post('/api/sp/export', dict(body, fmt='txt', regions=[dict(as_fitted, comps=h['comps'], base=h['base'], refine='heights', max_fwhm=5, share_width=True)]))
+        sess = json.loads(self.c.get('/api/sp/file?as=json&name=' + r['files']['json']).data)
+        self.assertEqual((sess['fits'][0]['parameters'], sess['options']['regions'][0]['refine']), (h['k'], 'heights'))
+        self.assertEqual([round(c['fwhm'], 6) for c in sess['fits'][0]['components']], [round(c['fwhm'], 6) for c in h['comps']])
+        r = self._post('/api/sp/export', dict(body, fmt='txt', regions=[dict(as_fitted, converged=False)]))
+        sess = json.loads(self.c.get('/api/sp/file?as=json&name=' + r['files']['json']).data)
+        self.assertFalse(sess['fits'][0]['converged']); self.assertIn('NOT CONVERGED', self.c.get('/api/sp/file?name=' + r['files']['txt']).data.decode())
+        self.assertIn('nothing fitted yet', self._post('/api/sp/export', dict(body, regions=[{'lo': 780, 'hi': 960}]), 400)['error'])     # nothing is fitted on the way out
+
+    def test_a_hand_edit_removes_nothing_and_an_envelope_is_offered(self):
+        body = dict(self.body, lo=780, hi=960)
+        full = self._post('/api/sp/fit', body)['fit']
+        self.assertIn('envelope', full)
+        extra = full['comps'] + [dict(full['comps'][0], pos=880.0, height=5.0, fwhm=1.2)]              # a band placed where the data have none
+        kept = self._post('/api/sp/fit', dict(body, comps=extra, refine='heights', keep_dead=True))['fit']
+        self.assertEqual(len(kept['comps']), 4); self.assertEqual(sorted(round(c['pos'], 6) for c in kept['comps'])[2], 880.0)
+        self.assertEqual([round(c['fwhm'], 9) for c in kept['comps']], [round(c['fwhm'], 9) for c in sorted(extra, key=lambda c: c['pos'])])
+        for bad in ({'refine': [1]}, {'refine': {}}, {'comps': [dict(full['comps'][0], fix=5)] + full['comps'][1:]}):       # junk is not a crash
+            self._post('/api/sp/fit', dict(body, **dict({'comps': full['comps']}, **bad)))
+        st = json.loads(self.c.get('/api/sp/state').data)
+        self.assertEqual([r['key'] for r in st['rulers']], ['oo', 'nu1', 'nu3'])
+        d2 = self._post('/api/sp/d2', dict(self.body, baseline='snip', width=150, lo=780, hi=960, d2_width=12))    # the two widths are two things
+        self.assertEqual(d2['width'], 12)
+
+    def test_a_file_rewritten_is_read_again_and_each_spectrum_has_its_own_files(self):
+        p = os.path.join(self.tmp, 'rewritten.txt')
+        def write(at):
+            x, y, _ = synth(5, [dict(TRUTH[0], pos=at)], lo=300, hi=1300)
+            with open(p, 'w', encoding='utf-8') as fh:
+                fh.write(''.join('%.2f\t%.3f\n' % r for r in zip(x, y)))
+            os.utime(p, (at, at))
+        top = lambda: (lambda d: d['x'][d['y'].index(max(d['y']))])(self._post('/api/sp/process', {'name': 'rewritten.txt'}))
+        try:
+            write(500.0); self.G.ms_set_folder(self.tmp); a = top()
+            write(900.0); b = top()
+            self.assertEqual((round(a), round(b)), (500, 900))
+            import openpyxl
+            wb = openpyxl.Workbook(); ws = wb.active
+            x, y, _ = synth(6, TRUTH)
+            for u, v in zip(x, y):
+                ws.append([u, v, None, u, 2 * v])
+            wb.save(os.path.join(self.tmp, 'two.xlsx')); self.G.ms_set_folder(self.tmp)
+            names = []
+            for k in (0, 1):
+                f = self._post('/api/sp/fit', {'name': 'two.xlsx', 'series': k, 'lo': 780, 'hi': 960})['fit']
+                names.append(self._post('/api/sp/export', {'name': 'two.xlsx', 'series': k, 'regions': [{'lo': 780, 'hi': 960, 'comps': f['comps'], 'base': f['base'], 'x0': f['x0']}]})['files']['txt'])
+            self.assertEqual(names, ['two_1_sp.txt', 'two_2_sp.txt'])
+        finally:                                                # the other tests list this folder
+            for name in ('rewritten.txt', 'two.xlsx'):
+                if os.path.exists(os.path.join(self.tmp, name)):
+                    os.remove(os.path.join(self.tmp, name))
+            self.G.ms_set_folder(self.tmp)
+            if self.G.MS['athread']:
+                self.G.MS['athread'].join(60)
+
     def test_upload_stays_in_memory(self):
         before = sorted(os.listdir(self.tmp))
         r = self.c.post('/api/sp/upload', data={'file': (io.BytesIO(self.text.encode()), '../sneaky name.txt')}, content_type='multipart/form-data')

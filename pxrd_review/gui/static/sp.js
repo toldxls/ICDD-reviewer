@@ -24,7 +24,9 @@ function sv(tag, attrs, ...kids) {
 }
 
 // ---- state -------------------------------------------------------------------
-// A region = one fitted stretch: {lo, hi, comps, fit, dirty, hist, redo, trials, prevBic}.
+// A region = one fitted stretch: {lo, hi, comps, fit, dirty, hist, redo, trials, prevBic, seq} + HOW it was fitted
+// (local, share_width, share_eta, max_fwhm, min_fwhm, refine): what an export, a session and an undo evaluate it with —
+// the controls on the left may have moved on to another region since.
 //   comps  the WORKING bands — what the table shows and the handles move: [{shape, pos, height, fwhm, eta, fix[], wmax?}]
 //   fit    the server's last fit of them (its curve and residual are drawn while !dirty)
 //   dirty  the bands were changed since that fit: they are drawn dashed, with their own sum, until fitted again
@@ -39,10 +41,16 @@ const SP = {
   sel: -1,                // the selected band of that region
   anchors: [],
   mode: 'pan',
-  layers: { raw: false, comps: true, ticks: true, stated: true, peaks: false, reverse: false, d2: false },
+  layers: { raw: false, comps: true, ticks: true, stated: true, peaks: false, reverse: false, d2: false, oo: true, uo: false },
   busy: 0,
+  gen: 0,                 // counts the spectra shown: a fit answering for the curve before is dropped
+  pseq: 0,                // … and the requests for one: the last asked for is the one shown
+  fits: 0, fitting: 0,    // fits on their way; those that may move bands (the fit buttons wait for them)
+  lists: [], listsRedo: [],   // the list of regions before a region was cleared, replaced or made: undo of those
+  yz: 1,                  // vertical zoom
+  ready: false,           // the spectrum and what was left of its fit are in: from here on the work is kept
 };
-const LS = 'pxrd-sp2';                                    // 2: the defaults changed (smallest band 3 %) — remembered values start afresh
+const LS = 'pxrd-sp3';                                    // 3: the defaults changed (at most 12 bands; 2: smallest band 3 %) — remembered values start afresh
 const KEEP = ['sp-refine', 'sp-shape', 'sp-local', 'sp-baseline', 'sp-lam', 'sp-p', 'sp-width', 'sp-threshold', 'sp-resolution', 'sp-maxn', 'sp-share', 'sp-d2w'];
 const KEEP_CB = ['sp-despike', 'sp-share-w', 'sp-share-eta', 'sp-live'];
 function loadPrefs() {
@@ -88,7 +96,7 @@ function opts() {
     name: SP.file, series: SP.series, kind: $('#sp-kind').value,
     despike: $('#sp-despike').checked, threshold: num('sp-threshold'), resolution: num('sp-resolution'),
     baseline: $('#sp-baseline').value, anchors: SP.anchors, lam: Math.pow(10, num('sp-lam') == null ? 7 : num('sp-lam')), p: num('sp-p'), width: num('sp-width'),
-    cif: $('#sp-cif').value, ms: $('#sp-ms').value,
+    cif: $('#sp-cif').value, ms: $('#sp-ms').value, laser: num('sp-laser'),
   };
 }
 // … and how a region is to be fitted
@@ -113,44 +121,98 @@ async function loadState(pick) {
   for (const r of s.regions) pre.append(el('button', { onclick: () => setRegion(r.lo, r.hi, true) }, r.name + ' ' + r.lo + '–' + r.hi));
   pre.append(el('button', { onclick: () => { if (SP.d) { SP.view = [SP.d.x[0], SP.d.x[SP.d.x.length - 1]]; draw(); } } }, 'whole'));
   listOutputs(s.outputs);
+  for (const b of document.querySelectorAll('[data-fmt]')) {     // an export goes into the open folder's review_out
+    b.disabled = !s.folder; b.title = s.folder ? '' : 'No folder is open: open the folder that holds the manuscript in the main window first — the table is written into its review_out.';
+  }
   if (pick && s.files.some(f => f.name === pick)) { fsel.value = pick; await chooseFile(pick); }
 }
 
 async function chooseFile(name) {
-  SP.file = name; SP.series = 0; SP.d = null; SP.d2 = null; SP.regions = []; SP.cur = -1; SP.sel = -1; SP.anchors = [];
-  const ssel = $('#sp-series'); ssel.textContent = '';
+  SP.ready = false; SP.gen++;
+  SP.file = name; SP.series = 0; SP.d = null; SP.d2 = null; SP.regions = []; SP.cur = -1; SP.sel = -1; SP.anchors = []; SP.lists = []; SP.listsRedo = []; SP.yz = 1;
+  $('#sp-kind').value = ''; $('#sp-laser').value = '';      // what the last file was said to be is not what this one is
+  const ssel = $('#sp-series'); ssel.textContent = ''; ssel.classList.add('hidden');
   if (!name) { draw(); renderResult(); return; }
   try {
     const r = await api('/api/sp/series?name=' + enc(name));
     for (const t of r.series) ssel.append(el('option', { value: t.i }, t.name.replace(name + ' | ', '') + ' — ' + t.n + ' points' + (t.offset_copy ? ' (an offset copy)' : '')));
-    SP.seriesList = r.series;
+    SP.seriesList = r.series; ssel.classList.toggle('hidden', r.series.length < 2);
     const guess = r.series[0].kind;
     if (!$('#sp-kind').value && guess) setReverse(guess.startsWith('ir'));
     await process(true);
+    await restoreWork();
   } catch (e) { status(e.message, true); SP.d = null; draw(); renderResult(); }
+  SP.ready = true;
 }
 
-function setReverse(on) {
-  SP.layers.reverse = on;
-  const cb = document.querySelector('#sp-layers [data-layer=reverse]'); if (cb) cb.checked = on;
+// ---- the work in hand is kept ------------------------------------------------------
+// Every region's bands, as they stand, are kept in this browser per spectrum (band parameters and options only — never
+// the spectrum): another file, a reload or a closed window loses nothing, and the spectrum opens on the fit left on it.
+const WORK = 'pxrd-sp-work';
+const workKey = () => ((SP.state && SP.state.folder) || '') + '|' + SP.file + '|' + SP.series;
+const asFitted = r => ({ lo: r.lo, hi: r.hi, comps: r.comps.map(bare), local: r.local || $('#sp-local').value, share_width: !!r.share_width, share_eta: !!r.share_eta,
+  max_fwhm: r.max_fwhm || null, min_fwhm: r.min_fwhm || null, refine: r.refine || '', converged: r.fit ? r.fit.converged : r.converged !== false,
+  base: r.fit ? r.fit.base : r.base0 || null, x0: r.fit ? r.fit.x0 : r.x0 });
+let workTimer = null;
+function saveWork() {
+  clearTimeout(workTimer);
+  if (!SP.ready || !SP.file || !SP.d) return;
+  workTimer = setTimeout(() => {
+    if (!SP.ready || !SP.file || !SP.d) return;
+    try {
+      const all = JSON.parse(localStorage.getItem(WORK) || '{}'), key = workKey();
+      const regs = SP.regions.filter(r => r.comps.length);
+      if (regs.length) {
+        const how = regs.map(asFitted);
+        all[key] = { t: Date.now(), s: { options: Object.assign(opts(), { regions: how.map(h => Object.assign({}, h, { comps: undefined })) }),
+          fits: how.map(h => ({ lo: h.lo, hi: h.hi, baseline: h.base, x0: h.x0, converged: h.converged, components: h.comps })) } };
+      } else delete all[key];
+      for (const k of Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(12)) delete all[k];
+      localStorage.setItem(WORK, JSON.stringify(all));
+    } catch (_) {}
+  }, 300);
+}
+async function restoreWork() {
+  let w = null;
+  try { w = (JSON.parse(localStorage.getItem(WORK) || '{}'))[workKey()]; } catch (_) {}
+  if (!w || !w.s || !Array.isArray(w.s.fits) || !w.s.fits.length) return;
+  await applySession(w.s, null, true);
+  const n = SP.regions.reduce((k, r) => k + r.comps.length, 0);
+  if (n) status('the fit left on this spectrum is back (' + n + ' band' + (n === 1 ? '' : 's') + ', as they stood) — Clear removes a region');
 }
 
+function setLayer(k, on) {
+  SP.layers[k] = on;
+  const cb = document.querySelector('#sp-layers [data-layer=' + k + ']'); if (cb) cb.checked = on;
+}
+const setReverse = on => setLayer('reverse', on);
+
+const sameCurve = (a, b) => a.y.length === b.y.length && a.x[0] === b.x[0] && a.y.every((v, i) => v === b.y[i]);
 async function process(resetView) {
   if (!SP.file) return;
+  const seq = ++SP.pseq, before = SP.d;
   try {
     status('reading…');
-    const d = SP.d = await api('/api/sp/process', opts());
-    SP.d2 = null;
+    const d = await api('/api/sp/process', opts());
+    if (seq !== SP.pseq) return;                             // another spectrum was asked for meanwhile: that one is shown
+    const same = !resetView && before && sameCurve(before, d);   // the manuscript or the .cif beside it changed, not the curve
+    SP.d = d; SP.d2 = null;
+    if (!same) SP.gen++;                                     // a fit still on its way is of the curve before
     if (resetView || !SP.view) SP.view = [d.x[0], d.x[d.x.length - 1]];
     status(d.x.length + ' points, ' + d.x[0] + '–' + d.x[d.x.length - 1] + ' cm⁻¹; noise ' + fmt(d.noise) + (d.kind ? '; ' + d.kind.replace('ir-', 'infrared, ') : ''));
     $('#sp-spikes').textContent = $('#sp-despike').checked ? (d.spikes.length ? d.spikes.length + ' removed: ' + d.spikes.slice(0, 8).map(s => Math.round(s[0])).join(', ') + (d.spikes.length > 8 ? ' …' : '') : 'none found') : '';
+    $('#sp-laser-row').classList.toggle('hidden', !(num('sp-laser') || d.notes.some(t => /axis is in nm/.test(t))));     // asked for only when the axis is in nanometres
     const n = $('#sp-notes'); n.textContent = '';
     for (const t of d.notes) n.append(el('div', { class: 'note', title: t }, t));
-    // a changed spectrum under fitted regions: their fits are of the spectrum before — to be fitted again
-    if (!resetView) for (const r of SP.regions) if (r.comps.length) r.dirty = true;
+    // a changed curve under fitted regions: their fits are of the curve before. The bands stay where they are and their
+    // heights follow (as after an edit) — or, with that off, they wait for 'Fit these'. An unchanged curve changes nothing.
+    if (!SP.layers.uo && SP.uoFor !== SP.file && d.ticks.some(t => /UO2/.test(t.label))) { SP.uoFor = SP.file; setLayer('uo', true); }
+    const stale = !resetView && !same ? SP.regions.filter(r => r.comps.length) : [];
+    for (const r of stale) r.dirty = true;
     draw(); renderResult(); savePrefs();
     if (SP.layers.d2) loadD2();
-  } catch (e) { status(e.message, true); }
+    if ($('#sp-live').checked) for (const r of stale) fitRegion(r, r.comps, { refine: 'heights', keep_dead: true });
+  } catch (e) { if (seq === SP.pseq) status(e.message, true); }
 }
 
 async function loadD2() {
@@ -158,13 +220,25 @@ async function loadD2() {
   const key = JSON.stringify([opts(), num('sp-d2w')]);
   if (SP.d2 && SP.d2.key === key) { draw(); return; }
   try {
-    const r = await api('/api/sp/d2', Object.assign(opts(), { lo: SP.d.x[0], hi: SP.d.x[SP.d.x.length - 1], width: num('sp-d2w') || 25 }));
+    const r = await api('/api/sp/d2', Object.assign(opts(), { lo: SP.d.x[0], hi: SP.d.x[SP.d.x.length - 1], d2_width: num('sp-d2w') || 25 }));
     SP.d2 = { x: r.x, d2: r.d2, key }; draw();
   } catch (e) { status(e.message, true); }
 }
 
 // ---- the plot ----------------------------------------------------------------
-const M = { l: 58, r: 12, t: 16, b: 30, res: 64 };       // margins; res = the residual strip's height
+const M = { l: 58, r: 12, t: 16, b: 30, res: 64 };       // margins (t grows by a row per distance ruler shown); res = the residual strip's height
+const RULER = 15;                                        // the height of one ruler row
+// the distance rulers switched on (the O···O one; the two U–O ones together)
+const rulersOn = () => ((SP.state && SP.state.rulers) || []).filter(r => r.key === 'oo' ? SP.layers.oo : SP.layers.uo);
+// the distance a ruler gives at a wavenumber (between two of its ticks, a hundredth of an ångström apart), or null outside it
+function rulerAt(r, x) {
+  const t = r.ticks;
+  for (let i = 1; i < t.length; i++) {
+    const a = t[i - 1], b = t[i];
+    if ((x - a[1]) * (x - b[1]) <= 0 && a[1] !== b[1]) return a[0] + (b[0] - a[0]) * (x - a[1]) / (b[1] - a[1]);
+  }
+  return null;
+}
 let G = null;                                            // the last drawing's geometry (for the pointer)
 
 function fmt(v) {
@@ -211,15 +285,19 @@ function draw() {
   }
   const W = host.clientWidth || 800, H = host.clientHeight || 400;
   const hasRes = SP.regions.some(r => r.comps.length);
-  const ph = H - M.t - M.b - (hasRes ? M.res : 0), pw = W - M.l - M.r;
   const [vx0, vx1] = SP.view;
+  const rulers = rulersOn().filter(r => r.ticks.some(t => t[1] >= vx0 && t[1] <= vx1));     // those with a stretch in view
+  M.t = 16 + RULER * rulers.length;
+  const ph = H - M.t - M.b - (hasRes ? M.res : 0), pw = W - M.l - M.r;
   const [i0, i1] = range(indexOf(vx0) - 1, indexOf(vx1) + 1);
   const ys = SP.layers.raw ? d.cleaned : d.y;
   let ymin = Infinity, ymax = -Infinity;
   for (let i = i0; i <= i1; i++) { const v = ys[i]; if (v < ymin) ymin = v; if (v > ymax) ymax = v; }
   if (!(ymax > ymin)) { ymax = ymin + 1; }
-  if (!SP.layers.raw) ymin = Math.min(ymin, 0);
-  const padY = 0.06 * (ymax - ymin); ymax += padY; ymin -= SP.layers.raw ? padY : 0.02 * (ymax - ymin);
+  const high = ymin > 0.3 * ymax;                           // bands on a high background (no baseline taken off): zero is not forced into view
+  if (!SP.layers.raw && !high) ymin = Math.min(ymin, 0);
+  const padY = 0.06 * (ymax - ymin); ymax += padY; ymin -= SP.layers.raw || high ? padY : 0.02 * (ymax - ymin);
+  ymax = ymin + (ymax - ymin) / SP.yz;                      // the vertical zoom: the foot of the curve enlarged
   const rev = SP.layers.reverse;
   const X = v => M.l + (rev ? (vx1 - v) : (v - vx0)) / (vx1 - vx0) * pw;
   const Xinv = px => rev ? vx1 - (px - M.l) / pw * (vx1 - vx0) : vx0 + (px - M.l) / pw * (vx1 - vx0);
@@ -227,8 +305,10 @@ function draw() {
   const Yinv = py => ymax - (py - M.t) / ph * (ymax - ymin);
   G = { X, Xinv, Y, Yinv, W, H, pw, ph, ymin, ymax };
   const svg = sv('svg', { viewBox: '0 0 ' + W + ' ' + H, preserveAspectRatio: 'none' });
-  svg.append(sv('defs', null, sv('clipPath', { id: 'sp-clip' }, sv('rect', { x: M.l, y: M.t - 4, width: pw, height: ph + 4 + (hasRes ? M.res : 0) }))));
+  svg.append(sv('defs', null, sv('clipPath', { id: 'sp-clip' }, sv('rect', { x: M.l, y: M.t - 4, width: pw, height: ph + 4 })),
+    sv('clipPath', { id: 'sp-clip-r' }, sv('rect', { x: M.l, y: M.t + ph + 2, width: pw, height: M.res - 4 }))));
   const g = sv('g', { 'clip-path': 'url(#sp-clip)' }); svg.append(g);
+  const gr = sv('g', { 'clip-path': 'url(#sp-clip-r)' }); svg.append(gr);     // the residual strip: nothing of the plot runs into it
 
   // one path of a curve, thinned to the pixels there are: per pixel column its lowest and highest point
   const path = (xs, vals, a, b, yf) => {
@@ -255,10 +335,17 @@ function draw() {
       const e = sv('g', { class: 'r-edge' }, sv('line', { x1: x, x2: x, y1: M.t - 4, y2: M.t + ph }), sv('rect', { x: x - 5, y: M.t - 4, width: 10, height: ph + 4 }),
         sv('path', { d: 'M' + (x - 4) + ',' + (M.t + ph / 2 - 9) + ' h8 v18 h-8 Z' }),
         sv('title', null, 'drag to move this end of the fitted region (' + r[side] + ' cm⁻¹); its bands stay'));
-      e.addEventListener('mousedown', ev => { if (ev.button !== 0) return; ev.stopPropagation(); ev.preventDefault(); r.edgeBefore = snapshot(r); drag = { kind: 'edge', reg: r, side, lo0: r.lo, hi0: r.hi, moved: false }; });
+      e.addEventListener('mousedown', ev => { if (ev.button !== 0) return; ev.stopPropagation(); ev.preventDefault(); r.edgeBefore = snapshot(r); drag = { kind: 'edge', reg: r, side, lo0: r.lo, hi0: r.hi, dirty0: !!r.dirty, moved: false }; });
       edges.append(e);
     }
   });
+  // a stretch chosen and not fitted yet: drawn, so that a drag or a preset shows where it landed
+  const plo = num('sp-lo'), phi = num('sp-hi');
+  if (plo != null && phi != null && phi > plo && !SP.regions.some(r => Math.abs(r.lo - plo) < 1 && Math.abs(r.hi - phi) < 1)) {
+    const a = X(plo), b = X(phi);
+    g.append(sv('rect', { class: 'pending', x: Math.min(a, b), y: M.t - 3, width: Math.abs(b - a), height: ph + 2 }));
+    g.append(sv('text', { class: 'pending-l', x: Math.min(a, b) + 6, y: M.t + 12 }, plo + '–' + phi + ' cm⁻¹: Auto fit, or ‘band’ and click'));
+  }
   // the second derivative, bands up, on a scale of its own (the lower part of the plot)
   if (SP.layers.d2 && SP.d2) {
     const q = SP.d2; let a = 0; while (a < q.x.length - 1 && q.x[a + 1] < vx0) a++;
@@ -269,6 +356,7 @@ function draw() {
     g.append(sv('path', { class: 'd2', d: path(q.x, q.d2, a, b, DY) }, sv('title', null, 'the second derivative (bands up), smoothed over ' + (num('sp-d2w') || 25) + ' cm⁻¹')));
   }
   if (SP.layers.raw) {
+    if (d.spikes.length && d.raw) g.append(sv('path', { class: 'rawdata', d: path(d.x, d.raw, i0, i1) }, sv('title', null, 'as recorded, before the cosmic rays were taken out')));
     g.append(sv('path', { class: 'data', d: path(d.x, d.cleaned, i0, i1) }));
     if ($('#sp-baseline').value !== 'none') g.append(sv('path', { class: 'base', d: path(d.x, d.baseline, i0, i1) }));
     for (const s of d.spikes) g.append(sv('circle', { class: 'spike', cx: X(s[0]), cy: M.t + 2, r: 2.5 }, sv('title', null, 'a cosmic-ray event removed at ' + Math.round(s[0]) + ' cm⁻¹')));
@@ -285,12 +373,16 @@ function draw() {
     const c = cv[k]; if (!c) return;
     const off = SP.layers.raw ? v => d.baseline[Math.min(d.x.length - 1, indexOf(v))] || 0 : () => 0;
     const bl = v => c.base[0] + c.base[1] * (v - c.x0) + off(v);
-    if (SP.layers.comps) r.comps.forEach((b, j) => {
+    // the widest first: a narrow band on a broad one is drawn — and clicked — on top of it
+    if (SP.layers.comps) r.comps.map((b, j) => [b, j]).sort((p, q) => q[0].fwhm - p[0].fwhm).forEach(([b, j]) => {
       const sel = k === SP.cur && j === SP.sel;
       const vals = c.x.map(v => profile(b, v) + bl(v));
-      const p = sv('path', { class: 'comp' + (sel ? ' sel' : '') + (c.draft ? ' draft' : ''), d: path(c.x, vals, 0, c.x.length - 1) });
-      p.addEventListener('mousedown', ev => { if (SP.mode === 'pan' && !ev.shiftKey) { ev.stopPropagation(); select(k, j); } });
-      g.append(p);
+      // the area under the band down to the local baseline (closed along it: a band cut by the region's edge filled as a wedge), and its curve
+      const last = c.x.length - 1, curve = path(c.x, vals, 0, last);
+      const area = sv('path', { class: 'comp-f' + (sel ? ' sel' : ''), d: curve + ' L' + X(c.x[last]).toFixed(1) + ',' + Y(bl(c.x[last])).toFixed(1) + ' L' + X(c.x[0]).toFixed(1) + ',' + Y(bl(c.x[0])).toFixed(1) + ' Z' });
+      const p = sv('path', { class: 'comp' + (sel ? ' sel' : '') + (c.draft ? ' draft' : ''), d: curve });
+      for (const q of [area, p]) q.addEventListener('mousedown', () => { picked = [k, j]; });      // selected on mouse-up if the pointer did not move: a drag from here pans
+      g.append(area, p);
       g.append(sv('text', { class: 'lab', x: X(b.pos), y: Math.max(M.t + 8, Y(b.height + bl(b.pos)) - 8), 'text-anchor': 'middle' }, b.pos.toFixed(0)));
       if (k === SP.cur) {
         const hp = sv('circle', { class: 'h-pos' + (sel ? ' sel' : ''), cx: X(b.pos), cy: Y(b.height + bl(b.pos)), r: sel ? 5.5 : 4.5 },
@@ -304,7 +396,7 @@ function draw() {
       }
     });
     g.append(sv('path', { class: 'model' + (c.draft ? ' draft' : ''), d: path(c.x, c.model.map((v, i) => v + off(c.x[i])), 0, c.x.length - 1) }));
-    g.append(sv('path', { class: 'resid', d: path(c.x, c.residual, 0, c.x.length - 1, RY) }));
+    gr.append(sv('path', { class: 'resid', d: path(c.x, c.residual, 0, c.x.length - 1, RY) }));
     // where the residual still holds a band: a mark to click
     if (k === SP.cur && r.fit && !r.dirty) for (const nx of r.fit.next || []) {
       const x = X(nx.pos), y = M.t + ph - 2;
@@ -348,6 +440,27 @@ function draw() {
     ax.append(sv('line', { x1: M.l - 4, x2: M.l, y1: Y(v), y2: Y(v) }), sv('text', { x: M.l - 6, y: Y(v) + 4, 'text-anchor': 'end' }, fmt(v)));
   ax.append(sv('text', { x: M.l + pw, y: H - 3, 'text-anchor': 'end' }, 'wavenumber (cm⁻¹)'));
   svg.append(ax);
+  // the distance rulers over the plot: a tick every 0.01 Å, labelled where there is room (round values first), and a
+  // dot for every fitted band
+  rulers.forEach((r, row) => {
+    const yb = 14 + RULER * row, gq = sv('g', { class: 'ruler' }, sv('title', null, r.name + ': ' + r.of + ' — ' + r.cite + '. A correlation with scatter: it places a band, it does not measure a bond.'));
+    const vis = r.ticks.filter(t => t[1] >= vx0 && t[1] <= vx1);
+    const xs = vis.map(t => X(t[1]));
+    gq.append(sv('line', { x1: Math.min(...xs), x2: Math.max(...xs), y1: yb, y2: yb }));
+    gq.append(sv('text', { class: 'name', x: M.l - 6, y: yb, 'text-anchor': 'end' }, r.name));
+    const placed = [];
+    for (const m of [10, 5, 2, 1]) vis.forEach((t, i) => {     // tenths first, then twentieths … each label only where none stands within 34 px
+      if (Math.round(t[0] * 100) % m || placed.some(p => Math.abs(p - xs[i]) < 34)) return;
+      placed.push(xs[i]);
+      gq.append(sv('text', { x: xs[i], y: yb - 5, 'text-anchor': 'middle' }, t[0].toFixed(2)));
+    });
+    vis.forEach((t, i) => { const big = placed.includes(xs[i]); gq.append(sv('line', { x1: xs[i], x2: xs[i], y1: yb - (big ? 4 : 2), y2: yb })); });
+    for (const reg of SP.regions) for (const c of reg.comps) {
+      const dist = c.pos >= vx0 && c.pos <= vx1 ? rulerAt(r, c.pos) : null;
+      if (dist != null) gq.append(sv('circle', { cx: X(c.pos), cy: yb, r: 3 }, sv('title', null, 'the band at ' + c.pos.toFixed(1) + ' cm⁻¹: ' + r.name.replace(' Å', '') + ' ' + dist.toFixed(r.key === 'oo' ? 2 : 3) + ' Å — ' + r.cite)));
+    }
+    svg.append(gq);
+  });
   svg.append(sv('rect', { id: 'sp-sel', class: 'sel', x: 0, y: M.t, width: 0, height: ph }));
   g.append(edges);
   g.append(handles);                                        // on top: a handle is never under a curve
@@ -358,13 +471,15 @@ function draw() {
 function plotX(ev) { const r = $('#sp-plot').getBoundingClientRect(); return ev.clientX - r.left; }
 function plotY(ev) { const r = $('#sp-plot').getBoundingClientRect(); return ev.clientY - r.top; }
 let drag = null;
+let picked = null;                                         // the band under a mouse-down, until the mouse-up says click or drag
 
 function readout(ev) {
   if (!G || !SP.d) return;
   const x = G.Xinv(plotX(ev)), i = Math.min(SP.d.x.length - 1, Math.max(0, indexOf(x)));
   const ws = [];
   for (const [name, e] of Object.entries(SP.state.windows || {})) { const w = e.any; if (w && x >= w.p5 && x <= w.p95) ws.push(name); }
-  $('#sp-readout').textContent = x.toFixed(1) + ' cm⁻¹   ' + fmt((SP.layers.raw ? SP.d.cleaned : SP.d.y)[i]) + (ws.length ? '   — where papers place: ' + ws.slice(0, 5).join(', ') : '');
+  const ds = rulersOn().map(r => [r, rulerAt(r, x)]).filter(p => p[1] != null).map(([r, v]) => r.name.replace(' Å', '') + ' ' + v.toFixed(r.key === 'oo' ? 2 : 3) + ' Å');
+  $('#sp-readout').textContent = x.toFixed(1) + ' cm⁻¹   ' + fmt((SP.layers.raw ? SP.d.cleaned : SP.d.y)[i]) + (ds.length ? '   ' + ds.join(' · ') : '') + (ws.length ? '   — where papers place: ' + ws.slice(0, 5).join(', ') : '');
 }
 
 function setRegion(lo, hi, zoom) {
@@ -376,13 +491,24 @@ function setRegion(lo, hi, zoom) {
     const over = r => r.comps.length && r.lo < hi && r.hi > lo;
     const cur = SP.regions[SP.cur];
     const target = cur && over(cur) ? cur : SP.regions.filter(over).sort((a, b) => (Math.min(b.hi, hi) - Math.max(b.lo, lo)) - (Math.min(a.hi, hi) - Math.max(a.lo, lo)))[0];
-    if (target) { SP.cur = SP.regions.indexOf(target); resizeRegion(target, lo, hi); if (zoom) zoomTo(target.lo, target.hi); return; }
+    // … unless the stretch is more than twice that region: then it is a stretch of its own (typing the first limit of
+    // another region made the fitted one swallow half the spectrum, and refitted it there)
+    if (target && hi - lo <= 2 * (target.hi - target.lo)) { SP.cur = SP.regions.indexOf(target); resizeRegion(target, lo, hi); if (zoom) zoomTo(target.lo, target.hi); return; }
+    if (target) status(lo + '–' + hi + ' cm⁻¹ chosen (dashed). Auto fit fits it afresh and replaces the fitted region inside it — undo brings that back. To widen the fitted region instead, drag its edge.');
   }
   $('#sp-lo').value = lo; $('#sp-hi').value = hi;
   if (k !== SP.cur) SP.sel = -1;
   SP.cur = k;
+  if (k >= 0) syncControls(SP.regions[k]);
+  else if (!SP.regions.some(r => r.comps.length && r.lo < hi && r.hi > lo)) status(lo + '–' + hi + ' cm⁻¹ chosen (dashed): Auto fit, or ‘band’ and click where a band is');
   if (zoom) zoomTo(lo, hi);
   draw(); renderResult();
+}
+// the controls on the left show how the region now current was fitted
+function syncControls(r) {
+  if (!r || r.local == null) return;
+  $('#sp-local').value = r.local; $('#sp-share-w').checked = !!r.share_width; $('#sp-share-eta').checked = !!r.share_eta;
+  $('#sp-wmax').value = r.max_fwhm || ''; $('#sp-wmin').value = r.min_fwhm || '';
 }
 function zoomTo(lo, hi) { const pad = 0.15 * (hi - lo); SP.view = [Math.max(SP.d.x[0], lo - pad), Math.min(SP.d.x[SP.d.x.length - 1], hi + pad)]; draw(); }
 // A fitted region given new bounds: its bands stay (those now outside it go — undo brings them back), it stops at its
@@ -390,8 +516,8 @@ function zoomTo(lo, hi) { const pad = 0.15 * (hi - lo); SP.view = [Math.max(SP.d
 function resizeRegion(reg, lo, hi) {
   const k = SP.regions.indexOf(reg), prev = SP.regions[k - 1], next = SP.regions[k + 1];
   lo = Math.max(lo, Math.ceil(SP.d.x[0]), prev ? prev.hi : -Infinity); hi = Math.min(hi, Math.floor(SP.d.x[SP.d.x.length - 1]), next ? next.lo : Infinity);
-  if (!(hi - lo >= 10)) { $('#sp-lo').value = reg.lo; $('#sp-hi').value = reg.hi; status('a region is at least 10 cm⁻¹ wide and does not cross its neighbour', true); draw(); return; }
-  if (lo === reg.lo && hi === reg.hi) { $('#sp-lo').value = lo; $('#sp-hi').value = hi; draw(); return; }
+  if (!(hi - lo >= 10)) { $('#sp-lo').value = reg.lo; $('#sp-hi').value = reg.hi; reg.edgeBefore = null; status('a region is at least 10 cm⁻¹ wide and does not cross its neighbour', true); draw(); renderResult(); return; }
+  if (lo === reg.lo && hi === reg.hi) { $('#sp-lo').value = lo; $('#sp-hi').value = hi; reg.edgeBefore = null; draw(); renderResult(); return; }
   const out = reg.comps.filter(c => c.pos < lo || c.pos > hi).length;
   reg.hist.push(reg.edgeBefore || snapshot(reg)); reg.edgeBefore = null; if (reg.hist.length > 60) reg.hist.shift(); reg.redo = [];
   reg.lo = lo; reg.hi = hi; reg.comps = reg.comps.filter(c => c.pos >= lo && c.pos <= hi);
@@ -404,6 +530,7 @@ function currentRegion(make) {
   if (lo == null || hi == null || hi <= lo) { status('choose a region first: drag across the bands (region), or use a preset', true); return null; }
   let k = SP.regions.findIndex(r => Math.abs(r.lo - lo) < 1 && Math.abs(r.hi - hi) < 1);
   if (k < 0 && make) {
+    keepList();                                                        // undo brings back what this replaces
     SP.regions = SP.regions.filter(r => r.hi <= lo || r.lo >= hi);     // a region replaces the ones it overlaps
     SP.regions.push({ lo, hi, fit: null, trials: [], comps: [], dirty: false, hist: [], redo: [] }); SP.regions.sort((a, b) => a.lo - b.lo);
     k = SP.regions.findIndex(r => r.lo === lo && r.hi === hi);
@@ -415,13 +542,25 @@ function currentRegion(make) {
 function select(k, j) {
   const r = SP.regions[k]; if (!r) return;
   $('#sp-lo').value = r.lo; $('#sp-hi').value = r.hi;
+  if (k !== SP.cur) syncControls(r);
   SP.cur = k; SP.sel = j; draw(); renderResult();
 }
+// the list of regions as it stands, before one is cleared, replaced or made: what undo goes back to when the current
+// region has nothing left to undo
+function keepList() { SP.lists.push({ regions: SP.regions.slice(), cur: SP.cur }); if (SP.lists.length > 20) SP.lists.shift(); SP.listsRedo = []; }
+function backToList(from, to) {
+  const s = from.pop(); to.push({ regions: SP.regions.slice(), cur: SP.cur });
+  SP.regions = s.regions; SP.cur = s.cur < SP.regions.length ? s.cur : -1; SP.sel = -1;
+  const r = SP.regions[SP.cur]; if (r) { $('#sp-lo').value = r.lo; $('#sp-hi').value = r.hi; syncControls(r); }
+  draw(); renderResult();
+}
+function blurField() { const a = document.activeElement; if (a && a !== document.body && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) a.blur(); }
 
 // a band's handle: ● moves it and sets its height, ◆ sets its width
 function startHandle(ev, k, j, what) {
   if (ev.button !== 0) return;
   ev.stopPropagation(); ev.preventDefault();
+  blurField();                                               // a number still being typed is taken first
   const r = SP.regions[k]; SP.cur = k; SP.sel = j;
   drag = { kind: 'handle', what, reg: r, j, before: snapshot(r), moved: false };
 }
@@ -457,8 +596,9 @@ function wirePlot() {
   });
   host.addEventListener('mousedown', ev => {
     if (!G || ev.button !== 0) return;
+    blurField();                                             // the keys go to the plot from here (Delete was eating a digit of the field last typed in)
     const kind = ev.shiftKey || SP.mode === 'region' ? 'region' : SP.mode === 'pan' ? 'pan' : 'click';
-    drag = { kind, px: plotX(ev), view: SP.view.slice(), G };
+    drag = { kind, px: plotX(ev), view: SP.view.slice(), G, pick: picked }; picked = null;
     ev.preventDefault();
   });
   window.addEventListener('mouseup', ev => {
@@ -471,13 +611,14 @@ function wirePlot() {
     }
     if (d.kind === 'edge') {
       const r = d.reg, lo = r.lo, hi = r.hi;
-      r.lo = d.lo0; r.hi = d.hi0;                            // back to where it was, then moved properly (neighbours, bands outside, undo, refit)
+      r.lo = d.lo0; r.hi = d.hi0; r.dirty = d.dirty0;        // back to where it was, then moved properly (neighbours, bands outside, undo, refit)
       if (d.moved) resizeRegion(r, lo, hi); else { r.edgeBefore = null; draw(); }
       return;
     }
     if (d.kind === 'region' && d.moved) { setRegion(d.G.Xinv(d.px), d.G.Xinv(x), false); return; }
     if (d.kind === 'click' || (d.kind === 'pan' && !d.moved && SP.mode !== 'pan')) clickAt(G.Xinv(x), plotY(ev));
-    else if (d.kind === 'pan' && !d.moved) {                            // a plain click in move mode: the region under it
+    else if (d.kind === 'pan' && !d.moved && d.pick) select(d.pick[0], d.pick[1]);   // a plain click on a band: that band
+    else if (d.kind === 'pan' && !d.moved) {                            // … elsewhere: the region under it
       const v = G.Xinv(x), k = SP.regions.findIndex(r => v >= r.lo && v <= r.hi);
       if (k >= 0) { if (k !== SP.cur) SP.sel = -1; setRegion(SP.regions[k].lo, SP.regions[k].hi, false); }
     }
@@ -485,20 +626,28 @@ function wirePlot() {
   host.addEventListener('wheel', ev => {
     if (!G || !SP.d) return;
     ev.preventDefault();
+    if (ev.shiftKey || ev.altKey || plotX(ev) < M.l) {        // over the height axis, or with Shift / Alt: the vertical zoom (the foot of the curve enlarged)
+      const dy = ev.deltaY || ev.deltaX; if (!dy) return;
+      SP.yz = Math.min(500, Math.max(1, SP.yz * (dy > 0 ? 0.8 : 1.25))); draw(); return;
+    }
     const x = G.Xinv(plotX(ev)), f = ev.deltaY > 0 ? 1.25 : 0.8;
     const lo = SP.d.x[0], hi = SP.d.x[SP.d.x.length - 1];
     const a = x - (x - SP.view[0]) * f, b = x + (SP.view[1] - x) * f;
     if (b - a < 4) return;
     SP.view = [Math.max(lo, a), Math.min(hi, b)]; draw();
   }, { passive: false });
-  host.addEventListener('dblclick', () => { if (SP.d) { SP.view = [SP.d.x[0], SP.d.x[SP.d.x.length - 1]]; draw(); } });
-  host.addEventListener('dragover', ev => { ev.preventDefault(); host.classList.add('drop'); });
+  host.addEventListener('dblclick', () => { if (SP.d && SP.mode !== 'band' && SP.mode !== 'anchor') { SP.view = [SP.d.x[0], SP.d.x[SP.d.x.length - 1]]; SP.yz = 1; draw(); } });
+  host.addEventListener('dragover', () => host.classList.add('drop'));
   host.addEventListener('dragleave', () => host.classList.remove('drop'));
-  host.addEventListener('drop', ev => { ev.preventDefault(); host.classList.remove('drop'); if (ev.dataTransfer.files.length) upload(ev.dataTransfer.files[0]); });
+  host.addEventListener('drop', () => host.classList.remove('drop'));
+  // a file dropped ANYWHERE on the page is opened here (dropped beside the plot, the browser left the page for the file)
+  window.addEventListener('dragover', ev => ev.preventDefault());
+  window.addEventListener('drop', ev => { ev.preventDefault(); if (ev.dataTransfer && ev.dataTransfer.files.length) upload(ev.dataTransfer.files[0]); });
   new ResizeObserver(() => draw()).observe(host);
   // the selected band from the keyboard: Delete removes it, the arrows nudge it; ⌘Z / Ctrl-Z undoes
   window.addEventListener('keydown', ev => {
-    if (/^(INPUT|SELECT|TEXTAREA)$/.test((ev.target && ev.target.tagName) || '')) return;
+    const t = ev.target || {};                              // a key typed into a field is the field's; a ticked box takes none
+    if (t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t.tagName === 'INPUT' && !/^(checkbox|radio|button)$/.test(t.type))) return;
     const r = SP.regions[SP.cur];
     if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'z') { ev.preventDefault(); if (ev.shiftKey) redo(); else undo(); return; }
     if (!r || SP.sel < 0 || !r.comps[SP.sel]) return;
@@ -520,10 +669,14 @@ function clickAt(x, py) {
   }
   if (SP.mode === 'band') {
     let reg = SP.regions.find(r => x >= r.lo && x <= r.hi);
-    if (!reg) {                                             // no region there yet: one around the click
-      const lo = Math.max(SP.d.x[0], x - 60), hi = Math.min(SP.d.x[SP.d.x.length - 1], x + 60);
-      $('#sp-lo').value = Math.round(lo); $('#sp-hi').value = Math.round(hi); reg = currentRegion(true);
+    if (!reg) {                                             // no region there yet: one around the click, up to its neighbours and never over them
+      const prev = SP.regions.filter(r => r.hi < x).pop(), next = SP.regions.find(r => r.lo > x);
+      const lo = Math.ceil(Math.max(SP.d.x[0], x - 60, prev ? prev.hi : -Infinity)), hi = Math.floor(Math.min(SP.d.x[SP.d.x.length - 1], x + 60, next ? next.lo : Infinity));
+      if (hi - lo < 10) { status('no room for a region of its own between the fitted regions there: widen one of them (drag its edge)', true); return; }
+      $('#sp-lo').value = lo; $('#sp-hi').value = hi; reg = currentRegion(true);
     } else { $('#sp-lo').value = reg.lo; $('#sp-hi').value = reg.hi; SP.cur = SP.regions.indexOf(reg); }
+    const there = reg.comps.findIndex(c => Math.abs(G.X(c.pos) - G.X(x)) < 3);     // the second click of a double click: the band is there already
+    if (there >= 0) { SP.sel = there; draw(); renderResult(); return; }
     // the band as clicked: at the height of the click above what the other bands already give there, as wide as a
     // band the finder saw there — else a tenth of the region
     const near = SP.d.peaks.find(p => Math.abs(p.pos - x) < Math.max(8, 0.3 * p.fwhm));
@@ -539,23 +692,37 @@ function clickAt(x, py) {
 
 // ---- editing the bands -----------------------------------------------------------
 const bare = c => ({ shape: c.shape, pos: c.pos, height: c.height, fwhm: c.fwhm, eta: c.eta == null ? 0.5 : c.eta, fix: (c.fix || []).slice(), wmax: c.wmax || null, wmin: c.wmin || null });
-const snapshot = r => JSON.stringify({ lo: r.lo, hi: r.hi, comps: r.comps.map(bare) });
-function restore(r, snap) {                                  // a snapshot back: the bands and the region's bounds
+// A snapshot is the region as it stood: its bounds, its bands and their FIT (curve, statistics, warnings). Undo and redo
+// put it back as it was — nothing is fitted again (an evaluation on the way back gave other numbers than had been shown).
+const HOW = ['local', 'share_width', 'share_eta', 'max_fwhm', 'min_fwhm', 'refine'];
+const snapshot = r => JSON.stringify({ lo: r.lo, hi: r.hi, comps: r.comps.map(bare), fit: r.fit, dirty: !!r.dirty, trials: r.trials || [], how: HOW.map(k => r[k]) });
+function restore(r, snap) {
   const s = JSON.parse(snap);
-  r.comps = Array.isArray(s) ? s : s.comps;
-  if (!Array.isArray(s)) { r.lo = s.lo; r.hi = s.hi; if (r === SP.regions[SP.cur]) { $('#sp-lo').value = r.lo; $('#sp-hi').value = r.hi; } }
+  r.comps = s.comps; r.fit = s.fit || null; r.dirty = s.fit ? s.dirty : r.comps.length > 0; r.trials = s.trials || []; r.prevBic = null;
+  if (s.how) { HOW.forEach((k, i) => { r[k] = s.how[i]; }); if (r === SP.regions[SP.cur]) syncControls(r); }
+  r.lo = s.lo; r.hi = s.hi; if (r === SP.regions[SP.cur]) { $('#sp-lo').value = r.lo; $('#sp-hi').value = r.hi; }
+  if (SP.sel >= r.comps.length) SP.sel = r.comps.length - 1;
 }
 function mutate(reg, fn) {                                  // every change to the bands goes through here: undo, preview, refit
   reg.hist.push(snapshot(reg)); if (reg.hist.length > 60) reg.hist.shift(); reg.redo = [];
   fn();
   changed(reg);
 }
-function changed(reg) {
-  reg.dirty = true;
+// What a change sets off (when 'heights follow edits' is on; off, the change is only previewed):
+//   'edit'     a band was moved, added, removed, split, merged, typed over, or the region resized — the HEIGHTS of all
+//              bands are fitted again and nothing else moves; no band is removed (a refit of everything after each edit
+//              walked hand-placed bands away and deleted the one just dragged)
+//   'options'  how the region is fitted was changed (local baseline, one width, widest …) — a fit as 'Fit these' does
+// (undo / redo do not come here: a snapshot carries its fit)
+function changed(reg, how) {
+  reg.dirty = true; reg.seq = (reg.seq || 0) + 1;          // a fit still on its way is of the bands before this change
+  clearTimeout(reg.timer);
   if (SP.sel >= reg.comps.length) SP.sel = reg.comps.length - 1;
   if (!reg.comps.length) { reg.fit = null; reg.dirty = false; }
   draw(); renderResult();                                   // the change itself at once (dashed), the fit when it comes
-  if ($('#sp-live').checked && reg.comps.length) fitRegion(reg, reg.comps);
+  if (!$('#sp-live').checked || !reg.comps.length) return;
+  if (how === 'options') fitRegion(reg, reg.comps);
+  else reg.timer = setTimeout(() => fitRegion(reg, reg.comps, { refine: 'heights', keep_dead: true }), 150);   // ten arrow presses are one fit, not ten in a queue
 }
 function addBand(reg, b) {
   mutate(reg, () => { reg.comps.push(Object.assign({ shape: $('#sp-shape').value, eta: 0.5, fix: [] }, b)); reg.comps.sort((a, c) => a.pos - c.pos); SP.sel = reg.comps.findIndex(c => c.pos === b.pos); });
@@ -567,7 +734,11 @@ function splitBand(reg, j) {                                 // one band into tw
     reg.comps.splice(j, 1, Object.assign(bare(c), { pos: c.pos - d / 2, fwhm: 0.75 * c.fwhm, height: 0.6 * c.height }), Object.assign(bare(c), { pos: c.pos + d / 2, fwhm: 0.75 * c.fwhm, height: 0.6 * c.height }));
   });
 }
-const twin = (reg, j) => { const a = reg.comps[j], b = reg.comps[j + 1]; return !!(a && b && Math.abs(b.pos - a.pos) < 0.25 * (a.fwhm + b.fwhm)); };
+const twin = (reg, j) => {                                   // as spectrum.twins: closer than half the narrower width, and of like width
+  const a = reg.comps[j], b = reg.comps[j + 1]; if (!a || !b) return false;
+  const lo = Math.min(a.fwhm, b.fwhm), hi = Math.max(a.fwhm, b.fwhm);
+  return Math.abs(b.pos - a.pos) < 0.5 * lo && hi < 2 * lo;
+};
 function mergeBands(reg, j) {                                // two bands the data cannot tell apart, as one
   mutate(reg, () => {
     const a = reg.comps[j], b = reg.comps[j + 1], h = a.height + b.height || 1;
@@ -576,16 +747,29 @@ function mergeBands(reg, j) {                                // two bands the da
   });
 }
 function undo() {
-  const r = SP.regions[SP.cur]; if (!r || !r.hist.length) { status('nothing to undo in this region'); return; }
-  r.redo.push(snapshot(r)); restore(r, r.hist.pop()); changed(r);
+  const r = SP.regions[SP.cur];
+  if (r && r.hist.length) {
+    r.seq = (r.seq || 0) + 1; clearTimeout(r.timer);        // a fit still on its way belongs to the state being left
+    r.redo.push(snapshot(r)); restore(r, r.hist.pop()); draw(); renderResult(); return;
+  }
+  // nothing left in the region (or none is current): the list of regions as it was before one was cleared, replaced or made
+  if ((!r || !r.comps.length) && SP.lists.length) { backToList(SP.lists, SP.listsRedo); status('the regions as they were before'); return; }
+  status(r ? 'nothing to undo in this region' : 'nothing to undo: click a region first');
 }
 function redo() {
-  const r = SP.regions[SP.cur]; if (!r || !r.redo.length) return;
-  r.hist.push(snapshot(r)); restore(r, r.redo.pop()); changed(r);
+  const r = SP.regions[SP.cur];
+  if (r && r.redo.length) {
+    r.seq = (r.seq || 0) + 1; clearTimeout(r.timer);
+    r.hist.push(snapshot(r)); restore(r, r.redo.pop()); draw(); renderResult(); return;
+  }
+  if (SP.listsRedo.length) { backToList(SP.listsRedo, SP.lists); return; }
+  status('nothing to redo');
 }
 
 // ---- fitting -------------------------------------------------------------------
-let fitSeq = 0;
+// An answer is taken only while it is still of what is on the screen: the region's own count (another fit or an edit of
+// THAT region since), the spectrum's (another curve since), and the region still there. One count for all regions
+// dropped the answer of a slow fit when a quick one of another region came in between.
 async function fitRegion(reg, comps, extra) {
   const body = Object.assign(fitOpts(reg), extra || {});
   if (comps && comps.length) body.comps = comps.map(bare);
@@ -593,12 +777,15 @@ async function fitRegion(reg, comps, extra) {
     const n = num('sp-n'); if (n && !body.n) body.n = n;
     if ($('#sp-seed').checked && SP.d) body.seeds = SP.d.ticks.filter(t => t.pos >= reg.lo && t.pos <= reg.hi);
   }
-  const seq = ++fitSeq;
+  clearTimeout(reg.timer);
+  const seq = reg.seq = (reg.seq || 0) + 1, gen = SP.gen, full = !(extra && (extra.keep_dead || extra.evaluate));
+  const live = () => seq === reg.seq && gen === SP.gen && SP.regions.includes(reg);
+  busy(1, full);
   try {
     status('fitting ' + reg.lo + '–' + reg.hi + ' cm⁻¹…');
     const r = await api('/api/sp/fit', body);
-    if (seq !== fitSeq) return;                             // a later change is already being fitted: this answer is stale
-    if (!(comps && comps.length) || (extra && extra.add)) { reg.hist.push(snapshot(reg)); reg.redo = []; }
+    if (!live()) return;                                    // a later change is already being fitted, or the spectrum is another: this answer is stale
+    if (full) { reg.hist.push(snapshot(reg)); if (reg.hist.length > 60) reg.hist.shift(); reg.redo = []; }   // a fit that may move bands is a step undo takes back; the heights refit after an edit belongs to the edit's own step
     reg.prevBic = reg.fit && reg.fit.lo === r.fit.lo && reg.fit.n === r.fit.n ? reg.fit.bic : null;
     const selPos = SP.sel >= 0 && reg.comps[SP.sel] ? reg.comps[SP.sel].pos : null;
     reg.fit = r.fit; reg.comps = r.fit.comps.map(bare); reg.dirty = false;
@@ -606,10 +793,18 @@ async function fitRegion(reg, comps, extra) {
     if (selPos != null && reg === SP.regions[SP.cur]) {      // the selected band, wherever the fit left it
       let best = -1; reg.comps.forEach((c, j) => { if (best < 0 || Math.abs(c.pos - selPos) < Math.abs(reg.comps[best].pos - selPos)) best = j; }); SP.sel = best;
     }
-    reg.local = body.local; reg.share_width = body.share_width; reg.share_eta = body.share_eta;
+    // how it was fitted stays with the region: an export, a session and an undo evaluate it with these, whatever the controls say by then
+    reg.local = body.local; reg.share_width = body.share_width; reg.share_eta = body.share_eta; reg.max_fwhm = body.max_fwhm; reg.min_fwhm = body.min_fwhm;
+    reg.refine = body.comps ? body.refine || '' : '';
     status(r.fit.comps.length + ' band' + (r.fit.comps.length === 1 ? '' : 's') + ' fitted, ' + reg.lo + '–' + reg.hi + ' cm⁻¹' + (r.fit.converged ? '' : ' — not converged'));
-  } catch (e) { if (seq === fitSeq) status(e.message, true); }
-  draw(); renderResult();
+  } catch (e) { if (live()) status(e.message, true); }
+  finally { busy(-1, full); }
+  if (live()) { draw(); renderResult(); }
+}
+function busy(by, full) {
+  SP.fits = Math.max(0, SP.fits + by); if (full) SP.fitting = Math.max(0, SP.fitting + by);
+  $('#sp-busy').classList.toggle('hidden', !SP.fits); $('#sp-plot').classList.toggle('busy', SP.fitting > 0);
+  for (const id of ['sp-auto', 'sp-refit', 'sp-add']) $('#' + id).disabled = SP.fitting > 0;     // a click on a fit already running queued another
 }
 
 function renderResult(light) {
@@ -620,7 +815,15 @@ function renderResult(light) {
     if (row && b) { const inp = row.querySelectorAll('input[type=number]'); if (inp.length >= 3) { inp[0].value = b.pos.toFixed(1); inp[1].value = b.fwhm.toFixed(1); inp[2].value = +b.height.toPrecision(5); } }
     return;
   }
+  // the cell being typed in keeps the focus (and what was typed) across the rebuild: Tab goes on to the next cell
+  const ae = document.activeElement; let keep = null;
+  if (ae && ae.tagName === 'INPUT' && ae.type === 'number' && tb.contains(ae)) {
+    const tr = ae.closest('tr'); keep = [[...tb.children].indexOf(tr), [...tr.querySelectorAll('input[type=number]')].indexOf(ae), ae.value !== ae.defaultValue ? ae.value : null];
+  }
+  saveWork();
   tb.textContent = ''; st.textContent = ''; wn.textContent = ''; cp.textContent = '';
+  const hint = $('#sp-hint'); hint.textContent = ''; hint.classList.add('hidden');
+  $('#sp-export').classList.toggle('hidden', !SP.regions.some(r => r.fit && r.comps.length));
   if (!SP.d) return;
   if (!reg || !reg.comps.length) {
     st.textContent = SP.regions.some(r => r.comps.length) ? 'Click a fitted region to see its bands, or choose another region and fit it.'
@@ -635,14 +838,31 @@ function renderResult(light) {
       + (f.converged ? '' : '; NOT CONVERGED') + (reg.dirty ? '   — changed since this fit: press ‘Fit these’' : '')
       + (reg.trials && reg.trials.length && !reg.dirty ? '   · models tried: ' + reg.trials.map(t => t.n + ' (BIC ' + t.bic.toFixed(0) + ')').join(', ') : '');
   } else st.textContent = reg.lo + '–' + reg.hi + ' cm⁻¹: not fitted yet — press ‘Fit these’';
+  if (f && !reg.dirty && f.envelope && !num('sp-wmax')) {
+    const e = f.envelope;
+    hint.classList.remove('hidden');
+    hint.append('The band at ' + e.pos.toFixed(0) + ' cm⁻¹ is ' + e.fwhm.toFixed(0) + ' wide and has finer bands inside it (' + e.inside.map(v => v.toFixed(0)).join(', ') +
+      '). One broad band, or an envelope of narrower ones? The data do not say.',
+      el('button', { title: 'Sets ‘widest’ to ' + e.cap + ' cm⁻¹ and fits the region again from scratch: no band may be wider, so the envelope comes apart into several. Undo brings this fit back.',
+        onclick: () => { $('#sp-wmax').value = e.cap; SP.sel = -1; fitRegion(reg, null); } }, 'Fit as an envelope (widest ' + e.cap + ')'));
+  }
   const info = f && !reg.dirty ? f.comps : [];
   const total = info.reduce((s, c) => s + (c.area || 0), 0) || 1;
   tb.append(el('tr', null, ...['position (cm⁻¹)', 'FWHM', 'height', 'area %', 'shape', 'hold', 'where papers place it', 'distance', ''].map(h => el('th', null, h))));
   reg.comps.forEach((c, k) => {
     const fc = info[k] || {};
     const cell = (key, digits) => {
-      const inp = el('input', { type: 'number', step: key === 'height' ? 'any' : '0.1', value: key === 'height' ? +c[key].toPrecision(5) : c[key].toFixed(digits) });
-      inp.addEventListener('change', () => { const v = parseFloat(inp.value); if (Number.isFinite(v) && (key === 'pos' || v > 0 || key === 'height')) mutate(reg, () => { reg.comps[k][key] = v; }); });
+      let shown = String(key === 'height' ? +c[key].toPrecision(5) : c[key].toFixed(digits));
+      const inp = el('input', { type: 'number', step: key === 'height' ? 'any' : '0.1', value: shown });
+      // taken when the field is left or Enter is pressed — a moment later, so that the focus has moved on first (Tab)
+      const commit = () => {
+        if (inp.value === shown) return;
+        const v = parseFloat(inp.value);
+        if (!Number.isFinite(v) || (key === 'height' ? v < 0 : key === 'fwhm' ? v <= 0 : false)) { inp.value = shown; status(key === 'height' ? 'a height is zero or more' : 'a width is above zero', true); return; }
+        shown = inp.value;
+        setTimeout(() => { if (reg.comps[k] && SP.regions.includes(reg)) mutate(reg, () => { reg.comps[k][key] = v; }); }, 0);
+      };
+      inp.addEventListener('change', commit); inp.addEventListener('blur', commit);
       inp.addEventListener('focus', () => { if (SP.sel !== k) { SP.sel = k; draw(); [...tb.querySelectorAll('tr')].slice(1).forEach((tr, j) => tr.classList.toggle('sel', j === k)); } });
       const e = fc.esd && fc.esd[key];
       return el('td', null, inp, e ? el('span', { class: 'esd' }, ' ± ' + (key === 'height' ? fmt(e) : e >= 0.095 ? e.toFixed(1) : e.toPrecision(1))) : null,
@@ -667,6 +887,10 @@ function renderResult(light) {
     tr.addEventListener('mousedown', ev => { if (!/^(INPUT|SELECT|BUTTON|LABEL|OPTION)$/.test(ev.target.tagName) && SP.sel !== k) { SP.sel = k; draw(); renderResult(); } });
     tb.append(tr);
   });
+  if (keep) {
+    const tr = tb.children[keep[0]], inp = tr && tr.querySelectorAll('input[type=number]')[keep[1]];
+    if (inp) { inp.focus(); if (keep[2] != null) inp.value = keep[2]; else inp.select(); }
+  }
   if (f && !reg.dirty) for (const w of f.warnings) wn.append(el('div', { class: 'warn' }, w));
   if (f && !reg.dirty && (f.next || []).length) wn.append(el('div', { class: 'muted' }, 'The residual still holds a band near ' + f.next.map(n => n.pos.toFixed(0)).join(', ') + ' cm⁻¹ (▲ under the plot: click one, or ‘+ band’).'));
   if (f && !reg.dirty && f.stated) {
@@ -707,13 +931,13 @@ function listOutputs(names) {
   for (const n of names || []) o.append(el('a', { title: outputTitle(n), onclick: () => openOutput(n) }, n));
 }
 async function exportAll(fmt_) {
-  if (SP.regions.some(r => r.dirty && r.comps.length)) { status('a region was changed since its fit: press ‘Fit these’ first, so the table written is a fit', true); return; }
-  // the bands as they stand are written — no fitting on the way out: the table is the fit on the screen
-  const regions = SP.regions.filter(r => r.fit && r.comps.length).map(r => ({ lo: r.lo, hi: r.hi, comps: r.comps.map(bare), local: r.local || $('#sp-local').value, share_width: !!r.share_width,
-    share_eta: !!r.share_eta, max_fwhm: num('sp-wmax'), min_fwhm: num('sp-wmin'), converged: r.fit.converged }));
+  const ed = SP.regions.find(r => r.dirty && r.comps.length);
+  if (ed) { status('the region ' + ed.lo + '–' + ed.hi + ' cm⁻¹ was changed since its fit (dashed): click it and press ‘Fit these’, so that the table written is a fit', true); return; }
+  // the bands as they stand are written, each region as IT was fitted — no fitting on the way out: the table is the fit on the screen
+  const regions = SP.regions.filter(r => r.fit && r.comps.length).map(asFitted);
   if (!regions.length) { status('nothing fitted yet: fit a region first', true); return; }
   try {
-    const r = await api('/api/sp/export', Object.assign(opts(), { regions, fmt: fmt_ }));
+    const r = await api('/api/sp/export', Object.assign(opts(), { regions, fmt: fmt_, reverse: !!SP.layers.reverse }));
     status('written into ' + r.folder);
     const box = $('#sp-exported'); box.textContent = ''; box.classList.remove('hidden');
     const main = fmt_ === 'xlsx' ? r.files.xlsx : fmt_ === 'word' ? r.files.docx : r.files.txt;
@@ -735,8 +959,13 @@ async function loadSession(name) {
     await applySession(await r.json(), name);
   } catch (e) { status(e.message, true); }
 }
-async function applySession(s, label) {
+async function applySession(s, label, quiet) {
   if (!s || !Array.isArray(s.fits) || !s.options) { status((label || 'that file') + ' is not a session written by this window', true); return; }
+  const was = SP.ready; SP.ready = false;                    // nothing is kept of the half-opened state
+  try { await applySession_(s, quiet); } finally { SP.ready = was || !quiet; }
+  if (SP.ready) saveWork();
+}
+async function applySession_(s, quiet) {
   const o = s.options, file = o.name || s.file;
   if (!SP.state.files.some(f => f.name === file)) {
     SP.pending = s;
@@ -746,17 +975,18 @@ async function applySession(s, label) {
   SP.pending = null;
   const set = (id, v) => { if (v != null && $('#' + id)) $('#' + id).value = v; };
   set('sp-kind', o.kind || ''); set('sp-threshold', o.threshold); set('sp-resolution', o.resolution == null ? '' : o.resolution); set('sp-baseline', o.baseline || 'none');
-  set('sp-lam', o.lam ? +Math.log10(o.lam).toFixed(2) : null); set('sp-p', o.p); set('sp-width', o.width);
+  set('sp-lam', o.lam ? +Math.log10(o.lam).toFixed(2) : null); set('sp-p', o.p); set('sp-width', o.width); $('#sp-laser').value = o.laser == null ? '' : o.laser;
   $('#sp-despike').checked = !!o.despike; showBaselineRows();
   if (o.cif && SP.state.cifs.includes(o.cif)) $('#sp-cif').value = o.cif;
   if (o.ms && SP.state.manuscripts.includes(o.ms)) $('#sp-ms').value = o.ms;
   $('#sp-file').value = file;
-  SP.file = file; SP.series = o.series || 0; SP.d = null; SP.d2 = null; SP.regions = []; SP.cur = -1; SP.sel = -1; SP.anchors = (o.anchors || []).slice();
+  SP.gen++;
+  SP.file = file; SP.series = o.series || 0; SP.d = null; SP.d2 = null; SP.regions = []; SP.cur = -1; SP.sel = -1; SP.anchors = (o.anchors || []).slice(); SP.lists = []; SP.listsRedo = [];
   try {
     const r = await api('/api/sp/series?name=' + enc(file));
     const ssel = $('#sp-series'); ssel.textContent = '';
     for (const t of r.series) ssel.append(el('option', { value: t.i }, t.name.replace(file + ' | ', '') + ' — ' + t.n + ' points'));
-    SP.seriesList = r.series; ssel.value = String(SP.series);
+    SP.seriesList = r.series; ssel.value = String(SP.series); ssel.classList.toggle('hidden', r.series.length < 2);
   } catch (e) { status(e.message, true); return; }
   await process(true);
   if (!SP.d) return;
@@ -765,21 +995,21 @@ async function applySession(s, label) {
     const rg = (o.regions || [])[k] || {};
     const lo = Math.round(rg.lo != null ? rg.lo : f.lo), hi = Math.round(rg.hi != null ? rg.hi : f.hi);
     SP.regions.push({ lo, hi, comps: f.components.map(bare), fit: null, dirty: true, hist: [], redo: [], trials: [], local: rg.local || (f.baseline && f.baseline[1] ? 'linear' : 'const'),
-      share_width: !!rg.share_width, share_eta: !!rg.share_eta });
+      share_width: !!rg.share_width, share_eta: !!rg.share_eta, max_fwhm: rg.max_fwhm || null, min_fwhm: rg.min_fwhm || null, refine: rg.refine || '',
+      base0: f.baseline || null, x0: f.x0, converged: f.converged });
   });
   // each region as it was written: its curve and statistics, with no fitting
   for (const reg of SP.regions) {
     try {
-      const r = await api('/api/sp/fit', Object.assign(opts(), { lo: reg.lo, hi: reg.hi, comps: reg.comps, local: reg.local, share_width: reg.share_width, share_eta: reg.share_eta, evaluate: true, min_share: num('sp-share') }));
+      const r = await api('/api/sp/fit', Object.assign(opts(), asFitted(reg), { evaluate: true, min_share: num('sp-share') }));
       reg.fit = r.fit; reg.comps = r.fit.comps.map(bare); reg.dirty = false;
     } catch (e) { status(e.message, true); }
   }
   if (SP.regions.length) {
-    const r0 = SP.regions[0]; SP.cur = 0; $('#sp-lo').value = r0.lo; $('#sp-hi').value = r0.hi; $('#sp-local').value = r0.local;
-    $('#sp-share-w').checked = r0.share_width; $('#sp-share-eta').checked = r0.share_eta;
+    const r0 = SP.regions[0]; SP.cur = 0; $('#sp-lo').value = r0.lo; $('#sp-hi').value = r0.hi; syncControls(r0);
     const pad = 0.1 * (r0.hi - r0.lo); SP.view = [Math.max(SP.d.x[0], r0.lo - pad), Math.min(SP.d.x[SP.d.x.length - 1], r0.hi + pad)];
   }
-  status('session reopened: ' + SP.regions.length + ' region' + (SP.regions.length === 1 ? '' : 's') + ', ' + SP.regions.reduce((n, r) => n + r.comps.length, 0) + ' bands, as they were written');
+  if (!quiet) status('session reopened: ' + SP.regions.length + ' region' + (SP.regions.length === 1 ? '' : 's') + ', ' + SP.regions.reduce((n, r) => n + r.comps.length, 0) + ' bands, as they were written');
   draw(); renderResult();
 }
 
@@ -805,18 +1035,25 @@ function wireSplit() {
 
 function wire() {
   $('#sp-file').addEventListener('change', e => chooseFile(e.target.value));
-  $('#sp-series').addEventListener('change', e => { SP.series = parseInt(e.target.value, 10) || 0; SP.regions = []; SP.cur = -1; SP.sel = -1; const t = SP.seriesList[SP.series]; if (t && !$('#sp-kind').value) setReverse((t.kind || '').startsWith('ir')); process(true); });
+  $('#sp-series').addEventListener('change', async e => {
+    SP.ready = false; SP.gen++;
+    SP.series = parseInt(e.target.value, 10) || 0; SP.regions = []; SP.cur = -1; SP.sel = -1; SP.lists = []; SP.listsRedo = [];
+    const t = SP.seriesList[SP.series]; if (t && !$('#sp-kind').value) setReverse((t.kind || '').startsWith('ir'));
+    await process(true); await restoreWork(); SP.ready = true;
+  });
   $('#sp-kind').addEventListener('change', e => { if (e.target.value) setReverse(e.target.value.startsWith('ir')); process(false); });
   $('#sp-open').addEventListener('click', () => $('#sp-upload').click());
   $('#sp-upload').addEventListener('change', e => { if (e.target.files.length) upload(e.target.files[0]); e.target.value = ''; });
-  for (const id of ['sp-despike', 'sp-threshold', 'sp-resolution', 'sp-lam', 'sp-p', 'sp-width', 'sp-cif', 'sp-ms'])
+  for (const id of ['sp-despike', 'sp-threshold', 'sp-resolution', 'sp-lam', 'sp-p', 'sp-width', 'sp-cif', 'sp-ms', 'sp-laser'])
     $('#' + id).addEventListener('change', () => process(false));
   $('#sp-baseline').addEventListener('change', () => { showBaselineRows(); process(false); });
   $('#sp-anchors-clear').addEventListener('click', () => { SP.anchors = []; process(false); });
   for (const id of ['sp-lo', 'sp-hi']) $('#' + id).addEventListener('change', () => { const lo = num('sp-lo'), hi = num('sp-hi'); if (lo != null && hi != null && hi > lo) setRegion(lo, hi, false); });
   // how the region is fitted: a change refits the bands there are (when 'refit as I edit' is on)
-  for (const id of ['sp-local', 'sp-share-w', 'sp-share-eta', 'sp-wmax', 'sp-wmin']) $('#' + id).addEventListener('change', () => { savePrefs(); const r = SP.regions[SP.cur]; if (r && r.comps.length) changed(r); });
-  for (const id of ['sp-shape', 'sp-maxn', 'sp-share', 'sp-live', 'sp-refine']) $('#' + id).addEventListener('change', savePrefs);
+  for (const id of ['sp-local', 'sp-share-w', 'sp-share-eta', 'sp-wmax', 'sp-wmin']) $('#' + id).addEventListener('change', () => { savePrefs(); const r = SP.regions[SP.cur]; if (r && r.comps.length) changed(r, 'options'); });
+  for (const id of ['sp-maxn', 'sp-share', 'sp-live', 'sp-refine']) $('#' + id).addEventListener('change', savePrefs);
+  // the shape: of every band of the current region (one step of undo), and of the bands added from here on
+  $('#sp-shape').addEventListener('change', () => { savePrefs(); const r = SP.regions[SP.cur], v = $('#sp-shape').value; if (r && r.comps.some(c => c.shape !== v)) mutate(r, () => { for (const c of r.comps) c.shape = v; }); });
   $('#sp-d2w').addEventListener('change', () => { savePrefs(); loadD2(); });
   $('#sp-auto').addEventListener('click', () => { const r = currentRegion(true); if (r) { SP.sel = -1; fitRegion(r, null); } });
   $('#sp-refit').addEventListener('click', () => {
@@ -830,12 +1067,17 @@ function wire() {
     fitRegion(r, r.comps, { add: true });
   });
   $('#sp-less').addEventListener('click', () => {
-    const r = currentRegion(false); if (!r || !r.comps.length) return;
+    const r = currentRegion(false); if (!r || !r.comps.length) { status('no band to take out: click a fitted region first', true); return; }
     const area = c => c.height * c.fwhm; let j = 0; r.comps.forEach((c, k) => { if (area(c) < area(r.comps[j])) j = k; });
     removeBand(r, j);
   });
   $('#sp-undo').addEventListener('click', undo); $('#sp-redo').addEventListener('click', redo);
-  $('#sp-clear').addEventListener('click', () => { if (SP.cur >= 0) { SP.regions.splice(SP.cur, 1); SP.cur = -1; SP.sel = -1; draw(); renderResult(); } });
+  $('#sp-clear').addEventListener('click', () => {
+    if (SP.cur < 0) { status('no region is selected: click the one to clear', true); return; }
+    keepList(); const r = SP.regions.splice(SP.cur, 1)[0]; SP.cur = -1; SP.sel = -1;
+    status('the region ' + r.lo + '–' + r.hi + ' cm⁻¹ and its ' + r.comps.length + ' band' + (r.comps.length === 1 ? '' : 's') + ' cleared — undo brings them back');
+    draw(); renderResult();
+  });
   for (const b of document.querySelectorAll('#sp-mode button')) b.addEventListener('click', () => {
     SP.mode = b.getAttribute('data-m');
     for (const o of document.querySelectorAll('#sp-mode button')) o.classList.toggle('on', o === b);

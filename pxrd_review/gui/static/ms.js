@@ -25,7 +25,7 @@ function setMode(mode, opts) {
   window.MODE = mode;
   clearTimeout(MSS.pollTimer);                       // the manuscript list stops polling outside its mode
   const ms = mode !== 'entries', tb = mode === 'tables';
-  document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+  document.querySelectorAll('#mode button[data-mode]').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
   $('#app').classList.toggle('hidden', ms);
   $('#ms-app').classList.toggle('hidden', !ms || tb);
   $('#tb-app').classList.toggle('hidden', !tb);
@@ -37,7 +37,7 @@ function setMode(mode, opts) {
   if (tb) tbLoad(); else if (ms) msLoad(); else loadEntries();
   if (!(opts && opts.quiet)) { $('#folderpanel').classList.add('hidden'); }
 }
-document.querySelectorAll('#mode button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+document.querySelectorAll('#mode button[data-mode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));   // 'Spectra ↗' sits in the group and is no mode: it opens its window (app.js)
 
 // ---- dashboard --------------------------------------------------------------
 async function msLoad() {

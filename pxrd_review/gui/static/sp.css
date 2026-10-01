@@ -23,7 +23,24 @@ body.sp input[type=checkbox] { accent-color: var(--accent); }
 #sp-side label { white-space: nowrap; }
 #sp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 #sp-tools { display: flex; align-items: center; gap: 12px; flex: none; }
-#sp-readout { font-variant-numeric: tabular-nums; }
+#sp-tools > * { flex: none; white-space: nowrap; }
+#sp-tools > .muted { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }   /* the hint gives way; the bar never wraps (the plot jumped under the pointer) */
+#sp-readout { font-variant-numeric: tabular-nums; flex: 1 1 0 !important; min-width: 12em !important; overflow: hidden; text-overflow: ellipsis; }
+#sp-busy { color: var(--accent); font-weight: 600; white-space: nowrap; }
+#sp-busy::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 6px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: sp-spin .8s linear infinite; vertical-align: -1px; }
+@keyframes sp-spin { to { transform: rotate(360deg); } }
+#sp-plot.busy svg { opacity: .55; }
+#sp-layers { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; margin: -2px 0; }
+#sp-layers label { white-space: nowrap; }
+#sp-layers input[type=number] { width: 4.6em; }
+#sp-rhead { display: flex; align-items: flex-start; gap: 12px; }
+#sp-rhead #sp-stats { flex: 1; }
+#sp-export { flex: none; white-space: nowrap; color: var(--muted); }
+#sp-export button { margin-left: 4px; }
+#sp-hint { border: 1px solid rgb(var(--accent-rgb) / .5); border-radius: 6px; padding: 5px 10px; margin: 6px 0; }
+#sp-hint button { margin-left: 8px; }
+#sp-plot .pending { fill: rgb(var(--accent-rgb) / .05); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 5 4; }
+#sp-plot .pending-l { fill: var(--accent); font-size: 11px; }
 #sp-plot {
   flex: 1 1 55%; min-height: 220px; position: relative; cursor: crosshair; user-select: none;
   background: rgb(var(--panel-rgb) / var(--panel-alpha)); border: 1px solid var(--line); border-radius: var(--radius);
@@ -33,10 +50,18 @@ body.sp input[type=checkbox] { accent-color: var(--accent); }
 #sp-plot .axis line, #sp-plot .axis path { stroke: var(--muted); }
 #sp-plot text { fill: var(--muted); font-size: 11px; }
 #sp-plot .data { fill: none; stroke: var(--text); stroke-width: 1; }
+#sp-plot .ruler line { stroke: var(--muted); stroke-width: 1; }
+#sp-plot .ruler text { fill: var(--muted); font-size: 10px; }
+#sp-plot .ruler .name { fill: var(--text); }
+#sp-plot .ruler circle { fill: var(--accent); stroke: var(--bg); stroke-width: 1; }
+#sp-plot .rawdata { fill: none; stroke: var(--danger); stroke-width: .8; opacity: .55; }
+#sp-tools button:disabled, #sp-side button:disabled, #sp-export button:disabled { opacity: .45; cursor: default; }
 #sp-plot .raw { fill: none; stroke: var(--muted); stroke-width: .8; }
 #sp-plot .base { fill: none; stroke: var(--warn); stroke-width: 1; stroke-dasharray: 4 3; }
 #sp-plot .model { fill: none; stroke: var(--danger); stroke-width: 1.4; }
-#sp-plot .comp { fill: rgb(var(--accent-rgb) / .10); stroke: var(--accent); stroke-width: .9; }
+#sp-plot .comp { fill: none; stroke: var(--accent); stroke-width: .9; }
+#sp-plot .comp-f { fill: rgb(var(--accent-rgb) / .10); stroke: none; }
+#sp-plot .comp-f.sel { fill: rgb(var(--accent-rgb) / .22); }
 #sp-plot .resid { fill: none; stroke: var(--muted); stroke-width: .9; }
 #sp-plot .region { fill: rgb(var(--accent-rgb) / .07); stroke: rgb(var(--accent-rgb) / .5); stroke-width: 1; }
 #sp-plot .region.cur { fill: rgb(var(--accent-rgb) / .13); }
@@ -48,7 +73,7 @@ body.sp input[type=checkbox] { accent-color: var(--accent); }
 #sp-plot .anchor { fill: var(--warn); stroke: var(--bg0); }
 #sp-plot .spike { fill: var(--danger); }
 #sp-plot .lab { fill: var(--accent); font-size: 10px; }
-#sp-plot .comp.sel { stroke-width: 1.8; fill: rgb(var(--accent-rgb) / .22); }
+#sp-plot .comp.sel { stroke-width: 1.8; }
 #sp-plot .comp.draft { stroke-dasharray: 4 3; }
 #sp-plot .model.draft { stroke-dasharray: 5 3; }
 #sp-plot .h-pos { fill: var(--accent); stroke: var(--bg0); stroke-width: 1; cursor: move; }
