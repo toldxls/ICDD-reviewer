@@ -92,6 +92,37 @@ class SpectrumWindow(unittest.TestCase):
         self._post('/api/sp/fit', dict(self.body, lo=5000, hi=5100), 400)
         self._post('/api/sp/fit', {}, 400)
 
+    def test_the_band_library_for_a_chemistry(self):
+        r = self._post('/api/sp/bands', {'formula': 'Ca2(UO2)3(SO4)2(OH)6·4H2O', 'kind': 'raman', 'at': [832, 1450, 'x', 2920]})
+        self.assertEqual(([g['key'] for g in r['groups']], r['source'], r['formula']), (['UO2', 'SO4', 'H2O', 'OH'], 'typed', 'Ca2(UO2)3(SO4)2(OH)6·4H2O'))
+        rows = {x['label']: x for x in r['rows']}
+        self.assertEqual((rows['SO4 ν1']['free'], rows['SO4 ν1']['active'], rows['UO2 ν1']['published']['of']), (983, 'Raman', 'raman'))
+        self.assertTrue(rows['SO4 ν1']['source'].startswith('Nakamoto')); self.assertTrue(rows['H2O lib']['broad'])
+        self.assertEqual(sorted(rows['UO2 ν1']['published']), ['of', 'p5', 'p50', 'p95', 'papers'])
+        self.assertEqual(([a['pos'] for a in r['at']], r['at'][0]['own'][0], r['at'][1]['own'], r['at'][2]['shared']), ([832, 1450, 2920], 'UO2 ν1', [], ['ν(C–H)']))
+        self.assertIn('CO3 ν3', r['at'][1]['other'])
+        # nothing typed: the formula the manuscript beside the spectrum states — this one states none
+        none = self._post('/api/sp/bands', {'ms': 'testite'})
+        self.assertEqual((none['formula'], none['groups'], none['rows'], none['source']), ('', [], [], ''))
+        self.assertEqual(self._post('/api/sp/bands', {'formula': 'PbS'})['groups'][0]['key'], 'sulfide')
+        self.assertEqual(self._post('/api/sp/bands', {})['rows'], [])
+        # a fit asked with the chemistry: each band is named for what that formula expects there, and the files say which formula
+        f = self._post('/api/sp/fit', dict(self.body, lo=780, hi=960, formula='Ca2(UO2)3(SO4)2(OH)6·4H2O'))['fit']
+        self.assertEqual(f['comps'][0]['suggest'][0], 'UO2 ν1'); self.assertEqual(f['head'][6], 'expected of the formula')
+        g = self._post('/api/sp/fit', dict(self.body, lo=780, hi=960, formula='Ca5(PO4)3F'))['fit']
+        self.assertTrue(g['comps'][0]['suggest'][0].startswith('no group of the formula'), g['comps'][0]); self.assertEqual(g['comps'][0]['distance'], '')
+        ex = self._post('/api/sp/export', dict(self.body, fmt='txt', formula='Ca2(UO2)3(SO4)2(OH)6·4H2O',
+                                               regions=[{'lo': 780, 'hi': 960, 'comps': f['comps'], 'base': f['base'], 'x0': f['x0']}]))
+        try:
+            text = self.c.get('/api/sp/file?name=' + ex['files']['txt']).data.decode('utf-8')
+            self.assertIn('chemistry: Ca2(UO2)3(SO4)2(OH)6·4H2O', text); self.assertIn('expected of the formula', text)
+            sess = json.loads(self.c.get('/api/sp/file?as=json&name=' + ex['files']['json']).data)
+            self.assertEqual(sess['options']['formula_typed'], 'Ca2(UO2)3(SO4)2(OH)6·4H2O')
+        finally:
+            for fn in os.listdir(self.G.MS['out_dir']):
+                if fn.startswith('testite_raman_sp'):
+                    os.remove(os.path.join(self.G.MS['out_dir'], fn))
+
     def test_refining_a_fit(self):
         body = dict(self.body, lo=780, hi=960)
         one = self._post('/api/sp/fit', dict(body, n=1))['fit']
@@ -256,6 +287,23 @@ class SpectrumWindow(unittest.TestCase):
             self.assertTrue(px['pixels_only']); self.assertGreaterEqual(len(px['peaks']), 5); self.assertNotIn('lo', px)
             self.assertAlmostEqual(min(px['peaks'], key=lambda p: abs(p - X(464) * z)), X(464) * z, delta=1.5)
             self.assertIn('axis needs two points', self._post('/api/sp/fig/trace', dict(body, v2=None, use=True), 400)['error'])
+            # the server holds a traced curve in memory only: the page keeps its points and gives them back after a restart,
+            # and a session written from it carries them too
+            fm = d['figure_meta']
+            self.assertEqual(len(fm['y']), len(d['x'])); self.assertAlmostEqual(fm['cm_per_px'], used['cm_per_px'], 6)
+            fit = self._post('/api/sp/fit', {'name': name, 'lo': 400, 'hi': 540})['fit']
+            ex = self._post('/api/sp/export', {'name': name, 'fmt': 'txt', 'regions': [{'lo': 400, 'hi': 540, 'comps': fit['comps'], 'base': fit['base'], 'x0': fit['x0']}]})
+            sess = json.loads(self.c.get('/api/sp/file?as=json&name=' + ex['files']['json']).data)
+            self.assertEqual((sess['figure']['name'], len(sess['figure']['x'])), (name, len(d['x'])))
+            with self.G._SP['lock']:
+                self.G._SP['uploads'].clear(); self.G._SP['prep'].clear()                                  # … as a restart leaves it
+            self._post('/api/sp/process', {'name': name}, 404)
+            back = self._post('/api/sp/fig/restore', {'name': name, 'x': d['x'], 'y': fm['y'], 'cm_per_px': fm['cm_per_px'], 'notes': fm['notes']})
+            self.assertEqual(back['name'], name)
+            again = self._post('/api/sp/process', {'name': name, 'ms': 'testite'})
+            self.assertEqual((again['x'], again['notes'][0], again['on_curve']['none']), (d['x'], d['notes'][0], [880.0]))
+            for bad in ({'name': 'a file.txt', 'x': d['x'], 'y': fm['y']}, {'name': name, 'x': d['x'], 'y': fm['y'][:-1]}, {'name': name, 'x': [1, 2], 'y': [1, 2]}, {'name': name}):
+                self._post('/api/sp/fig/restore', bad, 400)
             self.assertEqual(len(f['marks']), 6)                                                           # the six ticks of the axis, evenly spaced
             for m_, v_ in zip(f['marks'], range(200, 1300, 200)):
                 self.assertAlmostEqual(m_, X(v_) * z, delta=1.0)

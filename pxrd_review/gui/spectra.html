@@ -22,6 +22,7 @@
       <option value="ir-transmittance">infrared, transmittance</option>
     </select>
     <div class="spacer"></div>
+    <label class="muted" title="The mineral's chemistry: a formula — Ca(UO2)2(PO4)2·11H2O — or a mineral name (looked up in the local Mindat snapshot). The band library then says what its groups are expected to give: bars over the plot (‘expected’), the table under the fitted bands, and for each fitted band what it is expected to be in THIS chemistry. Left empty, the formula the manuscript beside the spectrum states is used (shown in grey).">chemistry <input type="text" id="sp-formula" placeholder="formula or mineral" spellcheck="false" autocomplete="off"></label>
     <label class="muted" title="The structure: its uranyl U–O and hydrogen-bond D···A distances are turned into the positions the two relations expect (Bartlett &amp; Cooney; Libowitzky) and drawn as green ticks.">.cif <select id="sp-cif"></select></label>
     <label class="muted" title="The manuscript or paper: the band positions its text states are drawn as orange marks and set beside the fitted bands.">manuscript <select id="sp-ms"></select></label>
     <span id="sp-status" class="muted"></span>
@@ -128,6 +129,7 @@
           <label><input type="checkbox" data-layer="comps" checked> bands</label>
           <label><input type="checkbox" data-layer="ticks" checked> structure</label>
           <label><input type="checkbox" data-layer="stated" checked> manuscript</label>
+          <label title="The band library over the plot: for each group of the mineral's chemistry (the ‘chemistry’ field above, else the manuscript's formula) and each of its modes, a bar where the band is expected — thin: the range in minerals from the literature; thick: where published mineral descriptions place it (5th–95th percentile, the tick their median); ◆ the free-ion value. Windows of different groups overlap: the bars say what a band CAN be in this chemistry, not what it is."><input type="checkbox" data-layer="lib" checked> expected</label>
           <label><input type="checkbox" data-layer="peaks"> found bands</label>
           <label title="A ruler over the plot: the O···O distance of the hydrogen bond whose O–H stretch would stand at each wavenumber — Libowitzky (1999). The pointer reads it; each fitted band is marked on it. A correlation with scatter: it places a band, it does not measure a bond."><input type="checkbox" data-layer="oo" checked> O···O Å</label>
           <label title="Two rulers over the plot: the uranyl U–O distance a band would mean as ν1 and as ν3 (UO2)2+ — Bartlett &amp; Cooney (1989). Switched on by itself when the structure beside the spectrum has a uranyl ion."><input type="checkbox" data-layer="uo"> U–O Å</label>
@@ -145,6 +147,7 @@
         <table id="sp-table"></table>
         <div id="sp-warnings"></div>
         <div id="sp-compare"></div>
+        <details id="sp-library"></details>
       </div>
     </main>
   </div>

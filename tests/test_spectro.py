@@ -341,9 +341,30 @@ class Formula(unittest.TestCase):
 
     def test_the_section(self):
         lines = S.check_lines(HEAD % 'Ca2(UO2)3(SO4)2(OH)6·4H2O' + RAMAN + OHS)
-        self.assertEqual(lines[0], 'spectroscopy: the stated bands beside the formula'); self.assertEqual(len(lines), 2)
-        self.assertEqual(S.check_lines(HEAD % 'Ca2(UO2)3(SO4)2(OH)6·4H2O' + RAMAN + OHS + 'The H–O–H bending band is at 1630 cm–1. '), [])
+        self.assertEqual(lines[0], 'spectroscopy: the stated bands beside the formula'); self.assertEqual(len(lines), 3)
+        self.assertTrue(lines[1].startswith('water: ')); self.assertTrue(lines[2].startswith('expected: '))
+        # with the bending band stated nothing is missing — the library line alone remains, and it places the band
+        lines = S.check_lines(HEAD % 'Ca2(UO2)3(SO4)2(OH)6·4H2O' + RAMAN + OHS + 'The H–O–H bending band is at 1630 cm–1. ')
+        self.assertEqual(len(lines), 2); self.assertRegex(lines[1], r'H2O bend \d+–\d+: 1630')
         self.assertEqual(S.check_lines('No formula here. ' + RAMAN + OHS), [])
+
+    def test_the_library_beside_the_stated_bands(self):
+        own = S.bands(RAMAN + OHS)
+        forms = [('Ca2(UO2)3(SO4)2(OH)6·4H2O', {}, 'ideal')]
+        ln = S.library_lines(own, forms)
+        self.assertEqual(len(ln), 1)
+        self.assertTrue(ln[0].startswith('expected: the groups of Ca2(UO2)3(SO4)2(OH)6·4H2O and the stated bands in their ranges — O–H stretch '), ln[0])
+        self.assertIn('3250, 3480', ln[0]); self.assertIn('SO4 (ν3 ', ln[0]); self.assertIn('): 1010, 1105', ln[0]); self.assertIn('UO2 (ν3 ', ln[0]); self.assertIn('): 832', ln[0])
+        self.assertNotIn('no band stated', ln[0])                                          # the water bend is `species_lines`' to speak of
+        # a group of the formula with no band stated in any of its ranges is named — inside the stretch of axis the paper reports
+        ln = S.library_lines(own, [('Ca2(UO2)3(SO4)2(C2O4)(OH)4·4H2O', {}, 'ideal')])
+        self.assertRegex(ln[0], r'; no band stated for C2O4 \(νa\(C=O\) 1580–1680, νs\(C–O\) 1420–1500, .*\)$')
+        # … a paper whose bands stop at 1105 cm-1 reports no stretch of axis where ammonium would stand: nothing is said of it
+        low = [S.Band(p, 'raman', '', None, None, 's', True) for p in (460.0, 832.0, 1010.0, 1105.0)]
+        ln = S.library_lines(low, [('(NH4)2(UO2)(SO4)2', {}, 'ideal')])
+        self.assertNotIn('NH4 (', ln[0]); self.assertNotIn('no band stated', ln[0])
+        self.assertEqual(S.library_lines(own[:2], forms), [])                             # two bands are a list, not a spectrum
+        self.assertEqual(S.library_lines(own, [('PbS', {}, 'ideal')]), []); self.assertEqual(S.library_lines(own, []), [])
 
 
 class Table(unittest.TestCase):
@@ -426,6 +447,10 @@ class Wording(unittest.TestCase):
                               ('Ca(UO2)2(PO4)2', RAMAN + 'Further bands are at 420 and 580 cm–1. ')):
             got = S.species_lines(HEAD % formula + body, name='testite')
             assert got, (formula, body)
+            infos += got
+        for formula in ('Ca2(UO2)3(SO4)2(OH)6·4H2O', 'Ca2(UO2)3(SO4)2(C2O4)(OH)4·4H2O', 'Ca(UO2)2(PO4)2'):       # the band library beside the stated bands
+            got = S.library_lines(S.bands(RAMAN + OHS), [(formula, {}, 'ideal')])
+            assert got, formula
             infos += got
         infos += S.table_lines([S.Band(1086.0, None, '', 'CO3', 1, 'row', True), S.Band(1150.0, None, '', 'CO3', 4, 'row', True)],
                                [S.Band(1086.0, 'raman', '', 'CO3', 3, 'The band at 1086 cm-1 is assigned to ν3 of CO3.', True)])

@@ -1,0 +1,190 @@
+{
+  "about": "The vibrational bands expected of a mineral's chemistry: per group and mode, the free-ion fundamental and the range the band takes in minerals (cm-1). Hand-maintained. 'free' is the fundamental of the free ion; 'range' is where the band of that mode is usually found in a crystal, where site symmetry splits the degenerate modes and bonding shifts them. Where published mineral descriptions give enough positions (band_windows.json, built from a corpus of papers) the tool shows that measured window beside the range. An entry tagged 'check' was entered from memory of the cited source and has not been compared with it line by line: treat it as a guide and correct it here. A mode tagged 'broad' is a wide region every hydrous mineral has bands in (librations, M–O–H bends): it is offered after the modes that stand at a position of their own.",
+  "sources": {
+    "N": "Nakamoto K. (2009) Infrared and Raman Spectra of Inorganic and Coordination Compounds, Part A, 6th ed. Wiley — free-ion fundamentals",
+    "F": "Farmer V.C., ed. (1974) The Infrared Spectra of Minerals. Mineralogical Society Monograph 4 — ranges in minerals",
+    "C": "Čejka J. (1999) Infrared spectroscopy and thermal analysis of the uranyl minerals. Reviews in Mineralogy 38, 521–622 — uranyl",
+    "L": "Libowitzky E. (1999) Correlation of O–H stretching frequencies and O–H···O hydrogen bond lengths in minerals. Monatshefte für Chemie 130, 1047–1059 — O–H stretching",
+    "R": "Ross S.D. (1974) in Farmer (1974): borates, sulfates and other oxyanions"
+  },
+  "activity": {"R": "Raman", "IR": "infrared", "R+IR": "Raman and infrared"},
+  "groups": [
+    {"key": "UO2", "name": "uranyl", "writes": "(UO2)2+", "in": ["UO2"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": null, "range": [750, 900], "active": "R", "source": "C"},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": null, "range": [850, 1000], "active": "IR", "source": "C"},
+       {"mode": "ν2", "what": "bend", "free": null, "range": [200, 300], "active": "IR", "source": "C"}]},
+    {"key": "SO4", "name": "sulfate", "writes": "(SO4)2−", "in": ["SO4"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 983, "range": [960, 1050], "active": "R", "source": "N"},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 1105, "range": [1050, 1250], "active": "R+IR", "source": "N"},
+       {"mode": "ν4", "what": "bend", "free": 611, "range": [570, 680], "active": "R+IR", "source": "N"},
+       {"mode": "ν2", "what": "bend", "free": 450, "range": [400, 520], "active": "R", "source": "N"}]},
+    {"key": "PO4", "name": "phosphate", "writes": "(PO4)3−", "in": ["PO4", "PO3OH", "PO3\\(OH\\)", "PO2\\(OH\\)2", "PO3F"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 938, "range": [920, 1010], "active": "R", "source": "N"},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 1017, "range": [990, 1160], "active": "R+IR", "source": "N"},
+       {"mode": "ν4", "what": "bend", "free": 567, "range": [520, 650], "active": "R+IR", "source": "N"},
+       {"mode": "ν2", "what": "bend", "free": 420, "range": [380, 500], "active": "R", "source": "N"}]},
+    {"key": "P-OH", "name": "acid phosphate", "writes": "(PO3OH)2−", "in": ["PO3OH", "PO3\\(OH\\)", "PO2\\(OH\\)2", "HPO4", "H2PO4"],
+     "modes": [
+       {"mode": "ν(P–OH)", "what": "P–OH stretch", "free": null, "range": [850, 920], "active": "R+IR", "source": "F", "check": true},
+       {"mode": "δ(P–O–H)", "what": "in-plane P–O–H bend", "free": null, "range": [1200, 1300], "active": "IR", "source": "F", "check": true}]},
+    {"key": "AsO4", "name": "arsenate", "writes": "(AsO4)3−", "in": ["AsO4", "AsO3OH", "AsO3\\(OH\\)", "AsO2\\(OH\\)2"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 837, "range": [780, 900], "active": "R", "source": "N"},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 878, "range": [760, 920], "active": "R+IR", "source": "N"},
+       {"mode": "ν4", "what": "bend", "free": 463, "range": [380, 520], "active": "R+IR", "source": "N"},
+       {"mode": "ν2", "what": "bend", "free": 349, "range": [300, 400], "active": "R", "source": "N"}]},
+    {"key": "As-OH", "name": "acid arsenate", "writes": "(AsO3OH)2−", "in": ["AsO3OH", "AsO3\\(OH\\)", "AsO2\\(OH\\)2", "HAsO4", "H2AsO4"],
+     "modes": [
+       {"mode": "ν(As–OH)", "what": "As–OH stretch", "free": null, "range": [680, 780], "active": "R+IR", "source": "F", "check": true}]},
+    {"key": "AsO3", "name": "arsenite", "writes": "(AsO3)3−", "in": ["AsO3(?!OH|\\(OH\\))"], "not_raw": ["As5\\+"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 752, "range": [700, 820], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 680, "range": [580, 720], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2, ν4", "what": "bends", "free": 340, "range": [300, 450], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "VO4", "name": "vanadate", "writes": "(VO4)3−", "in": ["VO4"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 826, "range": [780, 900], "active": "R", "source": "N"},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 804, "range": [700, 880], "active": "R+IR", "source": "N"},
+       {"mode": "ν4", "what": "bend", "free": 336, "range": [300, 420], "active": "R+IR", "source": "N"},
+       {"mode": "ν2", "what": "bend", "free": 336, "range": [300, 400], "active": "R", "source": "N"}]},
+    {"key": "V-O", "name": "polyvanadate / vanadyl", "writes": "V–O", "in": ["V(?![a-z])"], "not": ["VO4"], "with_o": true,
+     "modes": [
+       {"mode": "ν(V=O)", "what": "terminal V=O stretch", "free": null, "range": [900, 1010], "active": "R+IR", "source": "F", "check": true},
+       {"mode": "ν(V–O–V)", "what": "bridging V–O–V stretches", "free": null, "range": [500, 850], "active": "R+IR", "source": "F", "check": true}]},
+    {"key": "SiO4", "name": "silicate (isolated tetrahedra)", "writes": "(SiO4)4−", "in": ["SiO4"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 819, "range": [800, 900], "active": "R", "source": "N", "check": true},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 956, "range": [850, 1050], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν4", "what": "bend", "free": 527, "range": [450, 650], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2", "what": "bend", "free": 340, "range": [300, 450], "active": "R", "source": "N", "check": true}]},
+    {"key": "Si-O", "name": "silicate (linked tetrahedra)", "writes": "Si–O", "in": ["Si(?![a-z])"], "not": ["SiO4"], "with_o": true,
+     "modes": [
+       {"mode": "ν(Si–O)", "what": "Si–O and Si–O–Si antisymmetric stretches", "free": null, "range": [800, 1200], "active": "R+IR", "source": "F", "check": true},
+       {"mode": "νs(Si–O–Si)", "what": "Si–O–Si symmetric stretch", "free": null, "range": [600, 800], "active": "R", "source": "F", "check": true},
+       {"mode": "δ(O–Si–O)", "what": "bends", "free": null, "range": [400, 600], "active": "R+IR", "source": "F", "check": true}]},
+    {"key": "CO3", "name": "carbonate", "writes": "(CO3)2−", "in": ["CO3"],
+     "modes": [
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 1415, "range": [1350, 1560], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν1", "what": "symmetric stretch", "free": 1063, "range": [1040, 1120], "active": "R", "source": "N", "check": true},
+       {"mode": "ν2", "what": "out-of-plane bend", "free": 879, "range": [800, 890], "active": "IR", "source": "N", "check": true},
+       {"mode": "ν4", "what": "in-plane bend", "free": 680, "range": [670, 770], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "C2O4", "name": "oxalate", "writes": "(C2O4)2−", "in": ["C2O4"],
+     "modes": [
+       {"mode": "νa(C=O)", "what": "antisymmetric C=O stretch", "free": null, "range": [1580, 1680], "active": "IR", "source": "N", "check": true},
+       {"mode": "νs(C–O)", "what": "symmetric C–O stretch + C–C stretch", "free": null, "range": [1420, 1500], "active": "R", "source": "N", "check": true},
+       {"mode": "ν(C–O)+δ", "what": "C–O stretch + O–C=O bend", "free": null, "range": [1300, 1340], "active": "IR", "source": "N", "check": true},
+       {"mode": "ν(C–C)", "what": "C–C stretch", "free": null, "range": [850, 920], "active": "R", "source": "N", "check": true},
+       {"mode": "δ(O–C=O)", "what": "bend", "free": null, "range": [480, 530], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "NO3", "name": "nitrate", "writes": "(NO3)−", "in": ["NO3"],
+     "modes": [
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 1390, "range": [1300, 1450], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν1", "what": "symmetric stretch", "free": 1050, "range": [1035, 1065], "active": "R", "source": "N", "check": true},
+       {"mode": "ν2", "what": "out-of-plane bend", "free": 831, "range": [800, 840], "active": "IR", "source": "N", "check": true},
+       {"mode": "ν4", "what": "in-plane bend", "free": 720, "range": [690, 740], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "BO3", "name": "borate (BO3 triangles)", "writes": "(BO3)3−", "in": ["B(?![a-z])"], "not": ["BO4", "B\\(OH\\)4"], "with_o": true,
+     "modes": [
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": null, "range": [1100, 1450], "active": "R+IR", "source": "R", "check": true},
+       {"mode": "ν1", "what": "symmetric stretch", "free": 939, "range": [850, 960], "active": "R", "source": "R", "check": true},
+       {"mode": "ν2", "what": "out-of-plane bend", "free": null, "range": [650, 800], "active": "IR", "source": "R", "check": true},
+       {"mode": "ν4", "what": "in-plane bend", "free": null, "range": [550, 680], "active": "R+IR", "source": "R", "check": true}]},
+    {"key": "BO4", "name": "borate (BO4 tetrahedra)", "writes": "(BO4)5−", "in": ["B(?![a-z])"], "not": ["BO3(?![\\dO])"], "with_o": true,
+     "modes": [
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": null, "range": [850, 1100], "active": "R+IR", "source": "R", "check": true},
+       {"mode": "ν1", "what": "symmetric stretch", "free": null, "range": [700, 850], "active": "R", "source": "R", "check": true},
+       {"mode": "ν2, ν4", "what": "bends", "free": null, "range": [400, 650], "active": "R+IR", "source": "R", "check": true}]},
+    {"key": "MoO4", "name": "molybdate", "writes": "(MoO4)2−", "in": ["MoO4"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 897, "range": [850, 960], "active": "R", "source": "N", "check": true},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 837, "range": [750, 900], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2, ν4", "what": "bends", "free": 317, "range": [280, 400], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "Mo-O", "name": "molybdenum oxide / polymolybdate", "writes": "Mo–O", "in": ["Mo(?![a-z])"], "not": ["MoO4"], "with_o": true,
+     "modes": [
+       {"mode": "ν(Mo=O)", "what": "terminal Mo=O stretch", "free": null, "range": [880, 1000], "active": "R+IR", "source": "F", "check": true},
+       {"mode": "ν(Mo–O–Mo)", "what": "bridging Mo–O–Mo stretches", "free": null, "range": [600, 900], "active": "R+IR", "source": "F", "check": true}]},
+    {"key": "WO4", "name": "tungstate", "writes": "(WO4)2−", "in": ["WO4"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 931, "range": [870, 960], "active": "R", "source": "N", "check": true},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 838, "range": [750, 900], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2, ν4", "what": "bends", "free": 325, "range": [300, 420], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "W-O", "name": "tungsten oxide / polytungstate", "writes": "W–O", "in": ["W(?![a-z])"], "not": ["WO4"], "with_o": true,
+     "modes": [
+       {"mode": "ν(W=O)", "what": "terminal W=O stretch", "free": null, "range": [880, 1000], "active": "R+IR", "source": "F", "check": true},
+       {"mode": "ν(W–O–W)", "what": "bridging W–O–W stretches", "free": null, "range": [600, 900], "active": "R+IR", "source": "F", "check": true}]},
+    {"key": "Ti-O", "name": "titanium–oxygen", "writes": "Ti–O", "in": ["Ti(?![a-z])"], "with_o": true,
+     "modes": [
+       {"mode": "ν(Ti–O)", "what": "Ti–O stretches", "free": null, "range": [600, 900], "active": "R+IR", "source": "F", "check": true}]},
+    {"key": "Nb-O", "name": "niobium / tantalum–oxygen", "writes": "Nb–O", "in": ["Nb", "Ta(?![a-z])"], "with_o": true,
+     "modes": [
+       {"mode": "ν(Nb–O)", "what": "Nb–O and Ta–O stretches", "free": null, "range": [500, 900], "active": "R+IR", "source": "F", "check": true}]},
+    {"key": "CrO4", "name": "chromate", "writes": "(CrO4)2−", "in": ["CrO4"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 846, "range": [820, 900], "active": "R", "source": "N", "check": true},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 890, "range": [840, 960], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν4", "what": "bend", "free": 378, "range": [350, 430], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2", "what": "bend", "free": 349, "range": [320, 380], "active": "R", "source": "N", "check": true}]},
+    {"key": "SeO4", "name": "selenate", "writes": "(SeO4)2−", "in": ["SeO4"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 833, "range": [810, 880], "active": "R", "source": "N", "check": true},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 875, "range": [850, 930], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν4", "what": "bend", "free": 432, "range": [390, 470], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2", "what": "bend", "free": 335, "range": [320, 370], "active": "R", "source": "N", "check": true}]},
+    {"key": "SeO3", "name": "selenite", "writes": "(SeO3)2−", "in": ["SeO3"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 807, "range": [780, 860], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 737, "range": [680, 780], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2", "what": "bend", "free": 432, "range": [400, 480], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν4", "what": "bend", "free": 374, "range": [330, 400], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "TeO3", "name": "tellurite", "writes": "(TeO3)2−", "in": ["TeO3"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 758, "range": [700, 790], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 703, "range": [600, 720], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2", "what": "bend", "free": 364, "range": [330, 400], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν4", "what": "bend", "free": 326, "range": [280, 350], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "TeO6", "name": "tellurate", "writes": "(TeO6)6−", "in": ["TeO6", "Te\\(OH\\)6"], "raw": ["Te6\\+"],
+     "modes": [
+       {"mode": "ν(Te–O)", "what": "Te–O stretches", "free": null, "range": [600, 800], "active": "R+IR", "source": "F", "check": true},
+       {"mode": "δ(O–Te–O)", "what": "bends", "free": null, "range": [300, 480], "active": "R+IR", "source": "F", "check": true}]},
+    {"key": "IO3", "name": "iodate", "writes": "(IO3)−", "in": ["IO3"],
+     "modes": [
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 826, "range": [760, 840], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν1", "what": "symmetric stretch", "free": 779, "range": [730, 800], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2", "what": "bend", "free": 390, "range": [330, 420], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν4", "what": "bend", "free": 330, "range": [300, 350], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "SO3", "name": "sulfite", "writes": "(SO3)2−", "in": ["SO3(?!S|OH|\\(OH\\))"],
+     "modes": [
+       {"mode": "ν1", "what": "symmetric stretch", "free": 967, "range": [930, 1000], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν3", "what": "antisymmetric stretch", "free": 933, "range": [880, 1020], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν2", "what": "bend", "free": 620, "range": [600, 660], "active": "R+IR", "source": "N", "check": true},
+       {"mode": "ν4", "what": "bend", "free": 469, "range": [450, 540], "active": "R+IR", "source": "N", "check": true}]},
+    {"key": "NH4", "name": "ammonium", "writes": "(NH4)+", "in": ["NH4"],
+     "modes": [
+       {"mode": "ν3", "what": "antisymmetric N–H stretch", "free": 3145, "range": [3100, 3300], "active": "R+IR", "source": "N"},
+       {"mode": "ν1", "what": "symmetric N–H stretch", "free": 3040, "range": [2950, 3100], "active": "R", "source": "N"},
+       {"mode": "ν2", "what": "bend", "free": 1680, "range": [1650, 1720], "active": "R", "source": "N"},
+       {"mode": "ν4", "what": "bend", "free": 1400, "range": [1380, 1490], "active": "R+IR", "source": "N"}]},
+    {"key": "H3O", "name": "hydronium", "writes": "(H3O)+", "in": ["H3O"],
+     "modes": [
+       {"mode": "ν1, ν3", "what": "O–H stretches", "free": null, "range": [2600, 3400], "active": "R+IR", "source": "F", "check": true},
+       {"mode": "ν4", "what": "bend", "free": null, "range": [1650, 1780], "active": "R+IR", "source": "F", "check": true},
+       {"mode": "ν2", "what": "umbrella bend", "free": null, "range": [1050, 1200], "active": "IR", "source": "F", "check": true}]},
+    {"key": "H2O", "name": "water", "writes": "H2O", "in": ["H2O"],
+     "modes": [
+       {"mode": "stretch", "what": "O–H stretches (ν1 3657, ν3 3756 in the free molecule)", "free": null, "range": [2800, 3700], "active": "R+IR", "source": "L"},
+       {"mode": "bend", "what": "H–O–H bend (ν2)", "free": 1595, "range": [1590, 1700], "active": "R+IR", "source": "N"},
+       {"mode": "lib", "what": "librations", "free": null, "range": [350, 900], "active": "R+IR", "source": "F", "check": true, "broad": true}]},
+    {"key": "OH", "name": "hydroxyl", "writes": "(OH)−", "in": [],
+     "modes": [
+       {"mode": "stretch", "what": "O–H stretch (lower the stronger the hydrogen bond)", "free": null, "range": [2500, 3750], "active": "R+IR", "source": "L"},
+       {"mode": "bend", "what": "M–O–H bend", "free": null, "range": [650, 1200], "active": "R+IR", "source": "F", "check": true, "broad": true}]},
+    {"key": "sulfide", "name": "sulfide / sulfosalt (no oxyanion)", "writes": "M–S", "in": [],
+     "modes": [
+       {"mode": "ν(M–S)", "what": "metal–sulfur, S–S and As–S stretches: every band below about 500", "free": null, "range": [100, 500], "active": "R", "source": "F", "check": true}]}
+  ],
+  "always": [
+    {"key": "C-H", "name": "organic matter (not the mineral unless it is organic)", "mode": "ν(C–H)", "what": "C–H stretches: a contaminant, an embedding resin, a fingerprint", "range": [2800, 3000], "active": "R+IR", "source": "F"},
+    {"key": "M-O", "name": "metal–oxygen and lattice modes", "mode": "ν(M–O), lattice", "what": "metal–oxygen stretches and external (lattice) modes", "range": [50, 600], "active": "R+IR", "source": "F"}
+  ]
+}

@@ -1045,13 +1045,26 @@ def compare_stated(comps, stated, tolerance=6.0):
     return {'matched': matched, 'not_fitted': lost, 'not_stated': [p for k, p in enumerate(fitted) if k not in used]}
 
 
-def inferred(comps, technique=None):
-    """For each fitted band, what it would mean: the windows it falls in (spectro.suggest), and the distance either
-    relation gives where one applies -> [{'pos', 'suggest': [names], 'distance': str}]."""
-    from pxrd_review import spectro as SP
+def inferred(comps, technique=None, formula=None):
+    """For each fitted band, what it would mean: the windows it falls in (spectro.suggest) — or, with the mineral's
+    `formula`, what the band library expects there of THAT chemistry (bands.identify: the groups of the formula only,
+    and a plain word when none of them has a band there) — and the distance either relation gives where one applies
+    -> [{'pos', 'suggest': [names], 'distance': str}]."""
+    from pxrd_review import spectro as SP, bands as BD
+    keys = BD.groups_of(formula) if formula else []
     out = []
     for c in comps:
-        names = [n for n, _w in SP.suggest(c['pos'], technique)]
+        if keys:
+            cands = BD.identify(c['pos'], technique=technique, groups=keys)
+            names = [BD.label(x) for x in cands if x['in_formula']]
+            if not names:
+                other = [BD.label(x) for x in cands if x['in_formula'] is False and not x['broad']][:3]
+                shared = [x['mode'] for x in cands if x['group'] == 'M-O']
+                names = shared or ['no group of the formula' + (' (elsewhere: %s)' % ', '.join(other) if other else '')]
+            names = ['OH stretch' if n == 'H2O stretch' else n for n in names]          # water and hydroxyl stretch in one place
+            names = [n for k, n in enumerate(names) if n not in names[:k]]
+        else:
+            names = [n for n, _w in SP.suggest(c['pos'], technique)]
         dist = ''
         if CH_WINDOW[0] <= c['pos'] <= CH_WINDOW[1]:
             # the C–H stretches of grease, epoxy or a mounting medium stand here: no O···O distance is read off them
@@ -1118,10 +1131,11 @@ def prepare_series(every, series=0, lo=None, hi=None, kind=None, despike_on=Fals
             'kind': kind, 'noise': sig, 'notes': notes}
 
 
-def band_rows(f, technique=None):
-    """The table of a fit: one row per band — position, width, height, area, share of the area, shape, what it may be."""
+def band_rows(f, technique=None, formula=None):
+    """The table of a fit: one row per band — position, width, height, area, share of the area, shape, what it may be
+    (of the chemistry `formula` names, when one is given)."""
     total = sum(c['area'] for c in f.comps) or 1.0
-    extra = {round(i['pos'], 6): i for i in inferred(f.comps, technique)}
+    extra = {round(i['pos'], 6): i for i in inferred(f.comps, technique, formula)}
     rows = []
     def pm(v, e, fmt):
         return (fmt % v) + (' ± ' + (fmt % e) if e else '')
@@ -1130,11 +1144,11 @@ def band_rows(f, technique=None):
         rows.append([pm(c['pos'], c['esd'].get('pos'), '%.1f'), pm(c['fwhm'], c['esd'].get('fwhm'), '%.1f'), pm(c['height'], c['esd'].get('height'), '%.4g'),
                      '%.4g' % c['area'], '%.0f' % (100.0 * c['area'] / total), c['shape'] + (' η %.2f' % c['eta'] if c['shape'] == 'pvoigt' else ''),
                      ', '.join(i.get('suggest') or []), i.get('distance') or ''])
-    return ['position (cm⁻¹)', 'FWHM (cm⁻¹)', 'height', 'area', 'area %', 'shape', 'window', 'distance'], rows
+    return ['position (cm⁻¹)', 'FWHM (cm⁻¹)', 'height', 'area', 'area %', 'shape', 'expected of the formula' if formula else 'window', 'distance'], rows
 
 
-def table_text(f, technique=None, title=''):
-    head, rows = band_rows(f, technique)
+def table_text(f, technique=None, title='', formula=None):
+    head, rows = band_rows(f, technique, formula)
     w = [max(len(str(r[k])) for r in [head] + rows) for k in range(len(head))]
     L = [title] if title else []
     L.append('  '.join(h.ljust(w[k]) for k, h in enumerate(head)))
@@ -1213,9 +1227,12 @@ def session(prep, fits, opts):
             if c.get(k):
                 out[k] = c[k]
         return out
-    return {'pxrd_spectrum_session': 1, 'file': prep['series'].meta.get('source'), 'series': prep['series'].name, 'options': opts, 'noise': prep['noise'], 'spikes': prep['spikes'],
+    s = prep['series']
+    # a curve read off a figure is no file: its points go into the session, which then reopens by itself
+    figure = {'figure': {'name': s.name, 'x': list(s.x), 'y': list(s.y), 'cm_per_px': s.meta.get('cm_per_px'), 'notes': list(s.meta.get('notes') or [])}} if s.meta.get('format') == 'figure' else {}
+    return dict(figure, **{'pxrd_spectrum_session': 1, 'file': prep['series'].meta.get('source'), 'series': prep['series'].name, 'options': opts, 'noise': prep['noise'], 'spikes': prep['spikes'],
             'fits': [{'lo': f.lo, 'hi': f.hi, 'n': f.n, 'parameters': f.k, 'chi2': f.chi2, 'r2': f.r2, 'bic': f.bic, 'converged': f.converged,
-                      'baseline': list(f.base), 'x0': f.x0, 'components': [comp(c) for c in f.comps], 'warnings': list(f.warnings)} for f in fits]}
+                      'baseline': list(f.base), 'x0': f.x0, 'components': [comp(c) for c in f.comps], 'warnings': list(f.warnings)} for f in fits]})
 
 
 def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=None, reverse=None):
@@ -1223,12 +1240,15 @@ def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=N
     asked, the table as Word / Excel -> {kind: path}."""
     os.makedirs(out_dir, exist_ok=True)
     tech = 'raman' if prep['kind'] == 'raman' else 'ir' if prep['kind'].startswith('ir') else None
+    formula = str((opts or {}).get('formula') or '').strip() or None      # the chemistry the bands are read against (bands.identify)
     out = {}
     text = ['SPECTRUM — %s' % prep['series'].name] + ['  note: ' + n for n in prep['notes']]
+    if formula:
+        text.append('  chemistry: %s' % formula)
     if prep['spikes']:
         text.append('  %d cosmic-ray event%s removed at %s cm⁻¹' % (len(prep['spikes']), '' if len(prep['spikes']) == 1 else 's', ', '.join('%.0f' % a for a, _b in prep['spikes'][:12])))
     for f in fits:
-        text += ['', table_text(f, tech, 'Bands %g–%g cm⁻¹' % (f.lo, f.hi))]
+        text += ['', table_text(f, tech, 'Bands %g–%g cm⁻¹' % (f.lo, f.hi), formula)]
     out['txt'] = os.path.join(out_dir, stem + '_sp.txt')
     with open(out['txt'], 'w', encoding='utf-8') as fh:
         fh.write('\n'.join(text) + '\n')
@@ -1254,10 +1274,10 @@ def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=N
         for n_ in prep['notes']:
             ws.append([n_])
         for f in fits:
-            _head, rows = band_rows(f, tech)
+            _head, rows = band_rows(f, tech, formula)
             ws.append([])
             ws.append(['region %g–%g cm⁻¹: %d points, %d parameters; reduced χ² %.3g, R² %.5f%s' % (f.lo, f.hi, f.n, f.k, f.chi2, f.r2, '' if f.converged else '; NOT CONVERGED')])
-            ws.append(['position (cm⁻¹)', '± s.u.', 'FWHM (cm⁻¹)', '± s.u.', 'height', '± s.u.', 'area', 'area %', 'shape', 'η', 'where published descriptions place it', 'distance'])
+            ws.append(['position (cm⁻¹)', '± s.u.', 'FWHM (cm⁻¹)', '± s.u.', 'height', '± s.u.', 'area', 'area %', 'shape', 'η', 'expected of the formula' if formula else 'where published descriptions place it', 'distance'])
             for cell in ws[ws.max_row]:
                 cell.font = bold
             total = sum(c['area'] for c in f.comps) or 1.0
@@ -1293,7 +1313,7 @@ def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=N
         import docx
         doc = docx.Document()
         for f in fits:
-            head, rows = band_rows(f, tech)
+            head, rows = band_rows(f, tech, formula)
             doc.add_paragraph('Fitted bands, %g–%g cm⁻¹ (%s)' % (f.lo, f.hi, prep['series'].name))
             t = doc.add_table(rows=1, cols=len(head))
             for k, h in enumerate(head):
@@ -1329,6 +1349,7 @@ def main(argv=None):
     ap.add_argument('--shape', choices=SHAPES, default='pvoigt'); ap.add_argument('--local', choices=('none', 'const', 'linear'), default='linear', help='the local baseline of the fit')
     ap.add_argument('--cif', help='the structure: its uranyl and hydrogen-bond distances as expected positions')
     ap.add_argument('--manuscript', help='a manuscript .docx or paper .pdf: its stated bands beside the fitted ones')
+    ap.add_argument('--formula', help="the mineral's formula (or its name): each fitted band is then set against what the band library expects of that chemistry (pxrd bands)")
     ap.add_argument('--out', help='the folder for the outputs (default: review_out beside the file)'); ap.add_argument('--word', action='store_true'); ap.add_argument('--xlsx', action='store_true')
     a = ap.parse_args(argv)
     if a.fit and a.fit != 'auto' and not (a.fit.isdigit() and 1 <= int(a.fit) <= 40):
@@ -1336,6 +1357,9 @@ def main(argv=None):
     for what, path in (('--manuscript', a.manuscript), ('--cif', a.cif)):
         if path and not os.path.isfile(path):
             raise SystemExit('pxrd spectrum: no such file for %s: %s' % (what, path))
+    if a.formula:
+        from pxrd_review import bands as BD
+        a.formula = BD.resolve(a.formula)[0]                     # a mineral name -> its formula in the local Mindat snapshot
     try:
         if a.list:
             for k, s in enumerate(F.load(a.path, a.sheet)):
@@ -1370,7 +1394,7 @@ def main(argv=None):
             raise SystemExit('pxrd spectrum: %s' % e)
         fits.append(f)
         tech = 'raman' if prep['kind'] == 'raman' else 'ir' if prep['kind'].startswith('ir') else None
-        print(table_text(f, tech))
+        print(table_text(f, tech, formula=a.formula))
         print('  models tried: ' + ', '.join('%d (BIC %.0f)' % (n, b) for n, b, _c in trials))
         more = residual_bands(crop(prep['x'], prep['y'], f.lo, f.hi)[0], crop(prep['x'], prep['y'], f.lo, f.hi)[1], f, a.min_share / 100.0)
         if more:

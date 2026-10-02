@@ -30,12 +30,14 @@ import paper_features as PF
 import corpus_paper_extract as CPE
 
 MIN_PAPERS = 8                                       # a window with fewer papers behind it is not shipped
+MIN_PAPERS_TECH = 12                                 # … and one of a single technique needs more: at 8–10 papers the Raman or the
+                                                     # infrared half of a bin was the noisier window, not the sharper one
 EXCLUDE = re.compile(r'CNMNC|proposal|review_out|pxrd-review', re.I)     # unpublished work, the tool's own output and its bundles
 WINDOW_MODES = {1, 2, 3, 4}                          # the numbered modes of a polyatomic group …
 WINDOW_EXTRA = {('OH', 'stretch'), ('H2O', 'bend'), ('H2O', 2)}          # … and the two water / hydroxyl bands every hydrated mineral has
 PCTS = (5, 25, 50, 75, 95)
-FORMULA_KINDS = ('water:', 'hydrogen:', 'carbonate:', 'ammonium:', 'nitrate:', 'hydronium:', 'assignment:', 'table:')     # spectro.species_lines / table_lines
-TRIM = 5.0                                           # robust sigmas (1.4826 MAD) from the median beyond which a position is dropped:
+FORMULA_KINDS = ('water:', 'hydrogen:', 'carbonate:', 'ammonium:', 'nitrate:', 'hydronium:', 'assignment:', 'table:', 'expected:')     # spectro.species_lines / table_lines
+TRIM = 3.0                                           # robust sigmas (1.4826 MAD) from the median beyond which a position is dropped:
                                                      # the reader mispairs a band with a group a few times in a hundred, and those
                                                      # land far from the rest — the percentiles are of what remains
 
@@ -43,6 +45,41 @@ TRIM = 5.0                                           # robust sigmas (1.4826 MAD
 def pct(v, q):
     v = sorted(v); i = (len(v) - 1) * q / 100.0; lo = int(i); hi = min(lo + 1, len(v) - 1)
     return v[lo] + (v[hi] - v[lo]) * (i - lo)
+
+
+_TAGS = re.compile(r'<[^>]+>')
+_BOND = re.compile(r'(?<![A-Za-z])(?:O\s?-\s?)?([A-Z][a-z]?)\d?\+?\s?-\s?O(H)?(?:\s?-\s?([A-Z][a-z]?))?(?![a-z])')
+
+
+def chemistry(text):
+    """(mineral name, formula, where from) — the species' IMA formula in the local Mindat snapshot, else the ideal
+    formula the paper states. The chemistry the band library is conditioned on; private like the rest of a record."""
+    name = ''
+    try:
+        name = PE.mineral_name(text) or ''
+        sr = PE.species_record(name)
+        if sr:
+            return name, _TAGS.sub('', sr['formula']), 'mindat'
+    except Exception:
+        pass
+    try:
+        f = S.paper_formulas(text, name)
+        if f:
+            return name, f[0][0], 'paper'
+    except Exception:
+        pass
+    return name, '', ''
+
+
+def bond_of(b):
+    """'Si-O', 'U-OH', 'Si-O-Si' … for a band the reader put down to a bond — only where its sentence names ONE bond."""
+    if b.family != 'M-O':
+        return None
+    found = {(m.group(1), bool(m.group(2)), m.group(3)) for m in _BOND.finditer(b.sentence) if m.group(1) not in ('O', 'H')}
+    if len(found) != 1:
+        return None
+    el, oh, el2 = next(iter(found))
+    return '%s-O%s%s' % (el, 'H' if oh else '', '-' + el2 if el2 else '')
 
 
 def read_paper(pdf, cif):
@@ -57,8 +94,12 @@ def read_paper(pdf, cif):
         lines = S.check_lines(text, None, cif, pdf)
     except Exception as e:
         lines = ['ERROR %s' % str(e)[:120]]
-    rec = {'paper': os.path.basename(pdf),
+    name, formula, fsrc = chemistry(text)
+    rec = {'paper': os.path.basename(pdf), 'name': name, 'formula': formula, 'fsrc': fsrc,
            'bands': [[b.pos, b.technique, b.shape, b.family, b.mode, b.own] for b in bands],
+           'bonds': [bond_of(b) for b in bands],
+           # what the paper quotes for the FREE ion ('the free sulfate ion has ν1 at 981 …'): the check on the literature table
+           'free': [[b.pos, b.family, b.mode] for b in bands if not b.own and b.family and re.search(r'\bfree\b|\bT\s?d\b|aqueous|undistorted|ideal', b.sentence)],
            'claims': [[r['claim'].relation, r['claim'].text, r['claim'].band, r['claim'].mode, r['claim'].paired, r['status'], r['grade'],
                        None if r['calc'] is None else round(r['calc'], 4)] for r in claims],
            'lines': lines}
@@ -82,13 +123,14 @@ def windows(recs):
         entry = {}
         for t in ('any', 'raman', 'ir'):
             v = acc[key].get(t) or []
-            if len({p for _x, p in v}) < MIN_PAPERS:
+            need = MIN_PAPERS if t == 'any' else MIN_PAPERS_TECH
+            if len({p for _x, p in v}) < need:
                 continue
             med = pct([x for x, _p in v], 50)
             sigma = max(1.4826 * pct([abs(x - med) for x, _p in v], 50), 5.0)
             kept = [(x, p) for x, p in v if abs(x - med) <= TRIM * sigma]
             papers = len({p for _x, p in kept})
-            if papers >= MIN_PAPERS:
+            if papers >= need:
                 xs = [x for x, _p in kept]
                 entry[t] = dict({'n': len(xs), 'papers': papers, 'dropped': len(v) - len(kept)}, **{'p%d' % q: round(pct(xs, q)) for q in PCTS})
         if entry:
@@ -207,7 +249,7 @@ def main(pdf_dirs, out_dir, tag, baseline=None, only=None, subset=None, limit=No
         dest = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'pxrd_review', 'data', 'band_windows.json')
         doc = {'about': 'Where published mineral descriptions place each vibrational band: percentiles of the stated positions (cm-1) per group and mode. '
                         'Aggregates only; rebuilt by tools/corpus_spectra.py --build-windows.',
-               'min_papers': MIN_PAPERS, 'percentiles': list(PCTS), 'trim_sigmas': TRIM, 'windows': w}
+               'min_papers': MIN_PAPERS, 'min_papers_one_technique': MIN_PAPERS_TECH, 'percentiles': list(PCTS), 'trim_sigmas': TRIM, 'windows': w}
         with open(dest, 'w', encoding='utf-8') as f:
             json.dump(doc, f, indent=1, ensure_ascii=False, sort_keys=True); f.write('\n')
         L.append(''); L.append('windows written: %s (%d bins)' % (dest, sum(len(e) for e in w.values())))

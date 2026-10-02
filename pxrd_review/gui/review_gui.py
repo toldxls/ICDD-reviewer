@@ -3107,7 +3107,7 @@ def api_ms_export():
 # window and the command line cannot disagree. Same rules as the Tables mode: the page sends file NAMES (keys of the
 # open folder, or of what it uploaded), never paths; an upload is parsed and kept in memory, and nothing is written
 # until Export, which writes only into review_out.
-from pxrd_review import spectrum as SPM, spectrum_formats as SPF, spectro as SPC, figure_trace as FT
+from pxrd_review import spectrum as SPM, spectrum_formats as SPF, spectro as SPC, figure_trace as FT, bands as BD
 import tempfile
 from collections import OrderedDict
 
@@ -3274,6 +3274,81 @@ def api_sp_state():
                     'regions': [{'name': 'uranyl', 'lo': 700, 'hi': 1000}, {'name': 'O–H', 'lo': 2800, 'hi': 3800}]})
 
 
+_SP_CHEM = {}                # manuscript path -> (mtime, formula, mineral name): reading a paper for its formula takes a moment
+
+
+def _sp_ms_formula(key):
+    """(formula, mineral name) the manuscript states for its mineral — the ideal formula first — or ('', '')."""
+    path = (MS.get('files') or {}).get(str(key or ''))
+    if not path:
+        return '', ''
+    try:
+        stamp = os.path.getmtime(path)
+    except OSError:
+        return '', ''
+    hit = _SP_CHEM.get(path)
+    if hit and hit[0] == stamp:
+        return hit[1], hit[2]
+    formula = name = ''
+    try:
+        from pxrd_review import paper_extract as PE
+        text = PE.text_of(path)
+        name = PE.mineral_name(text) or ''
+        forms = SPC.paper_formulas(text, name)
+        if forms:
+            formula = re.sub(r'\s+', ' ', forms[0][0]).strip()
+    except Exception:
+        pass
+    if len(_SP_CHEM) > 40:
+        _SP_CHEM.clear()
+    _SP_CHEM[path] = (stamp, formula, name)
+    return formula, name
+
+
+def _sp_formula(d):
+    """The chemistry a request reads its bands against: the formula typed (a mineral name is looked up in the local
+    Mindat snapshot), else the one the manuscript beside the spectrum states -> (formula, mineral name, where from)."""
+    typed = str(d.get('formula') or '').strip()[:300]
+    if typed:
+        f, name = BD.resolve(typed)
+        return f, name, 'typed'
+    f, name = _sp_ms_formula(d.get('ms'))
+    return f, name, 'manuscript' if f else ''
+
+
+@app.route('/api/sp/bands', methods=['POST'])
+def api_sp_bands():
+    """The band library for a chemistry: the groups of the formula and, per mode, where its band is expected (the
+    literature's range, the published positions). With `at`, what each of those bands is expected to be."""
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    formula, name, source = _sp_formula(d)
+    kind = str(d.get('kind') or '')
+    tech = 'raman' if kind == 'raman' else 'ir' if kind.startswith('ir') else None
+    lib = BD.library()
+    names = {g['key']: g['name'] for g in lib['groups']}
+    keys = BD.groups_of(formula) if formula else []
+    def row(r):
+        p = r['published']
+        return {'group': r['group'], 'label': BD.label(r), 'mode': r['mode'], 'what': r['what'], 'free': r['free'], 'lo': r['lo'], 'hi': r['hi'],
+                'active': lib['activity'][r['active']], 'source': lib['sources'][r['source']].split(' — ')[0], 'check': r['check'], 'broad': r['broad'],
+                'published': None if not p else {'p5': p['p5'], 'p50': p['p50'], 'p95': p['p95'], 'papers': p['papers'], 'of': r['published_for']}}
+    out = {'ok': True, 'formula': BD.display(formula) if formula else '', 'name': name, 'source': source,
+           'groups': [{'key': k, 'name': names[k]} for k in keys], 'rows': [row(r) for r in BD.expected(groups=keys, technique=tech)] if keys else []}
+    at = d.get('at')
+    if isinstance(at, list):
+        res = []
+        for v in at[:60]:
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 20000:
+                cands = BD.identify(float(v), technique=tech, groups=keys if formula else None)
+                res.append({'pos': v, 'own': [BD.label(c) for c in cands if c['in_formula'] is not False and c['score'] is not None],
+                            'other': [BD.label(c) for c in cands if c['in_formula'] is False and not c['broad']][:4],
+                            'shared': [c['mode'] for c in cands if c['score'] is None]})
+        out['at'] = res
+    return jsonify(out)
+
+
 @app.route('/api/sp/upload', methods=['POST'])
 def api_sp_upload():
     """A spectrum file from the browser's own chooser (or dropped on the page): parsed and kept in memory under its
@@ -3345,6 +3420,7 @@ def api_sp_process():
             on_curve = None
     return jsonify({'ok': True, 'name': prep['series'].name, 'x': _sp_r(prep['x']), 'raw': _sp_r(prep['raw'], 5), 'cleaned': _sp_r(prep['cleaned'], 5),
                     'on_curve': on_curve, 'figure': meta.get('format') == 'figure',
+                    'figure_meta': {'cm_per_px': meta.get('cm_per_px'), 'notes': list(meta.get('notes') or []), 'y': _sp_r(prep['series'].y, 5)} if meta.get('format') == 'figure' else None,
                     'baseline': _sp_r(prep['baseline'], 5), 'y': _sp_r(prep['y'], 5), 'spikes': prep['spikes'], 'noise': prep['noise'], 'kind': prep['kind'],
                     'notes': prep['notes'] + notes, 'peaks': [{'pos': round(q['pos'], 2), 'height': q['height'], 'fwhm': round(q['fwhm'], 2)} for q in peaks],
                     'ticks': [{'pos': round(a, 1), 'label': b} for a, b in ticks], 'stated': stated})
@@ -3557,6 +3633,34 @@ def api_sp_fig_trace():
     return jsonify(out)
 
 
+@app.route('/api/sp/fig/restore', methods=['POST'])
+def api_sp_fig_restore():
+    """A curve read off a figure earlier, given back by the page (it keeps the points; the server keeps such a curve in
+    memory only, so a restart loses it): held again under its name, as when it was first used."""
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    name = str(d.get('name') or '')[:200]
+    x, y = d.get('x'), d.get('y')
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and abs(v) < 1e12
+    if not name.endswith('(figure)') or not isinstance(x, list) or not isinstance(y, list) or len(x) != len(y) or not 5 <= len(x) <= 20000 \
+            or not all(num(v) for v in x) or not all(num(v) for v in y):
+        return jsonify({'ok': False, 'error': 'not a curve read off a figure'}), 400
+    notes = [str(n)[:400] for n in (d.get('notes') if isinstance(d.get('notes'), list) else [])[:6]]
+    try:
+        series = SPF._series(name, [float(v) for v in x], [float(v) for v in y], format='figure', source=name, notes=notes,
+                             cm_per_px=_sp_num(d, 'cm_per_px', 1e-6, 1e4, 1.0), y_unit='relative')
+    except ValueError as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 400
+    with _SP['lock']:
+        _SP['uploads'][name] = [series]; _SP['uploads'].move_to_end(name)
+        while len(_SP['uploads']) > _SP_KEEP:
+            _SP['uploads'].popitem(last=False)
+        for k in [k for k in _SP['prep'] if json.loads(k)[0] == name]:
+            del _SP['prep'][k]
+    return jsonify({'ok': True, 'name': name})
+
+
 @app.route('/api/sp/fig/colour', methods=['POST'])
 def api_sp_fig_colour():
     """The colour of the curve where the user clicked on it: the darkest pixel within two of the click."""
@@ -3580,14 +3684,14 @@ def api_sp_fig_colour():
     return jsonify({'ok': True, 'colour': list(best[0]), 'seed': [best[1], best[2]]})
 
 
-def _sp_fit_json(f, xs, ys, technique, share=SPM.MIN_SHARE):
+def _sp_fit_json(f, xs, ys, technique, share=SPM.MIN_SHARE, formula=None):
     m = SPM.model(xs, f.comps, f.base, f.x0)
     try:                                                  # where the residual still holds a band: what '+ band' would add, drawn as marks
         nxt = [{'pos': round(c['pos'], 1), 'height': c['height'], 'fwhm': round(c['fwhm'], 1)} for c in SPM.residual_bands(xs, ys, f, share)[:4]]
     except Exception:
         nxt = []
-    head, rows = SPM.band_rows(f, technique)
-    info = SPM.inferred(f.comps, technique)
+    head, rows = SPM.band_rows(f, technique, formula)
+    info = SPM.inferred(f.comps, technique, formula)
     return {'lo': f.lo, 'hi': f.hi, 'n': f.n, 'k': f.k, 'chi2': f.chi2, 'r2': f.r2, 'bic': f.bic, 'sigma': f.sigma, 'converged': f.converged,
             'iterations': f.iterations, 'base': list(f.base), 'x0': f.x0, 'warnings': list(f.warnings), 'head': head, 'rows': rows,
             'comps': [{'shape': c['shape'], 'pos': c['pos'], 'height': c['height'], 'fwhm': c['fwhm'], 'eta': c['eta'], 'area': c['area'],
@@ -3699,7 +3803,7 @@ def api_sp_fit():
     except Exception as ex:
         return jsonify({'ok': False, 'error': '%s: %s' % (type(ex).__name__, str(ex)[:200])}), 500
     tech = 'raman' if prep['kind'] == 'raman' else 'ir' if (prep['kind'] or '').startswith('ir') else None
-    out = _sp_fit_json(f, xs, ys, tech, _sp_num(d, 'min_share', 0.0, 50.0, 100.0 * SPM.MIN_SHARE) / 100.0)
+    out = _sp_fit_json(f, xs, ys, tech, _sp_num(d, 'min_share', 0.0, 50.0, 100.0 * SPM.MIN_SHARE) / 100.0, _sp_formula(d)[0] or None)
     if not d.get('evaluate') and not _sp_num(d, 'max_fwhm', 0.5, 5000.0):
         try:                                                    # one broad band with finer ones inside it: offered as an envelope, never done unasked
             out['envelope'] = SPM.envelope_hint(xs, ys, f)
@@ -3762,7 +3866,8 @@ def api_sp_export():
         if len(prep['all']) > 1:                                # a file of several spectra: each one's table under its own name
             stem += '_%d' % (o['series'] + 1)
         fmt = d.get('fmt')
-        sess = dict(o, name=str(d.get('name') or ''), regions=kept, cif=str(d.get('cif') or ''), ms=str(d.get('ms') or ''), resolution=o.get('resolution'))
+        sess = dict(o, name=str(d.get('name') or ''), regions=kept, cif=str(d.get('cif') or ''), ms=str(d.get('ms') or ''), resolution=o.get('resolution'),
+                    formula=_sp_formula(d)[0], formula_typed=str(d.get('formula') or '').strip()[:300])
         paths = SPM.export(prep, fits, MS['out_dir'], stem, sess, word=fmt == 'word', xlsx=fmt == 'xlsx', ticks=ticks,
                            reverse=bool(d.get('reverse')) if isinstance(d.get('reverse'), bool) else None)
     except ValueError as ex:

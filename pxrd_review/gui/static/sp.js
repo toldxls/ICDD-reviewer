@@ -41,7 +41,7 @@ const SP = {
   sel: -1,                // the selected band of that region
   anchors: [],
   mode: 'pan',
-  layers: { raw: false, comps: true, ticks: true, stated: true, peaks: false, reverse: false, d2: false, oo: true, uo: false },
+  layers: { raw: false, comps: true, ticks: true, stated: true, peaks: false, reverse: false, d2: false, oo: true, uo: false, lib: true },
   busy: 0,
   gen: 0,                 // counts the spectra shown: a fit answering for the curve before is dropped
   pseq: 0,                // … and the requests for one: the last asked for is the one shown
@@ -96,7 +96,7 @@ function opts() {
     name: SP.file, series: SP.series, kind: $('#sp-kind').value,
     despike: $('#sp-despike').checked, threshold: num('sp-threshold'), resolution: num('sp-resolution'),
     baseline: $('#sp-baseline').value, anchors: SP.anchors, lam: Math.pow(10, num('sp-lam') == null ? 7 : num('sp-lam')), p: num('sp-p'), width: num('sp-width'),
-    cif: $('#sp-cif').value, ms: $('#sp-ms').value, laser: num('sp-laser'),
+    cif: $('#sp-cif').value, ms: $('#sp-ms').value, laser: num('sp-laser'), formula: $('#sp-formula').value.trim(),
   };
 }
 // … and how a region is to be fitted
@@ -120,6 +120,10 @@ async function loadState(pick) {
   const pre = $('#sp-presets'); pre.textContent = '';
   for (const r of s.regions) pre.append(el('button', { onclick: () => setRegion(r.lo, r.hi, true) }, r.name + ' ' + r.lo + '–' + r.hi));
   pre.append(el('button', { onclick: () => { if (SP.d) { SP.view = [SP.d.x[0], SP.d.x[SP.d.x.length - 1]]; draw(); } } }, 'whole'));
+  if (!SP.figsBack) {                                        // once: the curves read off figures before the server was last started
+    SP.figsBack = true;
+    if (await restoreFigures()) return loadState(pick);
+  }
   listOutputs(s.outputs);
   for (const b of document.querySelectorAll('[data-fmt]')) {     // an export goes into the open folder's review_out
     b.disabled = !s.folder; b.title = s.folder ? '' : 'No folder is open: open the folder that holds the manuscript in the main window first — the table is written into its review_out.';
@@ -172,6 +176,27 @@ function saveWork() {
     } catch (_) {}
   }, 300);
 }
+// A curve read off a figure is held by the server in memory only. The page keeps its points (per folder), gives them back
+// to a server that has been started again, and the curve is in the list as before — with the fit that was left on it.
+const FIGS = 'pxrd-sp-figs';
+function keepFigure(d) {
+  if (!d || !d.figure || !d.figure_meta) return;
+  try {
+    const all = JSON.parse(localStorage.getItem(FIGS) || '{}');
+    all[((SP.state && SP.state.folder) || '') + '|' + SP.file] = { t: Date.now(), name: SP.file, x: d.x, y: d.figure_meta.y, cm_per_px: d.figure_meta.cm_per_px, notes: d.figure_meta.notes };
+    for (const k of Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(6)) delete all[k];
+    localStorage.setItem(FIGS, JSON.stringify(all));
+  } catch (_) {}
+}
+async function restoreFigures() {
+  let all = {}; try { all = JSON.parse(localStorage.getItem(FIGS) || '{}'); } catch (_) {}
+  const pre = ((SP.state && SP.state.folder) || '') + '|'; let n = 0;
+  for (const [k, f] of Object.entries(all)) {
+    if (!k.startsWith(pre) || SP.state.files.some(q => q.name === f.name)) continue;
+    try { await api('/api/sp/fig/restore', { name: f.name, x: f.x, y: f.y, cm_per_px: f.cm_per_px, notes: f.notes }); n++; } catch (_) {}
+  }
+  return n;
+}
 async function restoreWork() {
   let w = null;
   try { w = (JSON.parse(localStorage.getItem(WORK) || '{}'))[workKey()]; } catch (_) {}
@@ -187,6 +212,104 @@ function setLayer(k, on) {
 }
 const setReverse = on => setLayer('reverse', on);
 
+// ---- the band library ----------------------------------------------------------
+// What the mineral's chemistry is expected to give (pxrd_review.bands): the formula typed in 'chemistry' (or a mineral
+// name), else the one the manuscript beside the spectrum states. SP.lib is the server's answer for (typed, manuscript,
+// kind): the groups, and per mode the literature's range and the published window. It is drawn over the plot, listed
+// under the fitted bands, read by the pointer, and — on the server — names what each fitted band can be.
+const LIB_COLOURS = ['#4ea1ff', '#e6a23c', '#5fbf5f', '#e56bb0', '#9b8cff', '#3cc8c8', '#d9705a'];
+const LANE = 20;                                         // the height of one row of library bars over the plot
+const kindNow = () => $('#sp-kind').value || (SP.d && SP.d.kind) || '';
+const libSpan = r => [Math.min(r.lo, r.published ? r.published.p5 : r.lo), Math.max(r.hi, r.published ? r.published.p95 : r.hi)];
+const libHolds = (r, x) => { const [a, b] = libSpan(r); return x >= a && x <= b; };
+const libColour = r => LIB_COLOURS[Math.max(0, SP.lib.groups.findIndex(g => g.key === r.group)) % LIB_COLOURS.length];
+// the chemistry typed belongs to the folder's mineral, not to one spectrum of it: kept per folder, back at the next start
+const CHEM = 'pxrd-sp-chem';
+function keepChem() {
+  try {
+    const all = JSON.parse(localStorage.getItem(CHEM) || '{}'), k = (SP.state && SP.state.folder) || '', v = $('#sp-formula').value.trim();
+    if (v) all[k] = v; else delete all[k];
+    localStorage.setItem(CHEM, JSON.stringify(all));
+  } catch (_) {}
+}
+function recallChem() {
+  try { const v = JSON.parse(localStorage.getItem(CHEM) || '{}')[(SP.state && SP.state.folder) || '']; if (v && !$('#sp-formula').value) $('#sp-formula').value = v; } catch (_) {}
+}
+async function loadLib() {
+  const typed = $('#sp-formula').value.trim(), key = JSON.stringify([typed, $('#sp-ms').value, kindNow()]);
+  if (SP.lib && SP.lib.key === key) return;
+  const seq = SP.libSeq = (SP.libSeq || 0) + 1;
+  try {
+    const r = await api('/api/sp/bands', { formula: typed, ms: $('#sp-ms').value, kind: kindNow() });
+    if (seq !== SP.libSeq) return;
+    const was = SP.lib ? SP.lib.formula : '';
+    SP.lib = Object.assign(r, { key });
+    $('#sp-formula').placeholder = r.source === 'manuscript' && r.formula ? r.formula : 'formula or mineral';
+    draw(); renderLibrary();
+    if (was !== r.formula) for (const reg of SP.regions) if (reg.fit && reg.comps.length && !reg.dirty) relabel(reg);
+  } catch (e) { status(e.message, true); }
+}
+// the chemistry changed: what each fitted band is expected to be is asked again — nothing is fitted, nothing moves
+async function relabel(reg) {
+  const seq = reg.seq, gen = SP.gen;
+  try {
+    const r = await api('/api/sp/fit', Object.assign(opts(), asFitted(reg), { evaluate: true, min_share: num('sp-share') }));
+    if (seq !== reg.seq || gen !== SP.gen || !SP.regions.includes(reg) || reg.dirty) return;
+    reg.fit = r.fit; renderResult();
+  } catch (_) {}
+}
+// the rows of the library in view, each given a lane so that no bar or label sits on another
+function libLanes(vx0, vx1, pw) {
+  if (!SP.layers.lib || !SP.lib || !SP.lib.rows.length) return [];
+  const perPx = (vx1 - vx0) / Math.max(1, pw), ends = [], out = [];
+  const both = SP.lib.rows.some(r => r.label === 'OH stretch');      // water and hydroxyl stretch in one place: one bar
+  const rows = SP.lib.rows.filter(r => !r.broad && !(both && r.label === 'H2O stretch') && libSpan(r)[0] <= vx1 && libSpan(r)[1] >= vx0)
+    .map(r => { const [a, b] = libSpan(r), lo = Math.max(a, vx0), hi = Math.min(b, vx1), half = (r.label.length * 5.6 + 12) * perPx / 2, mid = (lo + hi) / 2;
+      return { r, a: Math.min(lo, mid - half), b: Math.max(hi, mid + half), mid }; })
+    .sort((p, q) => p.a - q.a);
+  for (const it of rows) {
+    let lane = ends.findIndex(e => e <= it.a);
+    if (lane < 0) { if (ends.length >= 6) continue; lane = ends.length; ends.push(0); }
+    ends[lane] = it.b; out.push(Object.assign(it, { lane }));
+  }
+  return out;
+}
+function renderLibrary() {
+  const host = $('#sp-library'); if (!host) return;
+  host.textContent = '';
+  const L = SP.lib;
+  if (!L || !L.formula) {
+    host.append(el('summary', null, 'Band library — type the mineral’s formula or its name in ‘chemistry’ above (or choose the manuscript): the bands its groups are expected to give are listed here and drawn over the plot'));
+    return;
+  }
+  const sum = el('summary', null, 'Band library — expected of ');
+  sum.append(el('b', null, (L.name ? L.name + ', ' : '') + L.formula), L.source === 'manuscript' ? ' (the manuscript’s formula)' : '', ': ' + (L.groups.map(g => g.name).join(', ') || 'no group of the library — its bands are metal–anion and lattice modes, below about 600 cm⁻¹'));
+  host.append(sum);
+  if (!L.rows.length) return;
+  const stated = SP.d ? [...new Set(SP.d.stated.map(b => b.pos))].sort((a, b) => a - b) : [];
+  const fitted = []; for (const reg of SP.regions) for (const c of reg.comps) fitted.push(c.pos);
+  fitted.sort((a, b) => a - b);
+  const tb = el('table');
+  tb.append(el('tr', null, ...['band', 'what', 'active in', 'free ion', 'range in minerals', 'published positions', 'stated in the manuscript', 'fitted here'].map(h => el('th', null, h))));
+  let last = null, starred = false;
+  for (const r of L.rows) {
+    const p = r.published, st = stated.filter(x => libHolds(r, x)), ft = fitted.filter(x => libHolds(r, x));
+    const sw = el('i', { class: 'sw' }); sw.style.background = libColour(r);
+    const name = el('td', { title: r.source }, sw, r.label);
+    starred = starred || r.check;
+    const tr = el('tr', { class: r.group !== last ? 'g' : '' }, name, el('td', { class: 'w' }, r.what), el('td', null, r.active), el('td', null, r.free == null ? '' : String(r.free)),
+      el('td', { title: r.source + (r.check ? ' — entered from memory of the source, not yet compared with it line by line' : '') }, r.lo + '–' + r.hi + (r.check ? ' *' : '')),
+      el('td', { title: p ? 'the 5th–95th percentile of the positions published mineral descriptions assign to this mode' + (p.of === 'any' ? '' : ' (' + (p.of === 'ir' ? 'infrared' : 'Raman') + ' only)') : 'fewer than 8 papers of the corpus assign a band to this mode' },
+        p ? p.p5 + '–' + p.p95 + ', median ' + p.p50 + ' (' + p.papers + ' papers)' : ''),
+      el('td', { class: st.length ? '' : 'none' }, stated.length ? (st.join(', ') || '—') : ''),
+      el('td', { class: ft.length ? '' : 'none' }, fitted.length ? (ft.map(x => x.toFixed(1)).join(', ') || '—') : ''));
+    last = r.group; tb.append(tr);
+  }
+  host.append(tb);
+  host.append(el('div', { class: 'foot' }, (starred ? '* entered from memory of the source, not yet compared with it line by line (data/band_library.json). ' : '') +
+    'A band can belong to any mode whose range holds it: the ranges of different groups overlap. Sources: ' + [...new Set(L.rows.map(r => r.source))].join('; ') + '.'));
+}
+
 const sameCurve = (a, b) => a.y.length === b.y.length && a.x[0] === b.x[0] && a.y.every((v, i) => v === b.y[i]);
 async function process(resetView) {
   if (!SP.file) return;
@@ -195,6 +318,7 @@ async function process(resetView) {
     status('reading…');
     const d = await api('/api/sp/process', opts());
     if (seq !== SP.pseq) return;                             // another spectrum was asked for meanwhile: that one is shown
+    keepFigure(d);
     const same = !resetView && before && sameCurve(before, d);   // the manuscript or the .cif beside it changed, not the curve
     SP.d = d; SP.d2 = null;
     if (!same) SP.gen++;                                     // a fit still on its way is of the curve before
@@ -215,6 +339,7 @@ async function process(resetView) {
     const stale = !resetView && !same ? SP.regions.filter(r => r.comps.length) : [];
     for (const r of stale) r.dirty = true;
     draw(); renderResult(); savePrefs();
+    loadLib();
     if (SP.layers.d2) loadD2();
     if ($('#sp-live').checked) for (const r of stale) fitRegion(r, r.comps, { refine: 'heights', keep_dead: true });
   } catch (e) { if (seq === SP.pseq) status(e.message, true); }
@@ -292,7 +417,8 @@ function draw() {
   const hasRes = SP.regions.some(r => r.comps.length);
   const [vx0, vx1] = SP.view;
   const rulers = rulersOn().filter(r => r.ticks.some(t => t[1] >= vx0 && t[1] <= vx1));     // those with a stretch in view
-  M.t = 16 + RULER * rulers.length;
+  const lanes = libLanes(vx0, vx1, W - M.l - M.r), nLanes = lanes.reduce((n, it) => Math.max(n, it.lane + 1), 0);
+  M.t = 16 + RULER * rulers.length + LANE * nLanes;
   const ph = H - M.t - M.b - (hasRes ? M.res : 0), pw = W - M.l - M.r;
   const [i0, i1] = range(indexOf(vx0) - 1, indexOf(vx1) + 1);
   const ys = SP.layers.raw ? d.cleaned : d.y;
@@ -466,6 +592,26 @@ function draw() {
     }
     svg.append(gq);
   });
+  // the band library over the plot: per mode of the chemistry a thin bar for the range in minerals, a thick one for the
+  // published window (a notch at its median), a ◆ at the free-ion value
+  if (nLanes) {
+    const gl = sv('g', { class: 'lib' }), clipX = v => Math.max(M.l, Math.min(M.l + pw, X(v)));
+    const both = SP.lib.rows.some(r => r.label === 'OH stretch');      // one bar for the water and the hydroxyl stretch (libLanes left the other out)
+    for (const it of lanes) {
+      const r = it.r, col = libColour(r), yb = 10 + RULER * rulers.length + LANE * it.lane + 15, p = r.published;
+      const gq = sv('g', null, sv('title', null, r.label + ' — ' + r.what + '. In minerals ' + r.lo + '–' + r.hi + ' cm⁻¹' + (r.check ? ' (from memory of the source: check)' : '') +
+        (r.free != null ? '; free ion ' + r.free : '') + (p ? '; published positions ' + p.p5 + '–' + p.p95 + ', median ' + p.p50 + ' (' + p.papers + ' papers)' : '') + '; active in ' + r.active + '. ' + r.source));
+      gq.append(sv('line', { class: 'range', x1: clipX(r.lo), x2: clipX(r.hi), y1: yb, y2: yb, stroke: col }));
+      if (p) {
+        gq.append(sv('line', { class: 'pub', x1: clipX(p.p5), x2: clipX(p.p95), y1: yb, y2: yb, stroke: col }));
+        if (p.p50 >= vx0 && p.p50 <= vx1) gq.append(sv('line', { class: 'med', x1: X(p.p50), x2: X(p.p50), y1: yb - 2, y2: yb + 2 }));
+      }
+      if (r.free != null && r.free >= vx0 && r.free <= vx1) gq.append(sv('path', { d: 'M' + X(r.free) + ' ' + (yb - 4) + 'l3 4l-3 4l-3 -4z', fill: col }));
+      gq.append(sv('text', { x: Math.max(M.l + 2, Math.min(M.l + pw - 2, X(it.mid))), y: yb - 5, 'text-anchor': 'middle', fill: col }, both && r.label === 'OH stretch' ? 'O–H stretch' : r.label));
+      gl.append(gq);
+    }
+    svg.append(gl);
+  }
   svg.append(sv('rect', { id: 'sp-sel', class: 'sel', x: 0, y: M.t, width: 0, height: ph }));
   g.append(edges);
   g.append(handles);                                        // on top: a handle is never under a curve
@@ -481,10 +627,11 @@ let picked = null;                                         // the band under a m
 function readout(ev) {
   if (!G || !SP.d) return;
   const x = G.Xinv(plotX(ev)), i = Math.min(SP.d.x.length - 1, Math.max(0, indexOf(x)));
-  const ws = [];
-  for (const [name, e] of Object.entries(SP.state.windows || {})) { const w = e.any; if (w && x >= w.p5 && x <= w.p95) ws.push(name); }
+  const ws = [], ofFormula = !!(SP.lib && SP.lib.rows.length);
+  if (ofFormula) { for (const b of [false, true]) for (const r of SP.lib.rows) if (r.broad === b && libHolds(r, x)) ws.push(r.label); }     // of this chemistry: the modes standing on their own first
+  else for (const [name, e] of Object.entries(SP.state.windows || {})) { const w = e.any; if (w && x >= w.p5 && x <= w.p95) ws.push(name); }
   const ds = rulersOn().map(r => [r, rulerAt(r, x)]).filter(p => p[1] != null).map(([r, v]) => r.name.replace(' Å', '') + ' ' + v.toFixed(r.key === 'oo' ? 2 : 3) + ' Å');
-  $('#sp-readout').textContent = x.toFixed(1) + ' cm⁻¹   ' + fmt((SP.layers.raw ? SP.d.cleaned : SP.d.y)[i]) + (ds.length ? '   ' + ds.join(' · ') : '') + (ws.length ? '   — where papers place: ' + ws.slice(0, 5).join(', ') : '');
+  $('#sp-readout').textContent = x.toFixed(1) + ' cm⁻¹   ' + fmt((SP.layers.raw ? SP.d.cleaned : SP.d.y)[i]) + (ds.length ? '   ' + ds.join(' · ') : '') + (ws.length ? (ofFormula ? '   — expected of the formula: ' : '   — where papers place: ') + ws.slice(0, 5).join(', ') : ofFormula ? '   — no group of the formula is expected here' : '');
 }
 
 function setRegion(lo, hi, zoom) {
@@ -821,6 +968,7 @@ function busy(by, full) {
 function renderResult(light) {
   const tb = $('#sp-table'), st = $('#sp-stats'), wn = $('#sp-warnings'), cp = $('#sp-compare');
   const reg = SP.cur >= 0 ? SP.regions[SP.cur] : null;
+  if (!light) renderLibrary();                              // its 'fitted here' column follows the bands
   if (light && reg) {                                       // during a drag: the numbers of the dragged band only
     const row = tb.querySelectorAll('tr')[SP.sel + 1], b = reg.comps[SP.sel];
     if (row && b) { const inp = row.querySelectorAll('input[type=number]'); if (inp.length >= 3) { inp[0].value = b.pos.toFixed(1); inp[1].value = b.fwhm.toFixed(1); inp[2].value = +b.height.toPrecision(5); } }
@@ -859,7 +1007,7 @@ function renderResult(light) {
   }
   const info = f && !reg.dirty ? f.comps : [];
   const total = info.reduce((s, c) => s + (c.area || 0), 0) || 1;
-  tb.append(el('tr', null, ...['position (cm⁻¹)', 'FWHM', 'height', 'area %', 'shape', 'hold', 'where papers place it', 'distance', ''].map(h => el('th', null, h))));
+  tb.append(el('tr', null, ...['position (cm⁻¹)', 'FWHM', 'height', 'area %', 'shape', 'hold', SP.lib && SP.lib.rows.length ? 'expected of the formula' : 'where papers place it', 'distance', ''].map(h => el('th', null, h))));
   reg.comps.forEach((c, k) => {
     const fc = info[k] || {};
     const cell = (key, digits) => {
@@ -978,6 +1126,12 @@ async function applySession(s, label, quiet) {
 }
 async function applySession_(s, quiet) {
   const o = s.options, file = o.name || s.file;
+  if (!SP.state.files.some(f => f.name === file) && s.figure && s.figure.name === file) {      // a curve read off a figure travels in its session
+    try {
+      await api('/api/sp/fig/restore', { name: file, x: s.figure.x, y: s.figure.y, cm_per_px: s.figure.cm_per_px, notes: s.figure.notes });
+      await loadState(null);
+    } catch (e) { status(e.message, true); return; }
+  }
   if (!SP.state.files.some(f => f.name === file)) {
     SP.pending = s;
     status('this session is of ‘' + file + '’, which is not in the folder: open that spectrum (Open file…) and the session follows', true);
@@ -990,6 +1144,8 @@ async function applySession_(s, quiet) {
   $('#sp-despike').checked = !!o.despike; showBaselineRows();
   if (o.cif && SP.state.cifs.includes(o.cif)) $('#sp-cif').value = o.cif;
   if (o.ms && SP.state.manuscripts.includes(o.ms)) $('#sp-ms').value = o.ms;
+  const chem = o.formula_typed != null ? o.formula_typed : (o.formula || '');
+  if (chem) $('#sp-formula').value = chem;                  // a session that names no chemistry leaves the one in the field
   $('#sp-file').value = file;
   SP.gen++;
   SP.file = file; SP.series = o.series || 0; SP.d = null; SP.d2 = null; SP.regions = []; SP.cur = -1; SP.sel = -1; SP.anchors = (o.anchors || []).slice(); SP.lists = []; SP.listsRedo = [];
@@ -1053,6 +1209,8 @@ function wire() {
     await process(true); await restoreWork(); SP.ready = true;
   });
   $('#sp-kind').addEventListener('change', e => { if (e.target.value) setReverse(e.target.value.startsWith('ir')); process(false); });
+  $('#sp-formula').addEventListener('change', () => { keepChem(); saveWork(); loadLib(); });
+  $('#sp-formula').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); e.stopPropagation(); });
   $('#sp-open').addEventListener('click', () => $('#sp-upload').click());
   $('#sp-upload').addEventListener('change', e => { if (e.target.files.length) upload(e.target.files[0]); e.target.value = ''; });
   for (const id of ['sp-despike', 'sp-threshold', 'sp-resolution', 'sp-lam', 'sp-p', 'sp-width', 'sp-cif', 'sp-ms', 'sp-laser'])
@@ -1345,10 +1503,12 @@ loadPrefs(); showBaselineRows(); wire();
   const q = new URLSearchParams(location.search);
   try {
     await loadState(null);
+    recallChem();
     if (q.get('cif') && SP.state.cifs.includes(q.get('cif'))) $('#sp-cif').value = q.get('cif');
     if (q.get('ms') && SP.state.manuscripts.includes(q.get('ms'))) $('#sp-ms').value = q.get('ms');
     const pick = q.get('file') || (SP.state.files.length === 1 ? SP.state.files[0].name : '');
     if (pick && SP.state.files.some(f => f.name === pick)) { $('#sp-file').value = pick; await chooseFile(pick); } else draw();
+    loadLib();
   } catch (e) { status(e.message, true); draw(); }
 })();
 

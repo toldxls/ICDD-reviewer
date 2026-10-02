@@ -534,6 +534,48 @@ The same section appears in `pxrd paper --check`, `pxrd proposal` and the GUI's 
   the stated O–H bands. Either relation scatters by more than the differences it would be asked to judge, so the
   structure never makes a finding.
 
+**The band library** (`pxrd bands`). For a chemistry, the bands expected of it; for a band, what it is expected to be
+in that chemistry.
+
+```
+pxrd bands "Ca(UO2)2(PO4)2·11H2O"                 # the groups of the formula, each mode, where its band stands
+pxrd bands autunite --raman                       # the same from a mineral name (the local Mindat snapshot)
+pxrd bands "Cu4(SO4)(OH)6" --at 985,1450,3400     # what each band is expected to be in that chemistry
+pxrd bands --at 830                               # no chemistry: every group whose band stands there
+pxrd bands --groups                               # the groups the library knows
+```
+
+Two sources stand side by side in every row and are never merged into one number:
+
+- `data/band_library.json` (hand-maintained): per group and mode the **free-ion fundamental** and the **range in
+  minerals**, each with its source (Nakamoto 2009 for the fundamentals; Farmer 1974, Ross 1974, Čejka 1999 and
+  Libowitzky 1999 for the ranges). The fundamentals of sulfate, phosphate, arsenate, vanadate, ammonium, water and the
+  uranyl ranges are the values the corpus papers themselves quote from those sources; an entry marked `*` (`"check":
+  true`) was entered from memory of the source and has not been compared with it line by line — correct it in the file.
+- `data/band_windows.json` (measured): the **published positions** — the 5th–95th percentile and the median of what
+  published mineral descriptions assign to that mode, where eight papers or more give one.
+
+The formula is read for its groups (`bands.groups_of`): valence superscripts are no part of a group (`As5+O4` is an
+arsenate, `As3+O3` an arsenite), a mixed site before its oxygens is its dominant atom's group (`(Se0.8S0.2)O4` is a
+selenate), a group an empirical formula writes with a coefficient under 0.25 is a substituent and not a group of the
+mineral, uraninite's `UO2` is no uranyl, and a formula with no oxygen and S / Se / Te / As has no oxyanion at all —
+its bands are below about 500 cm⁻¹. `--at` names the modes of THIS chemistry whose range or published window holds the
+band, the nearest to its usual position first and the broad regions every hydrous mineral has (librations, M–O–H bends)
+last; the groups of another chemistry that stand there are named apart; the C–H window and the metal–oxygen / lattice
+region are offered whatever the mineral.
+
+What it is worth, measured on the papers' own assignments (1,100 assigned bands; windows built from one half of the
+papers and tried on the other): with no chemistry the first suggestion is the paper's mode for 38 % of the bands; with
+the formula for 82 %, and the paper's group for 88 %. What remains is overlap inside one group (ν1 against ν3 of an
+arsenate or a phosphate), which no window resolves. It is a reference to read a spectrum against, never a finding.
+
+The same library is in three more places: the spectrum window (below), `pxrd spectrum --formula`, and one information
+line of the spectroscopy section — `expected: the groups of <formula> and the stated bands in their ranges — …` — which
+sets a paper's stated bands in the ranges of its formula's groups (the modes above 700 cm⁻¹) and names a group with no
+stated band in any of them. The stated bands that fall in NO range of the formula are deliberately not listed there: on
+the corpus they were the reader's as often as the paper's (the end of a stated range read as a band, a formula cut
+short of its water).
+
 **The formula beside the bands** (information lines in the same section). What a spectrum of a new mineral is read for,
 first of all, is its hydrogen and its light groups — what the microprobe cannot see:
 
@@ -621,6 +663,14 @@ wavenumber (Libowitzky 1999, 2.60–3.20 Å) and the uranyl U–O distance a ban
 Cooney 1989; switched on by itself when the structure beside the spectrum has a uranyl ion). The pointer reads the
 distance, and each fitted band is marked on the ruler. The structure's expected positions are green ticks, the
 manuscript's stated bands orange marks.
+
+**The chemistry in the window.** The `chemistry` field takes a formula or a mineral name; left empty, the formula the
+manuscript beside the spectrum states is used (shown in grey). The `expected` layer then draws a bar over the plot for
+every mode of that chemistry — thin: the range in minerals; thick: the published positions, notched at their median; ◆
+the free-ion value — the pointer reads what the formula expects where it stands, every fitted band is named for what
+the formula expects there (or for the groups of another chemistry, when none of its own has a band there), and a
+**Band library** table under the fitted bands lists each mode with the manuscript's stated bands and the fitted bands
+that fall in it. The formula goes into the written table and the session.
 
 **A spectrum from a figure** (`From a figure…`). Most papers give no data — at best a figure. The window shows a page
 of a `.pdf` of the folder (pages whose caption names a Raman or infrared spectrum are starred), an image of a manuscript

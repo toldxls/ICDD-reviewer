@@ -137,6 +137,22 @@ body.sp input[type=checkbox] { accent-color: var(--accent); }
 #sp-warnings .warn { color: var(--warn); margin: 2px 0; }
 #sp-warnings .warn::before { content: '! '; font-weight: 700; }
 #sp-compare { margin-top: 6px; }
+#sp-formula { width: 15em; }
+#sp-library { margin-top: 10px; }
+#sp-library summary { cursor: pointer; color: var(--muted); }
+#sp-library summary b { color: var(--text); font-weight: 600; }
+#sp-library table { border-collapse: collapse; margin: 6px 0; font-variant-numeric: tabular-nums; }
+#sp-library th { text-align: left; font-weight: 600; color: var(--muted); padding: 2px 12px 2px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+#sp-library td { padding: 2px 12px 2px 0; vertical-align: baseline; white-space: nowrap; }
+#sp-library td.w { white-space: normal; color: var(--muted); }
+#sp-library td.none { color: var(--muted); }
+#sp-library tr.g td { border-top: 1px solid var(--line); }
+#sp-library i.sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+#sp-library .foot { color: var(--muted); margin-top: 4px; }
+#sp-plot .lib text { font-size: 10px; }
+#sp-plot .lib .range { stroke-width: 1; opacity: .75; }
+#sp-plot .lib .pub { stroke-width: 4; opacity: .9; }
+#sp-plot .lib .med { stroke: var(--bg0); stroke-width: 1.5; }
 #sp-compare .lost { color: var(--warn); }
 #sp-outputs a { cursor: pointer; text-decoration: underline; display: block; overflow-wrap: anywhere; margin: 2px 0; }
 #sp-exported { border: 1px solid rgb(var(--accent-rgb) / .5); border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; background: rgb(var(--accent-rgb) / .08); }

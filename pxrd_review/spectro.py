@@ -901,6 +901,10 @@ def check_lines(text, ex=None, cif=None, path=None, structure=None):
     except Exception:
         about = []
     try:
+        about += library_lines(own, paper_formulas(text, name or ''))
+    except Exception:
+        pass
+    try:
         about += table_lines(tab, prose)
     except Exception:
         pass
@@ -979,6 +983,66 @@ def paper_formulas(text, name=''):
 
 def _wn(v):
     return ', '.join('%g' % p for p in v[:6]) + (' …' if len(v) > 6 else '')
+
+
+LIBRARY_MIN = 700.0             # cm-1: below this the bends of every group and the metal-oxygen modes share the axis
+LIBRARY_BANDS = 4               # a paper stating fewer bands than this gives a list, not a spectrum to set beside its formula
+
+
+def library_lines(own, forms):
+    """The band library (pxrd_review.bands) beside the paper: the groups of its formula, where each one's bands are
+    expected, and the stated bands that stand there — one line, INFORMATION. Only the modes above `LIBRARY_MIN`
+    (stretches, the H-O-H bend), one entry per group; a group with no stated band in any of its ranges is named.
+    NOT said, on measurement: the stated bands that fall in no range of the formula. On the corpus (96 papers, 190
+    bands) those were the reader's as often as the paper's — the end of a stated range read as a band, a formula cut
+    short of its water — so that question is left to `pxrd bands --at` and the spectrum window, where a person gives
+    the band."""
+    from pxrd_review import bands as BD
+    if not forms:
+        return []
+    formula = re.sub(r'\s+', ' ', forms[0][0]).strip()
+    keys = BD.groups_of(formula)
+    if not keys or keys == ['sulfide']:
+        return []
+    pos = sorted({b.pos for b in own if b.family != 'overtone'})
+    if len(pos) < LIBRARY_BANDS:
+        return []
+    tech = {b.technique for b in own}
+    one = next(iter(tech)) if len(tech) == 1 and None not in tech else None            # a paper of one technique
+    rows = [r for r in BD.expected(groups=keys, technique=one) if r['hi'] > LIBRARY_MIN]
+    span = lambda r: (min(r['lo'], r['published']['p5']), max(r['hi'], r['published']['p95'])) if r['published'] else (r['lo'], r['hi'])
+    shown = lambda r: '%d–%d' % ((r['published']['p5'], r['published']['p95']) if r['published'] else (r['lo'], r['hi']))
+    parts = {}; order = []
+    for r in rows:                                               # one entry per group: its modes with their ranges, then the bands in any of them
+        lo, hi = span(r)
+        inside = [p for p in pos if lo <= p <= hi]
+        if r['broad']:
+            continue
+        oh = r['mode'] == 'stretch' and r['group'] in ('OH', 'H2O')                    # water and hydroxyl stretch in one place
+        key = 'O–H' if oh else 'H2O bend' if (r['group'], r['mode']) == ('H2O', 'bend') else r['group']
+        if key not in parts:
+            parts[key] = {'modes': [], 'bands': set(), 'lo': lo, 'hi': hi}; order.append(key)
+        e = parts[key]
+        name = 'stretch' if oh else '' if key == 'H2O bend' else r['mode']
+        if name not in [m for m, _s in e['modes']]:
+            e['modes'].append((name, shown(r)))
+        e['bands'].update(inside); e['lo'] = min(e['lo'], lo); e['hi'] = max(e['hi'], hi)
+    has = []; none = []
+    for key in order:
+        e = parts[key]
+        modes = ', '.join(('%s %s' % (m, s)).strip() for m, s in e['modes'])
+        if e['bands']:
+            has.append('%s (%s): %s' % (key, modes, _wn(sorted(e['bands']))) if len(e['modes']) > 1 or e['modes'][0][0] not in ('', 'stretch') else
+                       '%s %s: %s' % (key if key != 'O–H' else 'O–H stretch', e['modes'][0][1], _wn(sorted(e['bands']))))
+        elif key not in ('O–H', 'H2O bend') and pos[0] <= e['hi'] and pos[-1] >= e['lo']:      # … inside the stretch of axis the paper reports;
+            none.append('%s (%s)' % (key, modes))                                              # the O-H bands are `species_lines`' to speak of
+    if not has:
+        return []
+    shown_f = formula if len(formula) <= 60 else formula[:57] + '…'
+    line = 'expected: the groups of %s and the stated bands in their ranges — %s' % (shown_f, '; '.join(has))
+    if none:
+        line += '; no band stated for %s' % ', '.join(none)
+    return [line]
 
 
 def species_lines(text, ex=None, name='', _split=None, extra_bands=()):

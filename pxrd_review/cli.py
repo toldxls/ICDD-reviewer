@@ -49,6 +49,10 @@ long module paths, or ports.
                                    a Raman / infrared spectrum (text, CSV, .xlsx, RRUFF, JCAMP-DX, .spc, .spa, OPUS):
                                    cosmic rays removed, baseline taken off, bands fitted with uncertainties and
                                    warnings -> review_out/<stem>_sp.txt / .svg / .json
+    pxrd bands "<formula>"|<mineral> [--at 985,1630] [--raman|--ir] [--groups]
+                                   the band library: the vibrational bands expected of a chemistry (per group and
+                                   mode: the free-ion value, the range in minerals, the published positions) —
+                                   and, with --at, what a band at that position is expected to be in it
     pxrd pxrdaudit <manuscript.docx|paper.pdf> --cif structure.cif [--lambda Mo]
                                    the manuscript's powder table vs the .cif: the cell its dcalc column was
                                    computed from, strong lines left out, Icalc vs the computed pattern,
@@ -100,6 +104,7 @@ MODULE = {
     'lint':       'pxrd_review.lints',        # takes a manuscript — not folder-resolved
     'spectro':    'pxrd_review.spectro',      # takes a manuscript or a paper (+ --cif) — not folder-resolved
     'spectrum':   'pxrd_review.spectrum',     # takes a Raman / infrared data file — not folder-resolved
+    'bands':      'pxrd_review.bands',        # takes a formula or a mineral name — options only
     'proposal':   'pxrd_review.proposal',     # takes a folder or a manuscript — its own discovery, not folder-resolved
     'checkcif':   'pxrd_review.checkcif',     # takes a checkCIF report — not folder-resolved
 }
