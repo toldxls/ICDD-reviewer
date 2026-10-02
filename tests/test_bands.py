@@ -57,6 +57,34 @@ class Library(unittest.TestCase):
         for a in lib['always']:
             self.assertLess(a['range'][0], a['range'][1])
 
+    def test_each_numbered_mode_is_what_its_geometry_makes_it(self):
+        # the free ion's geometry fixes what ν1 … ν4 ARE and where each is active: a row that calls ν2 of a carbonate an
+        # in-plane bend, or lists ν1 of a sulfate as infrared-active, is wrong whatever its numbers
+        rules = {'tetrahedral': {'ν1': ('symmetric stretch', 'R'), 'ν2': ('symmetric bend', 'R'), 'ν3': ('antisymmetric stretch', 'R+IR'), 'ν4': ('antisymmetric bend', 'R+IR')},
+                 'planar': {'ν1': ('symmetric stretch', 'R'), 'ν2': ('out-of-plane bend', 'IR'), 'ν3': ('antisymmetric stretch', 'R+IR'), 'ν4': ('in-plane bend', 'R+IR')},
+                 'pyramidal': {'ν1': ('symmetric stretch', 'R+IR'), 'ν2': ('symmetric', 'R+IR'), 'ν3': ('antisymmetric stretch', 'R+IR'), 'ν4': ('antisymmetric bend', 'R+IR')},
+                 'linear': {'ν1': ('symmetric stretch', 'R'), 'ν2': ('bend', 'IR'), 'ν3': ('antisymmetric stretch', 'IR')}}
+        seen = 0
+        for g in B.library()['groups']:
+            rule = rules.get(g.get('shape'))
+            if not rule:
+                continue
+            for m in g['modes']:
+                if m['mode'] in rule:
+                    what, active = rule[m['mode']]
+                    self.assertTrue(m['what'].replace('N–H ', '').startswith(what), (g['key'], m['mode'], m['what']))
+                    self.assertEqual(m['active'], active, (g['key'], m['mode']))
+                    seen += 1
+            free = {m['mode']: m.get('free') for m in g['modes']}
+            if g['shape'] in ('tetrahedral', 'pyramidal') and all(free.get(k) for k in ('ν1', 'ν2', 'ν3', 'ν4')):
+                self.assertGreater(min(free['ν1'], free['ν3']), max(free['ν2'], free['ν4']), g['key'])      # stretches above bends
+            if g['shape'] == 'planar' and all(free.get(k) for k in ('ν1', 'ν2', 'ν3', 'ν4')):
+                self.assertTrue(free['ν3'] > free['ν1'] > free['ν2'] > free['ν4'], g['key'])               # CO3, NO3: 1415 > 1063 > 879 > 680
+        self.assertGreaterEqual(seen, 60)
+        shapes = {g['key']: g.get('shape') for g in B.library()['groups']}
+        self.assertEqual((shapes['SO4'], shapes['CO3'], shapes['SeO3'], shapes['UO2'], shapes['NH4'], shapes['H3O'], shapes['BO3'], shapes['BO4']),
+                         ('tetrahedral', 'planar', 'pyramidal', 'linear', 'tetrahedral', 'pyramidal', 'planar', 'tetrahedral'))
+
     def test_every_measured_window_belongs_to_a_mode(self):
         modes = {'%s %s' % (g['key'], m['mode']) for g in B.library()['groups'] for m in g['modes']}
         for name in B._windows():

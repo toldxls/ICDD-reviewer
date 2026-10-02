@@ -138,7 +138,10 @@ for a mineral's chemistry, which bands are expected where, and for a band, what 
   Ti, Nb/Ta, Mo, W and V outside a tetrahedron — and for each mode the library gives two things side by side, never
   merged into one number: the free-ion fundamental and the range in minerals from the literature (each entry with its
   source; one entered from memory of the source is marked for checking), and the positions published mineral
-  descriptions assign to that mode (the 5th–95th percentile and the median, where eight papers or more give one).
+  descriptions assign to that mode (the 5th–95th percentile and the median, where eight papers or more give one). Each
+  numbered mode says what it is — symmetric or antisymmetric stretch, symmetric (δs) or antisymmetric (δas) bend,
+  in-plane or out-of-plane — with its symmetry species and where the free ion's selection rules make it active, as its
+  geometry fixes them (tetrahedral XO4, planar XO3, pyramidal XO3, the linear uranyl ion); a test holds every row to it.
   `--at` turns it round: what a band at that position is expected to be in THIS chemistry, and — named apart — which
   groups of another chemistry stand there. A valence superscript is no part of a group, a mixed site before its oxygens
   is its dominant atom's group, and a group an empirical formula writes with a coefficient under a quarter is a

@@ -549,7 +549,14 @@ Two sources stand side by side in every row and are never merged into one number
 
 - `data/band_library.json` (hand-maintained): per group and mode the **free-ion fundamental** and the **range in
   minerals**, each with its source (Nakamoto 2009 for the fundamentals; Farmer 1974, Ross 1974, Čejka 1999 and
-  Libowitzky 1999 for the ranges). The fundamentals of sulfate, phosphate, arsenate, vanadate, ammonium, water and the
+  Libowitzky 1999 for the ranges). What each numbered mode IS follows from the free ion's geometry (`"shape"`), and a
+  test holds every row to it: tetrahedral XO4 — ν1 symmetric stretch (A1, Raman), ν2 symmetric bend δs (E, Raman), ν3
+  antisymmetric stretch (F2, both), ν4 antisymmetric bend δas (F2, both); planar XO3 (carbonate, nitrate, BO3) — ν1
+  symmetric stretch (Raman), ν2 out-of-plane bend (infrared), ν3 antisymmetric stretch, ν4 in-plane bend (both);
+  pyramidal XO3 (selenite, tellurite, sulfite, iodate, arsenite, hydronium) — ν1 symmetric stretch, ν2 symmetric bend,
+  ν3 antisymmetric stretch, ν4 antisymmetric bend, all active in both; uranyl — ν1 symmetric stretch (Raman), ν2 bend
+  and ν3 antisymmetric stretch (infrared). The activity given is the free ion's: in a crystal a forbidden mode
+  commonly appears, weakly. The fundamentals of sulfate, phosphate, arsenate, vanadate, ammonium, water and the
   uranyl ranges are the values the corpus papers themselves quote from those sources; an entry marked `*` (`"check":
   true`) was entered from memory of the source and has not been compared with it line by line — correct it in the file.
 - `data/band_windows.json` (measured): the **published positions** — the 5th–95th percentile and the median of what
