@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.16.0](#0160--2026-10-01) | 1 Oct | Spectroscopy: `pxrd spectro` recomputes the distances a paper credits to Bartlett & Cooney or Libowitzky from its own bands and sets the formula beside them; `pxrd spectrum` and the GUI's spectrum window import, clean and fit a Raman / infrared spectrum — or trace one off a figure; `pxrd bands` is a band library: for a chemistry the bands expected of it, for a band what it is expected to be in that chemistry |
 | [0.15.2](#0152--2026-09-30) | 30 Sep | GUI: the Mindat pane's lists are navigable — a species name opens its record, ‹ back returns to the list, a record's group name opens the group |
 | [0.15.1](#0151--2026-09-30) | 30 Sep | GUI: the Mindat & cross-source pane looks up any species or group from the local snapshot and filters species by element on a periodic table; formulas in the pane's group list no longer break mid-token |
 | [0.15.0](#0150--2026-09-30) | 30 Sep | The manuscript review reads a `.pdf` proposal whole (report only); a memo-driven regression; `pxrd paper --check` reads the analytical table's s.d. and count of analyses under their own headers, 2V in every place it is stated (against itself, the indices, and a comparison table's own column), the site-scattering table (the population's electrons vs the calculated column, refined vs calculated, the .cif's site vs the refined value) and the prose electron counts; `pxrd cifaudit` recomputes μ from the sites at Mo Kα; the under-bonded O, absolute Tmin, prism-as-plane, missing compatibility index and 'twinning not observed' rules |
@@ -40,9 +41,10 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
-## [Unreleased]
+## [0.16.0] — 2026-10-01
 **Spectroscopy.** The Raman and infrared bands a paper states are read and the distances it infers from them recomputed;
-a spectrum file is imported, cleaned and fitted in a window of its own.
+a spectrum file — or a figure of one — is imported, cleaned and fitted in a window of its own; and a band library says,
+for a mineral's chemistry, which bands are expected where, and for a band, what it is expected to be in that chemistry.
 
 ### Fixed
 - **GUI: two instances on one machine no longer log each other out.** The session cookie was one name for the host, so
@@ -128,10 +130,39 @@ a spectrum file is imported, cleaned and fitted in a window of its own.
   middle is taken along its slope; a baseline hidden in the axis line is zero, not missing. Measured on figures set
   against the data they were drawn from (`tools/figure_oracle.py`, private cases, and a synthetic ladder of
   resolutions): a traced peak lies a quarter to a half of a pixel from the data's, the shape at R² 0.99–0.9998.
+- **The band library** (`pxrd bands "<formula>" | <mineral> [--at 985,1630] [--raman|--ir]`; `pxrd_review/bands.py`,
+  `data/band_library.json`): the vibrational bands a chemistry is expected to give. The formula is read for its groups
+  — uranyl, sulfate, phosphate (and an acid phosphate's P–OH), arsenate, arsenite, vanadate, isolated and linked
+  silicate, carbonate, oxalate, nitrate, borate triangles and tetrahedra, molybdate, tungstate, chromate, selenate,
+  selenite, tellurite, tellurate, iodate, sulfite, ammonium, hydronium, water, hydroxyl, the metal–oxygen stretches of
+  Ti, Nb/Ta, Mo, W and V outside a tetrahedron — and for each mode the library gives two things side by side, never
+  merged into one number: the free-ion fundamental and the range in minerals from the literature (each entry with its
+  source; one entered from memory of the source is marked for checking), and the positions published mineral
+  descriptions assign to that mode (the 5th–95th percentile and the median, where eight papers or more give one).
+  `--at` turns it round: what a band at that position is expected to be in THIS chemistry, and — named apart — which
+  groups of another chemistry stand there. A valence superscript is no part of a group, a mixed site before its oxygens
+  is its dominant atom's group, and a group an empirical formula writes with a coefficient under a quarter is a
+  substituent, not a group of the mineral. Measured on the papers' own assignments (1,100 assigned bands, windows built
+  from one half of the papers and tried on the other): the first suggestion is the paper's mode for 38 % of bands with
+  no chemistry given and for 82 % with the formula; the paper's group is the first suggestion for 88 %.
+- **The library in the spectrum window**: a `chemistry` field (a formula or a mineral name; left empty, the formula
+  the manuscript beside the spectrum states), an `expected` layer — a bar over the plot for every mode of the
+  chemistry, thin for the range in minerals, thick for the published positions, a ◆ at the free-ion value — a table of
+  the expected bands under the fitted ones with the manuscript's stated bands and the fitted bands that fall in each,
+  and for every fitted band what the formula expects there in place of the windows of every chemistry (`pxrd spectrum
+  --formula` does the same on the command line; the written table and the session carry the formula).
+- **The library beside a paper's stated bands** (one information line in the spectroscopy section): the groups of the
+  formula, the range of each mode above 700 cm⁻¹, and the stated bands that stand there; a group with no stated band in
+  any of its ranges is named. On the corpus 224 of 541 papers get the line and 3 name a group. Stated bands that fall
+  in no range of the formula are NOT listed: on the corpus those were the reader's as often as the paper's.
+- **A spectrum read off a figure survives a restart**: the window keeps the traced points and gives them back to a
+  server that was started again, the curve is in the list as before with the fit that was left on it, and a session
+  written from a traced curve carries the curve.
 - `data/band_windows.json`: where published mineral descriptions place the numbered modes of the common groups, the O–H
-  stretch and the H2O bend (percentiles per group, mode and technique; aggregates of eight papers or more).
-- Dev tools: `tools/corpus_spectra.py` (the band library, the proof of the coefficients, the A/B, the windows),
-  `tools/seed_spectra.py` (recall).
+  stretch and the H2O bend (percentiles per group and mode; aggregates of eight papers or more, twelve for a window of
+  one technique alone, positions more than three robust deviations from the median left out).
+- Dev tools: `tools/corpus_spectra.py` (the per-paper band record with its chemistry, the proof of the coefficients, the
+  A/B, the windows), `tools/seed_spectra.py` (recall).
 
 ## [0.15.2] — 2026-09-30
 **The Mindat pane's lists lead somewhere.** A species in any pane list opens its record, ‹ back returns to the list it
