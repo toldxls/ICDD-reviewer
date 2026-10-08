@@ -64,6 +64,10 @@ for a mineral's chemistry, which bands are expected where, and for a band, what 
 - **A RRUFF spectrum pulled up in the spectrum window.** With a RRUFF library on the machine (`$PXRD_RRUFF_DIR`, a `RRUFF` folder
   beside or above the open folder, or `~/RRUFF`), a mineral typed into the `RRUFF mineral…` box lists its spectra; one opens here as
   a spectrum of its own or is drawn under the current curve (`overlay`), scaled to it. Read in place (`omnic_lib`), never copied.
+- **Spectrum window, tidied.** The top bar stays on one line (the label words moved into the controls, the status line gives
+  way); the plot legend sits behind a `?`; the five less-used layers (structure, found bands, the two rulers, the second
+  derivative) sit under `more ▾`; the finer fit controls (one width / one η, width limits, smallest band, refine, seeds from
+  the structure) fold under `more options`, opened by itself when a region uses one of them.
 - **The fit names a background hump.** A band wider than half the region fitted is said to be a background, with the remedy
   (a baseline, a narrower region); only one as wide as the region itself had been — measured on 320 RRUFF spectra fitted whole.
 - **`pxrd spectro <manuscript.docx|paper.pdf> [--cif X]`, and a spectroscopy section in `pxrd paper --check`, `pxrd proposal`

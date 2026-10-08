@@ -1,9 +1,29 @@
 /* The spectrum window (/spectra): app.css gives the theme tokens, the top bar, .seg, .chip, .muted, .hidden */
 body.sp { overflow: hidden; }
-body.sp #topbar select { max-width: 17em; }
+/* one line, always: every control keeps its width, the status line takes what is left and is cut with an ellipsis */
+body.sp #topbar { flex-wrap: nowrap; gap: 8px; overflow: hidden; }
+body.sp #topbar > * { flex: none; }
+body.sp #topbar select { max-width: 12em; }
+body.sp #topbar #sp-file { max-width: 15em; }
 body.sp #topbar button { white-space: nowrap; }
 body.sp #topbar label { white-space: nowrap; }
-#sp-status { max-width: 34em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.sp #topbar .spacer { flex: 0 1 12px; }
+#sp-formula { width: 11em; }
+#sp-rruff-box { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+#sp-rruff-box select { max-width: 11em; }
+#sp-status { flex: 1 1 0 !important; min-width: 3em; max-width: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the plot legend behind a '?' */
+.help { display: inline-block; width: 1.4em; height: 1.4em; line-height: 1.4em; text-align: center; border: 1px solid var(--line); border-radius: 50%; cursor: help; }
+/* 'more ▾' over the plot: a popover that opens under its summary */
+details.pop { position: relative; }
+details.pop > summary { cursor: pointer; list-style: none; color: var(--muted); }
+details.pop > summary::-webkit-details-marker { display: none; }
+details.pop[open] > summary { color: var(--accent); }
+details.pop .pop-body { position: absolute; z-index: 30; top: 1.6em; left: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; white-space: nowrap;
+  background: var(--panel, rgb(var(--panel-rgb) / 1)); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 18px rgb(0 0 0 / .25); }
+/* the finer fit controls, folded */
+details.fold > summary { cursor: pointer; color: var(--muted); font-size: .92em; margin: 2px 0; }
+details.fold[open] > summary { color: var(--text); }
 body.sp select, body.sp input[type=number] {
   background: rgb(var(--panel-rgb) / .9); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit;
 }

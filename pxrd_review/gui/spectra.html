@@ -11,12 +11,12 @@
   <header id="topbar">
     <div class="brand">Spectrum</div>
     <select id="sp-file" title="A spectrum file of the open folder, or one opened here.&#10;Text, CSV, a workbook sheet, RRUFF, JCAMP-DX, .spc, .spa or an OPUS file."></select>
-    <button id="sp-open" title="Open a spectrum file from anywhere on this machine. It is read into this window only: nothing is copied into the folder, and nothing leaves the machine.">Open file…</button>
+    <button id="sp-open" title="Open a spectrum file from anywhere on this machine. It is read into this window only: nothing is copied into the folder, and nothing leaves the machine.">Open…</button>
     <input type="file" id="sp-upload" class="hidden" title="a spectrum file, or a session (…_sp.json) written by an export">
-    <button id="sp-fig-open" title="Most papers give no data — at best a figure. Read the curve off a figure: a page of a .pdf, an image of a manuscript, or an image file. The frame, two points of the axis and the curve are confirmed by hand; the traced curve then opens here like any spectrum, with the manuscript's stated bands set beside it. Good to about a pixel: for seeing where the curve has a band, not for fitting widths.">From a figure…</button>
+    <button id="sp-fig-open" title="Most papers give no data — at best a figure. Read the curve off a figure: a page of a .pdf, an image of a manuscript, or an image file. The frame, two points of the axis and the curve are confirmed by hand; the traced curve then opens here like any spectrum, with the manuscript's stated bands set beside it. Good to about a pixel: for seeing where the curve has a band, not for fitting widths.">Figure…</button>
     <select id="sp-series" class="hidden" title="Which spectrum of the file (a sheet or a file may hold several)"></select>
     <span id="sp-rruff-box" class="hidden">
-      <input id="sp-rruff" list="sp-rruff-list" placeholder="RRUFF mineral…" title="A mineral of the RRUFF library on this machine: type its name, choose one of its spectra, then open it here or draw it under the current curve (overlay).">
+      <input id="sp-rruff" list="sp-rruff-list" placeholder="RRUFF…" title="A mineral of the RRUFF library on this machine: type its name, choose one of its spectra, then open it here or draw it under the current curve (overlay).">
       <datalist id="sp-rruff-list"></datalist>
       <select id="sp-rruff-spec" class="hidden" title="The mineral's spectra in the library (sample id, processing, laser)"></select>
       <button id="sp-rruff-open" class="hidden" title="Open this RRUFF spectrum here, as a spectrum of its own">open</button>
@@ -29,9 +29,9 @@
       <option value="ir-transmittance">infrared, transmittance</option>
     </select>
     <div class="spacer"></div>
-    <label class="muted" title="The mineral's chemistry: a formula — Ca(UO2)2(PO4)2·11H2O — or a mineral name (looked up in the local Mindat snapshot). The band library then says what its groups are expected to give: bars over the plot (‘expected’), the table under the fitted bands, and for each fitted band what it is expected to be in THIS chemistry. Left empty, the formula the manuscript beside the spectrum states is used (shown in grey).">chemistry <input type="text" id="sp-formula" placeholder="formula or mineral" spellcheck="false" autocomplete="off"></label>
-    <label class="muted" title="The structure: its uranyl U–O and hydrogen-bond D···A distances are turned into the positions the two relations expect (Bartlett &amp; Cooney; Libowitzky) and drawn as green ticks.">.cif <select id="sp-cif"></select></label>
-    <label class="muted" title="The manuscript or paper: the band positions its text states are drawn as orange marks and set beside the fitted bands.">manuscript <select id="sp-ms"></select></label>
+    <label class="muted" title="The mineral's chemistry: a formula — Ca(UO2)2(PO4)2·11H2O — or a mineral name (looked up in the local Mindat snapshot). The band library then says what its groups are expected to give: bars over the plot (‘expected’), the table under the fitted bands, and for each fitted band what it is expected to be in THIS chemistry. Left empty, the formula the manuscript beside the spectrum states is used (shown in grey)."><input type="text" id="sp-formula" placeholder="formula or mineral" spellcheck="false" autocomplete="off"></label>
+    <label class="muted" title="The structure: its uranyl U–O and hydrogen-bond D···A distances are turned into the positions the two relations expect (Bartlett &amp; Cooney; Libowitzky) and drawn as green ticks."><select id="sp-cif"></select></label>
+    <label class="muted" title="The manuscript or paper: the band positions its text states are drawn as orange marks and set beside the fitted bands."><select id="sp-ms"></select></label>
     <span id="sp-status" class="muted"></span>
   </header>
 
@@ -93,17 +93,19 @@
         <h3>Fit</h3>
         <div class="row"><label title="The shape of every band of the region (changing it changes them all — one step of undo) and of the bands added from here on. One band's own shape: its row in the table.">shape <select id="sp-shape"><option value="pvoigt">pseudo-Voigt</option><option value="gauss">Gaussian</option><option value="lorentz">Lorentzian</option></select></label></div>
         <div class="row"><label title="What the region's own baseline may still be after the subtraction above.">local baseline <select id="sp-local"><option value="linear">sloping</option><option value="const">constant</option><option value="none">none</option></select></label></div>
-        <div class="row"><label title="Every band of the region takes one common width and shape — for a multiplet of one kind."><input type="checkbox" id="sp-share-w"> one width for all</label>
-          <label title="Every pseudo-Voigt band takes one common shape parameter η; the widths stay their own. A dozen overlapping bands do not fix a dozen shapes — with one η the fit has that many parameters fewer and settles."><input type="checkbox" id="sp-share-eta"> one η</label></div>
         <div class="row"><label title="How many bands the automatic fit uses. Empty: as many as the data support, up to the number on the right.">bands <input type="number" id="sp-n" min="1" max="16" step="1" placeholder="auto"></label>
           <label title="The most bands the automatic fit may use.">at most <input type="number" id="sp-maxn" value="12" min="1" max="16" step="1"></label></div>
+        <div class="row"><label title="After every change to a band — a drag, an added, removed, split or merged band, an edited number — the HEIGHTS of all bands are fitted again at once. Nothing else moves and no band is removed: what you placed stays where you placed it. ‘Fit these’ then refines whatever ‘refine’ allows. Off: changes are only previewed (dashed) until ‘Fit these’."><input type="checkbox" id="sp-live" checked> heights follow edits</label></div>
+        <details id="sp-fit-more" class="fold"><summary title="The finer controls: one width or one η for all, width limits, the smallest band, what a refit may move, seeds from the structure">more options</summary>
+        <div class="row"><label title="Every band of the region takes one common width and shape — for a multiplet of one kind."><input type="checkbox" id="sp-share-w"> one width for all</label>
+          <label title="Every pseudo-Voigt band takes one common shape parameter η; the widths stay their own. A dozen overlapping bands do not fix a dozen shapes — with one η the fit has that many parameters fewer and settles."><input type="checkbox" id="sp-share-eta"> one η</label></div>
         <div class="row"><label title="The widest a band may be (cm⁻¹). What keeps a component of a broad envelope — the O–H stretches — from widening into the whole envelope: with a limit the fit must use several narrower bands. A band resting on the limit is said so.">widest <input type="number" id="sp-wmax" min="1" max="5000" step="5" placeholder="any"></label>
           <label title="The narrowest a band may be (cm⁻¹).">narrowest <input type="number" id="sp-wmin" min="0.1" max="5000" step="1" placeholder="any"></label></div>
         <div class="row"><label title="How small a band the automatic fit, ‘+ band’ and the marks under the plot may propose: its share of the curve where it stands (%). Lower finds more — and weaker — bands.">smallest band <input type="number" id="sp-share" value="3" min="0" max="50" step="1"> %</label></div>
         <div class="row"><label title="What ‘Fit these’ — and the refit after each change — may move. On an envelope of many overlapping bands a fit of everything moves everything: set the bands by hand, let the fit find their heights, then release the widths, then the positions. A band’s own ‘hold’ boxes add to this.">refine <select id="sp-refine">
             <option value="all">everything</option><option value="heights">heights only</option><option value="widths">heights + widths</option><option value="positions">heights + positions</option></select></label></div>
-        <div class="row"><label title="Start the automatic fit from the positions the structure expects (the green ticks inside the region)."><input type="checkbox" id="sp-seed"> from the structure</label>
-          <label title="After every change to a band — a drag, an added, removed, split or merged band, an edited number — the HEIGHTS of all bands are fitted again at once. Nothing else moves and no band is removed: what you placed stays where you placed it. ‘Fit these’ then refines whatever ‘refine’ allows. Off: changes are only previewed (dashed) until ‘Fit these’."><input type="checkbox" id="sp-live" checked> heights follow edits</label></div>
+        <div class="row"><label title="Start the automatic fit from the positions the structure expects (the green ticks inside the region)."><input type="checkbox" id="sp-seed"> from the structure</label></div>
+        </details>
         <div class="row"><button id="sp-auto" class="primary" title="Find the bands of the region and fit them: every band the second derivative shows at any scale, then whatever the residual still holds, then each band tested for removal.">Auto fit</button>
           <button id="sp-refit" title="Refine the bands of the table: what ‘refine’ allows to move, moves. A band the fit drives to zero height is taken out, and said.">Fit these</button>
           <button id="sp-clear" title="Remove this region and its bands (undo brings them back).">Clear</button></div>
@@ -113,8 +115,7 @@
           <button id="sp-redo" title="Forward again.">redo</button></div>
       </section>
       <section>
-        <h3>Written files</h3>
-        <div class="muted" title="Every export also writes a session file (…_sp.json): the options and every band as they stand. Click one below — or open it with Open file… — to take the fit up again where it was left.">Written files (click to open; a session reopens the fit):</div>
+        <h3 title="Every export also writes a session file (…_sp.json): the options and every band as they stand. Click one below — or open it with Open file… — to take the fit up again where it was left.">Written files</h3>
         <div id="sp-outputs" class="muted"></div>
       </section>
     </aside>
@@ -127,22 +128,24 @@
           <button data-m="band" title="Click where a band is to add it to the region's fit — at the height you click.">band</button>
           <button data-m="anchor" title="Click where the spectrum is baseline (with the anchor-points baseline).">anchor</button>
         </div>
-        <span class="muted" title="In the plot: drag a band's ● to move it and set its height, its ◆ to set its width; click a band to select it; Delete removes the selected band, ← → nudge it (Shift: by 5 cm⁻¹); click a ▲ under the plot to add the band the residual suggests there; drag a ▮ tab on either edge of the shaded region to change the stretch that is fitted. Scroll zooms along the axis; Shift-scroll (or scroll over the height axis) enlarges the foot of the curve; double-click shows everything again.">● move · ◆ width · ▲ add · Del remove · ▮ region edge · ⇧scroll height</span>
+        <span class="muted help" title="In the plot: drag a band's ● to move it and set its height, its ◆ to set its width; click a band to select it; Delete removes the selected band, ← → nudge it (Shift: by 5 cm⁻¹); click a ▲ under the plot to add the band the residual suggests there; drag a ▮ tab on either edge of the shaded region to change the stretch that is fitted. Scroll zooms along the axis; Shift-scroll (or scroll over the height axis) enlarges the foot of the curve; double-click shows everything again.">?</span>
         <span id="sp-busy" class="hidden">fitting…</span>
         <span id="sp-readout" class="muted"></span>
       </div>
       <div id="sp-layers" class="muted">show:
           <label><input type="checkbox" data-layer="raw"> as recorded</label>
           <label><input type="checkbox" data-layer="comps" checked> bands</label>
-          <label><input type="checkbox" data-layer="ticks" checked> structure</label>
           <label><input type="checkbox" data-layer="stated" checked> manuscript</label>
           <label title="The band library over the plot: for each group of the mineral's chemistry (the ‘chemistry’ field above, else the manuscript's formula) and each of its modes, a bar where the band is expected — thin: the range in minerals from the literature; thick: where published mineral descriptions place it (5th–95th percentile, the tick their median); ◆ the free-ion value. Windows of different groups overlap: the bars say what a band CAN be in this chemistry, not what it is."><input type="checkbox" data-layer="lib" checked> expected</label>
-          <label><input type="checkbox" data-layer="peaks"> found bands</label>
-          <label title="A ruler over the plot: the O···O distance of the hydrogen bond whose O–H stretch would stand at each wavenumber — Libowitzky (1999). The pointer reads it; each fitted band is marked on it. A correlation with scatter: it places a band, it does not measure a bond."><input type="checkbox" data-layer="oo" checked> O···O Å</label>
-          <label title="Two rulers over the plot: the uranyl U–O distance a band would mean as ν1 and as ν3 (UO2)2+ — Bartlett &amp; Cooney (1989). Switched on by itself when the structure beside the spectrum has a uranyl ion."><input type="checkbox" data-layer="uo"> U–O Å</label>
-          <label title="The second derivative of the spectrum, bands pointing up, smoothed over the width on the right: a component hidden in an envelope shows as a bump of its own. Narrow width = fine detail and noise; wide = the broad components."><input type="checkbox" data-layer="d2"> 2nd derivative</label>
-          <label title="The smoothing width of the second derivative (cm⁻¹)."><input type="number" id="sp-d2w" value="25" min="2" max="500" step="5"> cm⁻¹</label>
           <label title="High wavenumber on the left, as an infrared spectrum is printed."><input type="checkbox" data-layer="reverse"> high → low</label>
+          <details id="sp-more" class="pop"><summary title="More layers: the structure's expected positions, the found bands, the distance rulers, the second derivative">more ▾</summary><div class="pop-body">
+            <label><input type="checkbox" data-layer="ticks" checked> structure</label>
+            <label><input type="checkbox" data-layer="peaks"> found bands</label>
+            <label title="A ruler over the plot: the O···O distance of the hydrogen bond whose O–H stretch would stand at each wavenumber — Libowitzky (1999). The pointer reads it; each fitted band is marked on it. A correlation with scatter: it places a band, it does not measure a bond."><input type="checkbox" data-layer="oo" checked> O···O Å</label>
+            <label title="Two rulers over the plot: the uranyl U–O distance a band would mean as ν1 and as ν3 (UO2)2+ — Bartlett &amp; Cooney (1989). Switched on by itself when the structure beside the spectrum has a uranyl ion."><input type="checkbox" data-layer="uo"> U–O Å</label>
+            <label title="The second derivative of the spectrum, bands pointing up, smoothed over the width on the right: a component hidden in an envelope shows as a bump of its own. Narrow width = fine detail and noise; wide = the broad components."><input type="checkbox" data-layer="d2"> 2nd derivative</label>
+            <label title="The smoothing width of the second derivative (cm⁻¹)."><input type="number" id="sp-d2w" value="25" min="2" max="500" step="5"> cm⁻¹</label>
+          </div></details>
       </div>
       <div id="sp-plot" title=""></div>
       <div id="sp-split" title="Drag to give the plot or the band table more room. Double-click: back to the usual split."></div>

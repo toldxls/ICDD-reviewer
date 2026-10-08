@@ -115,7 +115,7 @@ async function loadState(pick) {
   for (const f of s.files) fsel.append(el('option', { value: f.name }, f.name + (f.source === 'upload' ? '  (opened here)' : '')));
   const fill = (sel, items, none) => { sel.textContent = ''; sel.append(el('option', { value: '' }, none)); for (const k of items) sel.append(el('option', { value: k }, k)); };
   const keepCif = $('#sp-cif').value, keepMs = $('#sp-ms').value;
-  fill($('#sp-cif'), s.cifs, 'none'); fill($('#sp-ms'), s.manuscripts, 'none');
+  fill($('#sp-cif'), s.cifs, '.cif: none'); fill($('#sp-ms'), s.manuscripts, 'manuscript: none');      // the label's word is in the control: the bar stays one line
   $('#sp-cif').value = keepCif; $('#sp-ms').value = keepMs;
   const pre = $('#sp-presets'); pre.textContent = '';
   for (const r of s.regions) pre.append(el('button', { onclick: () => setRegion(r.lo, r.hi, true) }, r.name + ' ' + r.lo + '–' + r.hi));
@@ -244,7 +244,7 @@ async function loadLib() {
     if (seq !== SP.libSeq) return;
     const was = SP.lib ? SP.lib.formula : '';
     SP.lib = Object.assign(r, { key });
-    $('#sp-formula').placeholder = r.source === 'manuscript' && r.formula ? r.formula : 'formula or mineral';
+    $('#sp-formula').placeholder = r.source === 'manuscript' && r.formula ? r.formula : 'chemistry: formula or mineral';
     draw(); renderLibrary();
     if (was !== r.formula) for (const reg of SP.regions) if (reg.fit && reg.comps.length && !reg.dirty) relabel(reg);
   } catch (e) { status(e.message, true); }
@@ -683,6 +683,8 @@ function syncControls(r) {
   if (!r || r.local == null) return;
   $('#sp-local').value = r.local; $('#sp-share-w').checked = !!r.share_width; $('#sp-share-eta').checked = !!r.share_eta;
   $('#sp-wmax').value = r.max_fwhm || ''; $('#sp-wmin').value = r.min_fwhm || '';
+  const fold = $('#sp-fit-more');                            // a region fitted with one of the finer settings shows them: the fold opens
+  if (fold && (r.share_width || r.share_eta || r.max_fwhm || r.min_fwhm)) fold.open = true;
 }
 function zoomTo(lo, hi) { const pad = 0.15 * (hi - lo); SP.view = [Math.max(SP.d.x[0], lo - pad), Math.min(SP.d.x[SP.d.x.length - 1], hi + pad)]; draw(); }
 // A fitted region given new bounds: its bands stay (those now outside it go — undo brings them back), it stops at its
@@ -1245,6 +1247,12 @@ function wire() {
   $('#sp-formula').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); e.stopPropagation(); });
   $('#sp-open').addEventListener('click', () => $('#sp-upload').click());
   wireRruff();
+  // the 'more ▾' layers popover closes on a click elsewhere or Escape (a <details> stays open until its summary is clicked again)
+  const more = $('#sp-more');
+  if (more) {
+    document.addEventListener('mousedown', ev => { if (more.open && !more.contains(ev.target)) more.open = false; });
+    document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && more.open) more.open = false; });
+  }
   $('#sp-upload').addEventListener('change', e => { if (e.target.files.length) upload(e.target.files[0]); e.target.value = ''; });
   for (const id of ['sp-despike', 'sp-threshold', 'sp-resolution', 'sp-lam', 'sp-p', 'sp-width', 'sp-cif', 'sp-ms', 'sp-laser'])
     $('#' + id).addEventListener('change', () => process(false));
