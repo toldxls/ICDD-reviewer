@@ -104,6 +104,12 @@ class SpectrumWindow(unittest.TestCase):
         # nothing typed: the formula the manuscript beside the spectrum states — this one states none
         none = self._post('/api/sp/bands', {'ms': 'testite'})
         self.assertEqual((none['formula'], none['groups'], none['rows'], none['source']), ('', [], [], ''))
+        # a name the snapshot does not know is said, never read as a formula; a known one resolves in any case
+        bad = self._post('/api/sp/bands', {'formula': 'Notaspeciesofanysnapshot', 'ms': 'testite'})
+        self.assertEqual((bad['source'], bad['name'], bad['formula'], bad['groups'], bad['rows']), ('unresolved', 'Notaspeciesofanysnapshot', '', [], []))
+        from pxrd_review import bands as B
+        if B.resolve('autunite')[1]:
+            self.assertEqual([g['key'] for g in self._post('/api/sp/bands', {'formula': 'Autunite'})['groups']], ['UO2', 'PO4', 'H2O'])
         self.assertEqual(self._post('/api/sp/bands', {'formula': 'PbS'})['groups'][0]['key'], 'sulfide')
         self.assertEqual(self._post('/api/sp/bands', {})['rows'], [])
         # a fit asked with the chemistry: each band is named for what that formula expects there, and the files say which formula
@@ -332,6 +338,18 @@ class SpectrumWindow(unittest.TestCase):
             self.G.ms_set_folder(self.tmp)
             if self.G.MS['athread']:
                 self.G.MS['athread'].join(60)
+
+    def test_an_upload_let_go_is_said_and_a_bad_picture_refused(self):
+        self.G._SP['uploads'].clear(); self.G._SP['let_go'].clear()
+        for k in range(self.G._SP_KEEP + 1):                                                         # one more than the window keeps
+            r = self.c.post('/api/sp/upload', data={'file': (io.BytesIO(self.text.encode()), 'up%d.txt' % k)}, content_type='multipart/form-data')
+            self.assertTrue(json.loads(r.data)['ok'])
+        gone = self._post('/api/sp/process', {'name': 'up0.txt'}, 404)['error']
+        self.assertIn('was opened here and has been let go', gone); self.assertIn('open it again', gone)
+        self.assertEqual(self._post('/api/sp/process', {'name': 'up1.txt'})['name'], 'up1.txt')
+        self.assertIn('no such spectrum file in the open folder', self._post('/api/sp/process', {'name': 'never.txt'}, 404)['error'])
+        r = self.c.post('/api/sp/fig/upload', data={'file': (io.BytesIO(b'not a picture'), 'pic.png')}, content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 400); self.assertIn('could not be read as an image', json.loads(r.data)['error'])
 
     def test_upload_stays_in_memory(self):
         before = sorted(os.listdir(self.tmp))

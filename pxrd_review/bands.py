@@ -211,10 +211,26 @@ def _window_text(r):
     return '%d–%d, median %d (%d papers%s)' % (p['p5'], p['p95'], p['p50'], p['papers'], '' if r['published_for'] == 'any' else ', ' + {'raman': 'Raman', 'ir': 'infrared'}[r['published_for']])
 
 
+_NAME = re.compile(r'^[A-Za-zÀ-ÿ\-]+(?:-?\([A-Za-z]+\))?$')
+
+
+def looks_like_name(text):
+    """Is the text the shape of a mineral name (letters, a hyphen, a Levinson suffix) rather than a formula? The first
+    letter's case is no test ('Autunite', 'monazite-(Ce)' are names); a capital AFTER the first letter, outside the
+    suffix, is a second element symbol ('PbS', 'NaCl', 'FeAsS' are formulas) — unless the whole word is typed in
+    capitals ('AUTUNITE')."""
+    text = (text or '').strip()
+    if not text or re.search(r'\d', text) or not _NAME.match(text):
+        return False
+    core = re.sub(r'-?\([A-Za-z]+\)$', '', text)
+    return len(core) > 2 and (not re.search(r'[A-Z]', core[1:]) or (core.isupper() and len(core) > 3))
+
+
 def resolve(arg):
-    """(formula, mineral name or '') — a mineral name looked up in the local Mindat snapshot, else the text as a formula."""
+    """(formula, mineral name or '') — a mineral name looked up in the local Mindat snapshot (any case), else the text
+    as a formula; `looks_like_name` tells a name that did not resolve from a formula."""
     arg = (arg or '').strip()
-    if arg and not re.search(r'\d', arg) and re.match(r'^[A-Za-zÀ-ÿ\-]+(?:-?\([A-Za-z]+\))?$', arg) and arg.lower() == arg:
+    if looks_like_name(arg):
         try:
             from pxrd_review import paper_extract as PE
             rec = PE.species_record(arg)
@@ -292,6 +308,9 @@ def main(argv=None):
     if not a.chemistry and not a.at:
         ap.print_usage(); return 2
     formula, name = resolve(a.chemistry) if a.chemistry else (None, '')
+    if formula is not None and not name and looks_like_name(formula):
+        print('no species named ‘%s’ in the local Mindat snapshot — give its formula' % formula)
+        formula = None
     if formula is not None:
         print('\n'.join(table(formula, tech, name)))
     if a.at:

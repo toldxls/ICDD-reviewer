@@ -2520,8 +2520,9 @@ def _calc_kind(s, head=False):
     checks. A section head, a doubt ('[unverified]'), and a line naming no difference are
     information. The line's own wording decides — the checker says what is a difference and what
     is not (a blank cell for a contact under bv_check.BLANK_INFO is 'not a difference' in its
-    text), so no number is re-read here and the CLI and the GUI cannot disagree."""
-    if head or not _CALC_FLAG.search(s) or '[unverified]' in s or s.startswith('not verifiable'):
+    text), so no number is re-read here and the CLI and the GUI cannot disagree. A line marked
+    '(information)' is information whatever else it carries: the paper sentence it quotes can hold ' vs '."""
+    if head or not _CALC_FLAG.search(s) or '[unverified]' in s or '(information)' in s or s.startswith('not verifiable'):
         return 'calcinfo'
     return 'calc'
 
@@ -3114,7 +3115,20 @@ from collections import OrderedDict
 _SP_UPLOAD_MAX = 48 * 1024 * 1024
 _SP_FIT_MAX = 60000                                     # points × bands of one fit
 _SP_KEEP = 6                                            # uploads / prepared spectra kept in memory (the oldest dropped)
-_SP = {'uploads': OrderedDict(), 'prep': OrderedDict(), 'series': OrderedDict(), 'figup': OrderedDict(), 'figs': OrderedDict(), 'lock': threading.Lock()}
+_SP = {'uploads': OrderedDict(), 'prep': OrderedDict(), 'series': OrderedDict(), 'figup': OrderedDict(), 'figs': OrderedDict(), 'lock': threading.Lock(),
+       'let_go': set()}                                   # names of uploads (and traced curves) dropped to make room: asked for again, the answer says so
+
+
+def _sp_hold_upload(name, series):
+    """Keep an upload (or a curve read off a figure) under its name, the oldest let go beyond _SP_KEEP; what was
+    prepared under that name before is forgotten. Caller holds no lock."""
+    with _SP['lock']:
+        _SP['uploads'][name] = series; _SP['uploads'].move_to_end(name); _SP['let_go'].discard(name)
+        while len(_SP['uploads']) > _SP_KEEP:
+            gone, _s = _SP['uploads'].popitem(last=False)
+            _SP['let_go'].add(gone)
+        for k in [k for k in _SP['prep'] if json.loads(k)[0] == name]:
+            del _SP['prep'][k]
 _SP_OUTPUT = re.compile(r'[^/\\]+_sp\.(docx|xlsx|txt|svg|json)')
 _SP_KINDS = ('', 'raman', 'ir-absorbance', 'ir-transmittance')
 
@@ -3157,6 +3171,10 @@ def _sp_series(name, sheet=None):
         return ([t for t in up if not sheet or (' | %s' % sheet) in t.name] or up), None
     path = _sp_files().get(name)
     if not path:
+        with _SP['lock']:
+            gone = name in _SP['let_go']
+        if gone:                                                 # an upload (or a traced curve) dropped to make room: say so, not 'no such file'
+            return None, ('%s was opened here and has been let go — the window keeps the last %d opened or traced; open it again' % (name, _SP_KEEP), 404)
         return None, ('no such spectrum file in the open folder: %s' % name, 404)
     key = json.dumps([_sp_stamp(name), sheet or None])
     with _SP['lock']:
@@ -3311,6 +3329,8 @@ def _sp_formula(d):
     typed = str(d.get('formula') or '').strip()[:300]
     if typed:
         f, name = BD.resolve(typed)
+        if not name and BD.looks_like_name(typed):            # a name the snapshot does not know: said, never read as a formula
+            return '', typed, 'unresolved'
         return f, name, 'typed'
     f, name = _sp_ms_formula(d.get('ms'))
     return f, name, 'manuscript' if f else ''
@@ -3378,12 +3398,7 @@ def api_sp_upload():
                 pass
     tbase = os.path.basename(tmp)
     series = [SPF.Series(t.name.replace(tbase, name), t.x, t.y, dict(t.meta, source=name)) for t in series]
-    with _SP['lock']:
-        _SP['uploads'][name] = series; _SP['uploads'].move_to_end(name)
-        while len(_SP['uploads']) > _SP_KEEP:
-            _SP['uploads'].popitem(last=False)
-        for k in [k for k in _SP['prep'] if json.loads(k)[0] == name]:
-            del _SP['prep'][k]
+    _sp_hold_upload(name, series)
     return jsonify({'ok': True, 'name': name, 'n': len(series)})
 
 
@@ -3510,8 +3525,8 @@ def api_sp_fig_upload():
     if not got or got.get('error'):
         return jsonify({'ok': False, 'error': (got or {}).get('error') or '%s could not be read' % name}), 400
     n = len(got['sources'])
-    if not name.lower().endswith('.pdf'):                          # an image is opened once here: a file that is no picture is refused now, not when it is shown
-        first = PW.run(FT.page_data, name, 0, None, raw, default=None, timeout=60)
+    if not name.lower().endswith('.pdf'):                          # a file that is no picture, or one too large, is refused now, not when it is shown — from its header, nothing decoded
+        first = PW.run(FT.probe_data, name, raw, default=None, timeout=60)
         if not first or first.get('error'):
             return jsonify({'ok': False, 'error': (first or {}).get('error') or '%s could not be read as an image' % name}), 400
     with _SP['lock']:
@@ -3623,12 +3638,7 @@ def api_sp_fig_trace():
         if r['down']:
             notes.append('the bands point down in the figure (a transmittance spectrum): shown here the other way up')
         series = SPF._series(label, r['x'], ys, format='figure', source=label, notes=notes, cm_per_px=r['cm_per_px'], y_unit='relative')
-        with _SP['lock']:
-            _SP['uploads'][label] = [series]; _SP['uploads'].move_to_end(label)
-            while len(_SP['uploads']) > _SP_KEEP:
-                _SP['uploads'].popitem(last=False)
-            for k in [k for k in _SP['prep'] if json.loads(k)[0] == label]:
-                del _SP['prep'][k]
+        _sp_hold_upload(label, [series])
         out['name'] = label
     return jsonify(out)
 
@@ -3652,12 +3662,7 @@ def api_sp_fig_restore():
                              cm_per_px=_sp_num(d, 'cm_per_px', 1e-6, 1e4, 1.0), y_unit='relative')
     except ValueError as ex:
         return jsonify({'ok': False, 'error': str(ex)}), 400
-    with _SP['lock']:
-        _SP['uploads'][name] = [series]; _SP['uploads'].move_to_end(name)
-        while len(_SP['uploads']) > _SP_KEEP:
-            _SP['uploads'].popitem(last=False)
-        for k in [k for k in _SP['prep'] if json.loads(k)[0] == name]:
-            del _SP['prep'][k]
+    _sp_hold_upload(name, [series])
     return jsonify({'ok': True, 'name': name})
 
 

@@ -144,6 +144,15 @@ class Library(unittest.TestCase):
         self.assertIn('1630 cm⁻¹: ', out.getvalue()); self.assertIn('H2O bend', out.getvalue()); self.assertIn('uranyl', out.getvalue())
         self.assertEqual(B.resolve('Ca(UO2)2(PO4)2'), ('Ca(UO2)2(PO4)2', ''))
         self.assertEqual(B.resolve('notamineralofanysnapshot'), ('notamineralofanysnapshot', ''))
+        # a name is a name in any case — 'Autunite', and the Levinson suffix with its capital; a formula is not one
+        self.assertEqual((B.looks_like_name('Spanoit'), B.looks_like_name('monazite-(Ce)'), B.looks_like_name('CaSO4'), B.looks_like_name('')), (True, True, False, False))
+        if B.resolve('autunite')[1]:                          # the local snapshot is there
+            self.assertEqual(B.resolve('Autunite'), (B.resolve('autunite')[0], 'Autunite'))
+            self.assertEqual(B.resolve('monazite-(Ce)')[1], 'monazite-(Ce)'); self.assertIn('PO4', B.resolve('monazite-(Ce)')[0])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(B.main(['Notaspeciesofanysnapshot', '--at', '830']), 0)
+        self.assertIn('no species named ‘Notaspeciesofanysnapshot’', out.getvalue()); self.assertNotIn('no group of the library', out.getvalue())
 
 
 class FittedBands(unittest.TestCase):

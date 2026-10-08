@@ -217,6 +217,39 @@ class Trace(unittest.TestCase):
             FT.digitize(img, box, X(200), 200, X(1200), 1200, colour=(0, 200, 0), tol=20)
         self.assertIn('no curve of that colour', str(e.exception))
 
+    def test_files_that_cannot_be_opened_and_images_too_large(self):
+        import tempfile, zipfile
+        with tempfile.TemporaryDirectory() as d:
+            bad_docx = os.path.join(d, 'bad.docx'); open(bad_docx, 'wb').write(b'PK not a zip')
+            bad_pdf = os.path.join(d, 'bad.pdf'); open(bad_pdf, 'wb').write(b'%PDF-1.4 garbage')
+            for path, word in ((bad_docx, 'is not a .docx'), (bad_pdf, 'is not a .pdf')):
+                for fn in (FT.sources, FT.figure):
+                    with self.assertRaises(ValueError) as e:
+                        fn(path)
+                    self.assertIn(word, str(e.exception))
+            self.assertIn('is not a .pdf', FT.sources_data(bad_pdf)['error'])
+            # an image is measured from its header before it is decoded; over the limit it is refused there
+            img, _X = self._image(150)
+            png = img.pix.tobytes('png')
+            self.assertEqual(FT.image_size(png, 'x.png'), (img.w, img.h))
+            self.assertEqual(FT.probe_data('x.png', png), {'w': img.w, 'h': img.h})
+            self.assertIn('could not be read as an image', FT.probe_data('x.png', b'not an image')['error'])
+            keep = FT.IMAGE_PIXELS_MAX
+            try:
+                FT.IMAGE_PIXELS_MAX = img.w * img.h - 1
+                self.assertIn('too large to trace', FT.probe_data('x.png', png)['error'])
+                with self.assertRaises(ValueError) as e:
+                    FT.figure('x.png', data=png)
+                self.assertIn('too large to trace', str(e.exception))
+                docx = os.path.join(d, 'pic.docx')
+                with zipfile.ZipFile(docx, 'w') as z:
+                    z.writestr('word/media/image1.png', png)
+                with self.assertRaises(ValueError) as e:
+                    FT.figure(docx, 0)
+                self.assertIn('too large to trace', str(e.exception))
+            finally:
+                FT.IMAGE_PIXELS_MAX = keep
+
     def test_the_stated_bands_beside_the_curve(self):
         fig = FT.figure(self.pdf, 0); box = FT.frames(fig)[0]; tk = FT.ticks(fig, box)
         r = FT.digitize(fig, box, tk[0][0], tk[0][1], tk[-1][0], tk[-1][1], seed=(self.X(464) * fig.w / 595.0, (Y1 - spec(464) / 1.15 * (Y1 - Y0)) * fig.w / 595.0))

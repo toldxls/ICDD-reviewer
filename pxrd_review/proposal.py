@@ -20,6 +20,13 @@ _FLAG = re.compile(r' vs |but the \.cif|but it is bonded|is bonded to .* not|doe
                    r'cited here but has no entry|listed but never cited|reproduced by no combination|(?<!\b0 )disagree', re.I)
 
 
+def is_flag(s):
+    """Is a paper-check report line a finding (a Word comment) by its WORDS? A doubt ('[unverified]'), a line that says it
+    is 'not a difference' and a line marked '(information)' are not, whatever else they carry — the paper sentence an
+    information line quotes can hold ' vs '."""
+    return bool(_FLAG.search(s)) and '[unverified]' not in s and 'not a difference' not in s and '(information)' not in s
+
+
 def find_files(target, cif=None, checkcif=None):
     """The manuscript .docx, the .cif and the checkCIF report from a folder or a manuscript path."""
     if os.path.isdir(target):
@@ -160,7 +167,7 @@ def review(target, cif=None, checkcif=None, out_dir=None, annotate_copy=True, qu
         section('composition, Gladstone–Dale, cell (paper --check)', lines)
         for ln in lines:
             s = ln.strip()
-            if ln.startswith('  ') and _FLAG.search(s) and '[unverified]' not in s and 'not a difference' not in s:
+            if ln.startswith('  ') and is_flag(s):
                 flags.append((s, _quoted(s)))
     except Exception as e:
         section('paper checks', ['could not run (%s)' % str(e)[:100]])

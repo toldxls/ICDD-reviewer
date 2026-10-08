@@ -47,6 +47,11 @@ a spectrum file — or a figure of one — is imported, cleaned and fitted in a 
 for a mineral's chemistry, which bands are expected where, and for a band, what it is expected to be in that chemistry.
 
 ### Fixed
+- **A line marked "(information)" is never a finding**, whatever the paper sentence it quotes contains (`proposal.is_flag`, the GUI's `_calc_kind`).
+- **A mineral name resolves in any case** in `pxrd bands` and the window's chemistry field ('Autunite', 'monazite-(Ce)'); an unknown name is said, not read as a formula.
+- **Spectrum window:** a non-current region is refitted with its own settings; typed limits apply once both fields are settled (Enter at once); a dragged stretch moves the region it mostly covers; a drag in band mode adds nothing; the figure panel keeps its state across Close / Escape / reopen; an upload let go says so.
+- **Figure panel:** an image over 60 Mpx is refused from its header before decoding (image files and .docx pictures had no cap); an upload is probed once; a damaged .docx or non-pdf is named for what it is.
+- **`pxrd spectro`:** a distance stated before its band ("2.70 Å was derived from the band at 3400 cm⁻¹") is paired.
 - **GUI: two instances on one machine no longer log each other out.** The session cookie was one name for the host, so
   opening a second GUI (another port) overwrote the first one's cookie and its open tab was refused on its next
   request. The cookie now carries the port.

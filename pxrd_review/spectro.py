@@ -529,6 +529,8 @@ _TURN = re.compile(r'\b(?:in (?:excellent|good|reasonable|fair|perfect|close)? ?
                    r'match|close to|compare|X-ray|structure (?:refinement|determination|data|analysis)|refined|observed (?:in|distance)|determined from|'
                    r'within the range|within \d|obtained from the|somewhat (?:higher|lower)|on par)', re.I)
 _HO_FORM = re.compile(r'(?<![A-Za-z-])H\s?···\s?(?:O|A)|H···Acceptor|\bd\(H|H-bonds? \(H')
+# between a distance and the band it is said to come from, the distance stated first
+_FROM = re.compile(r'\b(?:from|based on|using|calculated|derived|obtained|estimated|inferred|deduced|for)\b', re.I)
 
 
 def _dec(txt):
@@ -615,9 +617,13 @@ def _bc_claims(s, sents, k):
         add(m.group(1), None, int(m.group(2)), 'mode', m.start(1))
     rest = [m for m in re.finditer(_BC_D, head) if m.start(1) not in used]
     own = [b for b in _sentence_bands(s) if b.family == 'UO2' and b.mode in (1, 3)]
-    if len(rest) == 1 and len(own) == 1 and not out and s.find('%g' % own[0].pos) < rest[0].start(1):
-        add(rest[0].group(1), own[0].pos, None, 'single', rest[0].start(1))
-        rest = []
+    if len(rest) == 1 and len(own) == 1 and not out:
+        at = s.find('%g' % own[0].pos)
+        # the one uranyl band of the sentence before the one distance ('the ν1 band at 830 cm-1 gives 1.78 Å'), or after it
+        # when the words between say the distance comes from the band ('1.78 Å was calculated from the ν1 band at 830 cm-1')
+        if at < rest[0].start(1) or (at > rest[0].end(1) and _FROM.search(head[rest[0].end(1): at])):
+            add(rest[0].group(1), own[0].pos, None, 'single', rest[0].start(1))
+            rest = []
     for m in rest:
         if re.search(r'(?:\d\s?Å?\s?-|\bto)\s?[~∼≈]?\s?$', head[max(0, m.start(1) - 6): m.start(1)]) or re.match(r'\s?Å?\s?(?:-\s?[~∼≈]?\s?1\.\d|to\b)', head[m.end(1): m.end(1) + 8]):
             add(m.group(1), None, None, 'range', m.start(1)); continue
@@ -653,6 +659,14 @@ def _lib_claims(s, sents, k):
     nums = [p for g in _band_groups(s) if not g[3] and g[0] < ds[0].start(1) for p, _sh in g[2] if 2000 <= p <= 3800]
     if nums and len(nums) == len(ds):
         return [mk(m, p, 'list' if len(ds) > 1 else 'single') for m, p in zip(ds, nums)]
+    if not nums:
+        # the distance first, its bands after: '2.70 Å was derived from the band at 3400 cm-1', 'distances of 2.65 and
+        # 2.75 Å, calculated from the bands at 3338 and 3057 cm-1' — the words between must say the one comes from the other
+        after = [g for g in _band_groups(head) if not g[3] and g[0] > ds[-1].end(1)]
+        if after and re.search(_FROM, head[ds[-1].end(1): after[0][0]]):
+            nums = [p for g in after for p, _sh in g[2] if 2000 <= p <= 3800]
+            if nums and len(nums) == len(ds):
+                return [mk(m, p, 'list' if len(ds) > 1 else 'single') for m, p in zip(ds, nums)]
     if not nums:
         ctx = _numbers_before(sents, k, 2000, 3800)
         if ctx and len(ctx) == len(ds) and len(ds) > 1:

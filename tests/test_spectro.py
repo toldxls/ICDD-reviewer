@@ -188,6 +188,18 @@ class BartlettCooney(unittest.TestCase):
              'Using Bartlett and Cooney (1989) the U–O bond lengths are (in Å): 1.77 (from 917 cm–1), 1.81 (870 cm–1) and 1.80 (808 cm–1).')
         self.assertTrue(all(st == 'reproduced' for _t, _p, st, _g in _kinds(t)), _kinds(t))
 
+    def test_the_distance_first_and_its_band_after(self):
+        # 'the distance was derived from the band at': stated first, its band after — paired when the words between say so
+        r = S.check_claims('According to Libowitzky (1999), the O···O distance of 2.70 Å was derived from the band at 3400 cm–1.')
+        self.assertEqual([(x['claim'].paired, x['claim'].band, x['status']) for x in r], [('single', 3400.0, 'off')])
+        r = S.check_claims('The O···O distances of 2.66 and 2.76 Å were calculated with the correlation of Libowitzky (1999) from the bands at 3338 and 3057 cm–1.')
+        self.assertEqual([(x['claim'].paired, x['claim'].band, x['status']) for x in r], [('list', 3338.0, 'reproduced'), ('list', 3057.0, 'reproduced')])
+        r = S.check_claims('Applying Bartlett & Cooney (1989), a U–O bond length of 1.79 Å was calculated from the ν1 (UO2)2+ stretch at 824 cm–1.')
+        self.assertEqual([(x['claim'].paired, x['claim'].band, x['status']) for x in r], [('single', 824.0, 'reproduced')])
+        # without such words the band after is not the distance's: a comparison, a list of other things
+        r = S.check_claims('The O···O distance of 2.70 Å (Libowitzky 1999) is short; another band lies at 3400 cm–1.')
+        self.assertEqual([x['claim'].paired for x in r], [''])
+
     def test_unpaired_is_silent(self):
         self.assertEqual(_kinds('The inferred U–O bond length obtained from the empirical relation given by Bartlett & Cooney (1989) is ∼1.79 Å.'), [('1.79', '', 'unpaired', None)])
         # bands several sentences back (another spectrum, a page break between) are no ground for a remark
@@ -435,6 +447,12 @@ class Wording(unittest.TestCase):
             for r in S.check_claims(t):
                 if r['line']:
                     (flags if r['grade'] == 'flag' else infos).append(r['line'])
+        # the paper's own sentence, quoted into an information line, may carry ' vs ' — the line stays information
+        quoted = S.check_lines('The Raman spectrum of testite was recorded. Bands at 3400, 3250 and 3050 cm-1 are assigned to O-H stretching vibrations. '
+                               'The band at 3400 cm-1 corresponds to an O···O distance of 2.70 Å (Libowitzky 1999), Raman vs infrared.', {'name': 'testite'})
+        assert any(' vs infrared' in ln and '(information)' in ln for ln in quoted), quoted
+        infos += [ln for ln in quoted if '(information)' in ln]
+        infos.append('Si: at the low end of Si and the high end of Al (2.100 vs 2.300 apfu) the order reverses — the ranges cross (information)')
         structure = {'uranyl': [('U1', [1.75, 1.76], 1.755), ('U2', [1.79, 1.81], 1.80)], 'source': 'the .cif',
                      'hbonds': [('O3', 'O7', 2.80, 'H'), ('O4', 'O8', 2.95, 'H')]}
         infos += S.structure_lines(structure, [822.0], [856.0], [2840.0, 3400.0, 3600.0])
@@ -462,9 +480,9 @@ class Wording(unittest.TestCase):
         flags, infos = self._lines()
         self.assertGreaterEqual(len(flags), 3); self.assertGreaterEqual(len(infos), 15)
         for ln in flags:
-            self.assertTrue(PR._FLAG.search(ln), ln); self.assertEqual(G._calc_kind(ln), 'calc', ln)
+            self.assertTrue(PR.is_flag(ln), ln); self.assertEqual(G._calc_kind(ln), 'calc', ln)
         for ln in infos:
-            self.assertFalse(PR._FLAG.search(ln), ln); self.assertEqual(G._calc_kind(ln), 'calcinfo', ln)
+            self.assertFalse(PR.is_flag(ln), ln); self.assertEqual(G._calc_kind(ln), 'calcinfo', ln)
 
 
 class Windows(unittest.TestCase):

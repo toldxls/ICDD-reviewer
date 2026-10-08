@@ -278,6 +278,10 @@ function renderLibrary() {
   const host = $('#sp-library'); if (!host) return;
   host.textContent = '';
   const L = SP.lib;
+  if (L && L.source === 'unresolved') {                      // a name typed that the snapshot does not know: said, never read as a formula
+    host.append(el('summary', null, 'Band library — no species named ‘' + L.name + '’ in the local Mindat snapshot: check the spelling, or type its formula'));
+    return;
+  }
   if (!L || !L.formula) {
     host.append(el('summary', null, 'Band library — type the mineral’s formula or its name in ‘chemistry’ above (or choose the manuscript): the bands its groups are expected to give are listed here and drawn over the plot'));
     return;
@@ -639,10 +643,13 @@ function setRegion(lo, hi, zoom) {
   [lo, hi] = [Math.round(Math.min(lo, hi)), Math.round(Math.max(lo, hi))];
   let k = SP.regions.findIndex(r => Math.abs(r.lo - lo) < 1 && Math.abs(r.hi - hi) < 1);
   if (k < 0) {
-    // not a region as it stands: the bounds of the fitted region they overlap are being changed — the current one first
+    // not a region as it stands: the bounds of the fitted region they overlap are being changed — the one the stretch
+    // MOSTLY covers; the current region only when it holds at least half of the stretch (a drag that began a little
+    // inside the current region and ran over its neighbour had resized the current one and removed its bands)
     const over = r => r.comps.length && r.lo < hi && r.hi > lo;
+    const covered = r => Math.min(r.hi, hi) - Math.max(r.lo, lo);
     const cur = SP.regions[SP.cur];
-    const target = cur && over(cur) ? cur : SP.regions.filter(over).sort((a, b) => (Math.min(b.hi, hi) - Math.max(b.lo, lo)) - (Math.min(a.hi, hi) - Math.max(a.lo, lo)))[0];
+    const target = cur && over(cur) && covered(cur) >= 0.5 * (hi - lo) ? cur : SP.regions.filter(over).sort((a, b) => covered(b) - covered(a))[0];
     // … unless the stretch is more than twice that region: then it is a stretch of its own (typing the first limit of
     // another region made the fitted one swallow half the spectrum, and refitted it there)
     if (target && hi - lo <= 2 * (target.hi - target.lo)) { SP.cur = SP.regions.indexOf(target); resizeRegion(target, lo, hi); if (zoom) zoomTo(target.lo, target.hi); return; }
@@ -741,9 +748,11 @@ function wirePlot() {
       const lo = SP.d.x[0], hi = SP.d.x[SP.d.x.length - 1];
       if (a < lo) { b += lo - a; a = lo; } if (b > hi) { a -= b - hi; b = hi; }
       SP.view = [Math.max(lo, a), Math.min(hi, b)]; drag.moved = true; draw();
-    } else {
+    } else if (drag.kind === 'region') {
       const sel = $('#sp-sel'); if (!sel) return;
       sel.setAttribute('x', Math.min(drag.px, x)); sel.setAttribute('width', Math.abs(x - drag.px)); drag.moved = Math.abs(x - drag.px) > 3;
+    } else {                                                 // band / anchor mode: a drag is no click — nothing is drawn and nothing added
+      drag.moved = drag.moved || Math.abs(x - drag.px) > 3;
     }
   });
   host.addEventListener('mousedown', ev => {
@@ -768,6 +777,7 @@ function wirePlot() {
       return;
     }
     if (d.kind === 'region' && d.moved) { setRegion(d.G.Xinv(d.px), d.G.Xinv(x), false); return; }
+    if (d.kind === 'click' && d.moved) { status('a drag adds no band: click where the band is — to choose a stretch use region mode or Shift-drag, to pan use pan mode'); return; }
     if (d.kind === 'click' || (d.kind === 'pan' && !d.moved && SP.mode !== 'pan')) clickAt(G.Xinv(x), plotY(ev));
     else if (d.kind === 'pan' && !d.moved && d.pick) select(d.pick[0], d.pick[1]);   // a plain click on a band: that band
     else if (d.kind === 'pan' && !d.moved) {                            // … elsewhere: the region under it
@@ -928,8 +938,15 @@ function redo() {
 // An answer is taken only while it is still of what is on the screen: the region's own count (another fit or an edit of
 // THAT region since), the spectrum's (another curve since), and the region still there. One count for all regions
 // dropped the answer of a slow fit when a quick one of another region came in between.
+// how a region that is NOT current is fitted again: with its own settings. The controls show the current region's
+// (syncControls), so reading them for another region wrote the current one's settings into it (a baseline change refitted
+// every stale region that way and recorded one width / widest where they had never been asked for)
+function howOf(reg) {
+  if (reg.local == null) return {};
+  return { local: reg.local, share_width: !!reg.share_width, share_eta: !!reg.share_eta, max_fwhm: reg.max_fwhm || null, min_fwhm: reg.min_fwhm || null };
+}
 async function fitRegion(reg, comps, extra) {
-  const body = Object.assign(fitOpts(reg), extra || {});
+  const body = Object.assign(fitOpts(reg), reg !== SP.regions[SP.cur] ? howOf(reg) : {}, extra || {});
   if (comps && comps.length) body.comps = comps.map(bare);
   else {
     const n = num('sp-n'); if (n && !body.n) body.n = n;
@@ -1217,7 +1234,20 @@ function wire() {
     $('#' + id).addEventListener('change', () => process(false));
   $('#sp-baseline').addEventListener('change', () => { showBaselineRows(); process(false); });
   $('#sp-anchors-clear').addEventListener('click', () => { SP.anchors = []; process(false); });
-  for (const id of ['sp-lo', 'sp-hi']) $('#' + id).addEventListener('change', () => { const lo = num('sp-lo'), hi = num('sp-hi'); if (lo != null && hi != null && hi > lo) setRegion(lo, hi, false); });
+  // typed limits are applied when BOTH fields are settled: 'change' fired on the first field (Tab, click away) while the
+  // other still held the old bound, and that pair resized the region at once — narrowing it and removing its bands
+  // before the second limit was typed. So: 'focusout' (which knows where the focus goes — 'change' fires before it
+  // moves) applies unless the focus went to the other limit field; Enter in a field applies at once, an explicit commit.
+  const limitsTyped = () => { const lo = num('sp-lo'), hi = num('sp-hi'); if (lo != null && hi != null && hi > lo) setRegion(lo, hi, false); };
+  const otherLimit = id => $('#' + (id === 'sp-lo' ? 'sp-hi' : 'sp-lo'));
+  for (const id of ['sp-lo', 'sp-hi']) {
+    $('#' + id).addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); limitsTyped(); } });
+    $('#' + id).addEventListener('focusout', ev => {
+      if (ev.relatedTarget === otherLimit(id)) return;
+      const r = SP.regions[SP.cur], lo = num('sp-lo'), hi = num('sp-hi');
+      if (lo != null && hi != null && (!r || lo !== r.lo || hi !== r.hi)) limitsTyped();
+    });
+  }
   // how the region is fitted: a change refits the bands there are (when 'refit as I edit' is on)
   for (const id of ['sp-local', 'sp-share-w', 'sp-share-eta', 'sp-wmax', 'sp-wmin']) $('#' + id).addEventListener('change', () => { savePrefs(); const r = SP.regions[SP.cur]; if (r && r.comps.length) changed(r, 'options'); });
   for (const id of ['sp-maxn', 'sp-share', 'sp-live', 'sp-refine']) $('#' + id).addEventListener('change', savePrefs);
@@ -1269,9 +1299,13 @@ const FG = { name: '', i: 0, w: 0, h: 0, frames: [], box: null, x1: null, x2: nu
 const fgStatus = (msg, bad) => { const s = $('#sp-fig-status'); s.textContent = msg || ''; s.title = msg || ''; s.style.color = bad ? 'var(--danger)' : ''; };
 async function fgOpen() {
   $('#sp-fig').classList.remove('hidden');
+  // a page already open comes back as it was left — frame, marks, values, colour, trace (Close and Escape only hide the
+  // panel); the list of sources is refreshed in case a file was added. The first version reopened on the first starred
+  // page and wiped everything confirmed by hand.
+  if (FG.name && FG.w) { await fgSources(FG.name, true); fgDraw(); return; }
   await fgSources();
 }
-async function fgSources(pick) {
+async function fgSources(pick, keepPage) {
   try { SP.state = await api('/api/sp/state'); } catch (e) { fgStatus(e.message, true); return; }
   const sel = $('#sp-fig-src'); sel.textContent = '';
   const names = SP.state.figures || [];
@@ -1280,6 +1314,7 @@ async function fgSources(pick) {
   const ms = $('#sp-ms').value;                              // the manuscript set beside the spectrum, when it is one of them
   const want = pick || FG.name || names.find(n => ms && n.replace(/\.[^.]+$/, '') === ms) || names[0] || '';
   sel.value = want;
+  if (keepPage && want === FG.name && names.includes(want)) return;    // the page open stays open
   if (want) await fgPages(want);
 }
 async function fgPages(name) {
@@ -1484,7 +1519,10 @@ function wireFig() {
     fgDraw();
   });
   window.addEventListener('resize', () => { if (!$('#sp-fig').classList.contains('hidden')) fgDraw(); });
-  window.addEventListener('keydown', ev => { if (ev.key === 'Escape' && !$('#sp-fig').classList.contains('hidden')) $('#sp-fig').classList.add('hidden'); });
+  window.addEventListener('keydown', ev => {                 // Escape hides the panel (its state is kept) — not from inside one of its fields
+    const t = ev.target || {};
+    if (ev.key === 'Escape' && !$('#sp-fig').classList.contains('hidden') && !((t.tagName === 'INPUT' || t.tagName === 'SELECT') && $('#sp-fig').contains(t))) $('#sp-fig').classList.add('hidden');
+  });
 }
 async function fgUpload(f) {
   const fd = new FormData(); fd.append('file', f);

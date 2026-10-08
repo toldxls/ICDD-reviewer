@@ -73,9 +73,33 @@ class Figure(object):
         return tuple(self.rgb[i: i + 3])
 
 
+IMAGE_PIXELS_MAX = 60e6        # an image file (or a .docx picture) over this is refused before it is decoded: crop it to the plot
+
+
 def _pdf(path, data=None):
     import fitz
-    return fitz.open(stream=data, filetype='pdf') if data is not None else fitz.open(path)
+    try:
+        return fitz.open(stream=data, filetype='pdf') if data is not None else fitz.open(path)
+    except Exception:                                           # fitz.FileDataError and its kin: a file that is no .pdf, or a damaged one
+        raise ValueError('%s is not a .pdf that can be opened' % os.path.basename(path or 'the file'))
+
+
+def image_size(data=None, path=None, ext=None):
+    """(width, height) in pixels of an image file or its bytes, read from its header — nothing is decoded; None when
+    the file is no image MuPDF knows."""
+    import fitz
+    ext = (ext or os.path.splitext(path or '')[1]).lstrip('.').lower() or 'png'
+    try:
+        with (fitz.open(stream=data, filetype=ext) if data is not None else fitz.open(path)) as doc:
+            info = doc[0].get_image_info()
+            return (int(info[0]['width']), int(info[0]['height'])) if info else None
+    except Exception:
+        return None
+
+
+def _too_large(size, what):
+    if size and size[0] * size[1] > IMAGE_PIXELS_MAX:
+        raise ValueError('%s is %d × %d pixels — too large to trace; crop it to the plot first' % (what, size[0], size[1]))
 
 
 def sources(path, data=None):
@@ -100,8 +124,11 @@ def sources(path, data=None):
 
 
 def _docx_images(path):
-    with zipfile.ZipFile(path) as z:
-        return sorted(n for n in z.namelist() if n.startswith('word/media/') and n.lower().endswith(IMAGE_EXT + ('.emf', '.wmf')) and not n.lower().endswith(('.emf', '.wmf')))
+    try:
+        with zipfile.ZipFile(path) as z:
+            return sorted(n for n in z.namelist() if n.startswith('word/media/') and n.lower().endswith(IMAGE_EXT + ('.emf', '.wmf')) and not n.lower().endswith(('.emf', '.wmf')))
+    except (zipfile.BadZipFile, OSError):
+        raise ValueError('%s is not a .docx that can be opened' % os.path.basename(path))
 
 
 def figure(path, index=0, dpi=None, data=None):
@@ -111,6 +138,7 @@ def figure(path, index=0, dpi=None, data=None):
     import fitz
     low = (path or '').lower()
     if low.endswith(IMAGE_EXT) or (data is not None and not low.endswith('.pdf')):
+        _too_large(image_size(data, path), os.path.basename(path or 'that image'))     # from the header, before anything is decoded
         try:
             pix = fitz.Pixmap(data) if data is not None else fitz.Pixmap(path)
         except Exception:
@@ -122,6 +150,7 @@ def figure(path, index=0, dpi=None, data=None):
             raise ValueError('%s holds %d images; there is no number %d' % (os.path.basename(path), len(names), index + 1))
         with zipfile.ZipFile(path) as z:
             blob = z.read(names[index])
+        _too_large(image_size(blob, names[index]), 'image %d of %s' % (index + 1, os.path.basename(path)))
         try:
             return Figure(fitz.Pixmap(blob), label='%s, image %d' % (os.path.basename(path), index + 1))
         except Exception:
@@ -186,6 +215,20 @@ def sources_data(path, data=None):
         return {'sources': sources(path, data)}
     except ValueError as e:
         return {'error': str(e)}
+
+
+def probe_data(name, data):
+    """An image's size from its header, for a caller in another process: {'w', 'h'} or {'error'} — a file that is
+    no image, or one too large to trace, is refused here without being decoded (the first version decoded every
+    upload once to check it and again to show it)."""
+    size = image_size(data, name)
+    if not size:
+        return {'error': '%s could not be read as an image' % os.path.basename(name or 'the file')}
+    try:
+        _too_large(size, os.path.basename(name or 'that image'))
+    except ValueError as e:
+        return {'error': str(e)}
+    return {'w': size[0], 'h': size[1]}
 
 
 def _bezier(p, n=6):
