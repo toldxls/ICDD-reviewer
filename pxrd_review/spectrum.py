@@ -779,6 +779,7 @@ def envelope_hint(xs, ys, f):
 
 CORR_WARN = 0.95
 RUNS_WARN = -6.0
+WIDE_SHARE = 0.5     # of the region's width: a band this wide is a background hump, and the fit says so
 
 
 def diagnose(f, xs, residual, resolution=None):
@@ -806,8 +807,11 @@ def diagnose(f, xs, residual, resolution=None):
             out.append('the band at %.1f cm⁻¹ stands %.1f noise deviations high' % (c['pos'], c['height'] / f.sigma if f.sigma else 0.0))
         if c.get('at_limit') == 'max':
             out.append('the band at %.1f cm⁻¹ rests on the width limit (%.0f cm⁻¹): the data would have it wider — another band may be missing beside it' % (c['pos'], c['fwhm']))
-        if c['fwhm'] >= 0.98 * (f.hi - f.lo):
-            out.append('the band at %.1f cm⁻¹ is as wide as the region fitted: it is baseline, not a band' % c['pos'])
+        if c['fwhm'] >= WIDE_SHARE * (f.hi - f.lo):
+            # on 320 RRUFF spectra fitted whole with no baseline, 28 held such a band (a fluorescence hump, the foot of the
+            # Rayleigh line); only the 7 as wide as the region itself were being named
+            out.append('the band at %.1f cm⁻¹ is %.0f cm⁻¹ wide, %s the region fitted: a background hump, not a band — set a baseline (als, snip, anchors) or fit a narrower region'
+                       % (c['pos'], c['fwhm'], 'as wide as' if c['fwhm'] >= 0.98 * (f.hi - f.lo) else 'over half'))
         if c['pos'] - f.lo < 0.25 * c['fwhm'] or f.hi - c['pos'] < 0.25 * c['fwhm']:
             out.append('the band at %.1f cm⁻¹ stands on the edge of the region fitted: the foot of something outside it, or baseline — widen the region to fit it as a band' % c['pos'])
     if f.cov:

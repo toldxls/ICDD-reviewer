@@ -351,6 +351,32 @@ class SpectrumWindow(unittest.TestCase):
         r = self.c.post('/api/sp/fig/upload', data={'file': (io.BytesIO(b'not a picture'), 'pic.png')}, content_type='multipart/form-data')
         self.assertEqual(r.status_code, 400); self.assertIn('could not be read as an image', json.loads(r.data)['error'])
 
+    def test_a_rruff_spectrum_pulled_up_beside_the_folder(self):
+        # a RRUFF library beside the open folder (<folder>/RRUFF): its minerals listed, a spectrum opened here, its curve for the overlay
+        from tests.test_rruff_windows import write_library, gauss
+        from pxrd_review import omnic_lib as OL
+        d = os.path.join(self.tmp, 'RRUFF'); os.makedirs(d, exist_ok=True)
+        write_library(d, [('QuartzR040031_processed', 'field', gauss([464, 206], [100, 30])), ('QuartzR040031_raw', 'field', gauss([464, 206], [100, 30])),
+                          ('Calcite R040070_processed', 'pascal', gauss([1086, 712, 281], [100, 10, 20]))])
+        OL._OPEN.clear()
+        try:
+            r = json.loads(self.c.get('/api/sp/rruff/list').data)
+            self.assertEqual([m['name'] for m in r['minerals']], ['Calcite', 'Quartz'])
+            q = r['minerals'][1]['spectra']
+            self.assertEqual([(s['id'], s['kind']) for s in q], [('R040031', 'processed'), ('R040031', 'raw')])        # processed first
+            o = self._post('/api/sp/rruff/open', {'key': q[0]['key']})
+            self.assertEqual(o['name'], 'Quartz R040031 processed (RRUFF)')
+            self.assertIn({'name': o['name'], 'source': 'upload'}, json.loads(self.c.get('/api/sp/state').data)['files'])
+            p = self._post('/api/sp/process', {'name': o['name']})
+            self.assertEqual(p['kind'], 'raman'); self.assertTrue(any('RRUFF library' in n for n in p['notes']))
+            self.assertAlmostEqual(max(p['peaks'], key=lambda k: k['height'])['pos'], 464, delta=2)
+            c = json.loads(self.c.get('/api/sp/rruff/curve?key=' + str(q[0]['key'])).data)
+            self.assertEqual((len(c['x']), c['name']), (759, o['name']))
+            self.assertIn('choose a spectrum', self._post('/api/sp/rruff/open', {}, 400)['error'])
+            self.assertIn('no number', self._post('/api/sp/rruff/open', {'key': 99}, 400)['error'])
+        finally:
+            shutil.rmtree(d, ignore_errors=True); OL._OPEN.clear()
+
     def test_upload_stays_in_memory(self):
         before = sorted(os.listdir(self.tmp))
         r = self.c.post('/api/sp/upload', data={'file': (io.BytesIO(self.text.encode()), '../sneaky name.txt')}, content_type='multipart/form-data')

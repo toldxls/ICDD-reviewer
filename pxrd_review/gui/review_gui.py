@@ -3690,6 +3690,79 @@ def api_sp_fig_colour():
     return jsonify({'ok': True, 'colour': list(best[0]), 'seed': [best[1], best[2]]})
 
 
+# ---- a RRUFF library on this machine: a mineral's spectrum pulled up beside the one being fitted ------------------
+# The library is private (a Thermo OMNIC pair, found by omnic_lib.find_library: $PXRD_RRUFF_DIR, a RRUFF folder beside
+# or above the open folder, ~/RRUFF). Nothing of it is copied: a spectrum chosen is decoded and held in memory like a
+# file opened here, under a name the window then opens like any other — or drawn under the current curve (overlay).
+
+def _rruff():
+    from pxrd_review import omnic_lib as OL
+    folder = OL.find_library(MS.get('folder') or STATE.get('folder'))
+    return OL.open_library(folder) if folder else None
+
+
+@app.route('/api/sp/rruff/list')
+def api_sp_rruff_list():
+    """The minerals of the library and each one's spectra: [{'name', 'spectra': [{'key', 'id', 'kind', 'laser'}]}]."""
+    try:
+        lib = _rruff()
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': 'the RRUFF library could not be read (%s)' % str(ex)[:120]}), 500
+    if lib is None:
+        return jsonify({'ok': True, 'folder': '', 'minerals': []})
+    out = [{'name': m, 'spectra': [{'key': i, 'id': rid, 'kind': kind, 'laser': laser} for i, rid, kind, laser in v]} for m, v in lib.minerals().items()]
+    return jsonify({'ok': True, 'folder': lib.folder, 'n': lib.n, 'minerals': out})
+
+
+def _rruff_series(key):
+    lib = _rruff()
+    if lib is None:
+        raise ValueError('no RRUFF library on this machine')
+    i = int(key)
+    if not 0 <= i < lib.n:
+        raise ValueError('the library holds %d spectra; there is no number %d' % (lib.n, i + 1))
+    name = lib.names[i]
+    from pxrd_review.omnic_lib import split_name, laser_of
+    mineral, rid, kind = split_name(name)
+    laser = laser_of(name)
+    label = '%s %s %s%s (RRUFF)' % (mineral, rid, kind or 'spectrum', ' ' + laser + ' nm' if laser else '')
+    notes = ['from the RRUFF library on this machine (%s): a Raman spectrum of %s, %s%s — the reference, not the sample under review'
+             % (os.path.basename(lib.folder), mineral, kind or 'as filed', ', %s nm' % laser if laser else '')]
+    return SPF._series(label, lib.x, lib.spectrum(i), format='rruff', source=label, notes=notes, kind='raman'), label
+
+
+@app.route('/api/sp/rruff/open', methods=['POST'])
+def api_sp_rruff_open():
+    """One spectrum of the library held under its name, to be opened like a file opened here."""
+    d = request.get_json(silent=True) or {}
+    key = _sp_num(d, 'key', 0, 1e6)
+    if key is None:
+        return jsonify({'ok': False, 'error': 'choose a spectrum of the mineral first'}), 400
+    try:
+        series, label = _rruff_series(int(key))
+    except ValueError as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 400
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': 'the RRUFF spectrum could not be read (%s)' % str(ex)[:120]}), 500
+    _sp_hold_upload(label, [series])
+    return jsonify({'ok': True, 'name': label})
+
+
+@app.route('/api/sp/rruff/curve')
+def api_sp_rruff_curve():
+    """The points of one spectrum of the library, to draw under the current curve."""
+    key = _sp_num(request.args, 'key', 0, 1e6)
+    if key is None:
+        return jsonify({'ok': False, 'error': 'no spectrum named'}), 400
+    try:
+        series, label = _rruff_series(int(key))
+    except ValueError as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 400
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': 'the RRUFF spectrum could not be read (%s)' % str(ex)[:120]}), 500
+    return jsonify({'ok': True, 'name': label, 'x': _sp_r(series.x, 2), 'y': _sp_r(series.y, 4)})
+
+
 def _sp_fit_json(f, xs, ys, technique, share=SPM.MIN_SHARE, formula=None):
     m = SPM.model(xs, f.comps, f.base, f.x0)
     try:                                                  # where the residual still holds a band: what '+ band' would add, drawn as marks

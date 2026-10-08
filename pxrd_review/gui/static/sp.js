@@ -503,6 +503,16 @@ function draw() {
   } else {
     g.append(sv('path', { class: 'data', d: path(d.x, d.y, i0, i1) }));
   }
+  // a RRUFF spectrum under the curve: scaled so its top in view meets the current curve's top in view
+  if (SP.overlay && $('#sp-overlay').checked) {
+    const o = SP.overlay, first = o.x.findIndex(v => v >= vx0), past = o.x.findIndex(v => v > vx1);
+    const oa = Math.max(0, (first < 0 ? o.x.length : first) - 1), ob = Math.min(o.x.length - 1, (past < 0 ? o.x.length : past));
+    let omax = 0, cmax = 0; const cur = SP.layers.raw ? d.cleaned : d.y;
+    for (let k = oa; k <= ob; k++) omax = Math.max(omax, o.y[k]);
+    for (let k = i0; k <= i1; k++) cmax = Math.max(cmax, cur[k]);
+    const s = omax > 0 ? cmax / omax : 1;
+    if (ob > oa) g.append(sv('path', { class: 'overlay', d: path(o.x, o.y.map(v => v * s), oa, ob) }, sv('title', null, o.name + ' — scaled to the curve in view')));
+  }
   // fits: bands, their sum, the residual; the current region's bands carry handles
   const cv = SP.regions.map(r => r.comps.length ? curves(r) : null);
   let rmax = 0;
@@ -1234,6 +1244,7 @@ function wire() {
   $('#sp-formula').addEventListener('change', () => { keepChem(); saveWork(); loadLib(); });
   $('#sp-formula').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); e.stopPropagation(); });
   $('#sp-open').addEventListener('click', () => $('#sp-upload').click());
+  wireRruff();
   $('#sp-upload').addEventListener('change', e => { if (e.target.files.length) upload(e.target.files[0]); e.target.value = ''; });
   for (const id of ['sp-despike', 'sp-threshold', 'sp-resolution', 'sp-lam', 'sp-p', 'sp-width', 'sp-cif', 'sp-ms', 'sp-laser'])
     $('#' + id).addEventListener('change', () => process(false));
@@ -1302,6 +1313,54 @@ const FG = { name: '', i: 0, w: 0, h: 0, frames: [], box: null, x1: null, x2: nu
   ticks: [],              // the evenly spaced tick strokes found on the frame's axis (pixel x): what a mark dropped near the axis snaps to
   peaks: null };          // the tops of the traced curve's peaks (pixel x), after a Trace: what a mark dropped on a peak snaps to
 const fgStatus = (msg, bad) => { const s = $('#sp-fig-status'); s.textContent = msg || ''; s.title = msg || ''; s.style.color = bad ? 'var(--danger)' : ''; };
+// ---- the RRUFF library on this machine: a mineral's spectrum pulled up here, or drawn under the curve -------------
+// The list comes from /api/sp/rruff/list once (hidden when there is no library); a mineral typed into the box fills the
+// select with its spectra; 'open' holds the spectrum on the server under a name and opens it like a file opened here;
+// 'overlay' draws it under the current curve, scaled to the curve in view (SP.overlay = {name, x, y}; draw()).
+const RR = { minerals: null, byName: {} };
+async function wireRruff() {
+  const box = $('#sp-rruff-box'); if (!box) return;
+  try {
+    const r = await api('/api/sp/rruff/list');
+    if (!r.minerals || !r.minerals.length) return;
+    RR.minerals = r.minerals;
+    const dl = $('#sp-rruff-list');
+    for (const m of r.minerals) { RR.byName[m.name.toLowerCase()] = m; dl.append(el('option', { value: m.name })); }
+    box.classList.remove('hidden');
+    $('#sp-rruff').title += ' ' + r.minerals.length + ' minerals, ' + r.n + ' spectra (' + r.folder + ').';
+  } catch (_) { return; }
+  const specSel = $('#sp-rruff-spec'), openBtn = $('#sp-rruff-open'), ovLab = $('#sp-rruff-ov');
+  const pick = () => {
+    const m = RR.byName[$('#sp-rruff').value.trim().toLowerCase()];
+    specSel.textContent = '';
+    if (!m) { specSel.classList.add('hidden'); openBtn.classList.add('hidden'); ovLab.classList.add('hidden'); return; }
+    for (const s of m.spectra) specSel.append(el('option', { value: s.key }, s.id + ' ' + (s.kind || 'spectrum') + (s.laser ? ' ' + s.laser + ' nm' : '')));
+    specSel.classList.remove('hidden'); openBtn.classList.remove('hidden'); ovLab.classList.remove('hidden');
+    if ($('#sp-overlay').checked) overlayNow();
+  };
+  const overlayNow = async () => {
+    const key = specSel.value;
+    if (!key || !$('#sp-overlay').checked) { SP.overlay = null; draw(); return; }
+    try {
+      const r = await api('/api/sp/rruff/curve?key=' + enc(key));
+      if (specSel.value !== key) return;                     // another was chosen while this one loaded
+      SP.overlay = { name: r.name, x: r.x, y: r.y }; draw();
+      status(r.name + ' drawn under the curve (overlay)');
+    } catch (e) { status(e.message, true); }
+  };
+  $('#sp-rruff').addEventListener('change', pick);
+  $('#sp-rruff').addEventListener('input', () => { if (RR.byName[$('#sp-rruff').value.trim().toLowerCase()]) pick(); });
+  specSel.addEventListener('change', overlayNow);
+  $('#sp-overlay').addEventListener('change', overlayNow);
+  openBtn.addEventListener('click', async () => {
+    const key = specSel.value; if (!key) return;
+    try {
+      const r = await api('/api/sp/rruff/open', { key: +key });
+      await loadState(r.name);                                // the list of files now holds it (opened here); it opens as the current spectrum
+    } catch (e) { status(e.message, true); }
+  });
+}
+
 async function fgOpen() {
   $('#sp-fig').classList.remove('hidden');
   // a page already open comes back as it was left — frame, marks, values, colour, trace (Close and Escape only hide the

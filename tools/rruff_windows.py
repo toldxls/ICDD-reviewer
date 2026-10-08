@@ -19,7 +19,7 @@ only (an infrared-only mode is absent by nature), and the 2007 set holds one or 
 Outputs (out_dir, default review_out beside the corpus): rruff_windows_report.txt, rruff_windows.jsonl (one line per
 assigned band — private); --write puts the AGGREGATES into pxrd_review/data/band_windows_rruff.json.
 """
-import os, re, sys, json, struct, collections, statistics
+import os, re, sys, json, collections, statistics
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from pxrd_review import spectrum as SPM, bands as BD, paper_extract as PE
 
@@ -30,60 +30,7 @@ TRIM = 3.0                 # robust sigmas, as tools/corpus_spectra.py
 MIN_MINERALS = 3           # a window needs this many minerals
 
 
-def read_omnic(folder):
-    """[(name, x, y)] in the library's order. The .lbd: a text header of the length its first field says, then fixed
-    records (759 float32 on one grid, then 12 bytes); the .lbt: one 256-character name per record, each closed by \\x17."""
-    lbd = open(os.path.join(folder, 'RRUFFLib.lbd'), 'rb').read()
-    lbt = open(os.path.join(folder, 'RRUFFLib.lbt'), 'rb').read()
-    # the header's lines end in \r\n or \x00\n: tokens, not lines — length, company, library, version, '000', count,
-    # record size, …, points, first x, last x
-    toks = [t.strip().decode('latin-1') for t in re.split(rb'[\r\n\x00]+', lbd[:4000]) if t.strip()]
-    hlen = int(toks[0]); n = int(toks[5]); rec = int(toks[6]); npts = int(toks[13])
-    x0, x1 = float(toks[14]), float(toks[15])
-    if hlen + n * rec != len(lbd) or rec < 4 * npts:
-        raise SystemExit('the .lbd header (%d records of %d bytes, %d points, header %d) does not add up to its size %d' % (n, rec, npts, hlen, len(lbd)))
-    dx = (x1 - x0) / (npts - 1)
-    x = [x0 + k * dx for k in range(npts)]
-    # each text record: a one-byte kind, \x01\xff, then the name in a 256-character field (space-padded; some kinds
-    # close it with \x17 inside the field), then the record's numbers; the records stand in the .lbd's order
-    found = {m.start(1) - 3: m.group(1) for m in re.finditer(rb'[\x00-\xff]\x01\xff([ -~\x80-\xff\x17]{256})', lbt)}
-    # … and a few older records write the name as a length-prefixed string with no field at all ('\x16Sanbornite R050001_raw')
-    spans = sorted((p + 3, p + 259) for p in found)
-    for m in re.finditer(rb'([A-Z][A-Za-z\-\(\)\. ]{2,60}?R\d{6}[A-Za-z0-9_]{0,24})', lbt):
-        p = m.start()
-        if lbt[p - 1] == len(m.group(1)) and not any(a <= p < b for a, b in spans):
-            found[p - 3] = m.group(1)
-    names = {p: re.sub(r'[\x00-\x1f]', '', v.decode('latin-1')).strip() for p, v in found.items()}
-    if len(names) != n:
-        raise SystemExit('the .lbt holds %d names for %d spectra — the record layout is not the one this reader knows' % (len(names), n))
-    # each data record ends in a pointer to its text record: three bytes b0 b1 b2 -> b0 + 256·b2 + 65536·b1 (so the
-    # names are matched by pointer, not by order — though the two orders agree in this library)
-    out = []; order = sorted(names); missed = 0
-    for i in range(n):
-        r = lbd[hlen + i * rec: hlen + (i + 1) * rec]
-        b = r[4 * npts: 4 * npts + 3]
-        ptr = b[0] + 256 * b[2] + 65536 * b[1]
-        name = names.get(ptr)
-        if name is None:
-            missed += 1; name = names[order[i]]
-        out.append((name, x, list(struct.unpack('<%df' % npts, r[:4 * npts]))))
-    if missed:
-        print('note: %d of %d text pointers matched no record; those names were taken by order' % (missed, n))
-    return out
-
-
-_ID = re.compile(r'R\d{6}')
-
-
-def split_name(name):
-    """'Whiteite-(CaFeMg)R060912_785processed' -> ('Whiteite-(CaFeMg)', 'R060912', 'processed')."""
-    m = _ID.search(name)
-    if not m:
-        return name.strip(), '', ''
-    mineral = name[:m.start()].strip().strip('_').strip()
-    tail = name[m.end():].lower()
-    kind = next((k for k in ('processed', 'clean', 'corrected', 'raw') if k in tail or (k == 'processed' and 'proc' in tail) or (k == 'raw' and tail.endswith('ra'))), '')
-    return mineral, m.group(0), kind
+from pxrd_review.omnic_lib import read_omnic, split_name          # the library reader lives in the package (the window uses it too)
 
 
 def formula_of(mineral, cache={}):

@@ -61,6 +61,11 @@ for a mineral's chemistry, which bands are expected where, and for a band, what 
   `data/band_windows_rruff.json`): single-group minerals only, modes by the ion's geometry and free-ion ratios, so the windows
   check the library's ranges independently; `pxrd bands` and the window's library table show them, and they stand in where no
   paper window exists.
+- **A RRUFF spectrum pulled up in the spectrum window.** With a RRUFF library on the machine (`$PXRD_RRUFF_DIR`, a `RRUFF` folder
+  beside or above the open folder, or `~/RRUFF`), a mineral typed into the `RRUFF mineral…` box lists its spectra; one opens here as
+  a spectrum of its own or is drawn under the current curve (`overlay`), scaled to it. Read in place (`omnic_lib`), never copied.
+- **The fit names a background hump.** A band wider than half the region fitted is said to be a background, with the remedy
+  (a baseline, a narrower region); only one as wide as the region itself had been — measured on 320 RRUFF spectra fitted whole.
 - **`pxrd spectro <manuscript.docx|paper.pdf> [--cif X]`, and a spectroscopy section in `pxrd paper --check`, `pxrd proposal`
   and the GUI's Manuscript mode.** Every distance a sentence credits to Bartlett & Cooney (1989) — U–O of the uranyl ion
   from ν1 or ν3 — or to Libowitzky (1999) — O···O (or H···O) from an O–H stretch — is recomputed from the band the paper

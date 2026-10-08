@@ -15,6 +15,13 @@
     <input type="file" id="sp-upload" class="hidden" title="a spectrum file, or a session (…_sp.json) written by an export">
     <button id="sp-fig-open" title="Most papers give no data — at best a figure. Read the curve off a figure: a page of a .pdf, an image of a manuscript, or an image file. The frame, two points of the axis and the curve are confirmed by hand; the traced curve then opens here like any spectrum, with the manuscript's stated bands set beside it. Good to about a pixel: for seeing where the curve has a band, not for fitting widths.">From a figure…</button>
     <select id="sp-series" class="hidden" title="Which spectrum of the file (a sheet or a file may hold several)"></select>
+    <span id="sp-rruff-box" class="hidden">
+      <input id="sp-rruff" list="sp-rruff-list" placeholder="RRUFF mineral…" title="A mineral of the RRUFF library on this machine: type its name, choose one of its spectra, then open it here or draw it under the current curve (overlay).">
+      <datalist id="sp-rruff-list"></datalist>
+      <select id="sp-rruff-spec" class="hidden" title="The mineral's spectra in the library (sample id, processing, laser)"></select>
+      <button id="sp-rruff-open" class="hidden" title="Open this RRUFF spectrum here, as a spectrum of its own">open</button>
+      <label id="sp-rruff-ov" class="muted hidden" title="Draw the RRUFF spectrum under the current curve, scaled to it"><input type="checkbox" id="sp-overlay"> overlay</label>
+    </span>
     <select id="sp-kind" title="What the spectrum is. An infrared transmittance spectrum is converted to absorbance before anything else.">
       <option value="">kind: as guessed</option>
       <option value="raman">Raman</option>

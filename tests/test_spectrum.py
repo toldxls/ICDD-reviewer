@@ -605,3 +605,17 @@ class EndToEnd(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BackgroundHump(unittest.TestCase):
+    def test_a_band_over_half_the_region_is_named_a_background(self):
+        import math, random
+        from pxrd_review import spectrum as S
+        random.seed(3)
+        xs = [200.0 + k for k in range(1001)]
+        ys = [50 * math.exp(-((v - 700) / 400) ** 2) + 20 * math.exp(-((v - 500) / 6) ** 2) + random.gauss(0, 0.2) for v in xs]
+        f = S.fit(xs, ys, [{'shape': 'gauss', 'pos': 700, 'height': 50, 'fwhm': 600, 'eta': 0.5}, {'shape': 'gauss', 'pos': 500, 'height': 20, 'fwhm': 10, 'eta': 0.5}])
+        wide = [w for w in f.warnings if 'background hump' in w]
+        self.assertEqual(len(wide), 1, f.warnings); self.assertIn('over half the region', wide[0]); self.assertIn('set a baseline', wide[0])
+        g = S.fit(xs, ys, [{'shape': 'gauss', 'pos': 700, 'height': 50, 'fwhm': 600, 'eta': 0.5, 'fix': ['fwhm']}, {'shape': 'gauss', 'pos': 500, 'height': 20, 'fwhm': 10, 'eta': 0.5}], max_fwhm=600)
+        self.assertTrue(any('background hump' in w for w in g.warnings))

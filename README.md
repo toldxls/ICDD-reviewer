@@ -683,6 +683,12 @@ the formula expects there (or for the groups of another chemistry, when none of 
 **Band library** table under the fitted bands lists each mode with the manuscript's stated bands and the fitted bands
 that fall in it. The formula goes into the written table and the session.
 
+**A RRUFF spectrum beside yours** (the `RRUFF mineral…` box, shown when a RRUFF library is on this machine: `$PXRD_RRUFF_DIR`,
+a `RRUFF` folder beside or above the open folder, or `~/RRUFF`, holding a Thermo OMNIC pair `RRUFFLib.lbd` + `.lbt`). Type a
+mineral, choose one of its spectra (sample id, processing, laser), then `open` it here as a spectrum of its own — every tool
+works on it — or tick `overlay` to draw it under the current curve, scaled to the curve in view. The library is read in
+place; nothing of it is copied or written.
+
 **A spectrum from a figure** (`From a figure…`). Most papers give no data — at best a figure. The window shows a page
 of a `.pdf` of the folder (pages whose caption names a Raman or infrared spectrum are starred), an image of a manuscript
 `.docx`, or an image opened or dropped here, and three things are confirmed on it by hand: the plot's **frame** (a found
