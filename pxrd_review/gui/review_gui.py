@@ -3353,7 +3353,8 @@ def api_sp_bands():
         p = r['published']
         return {'group': r['group'], 'label': BD.label(r), 'mode': r['mode'], 'what': r['what'], 'free': r['free'], 'lo': r['lo'], 'hi': r['hi'],
                 'active': lib['activity'][r['active']], 'source': lib['sources'][r['source']].split(' — ')[0], 'check': r['check'], 'broad': r['broad'],
-                'published': None if not p else {'p5': p['p5'], 'p50': p['p50'], 'p95': p['p95'], 'papers': p['papers'], 'of': r['published_for']}}
+                'published': None if not p else {'p5': p['p5'], 'p50': p['p50'], 'p95': p['p95'], 'papers': p['papers'], 'of': r['published_for']},
+                'rruff': None if not r.get('rruff') else {'p5': r['rruff']['p5'], 'p50': r['rruff']['p50'], 'p95': r['rruff']['p95'], 'minerals': r['rruff']['minerals']}}
     out = {'ok': True, 'formula': BD.display(formula) if formula else '', 'name': name, 'source': source,
            'groups': [{'key': k, 'name': names[k]} for k in keys], 'rows': [row(r) for r in BD.expected(groups=keys, technique=tech)] if keys else []}
     at = d.get('at')

@@ -129,16 +129,40 @@ def groups_of(formula):
     return out
 
 
+RRUFF_FILE = os.path.join(_HERE, 'data', 'band_windows_rruff.json')
+RRUFF_MIN = 8                   # minerals: a RRUFF window stands in for a missing paper window from this many
+
+
+@functools.lru_cache(maxsize=1)
+def _rruff():
+    """The windows measured on a RRUFF Raman library (tools/rruff_windows.py; single-group minerals, modes by the
+    ion's geometry and free-ion ratios): {'GROUP mode': {'p5' … 'p95', 'n', 'minerals'}}."""
+    try:
+        with open(RRUFF_FILE, encoding='utf-8') as f:
+            return json.load(f).get('windows') or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def rruff_window(key, mode):
+    return _rruff().get('%s %s' % (key, mode))
+
+
 def _published(key, mode, technique=None, windows=None):
-    """The measured window of a mode — (window, 'raman' | 'ir' | 'any') — or (None, None)."""
+    """The measured window of a mode — (window, 'raman' | 'ir' | 'any' | 'rruff') — or (None, None). The papers'
+    stated positions first; where no paper window exists, the RRUFF spectra's (RRUFF_MIN minerals or more)."""
     w = (_windows() if windows is None else windows)
     name = '%s %s' % ('OH' if (key, mode) == ('H2O', 'stretch') else key, mode)
     entry = w.get(name)
-    if not entry:
-        return None, None
-    if technique and entry.get(technique):
-        return entry[technique], technique
-    return (entry['any'], 'any') if entry.get('any') else (None, None)
+    if entry:
+        if technique and entry.get(technique):
+            return entry[technique], technique
+        if entry.get('any'):
+            return entry['any'], 'any'
+    r = rruff_window(key, mode) if windows is None else None
+    if r and r.get('minerals', 0) >= RRUFF_MIN:
+        return dict(r, papers=r['minerals']), 'rruff'
+    return None, None
 
 
 def _rows(keys, technique=None, windows=None):
@@ -150,7 +174,7 @@ def _rows(keys, technique=None, windows=None):
             pub, tech = _published(g['key'], m['mode'], technique, windows)
             yield {'group': g['key'], 'name': g['name'], 'writes': g['writes'], 'mode': m['mode'], 'what': m['what'], 'free': m.get('free'),
                    'lo': m['range'][0], 'hi': m['range'][1], 'active': m['active'], 'source': m['source'], 'check': bool(m.get('check')), 'broad': bool(m.get('broad')),
-                   'published': pub, 'published_for': tech}
+                   'published': pub, 'published_for': tech, 'rruff': rruff_window(g['key'], m['mode'])}
 
 
 def expected(formula=None, technique=None, groups=None, windows=None):
@@ -208,7 +232,14 @@ def _window_text(r):
     p = r['published']
     if not p:
         return ''
+    if r['published_for'] == 'rruff':
+        return ''                                                # shown in its own column
     return '%d–%d, median %d (%d papers%s)' % (p['p5'], p['p95'], p['p50'], p['papers'], '' if r['published_for'] == 'any' else ', ' + {'raman': 'Raman', 'ir': 'infrared'}[r['published_for']])
+
+
+def _rruff_text(r):
+    w = r.get('rruff')
+    return '%d–%d, median %d (%d minerals)' % (w['p5'], w['p95'], w['p50'], w['minerals']) if w else ''
 
 
 _NAME = re.compile(r'^[A-Za-zÀ-ÿ\-]+(?:-?\([A-Za-z]+\))?$')
@@ -253,9 +284,11 @@ def table(formula, technique=None, name=''):
     L.append('  groups: ' + ', '.join('%s (%s)' % (k, names[k]) for k in keys))
     L.append('')
     rows = expected(formula, technique)
-    head = ('band', 'what', 'active', 'free ion', 'range in minerals', 'published positions')
+    head = ('band', 'what', 'active', 'free ion', 'range in minerals', 'published positions', 'RRUFF spectra')
     body = [(label(r), r['what'], lib['activity'][r['active']], '' if r['free'] is None else '%d' % r['free'],
-             '%d–%d%s' % (r['lo'], r['hi'], ' *' if r['check'] else ''), _window_text(r)) for r in rows]
+             '%d–%d%s' % (r['lo'], r['hi'], ' *' if r['check'] else ''), _window_text(r), _rruff_text(r)) for r in rows]
+    if not any(x[6] for x in body):
+        head = head[:6]; body = [x[:6] for x in body]
     w = [max(len(x[i]) for x in [head] + body) for i in range(len(head))]
     for x in [head] + body:
         L.append('  ' + '  '.join(c.ljust(w[i]) for i, c in enumerate(x)).rstrip())
@@ -264,6 +297,8 @@ def table(formula, technique=None, name=''):
         L.append('  * entered from memory of the source, not yet compared with it line by line (data/band_library.json)')
     L.append('  sources: ' + '; '.join(lib['sources'][s].split(' — ')[0] for s in sorted({r['source'] for r in rows})))
     L.append('  published positions: the 5th–95th percentile of what published mineral descriptions assign to that mode')
+    if len(head) > 6:
+        L.append('  RRUFF spectra: the same percentiles of the band in the Raman spectra of minerals whose formula holds this group alone (data/band_windows_rruff.json)')
     return L
 
 

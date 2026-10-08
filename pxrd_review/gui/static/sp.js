@@ -294,10 +294,14 @@ function renderLibrary() {
   const fitted = []; for (const reg of SP.regions) for (const c of reg.comps) fitted.push(c.pos);
   fitted.sort((a, b) => a - b);
   const tb = el('table');
-  tb.append(el('tr', null, ...['band', 'what', 'active in', 'free ion', 'range in minerals', 'published positions', 'stated in the manuscript', 'fitted here'].map(h => el('th', null, h))));
+  const anyRruff = L.rows.some(r => r.rruff);
+  tb.append(el('tr', null, ...['band', 'what', 'active in', 'free ion', 'range in minerals', 'published positions'].concat(anyRruff ? ['RRUFF spectra'] : [], ['stated in the manuscript', 'fitted here']).map(h => el('th', null, h))));
   let last = null, starred = false;
   for (const r of L.rows) {
-    const p = r.published, st = stated.filter(x => libHolds(r, x)), ft = fitted.filter(x => libHolds(r, x));
+    const p = r.published && r.published.of !== 'rruff' ? r.published : null, st = stated.filter(x => libHolds(r, x)), ft = fitted.filter(x => libHolds(r, x));
+    const rr = r.rruff;
+    const rruffTd = anyRruff ? [el('td', { title: rr ? 'the 5th–95th percentile of this band in the Raman spectra of minerals whose formula holds this group alone (a RRUFF library; modes by the ion’s geometry)' : 'fewer than three single-group minerals of the RRUFF library' },
+      rr ? rr.p5 + '–' + rr.p95 + ', median ' + rr.p50 + ' (' + rr.minerals + ' minerals)' : '')] : [];
     const sw = el('i', { class: 'sw' }); sw.style.background = libColour(r);
     const name = el('td', { title: r.source }, sw, r.label);
     starred = starred || r.check;
@@ -305,6 +309,7 @@ function renderLibrary() {
       el('td', { title: r.source + (r.check ? ' — entered from memory of the source, not yet compared with it line by line' : '') }, r.lo + '–' + r.hi + (r.check ? ' *' : '')),
       el('td', { title: p ? 'the 5th–95th percentile of the positions published mineral descriptions assign to this mode' + (p.of === 'any' ? '' : ' (' + (p.of === 'ir' ? 'infrared' : 'Raman') + ' only)') : 'fewer than 8 papers of the corpus assign a band to this mode' },
         p ? p.p5 + '–' + p.p95 + ', median ' + p.p50 + ' (' + p.papers + ' papers)' : ''),
+      ...rruffTd,
       el('td', { class: st.length ? '' : 'none' }, stated.length ? (st.join(', ') || '—') : ''),
       el('td', { class: ft.length ? '' : 'none' }, fitted.length ? (ft.map(x => x.toFixed(1)).join(', ') || '—') : ''));
     last = r.group; tb.append(tr);

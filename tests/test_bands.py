@@ -105,7 +105,8 @@ class Library(unittest.TestCase):
         self.assertTrue(nu1['published'] and 780 < nu1['published']['p5'] < nu1['published']['p95'] < 900)
         self.assertEqual(nu1['published_for'], 'any')
         self.assertEqual(next(r for r in B.expected('Ca(UO2)2(PO4)2·11H2O', 'raman') if B.label(r) == 'UO2 ν1')['published_for'], 'raman')
-        self.assertIsNone(next(r for r in rows if B.label(r) == 'PO4 ν2')['published'])    # too few papers: the literature's range alone
+        nu2 = next(r for r in rows if B.label(r) == 'PO4 ν2')                               # too few papers: the RRUFF spectra's window stands in
+        self.assertEqual(nu2['published_for'], 'rruff'); self.assertEqual(nu2['published']['papers'], nu2['rruff']['minerals'])
         self.assertEqual(B.expected('NaCl'), [])
         self.assertEqual([B.label(r) for r in B.expected(groups=['CO3'])], ['CO3 ν3', 'CO3 ν1', 'CO3 ν2', 'CO3 ν4'])
 

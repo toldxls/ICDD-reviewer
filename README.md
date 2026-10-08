@@ -561,6 +561,10 @@ Two sources stand side by side in every row and are never merged into one number
   true`) was entered from memory of the source and has not been compared with it line by line — correct it in the file.
 - `data/band_windows.json` (measured): the **published positions** — the 5th–95th percentile and the median of what
   published mineral descriptions assign to that mode, where eight papers or more give one.
+- `data/band_windows_rruff.json` (measured, Raman): the same percentiles of each band in the spectra of a RRUFF library
+  (`tools/rruff_windows.py`, run on a private copy): only minerals whose formula holds that one group, the modes assigned
+  by the ion's geometry and free-ion ratios — no range of the library goes into it, so it is an independent check on the
+  ranges; where no paper window exists and eight minerals or more give one, it stands in for the published positions.
 
 The formula is read for its groups (`bands.groups_of`): valence superscripts are no part of a group (`As5+O4` is an
 arsenate, `As3+O3` an arsenite), a mixed site before its oxygens is its dominant atom's group (`(Se0.8S0.2)O4` is a
