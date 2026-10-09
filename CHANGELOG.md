@@ -6,7 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
-| [0.16.0](#0160--2026-10-01) | 1 Oct | Spectroscopy: `pxrd spectro` recomputes the distances a paper credits to Bartlett & Cooney or Libowitzky from its own bands and sets the formula beside them; `pxrd spectrum` and the GUI's spectrum window import, clean and fit a Raman / infrared spectrum — or trace one off a figure; `pxrd bands` is a band library: for a chemistry the bands expected of it, for a band what it is expected to be in that chemistry |
+| [0.16.0](#0160--2026-10-09) | 9 Oct | Spectroscopy: `pxrd spectro` recomputes the distances a paper credits to Bartlett & Cooney or Libowitzky from its own bands and sets the formula beside them; `pxrd spectrum` and the GUI's spectrum window import, clean and fit a Raman / infrared spectrum — or trace one off a figure; `pxrd bands` is a band library: for a chemistry the bands expected of it, for a band what it is expected to be in that chemistry — its ranges measured on a RRUFF Raman library, and a RRUFF spectrum pulled up beside yours; an adversarial review's ten fixes; the window tidied |
 | [0.15.2](#0152--2026-09-30) | 30 Sep | GUI: the Mindat pane's lists are navigable — a species name opens its record, ‹ back returns to the list, a record's group name opens the group |
 | [0.15.1](#0151--2026-09-30) | 30 Sep | GUI: the Mindat & cross-source pane looks up any species or group from the local snapshot and filters species by element on a periodic table; formulas in the pane's group list no longer break mid-token |
 | [0.15.0](#0150--2026-09-30) | 30 Sep | The manuscript review reads a `.pdf` proposal whole (report only); a memo-driven regression; `pxrd paper --check` reads the analytical table's s.d. and count of analyses under their own headers, 2V in every place it is stated (against itself, the indices, and a comparison table's own column), the site-scattering table (the population's electrons vs the calculated column, refined vs calculated, the .cif's site vs the refined value) and the prose electron counts; `pxrd cifaudit` recomputes μ from the sites at Mo Kα; the under-bonded O, absolute Tmin, prism-as-plane, missing compatibility index and 'twinning not observed' rules |
@@ -41,7 +41,7 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
-## [0.16.0] — 2026-10-01
+## [0.16.0] — 2026-10-09
 **Spectroscopy.** The Raman and infrared bands a paper states are read and the distances it infers from them recomputed;
 a spectrum file — or a figure of one — is imported, cleaned and fitted in a window of its own; and a band library says,
 for a mineral's chemistry, which bands are expected where, and for a band, what it is expected to be in that chemistry.
