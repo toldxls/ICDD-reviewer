@@ -22,6 +22,9 @@ HUMP_MIN = 300.0            # cm⁻¹: a component this wide (and half its regio
 STRONG = 0.10               # of the top: a band whose coverage is counted
 GAP = 80.0                  # cm⁻¹: strong bands further apart than this are fitted in separate regions
 MARGIN = 40.0               # cm⁻¹: the region reaches this far beyond its outer bands
+EXTRA = 4                   # components allowed beyond the strong bands of a region (the window's 'at most' set as a user would)
+SECONDS = 10.0              # the search's time cap per region here (the window's is 30 s): a profile put 70 % of the time in a few wide regions
+_W = {}                     # the worker's store and windows (opened once per worker, not pickled per task)
 
 
 def regions_of(strong, lo, hi):
@@ -62,8 +65,14 @@ def mode_of(pos, keys, windows):
     return ''
 
 
-def one(args):
-    i, meta, x, y, baseline, windows = args
+def _init(store, baseline):
+    """Each worker opens the store itself (an mmap) and keeps the windows: no spectrum travels through a pipe."""
+    _W['st'] = RR.open_store(store); _W['baseline'] = baseline; _W['windows'] = BD._rruff()
+    SPM.AUTO_SECONDS = SECONDS
+
+
+def one(i):
+    st = _W['st']; meta = st.spectra[i]; x, y = st.xy(i); baseline = _W['baseline']; windows = _W['windows']
     t0 = time.time()
     rec = {'i': i, 'id': meta.get('id'), 'name': meta.get('name'), 'laser': meta.get('laser'), 'quality': meta.get('quality'), 'orient': meta.get('orient')}
     try:
@@ -76,8 +85,9 @@ def one(args):
         keys = [k for k in BD.groups_of(formula_of(meta.get('name') or '')) if k not in ('OH', 'H2O')]
         fits = []
         for lo, hi in regions_of([p for p, _w in strong], xs[0], xs[-1]):
+            n_in = sum(1 for p, _w in strong if lo <= p <= hi)
             try:
-                f, _trials = SPM.auto_fit(xs, ys, lo=lo, hi=hi, local_baseline='linear')
+                f, _trials = SPM.auto_fit(xs, ys, lo=lo, hi=hi, local_baseline='linear', max_n=min(12, n_in + EXTRA))
                 fits.append(f)
             except ValueError as ex:                               # 'no band found' in a region of weak bands: counted, not a crash
                 rec.setdefault('skipped', []).append(str(ex)[:60])
@@ -100,7 +110,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('--sample', type=int, default=0, help='this many spectra, drawn with --seed (0 = every processed Raman spectrum)')
     ap.add_argument('--seed', type=int, default=1)
-    ap.add_argument('--jobs', type=int, default=8)
+    ap.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 8) - 1))
     ap.add_argument('--baseline', default='none', choices=('none', 'als', 'snip', 'rubber'))
     ap.add_argument('--groups', help='only minerals of these library groups (comma-separated)')
     ap.add_argument('--out', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'review_out'))
@@ -117,13 +127,17 @@ def main(argv=None):
         idx = [i for i in idx if want & set(BD.groups_of(formula_of(st.spectra[i].get('name') or '')))]
     if a.sample and a.sample < len(idx):
         random.Random(a.seed).shuffle(idx); idx = sorted(idx[:a.sample])
-    windows = BD._rruff()
-    jobs = [(i, st.spectra[i], *st.xy(i), a.baseline, windows) for i in idx]
+    store = st.folder
     st.close()
     os.makedirs(a.out, exist_ok=True)
     t0 = time.time()
-    with Pool(a.jobs) as pool:
-        recs = pool.map(one, jobs, chunksize=4)
+    recs = []
+    with Pool(a.jobs, initializer=_init, initargs=(store, a.baseline)) as pool:
+        for k, r in enumerate(pool.imap_unordered(one, idx, chunksize=8), 1):
+            recs.append(r)
+            if k % 500 == 0 or k == len(idx):
+                print('  %d / %d spectra, %.1f min' % (k, len(idx), (time.time() - t0) / 60), flush=True)
+    recs.sort(key=lambda r: r['i'])
     with open(os.path.join(a.out, 'fit_gauntlet%s.jsonl' % a.tag), 'w', encoding='utf-8') as f:
         for r in recs:
             f.write(json.dumps(r, ensure_ascii=False) + '\n')
@@ -138,8 +152,8 @@ def main(argv=None):
     summary = {'spectra': len(recs), 'crashes': len(recs) - len(ok), 'coverage': round(100.0 * covered / max(1, strong), 1), 'humps': sum(1 for r in ok if r['hump']),
                'not_converged': sum(1 for r in ok if not r['converged']), 'median_seconds': round(statistics.median(r['seconds'] for r in recs), 1) if recs else 0,
                'baseline': a.baseline, 'sample': a.sample, 'seed': a.seed, 'minutes': round((time.time() - t0) / 60, 1)}
-    L = ['FIT GAUNTLET over %d RRUFF spectra, region by region (baseline %s; sample %d seed %d): %d crashes, %.1f %% of the strong bands fitted (within %g), %d with a hump (a band %d cm⁻¹ and half its region wide), %d not converged, %.1f s a spectrum'
-         % (summary['spectra'], a.baseline, a.sample, a.seed, summary['crashes'], summary['coverage'], COVER, summary['humps'], round(HUMP_MIN), summary['not_converged'], summary['median_seconds']), '']
+    L = ['FIT GAUNTLET over %d RRUFF spectra, region by region (baseline %s; sample %d seed %d; at most the strong bands + %d components a region, %g s a region): %d crashes, %.1f %% of the strong bands fitted (within %g), %d with a hump (a band %d cm⁻¹ and half its region wide), %d not converged, %.1f s a spectrum'
+         % (summary['spectra'], a.baseline, a.sample, a.seed, EXTRA, SECONDS, summary['crashes'], summary['coverage'], COVER, summary['humps'], round(HUMP_MIN), summary['not_converged'], summary['median_seconds']), '']
     L.append('  warnings: ' + ', '.join('%s %d' % (k, v) for k, v in warns.most_common(12)))
     L += ['', '  FWHM of the components by mode (p5–p50–p95 cm⁻¹, components of ≥ 5 % of the area):']
     agg = {}

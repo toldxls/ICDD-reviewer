@@ -44,6 +44,15 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
+## [Unreleased]
+
+### Changed
+- **`tools/fit_gauntlet.py` over the whole collection.** Each worker opens the store itself, the search per region is capped at
+  the region's strong bands + 4 components and 10 s (as a user sets the window's 'at most'), progress is printed; 14,007
+  spectra in 97 minutes at low priority: no crash, 72.1 % of the strong bands fitted within 6 cm⁻¹ or half their width, 50
+  humps, 290 regions not converged. `data/fit_widths.json` now rests on the whole collection (56 modes, 41 of them on 50
+  bands or more); this run is the baseline later runs diff against.
+
 ## [0.18.0] — 2026-10-10
 **The fuller collection put to work.** Every measurement the band library rests on is re-made on RRUFF's own collection —
 the O–H region and the infrared modes for the first time — and the reviewer gets RRUFF's bands beside the paper's own, the
