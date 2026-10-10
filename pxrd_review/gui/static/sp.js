@@ -5,6 +5,11 @@
 
 const $ = sel => document.querySelector(sel);
 const enc = encodeURIComponent;
+if (!window.chemNodes) {                                  // chem.js did not load (an old Safari without regex lookbehind): formulas plain, nothing breaks
+  window.chemTokens = t => [['', t == null ? '' : String(t)]];
+  window.chemNodes = t => document.createTextNode(t == null ? '' : String(t));
+  window.chemSvg = (e, t) => { e.append(document.createTextNode(t == null ? '' : String(t))); return e; };
+}
 function el(tag, attrs, ...kids) {
   const e = document.createElement(tag);
   if (attrs) for (const k in attrs) {
@@ -169,7 +174,7 @@ function saveWork() {
       const regs = SP.regions.filter(r => r.comps.length);
       if (regs.length) {
         const how = regs.map(asFitted);
-        all[key] = { t: Date.now(), s: { options: Object.assign(opts(), { regions: how.map(h => Object.assign({}, h, { comps: undefined })) }),
+        all[key] = { t: Date.now(), s: { options: Object.assign(opts(), { groups: undefined, regions: how.map(h => Object.assign({}, h, { comps: undefined })) }),   // the pick is the folder's, not this file's
           fits: how.map(h => ({ lo: h.lo, hi: h.hi, baseline: h.base, x0: h.x0, converged: h.converged, components: h.comps })) } };
       } else delete all[key];
       for (const k of Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(12)) delete all[k];
@@ -320,8 +325,9 @@ function renderLibrary() {
   }
   if (L && L.source === 'picked') {
     const sum = el('summary', null, 'Band library — expected of the groups picked: ');
-    sum.append(el('b', null, L.groups.length ? chemList(L.groups.map(g => g.key)) : 'none'),
-      ...(L.formula ? [' (the chemistry ' + (L.name ? L.name + ', ' : ''), chemNodes(L.formula), ' holds ', L.own.length ? chemList(L.own) : 'no group of the library', ')'] : []),
+    const writesOf = k => (PK.cat && PK.cat.groups.find(g => g.key === k) || L.groups.find(g => g.key === k) || {}).writes || k;
+    sum.append(el('b', null, L.groups.length ? chemList(L.groups.map(g => g.writes || g.key)) : 'none'),
+      ...(L.formula ? [' (the chemistry ' + (L.name ? L.name + ', ' : ''), chemNodes(L.formula), ' holds ', L.own.length ? chemList(L.own.map(writesOf)) : 'no group of the library', ')'] : []),
       L.groups.length ? '' : ' — pick a group under ‘Chem search’ over the plot, or go back to the chemistry’s own');
     host.append(sum);
     if (!L.rows.length) return;
@@ -1233,7 +1239,7 @@ async function applySession_(s, quiet) {
   if (o.ms && SP.state.manuscripts.includes(o.ms)) $('#sp-ms').value = o.ms;
   const chem = o.formula_typed != null ? o.formula_typed : (o.formula || '');
   if (chem) $('#sp-formula').value = chem;                  // a session that names no chemistry leaves the one in the field
-  if (Array.isArray(o.groups)) SP.pick = o.groups.map(String); else if (o.groups === null) SP.pick = null;   // a session written before the picker leaves it
+  if (Array.isArray(o.groups)) { SP.pick = o.groups.map(String); keepPick(); } else if (o.groups === null) { SP.pick = null; keepPick(); }   // a session written before the picker leaves it
   pickSummary();
   $('#sp-file').value = file;
   SP.gen++;
@@ -1427,24 +1433,25 @@ async function renderPicker() {
   const sp = el('div', { class: 'pk-species' }); host.append(sp);
   loadSpecies(sp);
 }
-async function loadSpecies(host) {
+let speciesTimer = null;
+async function loadSpecies(host, keep) {
   const keys = pickNow(), seq = ++PK.seq;
-  if (!keys.length) { host.append(el('span', { class: 'muted' }, 'No group picked: no species to list.')); return; }
-  host.append(el('span', { class: 'muted' }, 'looking for the species that hold ', chemList(keys, ' + '), '…'));
+  if (!keys.length) { host.textContent = ''; host.append(el('span', { class: 'muted' }, 'No group picked: no species to list.')); return; }
+  if (!keep) { host.textContent = ''; host.append(el('span', { class: 'muted' }, 'looking for the species that hold ', chemList(keys, ' + '), '…')); }
   let r;
-  try { r = await api('/api/sp/species', { groups: keys }); } catch (e) { host.textContent = e.message; return; }
+  try { r = await api('/api/sp/species', { groups: keys, q: PK.filter.trim(), only_spectra: PK.only }); } catch (e) { host.textContent = e.message; return; }
   if (seq !== PK.seq) return;
+  const had = keep ? host.querySelector('input[type=text]') : null, caret = had ? had.selectionStart : null;
   host.textContent = '';
-  const filt = el('input', { type: 'text', placeholder: 'filter by name…', spellcheck: 'false', autocomplete: 'off' }); filt.value = PK.filter;
+  const filt = el('input', { type: 'text', placeholder: 'filter by name or formula…', spellcheck: 'false', autocomplete: 'off' }); filt.value = PK.filter;
   const list = el('div', { class: 'pk-list' });
   const withSpectra = PK.cat && PK.cat.rruff && RR.choose;
+  const again = () => { clearTimeout(speciesTimer); speciesTimer = setTimeout(() => loadSpecies(host, true), 250); };   // the server filters the WHOLE list
   const fill = () => {
-    list.textContent = ''; const q = PK.filter.trim().toLowerCase(); let n = 0;
+    list.textContent = ''; let n = 0;
     const rows = PK.sort === 'spectra' ? r.species.slice().sort((a, b) => (!a.rruff) - (!b.rruff)) : r.species;    // a stable sort: by name within each half
     for (const s of rows) {
-      if (q && !s.name.toLowerCase().includes(q) && !s.formula.toLowerCase().includes(q)) continue;
-      if (PK.only && !s.rruff) continue;
-      if (++n > 300) { list.append(el('div', { class: 'muted' }, '… and more: narrow the filter')); break; }
+      if (++n > 600) { list.append(el('div', { class: 'muted' }, '… and more: narrow the filter')); break; }
       const f = el('span', { class: 'f' }); f.innerHTML = s.html || s.formula;             // Mindat's own sub/sup, every other tag escaped on the server
       const row = el('div', { class: 'pk-sp' + (s.rruff ? ' rr' : '') }, el('b', { title: s.rruff ? 'open the RRUFF spectrum of ' + s.name + ' here (' + s.rruff.n + ' spectr' + (s.rruff.n === 1 ? 'um' : 'a') + ' in the library)' : s.formula }, s.name), f);
       if (s.rruff && RR.choose) {                            // a name with a spectrum opens it in the window; 'overlay' draws it under the curve instead
@@ -1455,20 +1462,23 @@ async function loadSpecies(host) {
       }
       list.append(row);
     }
-    if (!n) list.append(el('div', { class: 'muted' }, (PK.only ? 'no species with a spectrum on this machine holds ' : 'no species of the snapshot holds '), chemList(keys, ' + '), (q ? ' and matches ‘' + PK.filter.trim() + '’' : '')));
+    if (!n) list.append(el('div', { class: 'muted' }, (PK.only ? 'no species with a spectrum on this machine holds ' : 'no species of the snapshot holds '), chemList(keys, ' + '), (PK.filter.trim() ? ' and matches ‘' + PK.filter.trim() + '’' : '')));
   };
-  filt.addEventListener('input', () => { PK.filter = filt.value; fill(); });
-  filt.addEventListener('keydown', e => e.stopPropagation());
+  filt.addEventListener('input', () => { PK.filter = filt.value; again(); });
+  filt.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Escape') $('#sp-pick').open = false; });
+  const q = PK.filter.trim();
   const head = el('div', { class: 'pk-species-head' }, el('span', { class: 'muted' }, r.total + ' species of the local Mindat snapshot hold ', chemList(keys, ' + '),
-    (withSpectra ? ' · ' + r.with_rruff + ' with a RRUFF spectrum on this machine, highlighted — a name opens its spectrum here' : '') + (r.total > r.species.length ? ' · the first ' + r.species.length + ' listed' : '')), filt);
+    (withSpectra ? ' · ' + r.with_rruff + ' with a RRUFF spectrum on this machine, highlighted — a name opens its spectrum here' : '') +
+    (q || PK.only ? ' · ' + r.matching + ' match' : '') + (r.matching > r.species.length ? ' · the first ' + r.species.length + ' listed' : '')), filt);
   if (withSpectra) {
     const sort = el('select', { title: 'The order of the list' }, el('option', { value: 'name' }, 'A–Z'), el('option', { value: 'spectra' }, 'with a spectrum first'));
     sort.value = PK.sort; sort.addEventListener('change', () => { PK.sort = sort.value; fill(); });
-    const cb = el('input', { type: 'checkbox' }); cb.checked = PK.only; cb.addEventListener('change', () => { PK.only = cb.checked; fill(); });
+    const cb = el('input', { type: 'checkbox' }); cb.checked = PK.only; cb.addEventListener('change', () => { PK.only = cb.checked; loadSpecies(host, true); });
     head.append(sort, el('label', { class: 'muted', title: 'List only the species the RRUFF library on this machine has a spectrum of' }, cb, ' only with a spectrum'));
   }
   host.append(head, list);
   fill();
+  if (had) { filt.focus(); try { filt.setSelectionRange(caret, caret); } catch (_) {} }
 }
 
 // ---- the RRUFF library on this machine: a mineral's spectrum pulled up here, or drawn under the curve -------------
@@ -1495,15 +1505,16 @@ const specLabel = s => s.id + ' ' + (s.kind || 'spectrum') + (s.laser ? ' ' + s.
 let fetchTimer = null;
 async function rruffFetch() {
   try {
-    const r = await api('/api/sp/rruff/fetch', {});
+    await api('/api/sp/rruff/fetch', {});
     status('fetching RRUFF from rruff.net…'); rruffFollow();
-  } catch (e) { status(e.message, true); }
+  } catch (e) { status(e.message, true); if (/already running/.test(e.message)) rruffFollow(); }
 }
 function rruffFollow() {
   clearTimeout(fetchTimer);
   fetchTimer = setTimeout(async () => {
     let r; try { r = await api('/api/sp/rruff/status'); } catch (e) { status(e.message, true); return; }
     const f = r.fetch || {};
+    if (!f.stage) { status('the RRUFF fetch is no longer running on the server (restarted?) — fetch again if the store is incomplete', true); return; }
     if (!f.finished) {
       const mb = v => (v / 1048576).toFixed(0);
       status(f.stage === 'reading' ? 'RRUFF: reading ' + (f.set || '') + ' — ' + (f.spectra || 0) + ' spectra so far'
@@ -1511,7 +1522,7 @@ function rruffFollow() {
       rruffFollow(); return;
     }
     if (f.error) { status('RRUFF fetch failed: ' + f.error, true); return; }
-    try { const l = await api('/api/sp/rruff/list'); if (rruffFill(l)) { status('RRUFF: ' + l.n + ' spectra of ' + l.minerals.length + ' minerals in the cache — found from now on whatever folder is open'); if ($('#sp-pick').open) renderPicker(); } } catch (e) { status(e.message, true); }
+    try { const l = await api('/api/sp/rruff/list'); if (rruffFill(l)) { status('RRUFF: ' + l.n + ' spectra of ' + l.minerals.length + ' minerals in the cache — found from now on whatever folder is open' + (f.missing && f.missing.length ? ' (not on rruff.net: ' + f.missing.join(', ') + ')' : '')); if ($('#sp-pick').open) renderPicker(); } } catch (e) { status(e.message, true); }
   }, 2000);
 }
 async function wireRruff() {
@@ -1532,7 +1543,8 @@ async function wireRruff() {
     const m = RR.byName[$('#sp-rruff').value.trim().toLowerCase()];
     specSel.textContent = '';
     if (!m) { specSel.classList.add('hidden'); openBtn.classList.add('hidden'); ovLab.classList.add('hidden'); return; }
-    for (const s of m.spectra) specSel.append(el('option', { value: s.key }, specLabel(s)));
+    const seen = {};
+    for (const s of m.spectra) { const lab = specLabel(s); seen[lab] = (seen[lab] || 0) + 1; specSel.append(el('option', { value: s.key }, lab + (seen[lab] > 1 ? ' (' + seen[lab] + ')' : ''))); }   // one sample, many orientations
     specSel.classList.remove('hidden'); openBtn.classList.remove('hidden'); ovLab.classList.remove('hidden');
     if ($('#sp-overlay').checked) overlayNow();
   };
@@ -1558,6 +1570,7 @@ async function wireRruff() {
   $('#sp-overlay').addEventListener('change', overlayNow);
   openBtn.addEventListener('click', async () => {
     const key = specSel.value; if (!key) return;
+    if ($('#sp-overlay').checked) { $('#sp-overlay').checked = false; SP.overlay = null; }   // the reference becomes the curve: not drawn under itself
     try {
       const r = await api('/api/sp/rruff/open', { key: +key });
       await loadState(r.name);                                // the list of files now holds it (opened here); it opens as the current spectrum

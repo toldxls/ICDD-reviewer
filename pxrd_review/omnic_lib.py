@@ -10,7 +10,7 @@ inside the field) and the record's numbers; a few older records write the name a
 """
 import os, re, struct, functools, collections
 
-_ID = re.compile(r'R\d{6}')
+_ID = re.compile(r'[RX]\d{6}')
 _LASER = re.compile(r'(\d{3})\s?nm|_(\d{3})(?:_|[a-z])')
 
 
@@ -176,8 +176,8 @@ def find_library(near=None):
     `near` or any of its parents (four levels), else ~/RRUFF, else a RRUFF folder up to two levels under Desktop / Documents /
     Downloads / home. Once found anywhere it is remembered, so it is there whatever folder is opened next. None when there is none."""
     env = os.environ.get('PXRD_RRUFF_DIR')
-    if env:
-        return env if is_library(env) else None
+    if env and is_library(env):
+        return env                                               # a folder named that is not a library: the other places are still tried
     hit = remembered()
     if hit:
         return hit
@@ -191,10 +191,15 @@ def find_library(near=None):
                 break
             p = parent
     cands.append(os.path.join(os.path.expanduser('~'), 'RRUFF'))
-    found = next((c for c in cands if is_library(c)), None) or _search()
+    found = next((c for c in cands if is_library(c)), None)
+    if not found and _SEARCHED[0] != tuple(SEARCH_ROOTS):        # the two-level walk once per process (per set of roots): not on every request of a window
+        found = _search(); _SEARCHED[0] = tuple(SEARCH_ROOTS)
     if found:
         remember(found)
     return found
+
+
+_SEARCHED = [None]                  # the roots `_search` has walked in this process without finding a library (a found one is remembered instead)
 
 
 def set_library(folder):
@@ -208,7 +213,7 @@ def set_library(folder):
         raise ValueError('no such folder: %s' % folder)
     for c in (folder, os.path.join(folder, 'RRUFF')):
         if is_library(c):
-            remember(c)
+            remember(c); _SEARCHED[0] = None
             return c
     raise ValueError('%s holds no RRUFFLib.lbd + RRUFFLib.lbt (the Thermo OMNIC library pair)' % folder)
 

@@ -1,5 +1,6 @@
 {
  "about": "Where the bands of single-group minerals stand in a RRUFF Raman library (the collection fetched from rruff.net by pxrd rruff --fetch, processed Raman spectra, broad scans left out — or a Thermo OMNIC copy): percentiles per group and mode, modes assigned by the ion geometry alone (tools/rruff_windows.py). Aggregates only.",
+ "source": "rruff: 14007 spectra walked, 4042 RRUFF ids, 2767 single-group",
  "percentiles": [
   5,
   25,
@@ -17,27 +18,27 @@
    "p50": 991,
    "p75": 1008,
    "p95": 1031,
-   "n": 174,
-   "minerals": 121,
+   "n": 176,
+   "minerals": 123,
    "dropped": 8
   },
   "SO4 ν3": {
    "p5": 1017,
    "p25": 1069,
    "p50": 1117,
-   "p75": 1161,
+   "p75": 1163,
    "p95": 1217,
-   "n": 157,
-   "minerals": 84,
+   "n": 159,
+   "minerals": 85,
    "dropped": 1
   },
   "SO4 ν4": {
    "p5": 560,
    "p25": 600,
-   "p50": 616,
+   "p50": 617,
    "p75": 633,
    "p95": 667,
-   "n": 107,
+   "n": 108,
    "minerals": 68,
    "dropped": 4
   },
@@ -47,7 +48,7 @@
    "p50": 453,
    "p75": 469,
    "p95": 500,
-   "n": 187,
+   "n": 191,
    "minerals": 97,
    "dropped": 1
   },
@@ -55,39 +56,39 @@
    "p5": 945,
    "p25": 963,
    "p50": 979,
-   "p75": 1004,
+   "p75": 1005,
    "p95": 1042,
-   "n": 279,
+   "n": 281,
    "minerals": 161,
-   "dropped": 7
+   "dropped": 6
   },
   "PO4 ν3": {
    "p5": 963,
    "p25": 1020,
-   "p50": 1065,
+   "p50": 1064,
    "p75": 1107,
    "p95": 1171,
-   "n": 379,
+   "n": 381,
    "minerals": 139,
    "dropped": 3
   },
   "PO4 ν4": {
-   "p5": 539,
+   "p5": 540,
    "p25": 564,
    "p50": 590,
    "p75": 619,
    "p95": 646,
-   "n": 326,
+   "n": 328,
    "minerals": 130,
    "dropped": 1
   },
   "PO4 ν2": {
    "p5": 403,
    "p25": 423,
-   "p50": 446,
-   "p75": 467,
+   "p50": 445,
+   "p75": 466,
    "p95": 488,
-   "n": 297,
+   "n": 298,
    "minerals": 139,
    "dropped": 2
   },
@@ -182,33 +183,33 @@
    "dropped": 10
   },
   "SiO4 ν1": {
-   "p5": 811,
+   "p5": 812,
    "p25": 847,
    "p50": 879,
    "p75": 914,
-   "p95": 936,
-   "n": 147,
-   "minerals": 53,
+   "p95": 935,
+   "n": 150,
+   "minerals": 54,
    "dropped": 9
   },
   "SiO4 ν3": {
    "p5": 767,
    "p25": 857,
-   "p50": 940,
-   "p75": 994,
+   "p50": 938,
+   "p75": 993,
    "p95": 1105,
-   "n": 168,
+   "n": 170,
    "minerals": 52,
    "dropped": 1
   },
   "SiO4 ν4": {
    "p5": 483,
-   "p25": 546,
+   "p25": 547,
    "p50": 559,
-   "p75": 588,
+   "p75": 589,
    "p95": 615,
-   "n": 135,
-   "minerals": 36,
+   "n": 136,
+   "minerals": 37,
    "dropped": 13
   },
   "SiO4 ν2": {
@@ -222,32 +223,32 @@
    "dropped": 8
   },
   "Si-O strongest": {
-   "p5": 210,
+   "p5": 212,
    "p25": 464,
-   "p50": 544,
-   "p75": 674,
+   "p50": 545,
+   "p75": 675,
    "p95": 1003,
-   "n": 747,
+   "n": 762,
    "minerals": 396,
    "dropped": 28
   },
   "CO3 ν3": {
-   "p5": 1320,
-   "p25": 1398,
-   "p50": 1409,
-   "p75": 1431,
-   "p95": 1461,
-   "n": 9,
-   "minerals": 7,
-   "dropped": 2
+   "p5": 1226,
+   "p25": 1302,
+   "p50": 1379,
+   "p75": 1414,
+   "p95": 1451,
+   "n": 14,
+   "minerals": 10,
+   "dropped": 0
   },
   "CO3 ν1": {
    "p5": 1055,
    "p25": 1070,
    "p50": 1085,
-   "p75": 1093,
-   "p95": 1101,
-   "n": 180,
+   "p75": 1092,
+   "p95": 1100,
+   "n": 182,
    "minerals": 106,
    "dropped": 6
   },
@@ -262,12 +263,12 @@
    "dropped": 0
   },
   "CO3 ν4": {
-   "p5": 662,
+   "p5": 663,
    "p25": 699,
    "p50": 715,
    "p75": 731,
    "p95": 762,
-   "n": 104,
+   "n": 106,
    "minerals": 57,
    "dropped": 6
   },
@@ -293,32 +294,32 @@
   },
   "BO3 ν1": {
    "p5": 951,
-   "p25": 960,
-   "p50": 976,
-   "p75": 990,
+   "p25": 962,
+   "p50": 984,
+   "p75": 989,
    "p95": 991,
-   "n": 8,
-   "minerals": 5,
+   "n": 9,
+   "minerals": 6,
    "dropped": 2
   },
   "BO3 ν2": {
-   "p5": 691,
-   "p25": 780,
-   "p50": 806,
-   "p75": 845,
-   "p95": 863,
-   "n": 8,
-   "minerals": 3,
+   "p5": 696,
+   "p25": 788,
+   "p50": 791,
+   "p75": 843,
+   "p95": 862,
+   "n": 9,
+   "minerals": 4,
    "dropped": 0
   },
   "BO3 ν4": {
-   "p5": 566,
-   "p25": 588,
-   "p50": 619,
-   "p75": 670,
+   "p5": 567,
+   "p25": 589,
+   "p50": 631,
+   "p75": 666,
    "p95": 719,
-   "n": 17,
-   "minerals": 4,
+   "n": 18,
+   "minerals": 5,
    "dropped": 0
   },
   "MoO4 ν1": {
@@ -392,13 +393,13 @@
    "dropped": 2
   },
   "Ti-O strongest": {
-   "p5": 177,
-   "p25": 244,
-   "p50": 431,
-   "p75": 636,
-   "p95": 817,
-   "n": 45,
-   "minerals": 21,
+   "p5": 161,
+   "p25": 243,
+   "p50": 396,
+   "p75": 634,
+   "p95": 816,
+   "n": 48,
+   "minerals": 23,
    "dropped": 0
   },
   "Nb-O strongest": {
@@ -571,6 +572,5 @@
    "minerals": 230,
    "dropped": 47
   }
- },
- "source": "rruff.net bulk files fetched 2026-10-10 (every Raman quality, oriented and unoriented; 14007 processed spectra of 3991 RRUFF ids walked, 2736 single-group)"
+ }
 }

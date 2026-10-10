@@ -31,6 +31,7 @@ SETS = {'excellent_oriented': ('raman', 'excellent', 'oriented'), 'excellent_uno
         'poor_unoriented': ('raman', 'poor', 'unoriented'),                                      # RRUFF publishes no poor_oriented set
         'unrated_oriented': ('raman', 'unrated', 'oriented'), 'unrated_unoriented': ('raman', 'unrated', 'unoriented'),
         'LR-Raman': ('raman', 'broad', 'unoriented'), 'infrared': ('infrared', '', '')}      # LR-Raman = RRUFF's broad scans (low resolution, to the O–H region)
+REQUIRED = ('excellent_unoriented',)       # a 404 on this one is a failure, not a set to skip: the collection is not where it was
 DEFAULT_SETS = ('excellent_oriented', 'excellent_unoriented', 'fair_oriented', 'fair_unoriented', 'poor_unoriented',
                 'unrated_oriented', 'unrated_unoriented', 'LR-Raman')
 QUALITY_RANK = {'excellent': 0, 'fair': 1, 'unrated': 2, 'poor': 3, 'broad': 4, '': 5}
@@ -63,7 +64,7 @@ def store_dir():
 
 # ----------------------------------------------------------------------------- one member of a RRUFF zip
 
-_SUB = re.compile(r'_([\d.\-x]+)_')
+_SUB = re.compile(r'_([\d.\-+x]+)_')
 _SUP = re.compile(r'\^([^^]*)\^')
 
 
@@ -92,6 +93,8 @@ def parse_member(text):
             xv, yv = float(a), float(b)
         except ValueError:
             continue
+        if xv != xv or yv != yv or abs(xv) == float('inf') or abs(yv) == float('inf'):
+            continue                                            # a NaN / inf row: no point of the curve
         x.append(xv); y.append(yv)
     return head, x, y
 
@@ -109,7 +112,10 @@ def member_meta(member, head, set_name):
     kind = 'raw' if 'raw' in ft else 'processed'
     laser = re.sub(r'\s*nm$', '', head.get('RAMAN WAVELENGTH') or head.get('LASER_WAVELENGTH') or '').strip()
     if not re.fullmatch(r'\d+(\.\d+)?', laser):
-        laser = ''                                               # 'unknown' and the like
+        fields = os.path.basename(member).split('__')          # 'Quartz__R040031__Raman__532__…': the file name says it too
+        laser = fields[3] if len(fields) > 3 and re.fullmatch(r'\d+(\.\d+)?', fields[3]) else ''
+    if laser.endswith('.0'):
+        laser = laser[:-2]
     return {'name': name.replace('_', ' ').strip(), 'id': rid, 'kind': kind, 'laser': laser, 'quality': quality, 'orient': orient, 'technique': tech,
             'chem': plain_chem(head.get('IDEAL CHEMISTRY', ''))[:120], 'locality': head.get('LOCALITY', '')[:160], 'source': head.get('SOURCE', '')[:80],
             'url': head.get('URL', '')[:120], 'set': set_name}
@@ -127,9 +133,20 @@ class Store(object):
             self.index = json.load(f)
         self.spectra = self.index['spectra']
         self.n = len(self.spectra)
-        self._f = open(os.path.join(folder, 'spectra.f32'), 'rb')
-        self._mm = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ) if self.n else None
-        self.names = ['%s %s %s' % (s['name'], s['id'], s['kind']) for s in self.spectra]
+        self.array = os.path.join(folder, self.index.get('array') or 'spectra.f32')
+        self._f = open(self.array, 'rb')
+        self._mm = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ) if self.n and os.path.getsize(self.array) else None
+
+    def close(self):
+        """The array file and its mapping let go (a rebuild replaces them; Windows cannot replace an open file)."""
+        try:
+            if self._mm is not None:
+                self._mm.close()
+        finally:
+            try:
+                self._f.close()
+            except Exception:
+                pass
 
     def meta(self, i):
         return self.spectra[i]
@@ -137,6 +154,8 @@ class Store(object):
     def xy(self, i):
         s = self.spectra[i]
         off, npts = s['off'], s['npts']
+        if self._mm is None or self._mm.closed:
+            raise ValueError('the RRUFF store was rebuilt — ask again')
         vals = struct.unpack_from('<%df' % (2 * npts), self._mm, off)
         return list(vals[:npts]), list(vals[npts:])
 
@@ -177,7 +196,6 @@ class Union(object):
             self.base.append(n); n += l.n
         self.n = n
         self.folder = ' + '.join(l.folder for l in self.libs)
-        self.names = [nm for l in self.libs for nm in l.names]
 
     def _at(self, i):
         if not 0 <= i < self.n:
@@ -222,8 +240,15 @@ def open_store(folder=None):
         st = Store(folder)
     except (OSError, ValueError, KeyError):
         return None
-    _STORE.clear(); _STORE[folder] = (stamp, st)
+    close_stores(); _STORE[folder] = (stamp, st)
     return st
+
+
+def close_stores():
+    """Every opened store closed and forgotten (before a rebuild or a removal)."""
+    for _stamp, st in list(_STORE.values()):
+        st.close()
+    _STORE.clear()
 
 
 def libraries(near=None):
@@ -241,14 +266,14 @@ def libraries(near=None):
     return u if u.n else None
 
 
-def status():
+def status(folder=None):
     """What the store holds -> {'folder', 'built', 'n', 'sets', 'raw', 'minerals', 'bytes'} or None."""
-    st = open_store()
+    st = open_store(folder)
     if st is None:
         return None
     ix = st.index
     try:
-            size = os.path.getsize(os.path.join(st.folder, 'spectra.f32'))
+        size = os.path.getsize(st.array)
     except OSError:
         size = 0
     return {'folder': st.folder, 'built': ix.get('built', ''), 'n': st.n, 'sets': ix.get('sets', []), 'raw': bool(ix.get('raw')),
@@ -282,46 +307,74 @@ def download(url, path, progress=None):
 def build(zips, out_dir, raw=False, progress=None):
     """The zips -> out_dir/index.json + out_dir/spectra.f32. Processed spectra always; RAW with `raw`."""
     os.makedirs(out_dir, exist_ok=True)
+    clean_parts(out_dir)
     spectra = []
-    tmp = os.path.join(out_dir, 'spectra.f32.part')
-    with open(tmp, 'wb') as out:
-        off = 0
-        for set_name, zpath in zips:
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    array = 'spectra-%s.f32' % stamp                          # a NEW array file each build: the index swap below is then one atomic step
+    tmp = os.path.join(out_dir, array + '.part')
+    try:
+        with open(tmp, 'wb') as out:
+            off = 0
+            for set_name, zpath in zips:
+                try:
+                    z = zipfile.ZipFile(zpath)
+                except zipfile.BadZipFile as ex:
+                    raise ValueError('%s is not a zip file (%s) — fetch again' % (os.path.basename(zpath), ex))
+                with z:
+                    members = [m for m in z.namelist() if m.lower().endswith('.txt')]
+                    for k, member in enumerate(members):
+                        head, x, y = parse_member(z.read(member).decode('utf-8', 'replace'))
+                        if len(x) < 5:
+                            continue
+                        meta = member_meta(member, head, set_name)
+                        if meta['kind'] == 'raw' and not raw and meta['technique'] == 'raman':
+                            continue                           # RRUFF's infrared collection is RAW only: always kept
+                        if x[0] > x[-1]:
+                            x.reverse(); y.reverse()
+                        data = struct.pack('<%df' % (2 * len(x)), *(x + y))
+                        out.write(data)
+                        meta.update(off=off, npts=len(x), x0=round(x[0], 2), x1=round(x[-1], 2))
+                        spectra.append(meta); off += len(data)
+                        if progress and k % 200 == 0:
+                            progress(stage='reading', set=set_name, spectra=len(spectra), done=k, total=len(members))
+        index = {'source': SOURCE, 'citation': CITATION, 'built': time.strftime('%Y-%m-%d %H:%M'), 'sets': [s for s, _ in zips], 'raw': bool(raw),
+                 'array': array, 'spectra': spectra}
+        with open(os.path.join(out_dir, 'index.json.part'), 'w', encoding='utf-8') as f:
+            json.dump(index, f)
+        os.replace(tmp, os.path.join(out_dir, array))
+        close_stores()                                         # the store in use let go before its index is replaced (Windows: an open file cannot be replaced)
+        os.replace(os.path.join(out_dir, 'index.json.part'), os.path.join(out_dir, 'index.json'))
+    except BaseException:
+        clean_parts(out_dir)
+        raise
+    for fn in os.listdir(out_dir):                             # the arrays of earlier builds
+        if fn.endswith('.f32') and fn != array:
             try:
-                z = zipfile.ZipFile(zpath)
-            except zipfile.BadZipFile as ex:
-                raise ValueError('%s is not a zip file (%s) — fetch again' % (os.path.basename(zpath), ex))
-            members = [m for m in z.namelist() if m.lower().endswith('.txt')]
-            for k, member in enumerate(members):
-                head, x, y = parse_member(z.read(member).decode('utf-8', 'replace'))
-                if len(x) < 5:
-                    continue
-                meta = member_meta(member, head, set_name)
-                if meta['kind'] == 'raw' and not raw and meta['technique'] == 'raman':
-                    continue                                   # RRUFF's infrared collection is RAW only: always kept
-                if x[0] > x[-1]:
-                    x.reverse(); y.reverse()
-                data = struct.pack('<%df' % (2 * len(x)), *(x + y))
-                out.write(data)
-                meta.update(off=off, npts=len(x), x0=round(x[0], 2), x1=round(x[-1], 2))
-                spectra.append(meta); off += len(data)
-                if progress and k % 200 == 0:
-                    progress(stage='reading', set=set_name, spectra=len(spectra), done=k, total=len(members))
-    index = {'source': SOURCE, 'citation': CITATION, 'built': time.strftime('%Y-%m-%d %H:%M'), 'sets': [s for s, _ in zips], 'raw': bool(raw), 'spectra': spectra}
-    with open(os.path.join(out_dir, 'index.json.part'), 'w', encoding='utf-8') as f:
-        json.dump(index, f)
-    os.replace(tmp, os.path.join(out_dir, 'spectra.f32'))
-    os.replace(os.path.join(out_dir, 'index.json.part'), os.path.join(out_dir, 'index.json'))
-    _STORE.clear()
+                os.remove(os.path.join(out_dir, fn))
+            except OSError:
+                pass
     return len(spectra)
+
+
+def clean_parts(out_dir):
+    """Half-written files of a build that did not finish."""
+    try:
+        for fn in os.listdir(out_dir):
+            if fn.endswith('.part'):
+                try:
+                    os.remove(os.path.join(out_dir, fn))
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def fetch(sets=DEFAULT_SETS, raw=False, ir=False, keep_zips=False, out_dir=None, log=print):
     """Download the sets and build the store -> the number of spectra. PROGRESS says where it stands."""
     out_dir = out_dir or store_dir()
-    sets = list(sets) + (['infrared'] if ir and 'infrared' not in sets else [])
+    sets = [str(s) for s in sets] + (['infrared'] if ir and 'infrared' not in sets else [])
     PROGRESS.clear(); _progress(stage='downloading', sets=sets, finished=False, error='', missing=[])
-    zips = []
+    zips, downloaded = [], []
     try:
         bad = [s for s in sets if s not in SETS]
         if bad:
@@ -336,10 +389,11 @@ def fetch(sets=DEFAULT_SETS, raw=False, ir=False, keep_zips=False, out_dir=None,
                 zips.append((s, path)); continue
             if log:
                 log('downloading %s …' % url_of(s))
+            downloaded.append(path)
             try:
                 download(url_of(s), path, progress=_progress)
             except urllib.error.HTTPError as ex:
-                if ex.code == 404:                                           # a set RRUFF does not publish (today): said, the rest fetched
+                if ex.code == 404 and s not in REQUIRED:                     # a set RRUFF does not publish (today): said, the rest fetched
                     PROGRESS['missing'].append(s)
                     if log:
                         log('%s: not on rruff.net (404) — skipped' % s)
@@ -360,26 +414,41 @@ def fetch(sets=DEFAULT_SETS, raw=False, ir=False, keep_zips=False, out_dir=None,
         _progress(stage='failed', error=str(ex), finished=True)
         raise
     finally:
-        if not keep_zips:
-            shutil.rmtree(os.path.join(out_dir, 'zips'), ignore_errors=True)
+        if not keep_zips:                                     # only what THIS run downloaded: a zip an earlier --keep-zips run left stays
+            for path in downloaded:
+                for fn in (path, path + '.part'):
+                    try:
+                        os.remove(fn)
+                    except OSError:
+                        pass
+            try:
+                os.rmdir(os.path.join(out_dir, 'zips'))
+            except OSError:
+                pass
+
+
+_LOCK = threading.Lock()
 
 
 def fetch_in_background(**kw):
     """The fetch on a thread (the window's button); PROGRESS is polled. False when one is already running."""
-    if PROGRESS and not PROGRESS.get('finished', True):
-        return False
-    def run():
-        try:
-            fetch(log=None, **kw)
-        except Exception:
-            pass                                               # PROGRESS carries the error
-    threading.Thread(target=run, daemon=True).start()
+    with _LOCK:
+        if PROGRESS and not PROGRESS.get('finished', True):
+            return False
+        PROGRESS.clear(); PROGRESS.update(stage='starting', finished=False, error='')     # claimed here, under the lock: a second click sees it
+        def run():
+            try:
+                fetch(log=None, **kw)
+            except Exception:
+                pass                                           # PROGRESS carries the error
+        threading.Thread(target=run, daemon=True).start()
     return True
 
 
 def remove(out_dir=None):
     out_dir = out_dir or store_dir()
-    shutil.rmtree(out_dir, ignore_errors=True); _STORE.clear()
+    close_stores()
+    shutil.rmtree(out_dir, ignore_errors=True)
 
 
 def main(argv=None):
@@ -400,7 +469,7 @@ def main(argv=None):
         n = fetch(sets=a.sets or DEFAULT_SETS, raw=a.raw, ir=a.ir, keep_zips=a.keep_zips, out_dir=a.dir)
         print('cite: ' + CITATION)
         return 0 if n else 1
-    st = status() if not a.dir else (open_store(a.dir) and status())
+    st = status(a.dir)
     if not st:
         print('no RRUFF store (pxrd rruff --fetch builds one; a Thermo OMNIC copy beside a folder is read as well)'); return 1
     print('%d spectra of %d minerals in %s (built %s; sets: %s%s; %.0f MB)' % (st['n'], st['minerals'], st['folder'], st['built'], ', '.join(st['sets']), ' + raw' if st['raw'] else '', st['bytes'] / 1e6))

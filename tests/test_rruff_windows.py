@@ -6,6 +6,35 @@ from tools import rruff_windows as RW
 from pxrd_review import bands as BD
 
 
+class StorePath(unittest.TestCase):
+  def test_read_any_reads_a_store_with_x_ids(self):
+    import json, os, sys, tempfile, shutil, struct
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
+    import rruff_windows as W
+    d = tempfile.mkdtemp(prefix='rrw_')
+    try:
+        x = [150.0 + k for k in range(300)]; y = gauss_any(x, [464], [100])
+        data = struct.pack('<%df' % 600, *(x + y))
+        with open(os.path.join(d, 'spectra.f32'), 'wb') as f:
+            f.write(data * 3)
+        sp = [{'name': 'Quartz', 'id': 'R040031', 'kind': 'processed', 'laser': '532.0', 'quality': 'excellent', 'orient': 'unoriented', 'technique': 'raman', 'off': 0, 'npts': 300},
+              {'name': 'Magnesio-riebeckite', 'id': 'X050031', 'kind': 'processed', 'laser': '785', 'quality': 'poor', 'orient': 'unoriented', 'technique': 'raman', 'off': len(data), 'npts': 300},
+              {'name': 'Quartz', 'id': 'R040031', 'kind': 'processed', 'laser': '532', 'quality': 'broad', 'orient': 'unoriented', 'technique': 'raman', 'off': 2 * len(data), 'npts': 300}]
+        json.dump({'spectra': sp}, open(os.path.join(d, 'index.json'), 'w'))
+        rows = W.read_any(d)
+        names = [n for n, _x, _y in rows]
+        assert names == ['QuartzR040031_532processed', 'Magnesio-riebeckiteX050031_785processed'], names     # the broad scan left out, '532.0' → 532
+        from pxrd_review.omnic_lib import split_name
+        assert split_name(names[1]) == ('Magnesio-riebeckite', 'X050031', 'processed'), split_name(names[1])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def gauss_any(x, centres, heights, w=6.0):
+    import math
+    return [sum(h * math.exp(-4 * math.log(2) * ((v - c) / w) ** 2) for c, h in zip(centres, heights)) for v in x]
+
+
 def write_library(folder, spectra):
     """A small OMNIC-style pair: `spectra` = [(name, kind, [y...])] on the tool's grid; kind 'field' writes the
     256-character name field, 'pascal' the length-prefixed name of the older records."""

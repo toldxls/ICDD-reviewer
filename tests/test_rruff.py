@@ -79,15 +79,45 @@ class Fetch(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             R.fetch(sets=['nosuchset'], out_dir=self.store, log=None)
         self.assertIn('no such RRUFF set', str(cm.exception))
+        self.assertEqual((R.PROGRESS['stage'], R.PROGRESS['finished']), ('failed', True))   # said in PROGRESS even when the sets are wrong
+        # a set rruff.net answers 404 for is skipped and named; the core set's 404 is a failure; a kept zip is not fetched twice
+        import urllib.error, urllib.request
+        real = R._urlopen
+        def fake(req, timeout=60):
+            url = req.full_url if hasattr(req, 'full_url') else req
+            if 'fair_oriented' in url or 'excellent_unoriented' in url:
+                raise urllib.error.HTTPError(url, 404, 'Not Found', {}, None)
+            return real(req, timeout)
+        R._urlopen = fake
+        try:
+            n0 = R.fetch(sets=['poor_unoriented', 'fair_oriented'], out_dir=self.store, keep_zips=True, log=None)
+            self.assertEqual((n0, R.PROGRESS['missing']), (3, ['fair_oriented']))
+            self.assertTrue(os.path.isfile(os.path.join(self.store, 'zips', 'poor_unoriented.zip')))
+            with self.assertRaises(ValueError) as cm:
+                R.fetch(sets=['excellent_unoriented'], out_dir=self.store, log=None)
+            self.assertIn('HTTP 404', str(cm.exception))
+            R._urlopen = lambda req, timeout=60: (_ for _ in ()).throw(AssertionError('downloaded although the zip was kept'))
+            self.assertEqual(R.fetch(sets=['poor_unoriented'], out_dir=self.store, keep_zips=True, log=None), 3)   # 'already here'
+        finally:
+            R._urlopen = real
+        self.assertEqual(R.status(self.store)['n'], 3)                                 # status of a named folder
+        self.assertFalse([f for f in os.listdir(self.store) if f.endswith('.part')])
+        st0 = R.open_store(self.store); self.assertFalse(st0._f.closed)
+        R.close_stores(); self.assertTrue(st0._f.closed)
+        with self.assertRaises(ValueError):
+            st0.xy(0)                                                                  # a closed store says so, never garbage
         with self.assertRaises(ValueError) as cm:
             R.fetch(sets=['fair_oriented'], out_dir=self.store, log=None)          # not served (a file:// 404 is an URLError): said with its url
         self.assertIn('fair_oriented.zip could not be downloaded', str(cm.exception))
         self.assertEqual((R.PROGRESS['stage'], R.PROGRESS['finished']), ('failed', True))
         self.assertNotIn('poor_oriented', R.SETS)                                   # RRUFF publishes no such set
         n = R.fetch(sets=['poor_unoriented', 'excellent_unoriented', 'LR-Raman'], ir=True, out_dir=self.store, log=None)
-        self.assertEqual(n, 6)                                                       # the Raman raw and the three-point member left out; the IR one (RAW only) in
+        self.assertEqual(n, 6)
+        self.assertEqual([f for f in os.listdir(self.store) if f.endswith('.f32')].__len__(), 1)   # one array file: the earlier builds' removed
+        self.assertTrue(st0._f.closed)                                                       # the Raman raw and the three-point member left out; the IR one (RAW only) in
         self.assertEqual((R.PROGRESS['stage'], R.PROGRESS['spectra'], R.PROGRESS['finished']), ('done', 6, True))
-        self.assertFalse(os.path.isdir(os.path.join(self.store, 'zips')))
+        zd = os.path.join(self.store, 'zips')                                       # only THIS run's zips are removed: the one kept earlier stays
+        self.assertEqual(sorted(os.listdir(zd)) if os.path.isdir(zd) else [], ['poor_unoriented.zip'])
         st = R.open_store(self.store)
         self.assertEqual((st.n, sorted(st.minerals())), (6, ['Calcite', 'Gypsum', 'Quartz']))
         q = st.minerals()['Quartz']                                                 # best first: excellent before poor, 532 before 780
@@ -140,7 +170,10 @@ class Fetch(unittest.TestCase):
             cv = json.loads(c.get('/api/sp/rruff/curve?key=%d' % qz[0]['key']).data)
             self.assertTrue(any(abs(p - 464) < 2 for p in cv['peaks']), cv['peaks'])
             o = json.loads(c.post('/api/sp/rruff/open', json={'key': qz[0]['key']}).data)
-            self.assertEqual(o['name'], 'Quartz R040031 processed 532 nm (RRUFF)')
+            self.assertEqual(o['name'], 'Quartz R040031 processed 532 nm (RRUFF %d)' % (qz[0]['key'] + 1))
+            o_ = json.loads(c.post('/api/sp/rruff/open', json={'key': qz[1]['key']}).data)
+            self.assertNotEqual(o['name'], o_['name'])                                 # two spectra of one sample: two names, both held
+            self.assertEqual(json.loads(c.post('/api/sp/process', json={'name': o['name']}).data)['name'], o['name'])
             p = json.loads(c.post('/api/sp/process', json={'name': o['name']}).data)
             self.assertEqual(p['kind'], 'raman'); self.assertTrue(any('excellent, unoriented' in n for n in p['notes']) and any('ideal chemistry SiO2' in n for n in p['notes']))
             ir = next(s_ for m in l['minerals'] if m['name'] == 'Calcite' for s_ in m['spectra'] if s_['technique'] == 'infrared')
@@ -158,12 +191,12 @@ class Fetch(unittest.TestCase):
                 time.sleep(0.05)
             self.assertEqual((R.PROGRESS.get('stage'), R.PROGRESS.get('error')), ('done', ''))
             self.assertEqual(json.loads(c.get('/api/sp/rruff/list').data)['store']['n'], 1)
-            self.assertEqual(c.post('/api/sp/rruff/fetch', json={'sets': ['nosuchset']}).status_code, 200)    # the error lands in PROGRESS
-            for _ in range(100):
-                if R.PROGRESS.get('finished'):
-                    break
-                time.sleep(0.05)
-            self.assertIn('no such RRUFF set', R.PROGRESS.get('error', ''))
+            self.assertEqual(c.post('/api/sp/rruff/fetch', json={'sets': ['nosuchset']}).status_code, 400)    # checked before anything runs
+            self.assertEqual(c.post('/api/sp/rruff/fetch', json={'sets': [{'a': 1}]}).status_code, 400)
+            self.assertEqual(c.post('/api/sp/rruff/fetch', json={'sets': []}).status_code, 400)
+            # the species list filtered on the server, the limit after the filter
+            sp2 = json.loads(c.post('/api/sp/species', json={'groups': ['SO4'], 'q': 'zzzzq'}).data)
+            self.assertEqual((sp2['species'], sp2['matching'] == 0, sp2['total'] > 0), ([], True, True))
         finally:
             OL.REMEMBER, OL.SEARCH_ROOTS = keep[0], keep[1]
             if keep[2]:

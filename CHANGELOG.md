@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.17.1](#0171--2026-10-10) | 10 Oct | The review of 0.17.0: a RRUFF spectrum's held name made unique (one sample's orientations replaced each other), the store's file handles closed and its rebuild made atomic, the species list filtered on the server (the box's filter had searched 600 rows of 2,000), the formula rule's range and valence cases, the pick no longer overridden by a file's saved work, the folder search once per start, the X-prefixed RRUFF ids counted, docs brought in line |
 | [0.17.0](#0170--2026-10-10) | 10 Oct | Spectrum window: **Chem search** — the band library's groups picked by element, each oxoanion its own colour and its modes in shades, the species of the snapshot that hold the pick with a click opening their RRUFF spectrum; **`pxrd rruff --fetch`** pulls RRUFF's Raman and infrared collections from rruff.net into a cache store found whatever folder is open (the OMNIC copy is remembered and searched for too); the band windows re-measured on it; a reference's bands ticked under the plot; formulas, oxides and ions formatted wherever the GUI prints one |
 | [0.16.0](#0160--2026-10-09) | 9 Oct | Spectroscopy: `pxrd spectro` recomputes the distances a paper credits to Bartlett & Cooney or Libowitzky from its own bands and sets the formula beside them; `pxrd spectrum` and the GUI's spectrum window import, clean and fit a Raman / infrared spectrum — or trace one off a figure; `pxrd bands` is a band library: for a chemistry the bands expected of it, for a band what it is expected to be in that chemistry — its ranges measured on a RRUFF Raman library, and a RRUFF spectrum pulled up beside yours; an adversarial review's ten fixes; the window tidied |
 | [0.15.2](#0152--2026-09-30) | 30 Sep | GUI: the Mindat pane's lists are navigable — a species name opens its record, ‹ back returns to the list, a record's group name opens the group |
@@ -42,6 +43,39 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
+## [0.17.1] — 2026-10-10
+**The review of 0.17.0** — four reviewers over the day's diff; every finding reproduced before it was fixed.
+
+### Fixed
+- **A RRUFF spectrum's held name is unique.** The oriented sets hold many orientations of one sample under one id, kind and
+  laser; opening a second replaced the first under the same name. The name now carries the library number, and identical
+  options in the box are numbered.
+- **The store's file and mapping are closed** before a rebuild and on removal (a leak per rebuild; on Windows the rebuild's
+  final rename would have failed); the rebuild writes a new array file and swaps the index in one step, so a request never
+  reads an old index against a new array; a failed build leaves no `.part` files; two clicks cannot start two fetches;
+  `pxrd rruff --status --dir X` reports X; a set's 404 is skipped only when it is not the collection's core set; the request's
+  set names are checked before anything runs; a NaN row is no point of a curve; a laser missing from the header is read from
+  the file name.
+- **The species list is filtered on the server.** The box's filter and `only with a spectrum` had searched the first 600 rows
+  the page received (a pick like hydroxyl holds 2,300 species), and the empty line claimed no species held the pick.
+- **The pick belongs to the folder.** A file's saved work had carried the pick and overrode it on every switch of spectrum;
+  a loaded session's pick is kept.
+- **The formula rule:** a count after a valence is a subscript (Fe²⁺Fe³⁺₂O₄), an ASCII hyphen is a charge only after a
+  bracket ((SO₄)²⁻, never Pb₃₋ₓ), the plain formula keeps range subscripts (Cu₁₋ₓ) and the HTML keeps a group's charge;
+  the SVG baseline returns exactly after a subscript; a browser without regex lookbehind shows formulas plain instead of a
+  blank plot.
+- **The species index follows the snapshot** (an empty or refreshed Mindat cache no longer leaves it empty or stale for the
+  server's life); the two-level folder search for an OMNIC copy runs once per start, not on every request; a
+  `$PXRD_RRUFF_DIR` that is not a library no longer stops the other places being tried.
+- **The windows measurement counts the X-prefixed RRUFF ids** (135 spectra had been dropped: 34 modes now rest on 8 minerals
+  or more) and names BO4 as the second group without a free-ion anchor; the written file's `source` line is the tool's own.
+- Opening a reference as the current spectrum drops the overlay (it had been drawn under itself); a 409 on a second fetch
+  click is followed rather than shown as an error; Escape closes the picker from its filter; the picker opens leftward so
+  its second column is never clipped; the fetch's follow-up stops when the server knows of no fetch; sets RRUFF does not
+  publish are named when a fetch ends.
+- Docs: INSTALL.md's statement of the tool's network calls names the RRUFF download; README describes the fetch; the
+  changelog's 0.17.0 entry names it too.
+
 ## [0.17.0] — 2026-10-10
 **Chem search, RRUFF from the source, formulas as a chemist writes them.** The spectrum window gains a periodic-table
 picker that draws the expected bands of any chemistry and lists the species that hold it; `pxrd rruff --fetch` brings
@@ -56,8 +90,14 @@ RRUFF's own collection to the machine; every formula the GUI prints carries its 
   pick is kept per folder, travels with the session and the written table (`expected of the groups picked`), and names
   the fitted bands in place of the formula. Routes `/api/sp/groups`, `/api/sp/species`; `bands.catalogue`,
   `bands.species_with` (the snapshot's formulas read in-process; nothing leaves the machine).
+- **`pxrd rruff --fetch`: RRUFF's spectra from the source.** The bulk files rruff.net publishes (every Raman quality, oriented and
+  unoriented, the broad scans to the O–H region; `--ir` the infrared collection, `--raw` the RAW spectra too) downloaded once and
+  kept as one compact store in the tool's cache; the window's `fetch from rruff.net…` button does the same with its progress
+  in the status line. The store and a Thermo OMNIC copy are listed as one; a mineral's spectra are offered best first and
+  labelled with quality and orientation; an overlaid reference's own bands are ticked under the plot and read by the pointer.
+  The one download beyond Mindat and GitHub, and only on request; the citation (Lafuente et al. 2015) travels with it.
 - **The band library's RRUFF windows re-measured on the fetched collection** (`tools/rruff_windows.py` reads the store):
-  28 modes now rest on 8 minerals or more (sulfate ν1 on 121, phosphate ν1 on 161, arsenate ν1 on 100; uranyl, selenite and
+  33 modes now rest on 8 minerals or more (sulfate ν1 on 121, phosphate ν1 on 161, arsenate ν1 on 100; uranyl, selenite and
   nitrate windows for the first time). The report's verdicts are information for the library's keeper: silicate ν3, phosphate ν1
   and sulfate ν3 run past their literature ranges.
 - **The RRUFF library is found whatever folder is open.** Once found anywhere — beside a folder, under Desktop / Documents /

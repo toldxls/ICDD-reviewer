@@ -41,11 +41,25 @@ class Groups(unittest.TestCase):
         self.assertTrue(aut.startswith('Ca(UO<sub>2</sub>)<sub>2</sub>(PO<sub>4</sub>)<sub>2</sub>'), aut)
         self.assertEqual(B.formula_html('Fe<sup>3+</sup><sub>2</sub>O<sub>3</sub><script>x</script>'), 'Fe<sub>2</sub>O<sub>3</sub>x')
         self.assertEqual(B.formula_html('Ca2+ & <b>Mg</b>'), 'Ca&amp;Mg')
+        self.assertEqual(B.formula_html('Co(AsS)<sup>3-</sup>'), 'Co(AsS)<sup>3-</sup>')                       # a group's charge stays, an element's valence goes
+        self.assertEqual((B.display('Cu<sub>1-x</sub>As<sub>x</sub>'), B.display('Ca<sub>1-2</sub>Ti'), B.display('Fe<sup>3+</sup>2O3'), B.display('Co(AsS)3-')), ('Cu1-xAsx', 'Ca1-2Ti', 'Fe2O3', 'Co(AsS)3-'))
         self.assertEqual(B.formula_html('(&#9723;<sub>0.5</sub>Ba<sub>0.5</sub>)&lt;'), '(<sub>0.5</sub>Ba<sub>0.5</sub>)&lt;')   # an entity is read, never shown raw
         self.assertEqual(B.species_with([]), [])
         self.assertTrue(set(both) <= set(B.species_with(['UO2'])))
         counts = B.species_counts()
         self.assertEqual(counts['UO2'], len(B.species_with(['UO2']))); self.assertGreater(counts['OH'], counts['UO2'])
+        # the index follows the snapshot: an empty one is never kept, a new one is read again
+        from pxrd_review import mindat as M
+        keep = (M._SDB, B._SPECIES)
+        try:
+            M._SDB = {}; B._SPECIES = (None, None)
+            self.assertEqual(B.species_index(), [])
+            M._SDB = None                                                                     # the cache file read again
+            self.assertGreater(len(B.species_index()), 1000)
+            M._SDB = {'recs': [{'name': 'Testite', 'formula': 'Ca(UO<sub>2</sub>)<sub>2</sub>(PO<sub>4</sub>)<sub>2</sub>'}]}   # a refreshed snapshot
+            self.assertEqual([n for n, _f, _g, _h in B.species_index()], ['Testite'])
+        finally:
+            M._SDB, B._SPECIES = keep
 
     def test_a_formula_as_a_chemist_writes_it(self):
         show = lambda t: ''.join(x if not k else '<%s>%s</%s>' % (k, x, k) for k, x in B.chem_tokens(t))
@@ -54,7 +68,9 @@ class Groups(unittest.TestCase):
                            ('(PO3OH)2−', '(PO<sub>3</sub>OH)<sup>2−</sup>'), ('Fe3+', 'Fe<sup>3+</sup>'), ('U6+O2', 'U<sup>6+</sup>O<sub>2</sub>'),
                            ('SO4 ν3', 'SO<sub>4</sub> ν3'), ('ν(P–OH)', 'ν(P–OH)'), ('H2O bend', 'H<sub>2</sub>O bend'), ('UO2 ν1', 'UO<sub>2</sub> ν1'),
                            ('(Fe0.8Mg0.2)Σ1.0O4', '(Fe<sub>0.8</sub>Mg<sub>0.2</sub>)Σ1.0O<sub>4</sub>'), ('Ca(UO2)2(PO4)2·10-12H2O', 'Ca(UO<sub>2</sub>)<sub>2</sub>(PO<sub>4</sub>)<sub>2</sub>·10-12H<sub>2</sub>O'),
-                           ('Pb3-xBi', 'Pb<sub>3</sub>-xBi'), ('(SO4)2-', '(SO<sub>4</sub>)<sup>2-</sup>'), ('Si–O', 'Si–O'), ('M–S', 'M–S'), ('SiO2', 'SiO<sub>2</sub>'), ('', ''), (None, '')):
+                           ('Pb3-xBi', 'Pb<sub>3</sub>-xBi'), ('(SO4)2-', '(SO<sub>4</sub>)<sup>2-</sup>'), ('Si–O', 'Si–O'), ('M–S', 'M–S'), ('SiO2', 'SiO<sub>2</sub>'), ('', ''), (None, ''),
+                           ('Fe2+Fe3+2O4', 'Fe<sup>2+</sup>Fe<sup>3+</sup><sub>2</sub>O<sub>4</sub>'), ('SO3-', 'SO<sub>3</sub>-'), ('Ca1-2Ti', 'Ca<sub>1</sub>-2Ti'),
+                           ('(OH)-', '(OH)<sup>-</sup>'), ('Cl-', 'Cl-'), ('Mn3+2O3', 'Mn<sup>3+</sup><sub>2</sub>O<sub>3</sub>')):
             self.assertEqual(show(text), want, text)
 
     def test_what_is_no_group(self):

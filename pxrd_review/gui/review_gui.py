@@ -3360,8 +3360,9 @@ def api_sp_bands():
                 'active': lib['activity'][r['active']], 'source': lib['sources'][r['source']].split(' — ')[0], 'check': r['check'], 'broad': r['broad'],
                 'published': None if not p else {'p5': p['p5'], 'p50': p['p50'], 'p95': p['p95'], 'papers': p['papers'], 'of': r['published_for']},
                 'rruff': None if not r.get('rruff') else {'p5': r['rruff']['p5'], 'p50': r['rruff']['p50'], 'p95': r['rruff']['p95'], 'minerals': r['rruff']['minerals']}}
+    writes = {g['key']: g['writes'] for g in lib['groups']}
     out = {'ok': True, 'formula': BD.display(formula) if formula else '', 'name': name, 'source': source,
-           'groups': [{'key': k, 'name': names[k]} for k in keys], 'own': own,
+           'groups': [{'key': k, 'name': names[k], 'writes': writes[k]} for k in keys], 'own': own,
            'rows': [row(r) for r in BD.expected(groups=keys, technique=tech)] if keys else []}
     at = d.get('at')
     if isinstance(at, list):
@@ -3421,8 +3422,14 @@ def api_sp_species():
     rr = _rruff_by_species()
     from pxrd_review import mindat as M
     rows = [{'name': n, 'formula': f, 'html': h, 'rruff': rr.get(M._norm(n))} for n, f, h in BD.species_with(keys)]
+    total, with_rruff = len(rows), sum(1 for r in rows if r['rruff'])
+    q = str(d.get('q') or '').strip().lower()[:80]              # the page's filter, applied HERE: the list is cut to `limit` after, never before
+    if q:
+        rows = [r for r in rows if q in r['name'].lower() or q in r['formula'].lower()]
+    if d.get('only_spectra'):
+        rows = [r for r in rows if r['rruff']]
     limit = int(_sp_num(d, 'limit', 1, 5000, 600))
-    return jsonify({'ok': True, 'groups': keys, 'total': len(rows), 'with_rruff': sum(1 for r in rows if r['rruff']), 'species': rows[:limit]})
+    return jsonify({'ok': True, 'groups': keys, 'total': total, 'with_rruff': with_rruff, 'matching': len(rows), 'species': rows[:limit]})
 
 
 @app.route('/api/sp/upload', methods=['POST'])
@@ -3780,6 +3787,8 @@ def api_sp_rruff_fetch():
     from pxrd_review import rruff as RR
     d = request.get_json(silent=True) or {}
     sets = d.get('sets') if isinstance(d.get('sets'), list) else list(RR.DEFAULT_SETS)
+    if not sets or not all(isinstance(x, str) and x in RR.SETS for x in sets):
+        return jsonify({'ok': False, 'error': 'no such RRUFF set (one of %s)' % ', '.join(RR.SETS)}), 400
     if not RR.fetch_in_background(sets=sets, raw=bool(d.get('raw')), ir=bool(d.get('ir'))):
         return jsonify({'ok': False, 'error': 'a fetch is already running'}), 409
     return jsonify({'ok': True, 'fetch': dict(RR.PROGRESS)})
@@ -3800,7 +3809,7 @@ def _rruff_series(key):
         raise ValueError('the library holds %d spectra; there is no number %d' % (lib.n, i + 1))
     m = lib.meta(i)
     mineral, rid, kind, laser, tech = m['name'], m['id'], m.get('kind') or 'spectrum', m.get('laser') or '', m.get('technique') or 'raman'
-    label = '%s %s %s%s%s (RRUFF)' % (mineral, rid, kind, ' ' + laser + ' nm' if laser else '', ' IR' if tech == 'infrared' else '')
+    label = '%s %s %s%s%s (RRUFF %d)' % (mineral, rid, kind, ' ' + laser + ' nm' if laser else '', ' IR' if tech == 'infrared' else '', i + 1)   # the number: one sample has many orientations under one id
     about = ', '.join(x for x in (m.get('quality'), m.get('orient'), ('%s nm' % laser) if laser else '') if x)
     notes = ['from the RRUFF library on this machine: %s spectrum of %s (%s, %s%s) — the reference, not the sample under review%s'
              % ('an infrared' if tech == 'infrared' else 'a Raman', mineral, rid, kind, ', ' + about if about else '', '. ' + m['source'] if m.get('source') and m.get('set') == 'omnic' else '')]

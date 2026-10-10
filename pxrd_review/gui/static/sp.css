@@ -188,7 +188,7 @@ body.sp input[type=checkbox] { accent-color: var(--accent); }
 button.primary { border-color: rgb(var(--accent-rgb) / .7); }
 
 /* the group picker: a popover under 'Chem search' — the groups by element, the modes of the pick, the species that hold it */
-#sp-pick .pop-body { white-space: normal; width: min(760px, calc(100vw - 48px)); gap: 8px; font-size: .95em; }
+#sp-pick .pop-body { white-space: normal; width: min(760px, calc(100vw - 48px)); gap: 8px; font-size: .95em; left: auto; right: 0; }   /* anchored on the right: it opens leftward over the side panel, never off the window */
 #sp-pick > summary { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; margin: -2px 0; border: 1px solid var(--line); border-radius: 6px;
   background: rgb(var(--panel-rgb) / .9); color: var(--text); line-height: 1.5; }
 #sp-pick > summary:hover { border-color: var(--accent); color: var(--accent); }

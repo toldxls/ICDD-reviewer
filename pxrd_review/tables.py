@@ -149,11 +149,11 @@ def T_plain(cell):
 
 def plain(cell):
     """Plain text with Unicode super/subscripts where they exist (console / clipboard)."""
-    SUP = str.maketrans('0123456789+-', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻')
+    SUP = str.maketrans('0123456789+-−', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻')
     SUB = str.maketrans('0123456789.', '₀₁₂₃₄₅₆₇₈₉.')
     out = []
     for t, st in cell:
-        if 'sup' in st and re.fullmatch(r'[\d+\-]+', t):
+        if 'sup' in st and re.fullmatch(r'[\d+\-−]+', t):
             out.append(t.translate(SUP))
         elif 'sub' in st and re.fullmatch(r'[\d.]+', t):
             out.append(t.translate(SUB))

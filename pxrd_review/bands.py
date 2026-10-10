@@ -48,12 +48,15 @@ _MIXED = re.compile(r'\(([^()]*)\)(?:Σ[\d.]+)?\)?O([34])')        # a mixed sit
 _SITE_ATOM = re.compile(r'([A-Z][a-z]?)(\d+(?:\.\d+)?)?')
 
 
+_VALENCE = re.compile(r'(?<=[A-Za-z])\d[+−]|(?<=[A-Za-z])\d-(?![\dx])')     # Fe3+, Fe3-, never the range Cu1-x / Ca1-2
+
+
 def clean(formula):
     """(formula with its valence superscripts, markup and spaces removed; the same with the valences kept).
     A mixed site written before its oxygens — '(Se0.8S0.2)O4' of an empirical formula — is read as its dominant
     atom's group ('SeO4')."""
     raw = re.sub(r'<[^>]+>|&#?\w+;|[\s\x00-\x1f□◻]', '', (formula or '').translate(_SUBS))
-    f = re.sub(r'(?<=[A-Za-z])\d[+\-−]', '', raw)
+    f = _VALENCE.sub('', raw)
     def dominant(m):
         atoms = [(float(n) if n else 1.0, el) for el, n in _SITE_ATOM.findall(m.group(1))]
         return '(%sO%s)' % (max(atoms)[1], m.group(2)) if len(atoms) > 1 else m.group(0)
@@ -62,7 +65,7 @@ def clean(formula):
 
 def display(formula):
     """The formula as it is shown: markup, spaces and valence superscripts removed, nothing else rewritten."""
-    return re.sub(r'(?<=[A-Za-z])\d[+\-−]', '', clean(formula)[1])
+    return _VALENCE.sub('', clean(formula)[1])
 
 
 def elements(formula):
@@ -244,7 +247,9 @@ def catalogue():
     return out
 
 
-_CHEM_TOKEN = re.compile(r'(?<=[A-Za-z)\]])(\d*[+−]|\d+-(?![A-Za-z]))|(?<=[A-Za-z)\]])(\d+(?:\.\d+)?)')
+# a charge: digits and + or − after a letter or a bracket ('Fe3+', '(SO4)2−'); the ASCII hyphen only after a bracket ('(SO4)2-' — after a
+# letter '3-' is a range, 'Pb3-x'); a count right after a charge is a subscript ('Fe2+2O3'); otherwise a number after a letter or bracket
+_CHEM_TOKEN = re.compile(r'(?<=[A-Za-z)\]])(\d*[+−]|(?<=[)\]])\d*-)(\d+(?:\.\d+)?)?|(?<=[A-Za-z)\]])(\d+(?:\.\d+)?)')
 
 
 def chem_tokens(text):
@@ -256,7 +261,12 @@ def chem_tokens(text):
     for m in _CHEM_TOKEN.finditer(text):
         if m.start() > last:
             out.append(('', text[last:m.start()]))
-        out.append(('sup' if m.group(1) is not None else 'sub', m.group(0)))
+        if m.group(1) is not None:
+            out.append(('sup', m.group(1)))
+            if m.group(2):
+                out.append(('sub', m.group(2)))
+        else:
+            out.append(('sub', m.group(3)))
         last = m.end()
     if last < len(text):
         out.append(('', text[last:]))
@@ -271,31 +281,36 @@ def formula_html(raw):
     import html as _h
     txt = re.sub(r'<(?!/?su[bp]>)[^>]+>', '', (raw or '').translate(_SUBS))
     txt = re.sub(r'[\s\x00-\x1f□◻]', '', _h.unescape(txt))                   # an entity (&#9723; = the vacancy sign) read, then dropped as `clean` drops the sign
-    txt = re.sub(r'<sup>\d*[+\-−]</sup>|(?<=[A-Za-z])\d[+\-−](?!</sup>)', '', txt)   # valences dropped, as `display` drops them (Fe<sup>3+</sup>, Fe3+)
+    txt = re.sub(r'(?<=[A-Za-z])<sup>\d*[+\-−]</sup>', '', txt)                       # an element's valence dropped, as `display` drops it; a group's charge ((AsS)<sup>3-</sup>) kept
+    txt = _VALENCE.sub('', txt)
     return ''.join(part if _SUBSUP.fullmatch(part) else _h.escape(part, quote=False) for part in _SUBSUP.split(txt))
 
 
-_SPECIES = None
+_SPECIES = (None, None)             # (the snapshot object it was built from, the rows)
 
 
 def species_index():
     """Every species of the local Mindat snapshot with the groups its IMA formula holds: [(name, formula, frozenset of
-    keys, formula as HTML)], by name. Read once (a quarter of a second for 6,000 species); nothing leaves the machine."""
+    keys, formula as HTML)], by name. Built once per snapshot (a quarter of a second for 6,000 species) and again when
+    the snapshot is refreshed or first arrives; nothing leaves the machine."""
     global _SPECIES
-    if _SPECIES is None:
-        rows = []
-        try:
-            from pxrd_review import mindat as M
-            recs = M.struct_db().get('recs', [])
-        except Exception:
-            recs = []
-        for r in recs:
-            f = r.get('formula') or ''
-            if r.get('name') and f:
-                rows.append((r['name'], display(f), frozenset(groups_of(f)), formula_html(f)))
-        rows.sort(key=lambda t: t[0].lower())
-        _SPECIES = rows
-    return _SPECIES
+    try:
+        from pxrd_review import mindat as M
+        db = M.struct_db()
+        recs = db.get('recs', []) if isinstance(db, dict) else []
+    except Exception:
+        db, recs = None, []
+    if _SPECIES[1] is not None and _SPECIES[0] is db and recs:
+        return _SPECIES[1]
+    rows = []
+    for r in recs:
+        f = r.get('formula') or ''
+        if r.get('name') and f:
+            rows.append((r['name'], display(f), frozenset(groups_of(f)), formula_html(f)))
+    rows.sort(key=lambda t: t[0].lower())
+    if recs:                                                     # an empty snapshot is never kept: the next call looks again
+        _SPECIES = (db, rows)
+    return rows
 
 
 def species_with(keys):

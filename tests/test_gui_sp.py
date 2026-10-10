@@ -382,7 +382,7 @@ class SpectrumWindow(unittest.TestCase):
             q = r['minerals'][1]['spectra']
             self.assertEqual([(s['id'], s['kind']) for s in q], [('R040031', 'processed'), ('R040031', 'raw')])        # processed first
             o = self._post('/api/sp/rruff/open', {'key': q[0]['key']})
-            self.assertEqual(o['name'], 'Quartz R040031 processed (RRUFF)')
+            self.assertEqual(o['name'], 'Quartz R040031 processed (RRUFF 1)')
             self.assertIn({'name': o['name'], 'source': 'upload'}, json.loads(self.c.get('/api/sp/state').data)['files'])
             p = self._post('/api/sp/process', {'name': o['name']})
             self.assertEqual(p['kind'], 'raman'); self.assertTrue(any('RRUFF library' in n for n in p['notes']))
@@ -391,6 +391,13 @@ class SpectrumWindow(unittest.TestCase):
             self.assertEqual((len(c['x']), c['name']), (759, o['name']))
             self.assertIn('choose a spectrum', self._post('/api/sp/rruff/open', {}, 400)['error'])
             self.assertIn('no number', self._post('/api/sp/rruff/open', {'key': 99}, 400)['error'])
+            self.assertEqual(self._post('/api/sp/species', {'groups': ['SO4'], 'q': 'zzzz'})['species'], [])
+            # the server's filter sees the WHOLE list, the limit cuts after it
+            from pxrd_review import bands as B
+            if B.species_index():
+                r_ = self._post('/api/sp/species', {'groups': ['OH'], 'q': 'uranophane', 'limit': 5})
+                self.assertTrue(r_['matching'] >= 1 and all('uranophane' in x['name'].lower() for x in r_['species']), r_['species'])
+                self.assertGreater(r_['total'], 2000)
         finally:
             shutil.rmtree(d, ignore_errors=True); OL._OPEN.clear()
 

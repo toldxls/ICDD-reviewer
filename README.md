@@ -83,7 +83,8 @@ Opens the review GUI in your browser — **localhost only**, auto-picks a free p
 **The `pxrd` command.** A launcher, so you type neither folder prefixes nor ports.
 Entries: `gui`, `review` (write comments/highlights), `sweep`, `lambda`, `extras`,
 `candidates`, `check` (regression), `refresh` / `mindat`, `update`. Papers and structures:
-`refs`, `paper`, `bv`, `tables`, `epma`, `gd`, `pxrd`, `cifaudit`, `checkcif`, `powder`, `pxrdaudit`, `lint`, `proposal`. A folder sub-command takes an
+`refs`, `paper`, `bv`, `tables`, `epma`, `gd`, `pxrd`, `cifaudit`, `checkcif`, `powder`, `pxrdaudit`, `lint`, `proposal`,
+`spectro`, `spectrum`, `bands`, `rruff` (the RRUFF spectra fetched from rruff.net). A folder sub-command takes an
 explicit folder, else the current directory when it holds entry `.docx` files, else the
 folder **remembered per sub-command** (pass it once, omit after); the GUI picks a free
 port; extra flags (`--id`, `--port`, …) pass through. Without installing, run
@@ -562,7 +563,7 @@ Two sources stand side by side in every row and are never merged into one number
 - `data/band_windows.json` (measured): the **published positions** — the 5th–95th percentile and the median of what
   published mineral descriptions assign to that mode, where eight papers or more give one.
 - `data/band_windows_rruff.json` (measured, Raman): the same percentiles of each band in the spectra of a RRUFF library
-  (`tools/rruff_windows.py`, run on a private copy): only minerals whose formula holds that one group, the modes assigned
+  (`tools/rruff_windows.py`, run on the collection `pxrd rruff --fetch` brings down): only minerals whose formula holds that one group, the modes assigned
   by the ion's geometry and free-ion ratios — no range of the library goes into it, so it is an independent check on the
   ranges; where no paper window exists and eight minerals or more give one, it stands in for the published positions.
 
@@ -695,10 +696,21 @@ the session, and names the fitted bands in place of the formula (`expected of th
 prints a formula, an ion or an oxide — chips, legend, plot labels, the pointer's readout, the band tables — it is written
 as a chemist writes it, subscripts and charges in place.
 
-**A RRUFF spectrum beside yours** (the `RRUFF…` box, shown when a RRUFF library is on this machine — a Thermo OMNIC pair
-`RRUFFLib.lbd` + `.lbt`. Looked for at `$PXRD_RRUFF_DIR`, then where it was last found, then a `RRUFF` folder beside or above
-the open folder, `~/RRUFF`, and two levels under Desktop, Documents and Downloads; once found anywhere it is remembered, so it
-is there whatever folder is opened next. With none found the bar shows `RRUFF library…`: name the folder once.) Type a
+**A RRUFF spectrum beside yours** (the `RRUFF…` box). The reference library comes from one or both of:
+- **`pxrd rruff --fetch`** (or the window's `fetch from rruff.net…` / `⤓ full` button): RRUFF's own bulk files downloaded from
+  rruff.net — every Raman quality, oriented and unoriented, and the broad scans that reach the O–H region; about 700 MB
+  downloaded once, the processed spectra kept as one compact store (some 300 MB) in the tool's cache (`<data home>/.cache/rruff/`,
+  or `$PXRD_RRUFF_STORE`), found from then on whatever folder is open. `--ir` adds the infrared collection (RAW only on RRUFF's
+  side, so always kept), `--raw` keeps the Raman RAW spectra too, `--sets` names the sets, `--status` says what is held, `--remove`
+  deletes it. This is the one download the tool makes beyond Mindat and GitHub, and only when asked. Please cite Lafuente,
+  Downs, Yang & Stone (2015), *The power of databases: the RRUFF project*, when its spectra are used.
+- **A Thermo OMNIC copy** (`RRUFFLib.lbd` + `.lbt`), looked for at `$PXRD_RRUFF_DIR`, then where it was last found, then a `RRUFF`
+  folder beside or above the open folder, `~/RRUFF`, and two levels under Desktop, Documents, Downloads and home (once per
+  start); remembered once found. With neither the bar shows `RRUFF library…`: fetch, or name the folder once.
+The two are listed as one. A mineral's spectra are offered best first — processed before raw, excellent before fair, unrated,
+poor and the broad scans, unoriented before oriented, 532 nm first — each labelled with its quality and orientation (one
+sample's many orientations are numbered). An overlaid reference's own bands are ticked under the plot and the pointer names
+the nearest. Type a
 mineral, choose one of its spectra (sample id, processing, laser), then `open` it here as a spectrum of its own — every tool
 works on it — or tick `overlay` to draw it under the current curve, scaled to the curve in view. The library is read in
 place; nothing of it is copied or written.

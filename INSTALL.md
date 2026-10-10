@@ -182,7 +182,9 @@ act on; this is the only one the tool writes.
 **Every paper is parsed on your machine.** The tool reads a paper's tables and sentences with its own
 code; nothing about a paper — not the file, not its text, not a value read from it — is sent to any
 outside service. The only network calls the tool makes are to the Mindat API for the mineral-species
-cache (section 5), and to GitHub to check for a new version (`PXRD_NO_UPDATE_CHECK=1` turns that off).
+cache, to GitHub for the version check, and — only when `pxrd rruff --fetch` or the spectrum window's
+`fetch from rruff.net…` button is used — a download of RRUFF's public spectra from rruff.net (`PXRD_NO_UPDATE_CHECK=1`
+turns the version check off); nothing of a paper or a spectrum is ever sent anywhere.
 
 ## 5. Mindat API key — optional
 

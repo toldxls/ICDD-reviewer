@@ -45,7 +45,8 @@ def read_any(folder):
             if m.get('technique') != 'raman' or m.get('quality') == 'broad' or m.get('kind') != 'processed':
                 continue
             x, y = st.xy(i)
-            out.append(('%s%s_%s%s' % (m['name'].replace(' ', ''), m['id'].split('-')[0], m['laser'], m['kind']), x, y))
+            laser = m['laser'].split('.')[0] if m.get('laser') else ''
+            out.append(('%s%s_%s%s' % (m['name'].replace(' ', ''), m['id'].split('-')[0], laser, m['kind']), x, y))
         return out
     return read_omnic(folder)
 
@@ -248,7 +249,7 @@ def main(argv=None):
         if shape and free_v1 and free_v1 > x[-1]:
             counts['group above the grid'] += 1; continue
         if shape and not free_v1:
-            counts['no free-ion ν1 to anchor on'] += 1; continue      # H3O: its 'ν1, ν3' carries no free value, so 'the strongest band' would be anything
+            counts['no free-ion ν1 to anchor on'] += 1; continue      # H3O ('ν1, ν3' carries no free value) and BO4: 'the strongest band' would be anything
         if shape:
             got = assign(shape, [m['mode'] for m in groups[g]['modes']], pk, free)
             for mode, ps in got.items():
