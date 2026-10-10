@@ -3323,6 +3323,39 @@ def _sp_ms_formula(key):
     return formula, name
 
 
+def _sp_ms_comparisons(key):
+    """The species the manuscript sets its spectrum beside (spectro.comparison_species), cached with the formula."""
+    path = (MS.get('files') or {}).get(str(key or ''))
+    if not path:
+        return []
+    try:
+        stamp = os.path.getmtime(path)
+    except OSError:
+        return []
+    hit = _SP_COMP.get(path)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    out = []
+    try:
+        from pxrd_review import paper_extract as PE
+        text = PE.text_of(path)
+        name = PE.mineral_name(text) or ''
+        try:
+            forms = SPC.paper_formulas(text, name)
+        except Exception:
+            forms = []
+        out = [s for s, _sent in SPC.comparison_species(text, name, None, forms)][:8]
+    except Exception:
+        out = []
+    if len(_SP_COMP) > 40:
+        _SP_COMP.clear()
+    _SP_COMP[path] = (stamp, out)
+    return out
+
+
+_SP_COMP = {}
+
+
 def _sp_formula(d):
     """The chemistry a request reads its bands against: the formula typed (a mineral name is looked up in the local
     Mindat snapshot), else the one the manuscript beside the spectrum states -> (formula, mineral name, where from)."""
@@ -3357,12 +3390,16 @@ def api_sp_bands():
     def row(r):
         p = r['published']
         return {'group': r['group'], 'label': BD.label(r), 'mode': r['mode'], 'what': r['what'], 'free': r['free'], 'lo': r['lo'], 'hi': r['hi'], 'k': order.get((r['group'], r['mode']), 0),
+                'width': fw.get(BD.label(r)),
                 'active': lib['activity'][r['active']], 'source': lib['sources'][r['source']].split(' — ')[0], 'check': r['check'], 'broad': r['broad'],
                 'published': None if not p else {'p5': p['p5'], 'p50': p['p50'], 'p95': p['p95'], 'papers': p['papers'], 'of': r['published_for']},
-                'rruff': None if not r.get('rruff') else {'p5': r['rruff']['p5'], 'p50': r['rruff']['p50'], 'p95': r['rruff']['p95'], 'minerals': r['rruff']['minerals']}}
+                'rruff': None if not r.get('rruff') else {'p5': r['rruff']['p5'], 'p50': r['rruff']['p50'], 'p95': r['rruff']['p95'], 'minerals': r['rruff']['minerals']},
+                'rruff_ir': None if not r.get('rruff_ir') else {'p5': r['rruff_ir']['p5'], 'p50': r['rruff_ir']['p50'], 'p95': r['rruff_ir']['p95'], 'minerals': r['rruff_ir']['minerals']}}
     writes = {g['key']: g['writes'] for g in lib['groups']}
+    comps = BD.composites(); orient = BD.orientation(); fw = BD.fit_widths()
     out = {'ok': True, 'formula': BD.display(formula) if formula else '', 'name': name, 'source': source,
-           'groups': [{'key': k, 'name': names[k], 'writes': writes[k]} for k in keys], 'own': own,
+           'groups': [{'key': k, 'name': names[k], 'writes': writes[k], 'orientation': orient.get(k)} for k in keys], 'own': own,
+           'composites': {k: comps[k] for k in keys if k in comps}, 'comparisons': _sp_ms_comparisons(d.get('ms')) if d.get('ms') else [],
            'rows': [row(r) for r in BD.expected(groups=keys, technique=tech)] if keys else []}
     at = d.get('at')
     if isinstance(at, list):
@@ -3386,11 +3423,11 @@ def _rruff_by_species():
         return {}
     if lib is None:
         return {}
-    from pxrd_review import mindat as M
+    from pxrd_review import rruff as RR
     out = {}
-    for m, v in lib.minerals().items():
-        i, rid, kind, laser = v[0]
-        out.setdefault(M._norm(m), {'key': i, 'id': rid, 'kind': kind, 'laser': laser, 'n': len(v), 'name': m})
+    for norm, specs in RR.by_species(lib).items():
+        i, m = specs[0]
+        out[norm] = {'key': i, 'id': m.get('id', ''), 'kind': m.get('kind', ''), 'laser': m.get('laser', ''), 'n': len(specs), 'name': m.get('name', '')}
     return out
 
 
@@ -3861,11 +3898,9 @@ def api_sp_rruff_curve():
         return jsonify({'ok': False, 'error': str(ex)}), 400
     except Exception as ex:
         return jsonify({'ok': False, 'error': 'the RRUFF spectrum could not be read (%s)' % str(ex)[:120]}), 500
-    try:                                                      # the reference's own bands: ticks under the plot, a reading aid
-        peaks = [round(p['pos'], 1) for p in SPM.find_bands(series.x, series.y)][:40]
-    except Exception:
-        peaks = []
-    return jsonify({'ok': True, 'name': label, 'x': _sp_r(series.x, 2), 'y': _sp_r(series.y, 4), 'peaks': sorted(peaks)})
+    from pxrd_review import rruff as RR                       # the reference's own bands: ticks under the plot, a reading aid (one reading of 'a band': rruff.bands_of)
+    peaks = [round(p, 1) for p, _h in RR.bands_of(series.x, series.y, n=40)]
+    return jsonify({'ok': True, 'name': label, 'x': _sp_r(series.x, 2), 'y': _sp_r(series.y, 4), 'peaks': peaks})
 
 
 def _sp_groups(d):
@@ -3886,6 +3921,12 @@ def _sp_fit_json(f, xs, ys, technique, share=SPM.MIN_SHARE, formula=None, groups
         nxt = []
     head, rows = SPM.band_rows(f, technique, formula, groups)
     info = SPM.inferred(f.comps, technique, formula, groups)
+    fw = BD.fit_widths(); notes = []
+    for c, i in zip(f.comps, info):
+        w = next((fw[n] for n in (i.get('suggest') or []) if n in fw), None)
+        if w and (c['fwhm'] > 1.5 * w['p95'] or c['fwhm'] < 0.5 * w['p5']):
+            notes.append('the band at %.1f cm⁻¹ is %.0f wide; the %s bands RRUFF\'s fits give run %g–%g (information)' % (c['pos'], c['fwhm'], next(n for n in i['suggest'] if n in fw), w['p5'], w['p95']))
+    f = f._replace(warnings=list(f.warnings) + notes[:3]) if notes else f
     return {'lo': f.lo, 'hi': f.hi, 'n': f.n, 'k': f.k, 'chi2': f.chi2, 'r2': f.r2, 'bic': f.bic, 'sigma': f.sigma, 'converged': f.converged,
             'iterations': f.iterations, 'base': list(f.base), 'x0': f.x0, 'warnings': list(f.warnings), 'head': head, 'rows': rows,
             'comps': [{'shape': c['shape'], 'pos': c['pos'], 'height': c['height'], 'fwhm': c['fwhm'], 'eta': c['eta'], 'area': c['area'],

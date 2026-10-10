@@ -147,8 +147,59 @@ def _rruff():
         return {}
 
 
-def rruff_window(key, mode):
-    return _rruff().get('%s %s' % (key, mode))
+RRUFF_IR_FILE = os.path.join(_HERE, 'data', 'band_windows_rruff_ir.json')
+
+
+@functools.lru_cache(maxsize=1)
+def _rruff_ir():
+    """The windows measured on RRUFF's infrared collection (tools/rruff_windows.py --which ir), same shape."""
+    try:
+        with open(RRUFF_IR_FILE, encoding='utf-8') as f:
+            return json.load(f).get('windows') or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def rruff_window(key, mode, technique=None):
+    return (_rruff_ir() if technique == 'ir' else _rruff()).get('%s %s' % (key, mode))
+
+
+COMPOSITES_FILE = os.path.join(_HERE, 'data', 'band_composites.json.gz')
+
+
+@functools.lru_cache(maxsize=1)
+def composites():
+    """{group: {'x0', 'dx', 'y': [...], 'minerals'}} — the median RRUFF spectrum per group (tools/rruff_windows.py --composites); {} without the file."""
+    import gzip
+    try:
+        with gzip.open(COMPOSITES_FILE, 'rt', encoding='utf-8') as f:
+            return json.load(f).get('composites') or {}
+    except (OSError, ValueError):
+        return {}
+
+
+FIT_WIDTHS_FILE = os.path.join(_HERE, 'data', 'fit_widths.json')
+ORIENTATION_FILE = os.path.join(_HERE, 'data', 'rruff_orientation.json')
+
+
+@functools.lru_cache(maxsize=1)
+def fit_widths():
+    """{'SO4 ν1': {'p5', 'p25', 'p50', 'p75', 'p95', 'n'}} — the FWHM of fitted components per mode on RRUFF (tools/fit_gauntlet.py --widths); {} without the file."""
+    try:
+        with open(FIT_WIDTHS_FILE, encoding='utf-8') as f:
+            return json.load(f).get('widths') or {}
+    except (OSError, ValueError):
+        return {}
+
+
+@functools.lru_cache(maxsize=1)
+def orientation():
+    """{group: {'median', 'p75', 'samples'}} — how much a group's two strongest bands' ratio varies with orientation (tools/rruff_windows.py --orientation)."""
+    try:
+        with open(ORIENTATION_FILE, encoding='utf-8') as f:
+            return json.load(f).get('groups') or {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _published(key, mode, technique=None, windows=None):
@@ -162,7 +213,7 @@ def _published(key, mode, technique=None, windows=None):
             return entry[technique], technique
         if entry.get('any'):
             return entry['any'], 'any'
-    r = rruff_window(key, mode) if windows is None else None
+    r = rruff_window(key, mode, technique) if windows is None else None     # the infrared windows for an infrared spectrum, the Raman ones otherwise
     if r and r.get('minerals', 0) >= RRUFF_MIN:
         return dict(r, papers=r['minerals']), 'rruff'
     return None, None
@@ -177,7 +228,7 @@ def _rows(keys, technique=None, windows=None):
             pub, tech = _published(g['key'], m['mode'], technique, windows)
             yield {'group': g['key'], 'name': g['name'], 'writes': g['writes'], 'mode': m['mode'], 'what': m['what'], 'free': m.get('free'),
                    'lo': m['range'][0], 'hi': m['range'][1], 'active': m['active'], 'source': m['source'], 'check': bool(m.get('check')), 'broad': bool(m.get('broad')),
-                   'published': pub, 'published_for': tech, 'rruff': rruff_window(g['key'], m['mode'])}
+                   'published': pub, 'published_for': tech, 'rruff': rruff_window(g['key'], m['mode']), 'rruff_ir': rruff_window(g['key'], m['mode'], 'ir')}
 
 
 def expected(formula=None, technique=None, groups=None, windows=None):
@@ -345,8 +396,8 @@ def _window_text(r):
     return '%d–%d, median %d (%d papers%s)' % (p['p5'], p['p95'], p['p50'], p['papers'], '' if r['published_for'] == 'any' else ', ' + {'raman': 'Raman', 'ir': 'infrared'}[r['published_for']])
 
 
-def _rruff_text(r):
-    w = r.get('rruff')
+def _rruff_text(r, key='rruff'):
+    w = r.get(key)
     return '%d–%d, median %d (%d minerals)' % (w['p5'], w['p95'], w['p50'], w['minerals']) if w else ''
 
 
@@ -392,11 +443,13 @@ def table(formula, technique=None, name=''):
     L.append('  groups: ' + ', '.join('%s (%s)' % (k, names[k]) for k in keys))
     L.append('')
     rows = expected(formula, technique)
-    head = ('band', 'what', 'active', 'free ion', 'range in minerals', 'published positions', 'RRUFF spectra')
+    head = ('band', 'what', 'active', 'free ion', 'range in minerals', 'published positions', 'RRUFF spectra', 'RRUFF infrared')
     body = [(label(r), r['what'], lib['activity'][r['active']], '' if r['free'] is None else '%d' % r['free'],
-             '%d–%d%s' % (r['lo'], r['hi'], ' *' if r['check'] else ''), _window_text(r), _rruff_text(r)) for r in rows]
+             '%d–%d%s' % (r['lo'], r['hi'], ' *' if r['check'] else ''), _window_text(r), _rruff_text(r), _rruff_text(r, 'rruff_ir')) for r in rows]
+    if not any(x[7] for x in body):
+        head = head[:7]; body = [x[:7] for x in body]
     if not any(x[6] for x in body):
-        head = head[:6]; body = [x[:6] for x in body]
+        head = head[:6] + head[7:]; body = [x[:6] + x[7:] for x in body]
     w = [max(len(x[i]) for x in [head] + body) for i in range(len(head))]
     for x in [head] + body:
         L.append('  ' + '  '.join(c.ljust(w[i]) for i, c in enumerate(x)).rstrip())
@@ -405,8 +458,10 @@ def table(formula, technique=None, name=''):
         L.append('  * entered from memory of the source, not yet compared with it line by line (data/band_library.json)')
     L.append('  sources: ' + '; '.join(lib['sources'][s].split(' — ')[0] for s in sorted({r['source'] for r in rows})))
     L.append('  published positions: the 5th–95th percentile of what published mineral descriptions assign to that mode')
-    if len(head) > 6:
+    if 'RRUFF spectra' in head:
         L.append('  RRUFF spectra: the same percentiles of the band in the Raman spectra of minerals whose formula holds this group alone (data/band_windows_rruff.json)')
+    if 'RRUFF infrared' in head:
+        L.append('  RRUFF infrared: the same on the infrared spectra, anchored on ν3 or ν1 (data/band_windows_rruff_ir.json)')
     return L
 
 

@@ -7,63 +7,128 @@ from pxrd_review import bands as BD
 
 
 class StorePath(unittest.TestCase):
-  def test_read_any_reads_a_store_with_x_ids(self):
-    import json, os, sys, tempfile, shutil, struct
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
-    import rruff_windows as W
-    d = tempfile.mkdtemp(prefix='rrw_')
-    try:
-        x = [150.0 + k for k in range(300)]; y = gauss_any(x, [464], [100])
-        data = struct.pack('<%df' % 600, *(x + y))
-        with open(os.path.join(d, 'spectra.f32'), 'wb') as f:
-            f.write(data * 3)
-        sp = [{'name': 'Quartz', 'id': 'R040031', 'kind': 'processed', 'laser': '532.0', 'quality': 'excellent', 'orient': 'unoriented', 'technique': 'raman', 'off': 0, 'npts': 300},
-              {'name': 'Magnesio-riebeckite', 'id': 'X050031', 'kind': 'processed', 'laser': '785', 'quality': 'poor', 'orient': 'unoriented', 'technique': 'raman', 'off': len(data), 'npts': 300},
-              {'name': 'Quartz', 'id': 'R040031', 'kind': 'processed', 'laser': '532', 'quality': 'broad', 'orient': 'unoriented', 'technique': 'raman', 'off': 2 * len(data), 'npts': 300}]
-        json.dump({'spectra': sp}, open(os.path.join(d, 'index.json'), 'w'))
-        rows = W.read_any(d)
-        names = [n for n, _x, _y in rows]
-        assert names == ['QuartzR040031_532processed', 'Magnesio-riebeckiteX050031_785processed'], names     # the broad scan left out, '532.0' → 532
-        from pxrd_review.omnic_lib import split_name
-        assert split_name(names[1]) == ('Magnesio-riebeckite', 'X050031', 'processed'), split_name(names[1])
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
+    """The readers over a fetched store: which spectra each `which` walks, the metadata carried, the pick per id, the writer's merge."""
+    @classmethod
+    def setUpClass(cls):
+        import json, tempfile
+        from tests.rruff_fixture import member, gauss, write_store, GRID, BROAD, IR
+        cls.tmp = tempfile.mkdtemp(prefix='rrw_')
+        cls.store = os.path.join(cls.tmp, 'store')
+        write_store(cls.store, {
+            'excellent_oriented': [member('Quartz', 'R040031', '532', 'processed', GRID, gauss(GRID, [464, 206], [100, 30]))],
+            'poor_unoriented': [member('Quartz', 'R040031', '780', 'processed', GRID, gauss(GRID, [464, 206], [100, 30])),
+                                member('Magnesio-riebeckite', 'X050031', '785', 'processed', GRID, gauss(GRID, [670], [100]), chem='Na_2_(Mg_3_Fe_2_)Si_8_O_22_(OH)_2_')],
+            'LR-Raman': [member('Gypsum', 'R040029', '532', 'processed', BROAD, gauss(BROAD, [1008, 3400], [100, 20], w=12), chem='CaSO_4_·2H_2_O')],
+            'infrared': [member('Calcite', 'R040070', '', 'raw', IR, gauss(IR, [1420, 875], [1, 0.3], w=20), chem='CaCO_3_', tech='Infrared')]})
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_which_spectra_each_reader_walks(self):
+        raman = RW.spectra_of(self.store, 'raman')
+        self.assertEqual(sorted((m['name'], m['id'], m['laser']) for m, _x, _y in raman), [('Magnesio-riebeckite', 'X050031', '785'), ('Quartz', 'R040031', '532'), ('Quartz', 'R040031', '780')])
+        broad = RW.spectra_of(self.store, 'broad')
+        self.assertEqual([(m['name'], m['quality'], round(x[-1])) for m, x, _y in broad], [('Gypsum', 'broad', 4398)])
+        ir = RW.spectra_of(self.store, 'ir')
+        self.assertEqual([(m['name'], m['technique'], m['kind']) for m, _x, _y in ir], [('Calcite', 'infrared', 'raw')])
+        with self.assertRaises(ValueError):
+            RW.spectra_of(self.store, 'xrd')
+        self.assertEqual(RW.label_of(raman[0][0]).split()[1], raman[0][0]['id'])
+
+    def test_the_pick_per_id_and_the_merging_writer(self):
+        import json
+        from pxrd_review import rruff as R
+        # the best of one id by rruff.rank: 532 nm unoriented before 780 nm, excellent-oriented after unoriented poor? no: quality first
+        metas = [m for m, _x, _y in RW.spectra_of(self.store, 'raman') if m['id'] == 'R040031']
+        best = min(metas, key=R.rank)
+        self.assertEqual((best['quality'], best['laser']), ('excellent', '532'))
+        # the writer replaces only the keys a run owns
+        path = os.path.join(self.tmp, 'win.json')
+        RW.write_windows({'SO4 ν1': {'p50': 990, 'minerals': 9}, 'H2O stretch': {'p50': 3300, 'minerals': 4}}, 'raman', 'run one', path)
+        RW.write_windows({'H2O stretch': {'p50': 3450, 'minerals': 12}, 'OH stretch': {'p50': 3600, 'minerals': 5}}, 'broad', 'run two', path)
+        doc = json.load(open(path, encoding='utf-8'))
+        self.assertEqual({k: v['p50'] for k, v in doc['windows'].items()}, {'H2O stretch': 3450, 'OH stretch': 3600, 'SO4 ν1': 990})   # the Raman run's O–H key was not its to write
+        self.assertEqual(sorted(doc['sources']), ['broad', 'raman']); self.assertEqual(doc['technique'], 'raman')
+        RW.write_windows({'SO4 ν3': {'p50': 1120, 'minerals': 9}}, 'raman', 'run three', path)
+        doc = json.load(open(path, encoding='utf-8'))
+        self.assertEqual(sorted(doc['windows']), ['H2O stretch', 'OH stretch', 'SO4 ν3'])                 # the Raman keys replaced, the O–H ones kept
+        ir = os.path.join(self.tmp, 'ir.json')
+        RW.write_windows({'SO4 ν3': {'p50': 1110, 'minerals': 10}}, 'ir', 'ir run', ir)
+        self.assertEqual(json.load(open(ir, encoding='utf-8'))['technique'], 'ir')
+
+    def test_the_runs_on_the_fixture_store(self):
+        # the broad-scan run measures the O–H keys of a water-only mineral; the infrared run anchors on ν3; activity and evidence write their reports
+        import json, io, contextlib
+        from pxrd_review import bands as B
+        out = os.path.join(self.tmp, 'out')
+        if not B.resolve('gypsum')[1]:
+            self.skipTest('no Mindat snapshot for the formula lookup')
+        with contextlib.redirect_stdout(io.StringIO()):
+            RW.main([self.store, out, '--which', 'broad'])
+        recs = [json.loads(l) for l in open(os.path.join(out, 'rruff_windows.jsonl'), encoding='utf-8')]
+        self.assertEqual({(r['group'], r['mode'], r['mineral']) for r in recs}, {('H2O', 'stretch', 'Gypsum')})        # gypsum: water, no hydroxyl; its 3400 band
+        self.assertAlmostEqual(recs[0]['pos'], 3400, delta=4)
+        with contextlib.redirect_stdout(io.StringIO()):
+            RW.main([self.store, out, '--which', 'ir'])
+        recs = [json.loads(l) for l in open(os.path.join(out, 'rruff_windows.jsonl'), encoding='utf-8')]
+        self.assertEqual({(r['group'], r['mode']) for r in recs}, {('CO3', 'ν3'), ('CO3', 'ν2')})                      # calcite's infrared ν3 (anchor) and ν2
+        with contextlib.redirect_stdout(io.StringIO()):
+            RW.main([self.store, out, '--activity'])
+        rep = open(os.path.join(out, 'rruff_activity_report.txt'), encoding='utf-8').read()
+        self.assertIn('ACTIVITY', rep)
+        win = os.path.join(self.tmp, 'ev_ir.json')
+        keep = RW.DATA
+        try:                                                                         # the evidence report reads the data folder: a scratch one here
+            RW.DATA = self.tmp
+            json.dump({'windows': {'CO3 ν2': {'p5': 860, 'p25': 865, 'p50': 872, 'p75': 878, 'p95': 884, 'n': 12, 'minerals': 9, 'dropped': 0}}}, open(os.path.join(self.tmp, 'band_windows_rruff_ir.json'), 'w'))
+            with contextlib.redirect_stdout(io.StringIO()):
+                RW.main([self.store, out, '--evidence'])
+            ev = open(os.path.join(out, 'library_evidence.txt'), encoding='utf-8').read()
+            self.assertIn('CO3      ν2', ev); self.assertIn('860–884 (872) 9', ev)                                    # the infrared column from the scratch file; the Raman column from the shipped data
+            self.assertIn('check-tagged rows', ev)
+        finally:
+            RW.DATA = keep
+
+    def test_composites_and_orientation_on_the_fixture_store(self):
+        import json, gzip, io, contextlib
+        from pxrd_review import bands as B
+        if not B.resolve('quartz')[1]:
+            self.skipTest('no Mindat snapshot for the formula lookup')
+        path = os.path.join(self.tmp, 'comp.json.gz')
+        with contextlib.redirect_stdout(io.StringIO()):
+            RW.composites(self.store, path)
+        comp = json.load(gzip.open(path, 'rt', encoding='utf-8'))['composites']
+        self.assertEqual(comp, {})                                                   # three minerals a group: none here has MIN_MINERALS
+        self.assertEqual(RW._resample([1.0, 2.0, 3.0], [10.0, 20.0, 30.0], 0.0, 3.0, 1.0), [None, 10.0, 20.0, 30.0])
+        opath = os.path.join(self.tmp, 'orient.json')
+        with contextlib.redirect_stdout(io.StringIO()):
+            RW.orientation(self.store, opath)
+        self.assertEqual(json.load(open(opath, encoding='utf-8'))['groups'], {})      # no sample with three orientations in the fixture
+        keep = RW.DATA
+        try:
+            RW.DATA = self.tmp
+            with contextlib.redirect_stdout(io.StringIO()):
+                RW.main([self.store, os.path.join(self.tmp, 'o2'), '--composites'])  # the flag route; DATA pointed at scratch so the shipped file is untouched
+            self.assertTrue(os.path.isfile(os.path.join(self.tmp, 'band_composites.json.gz')))
+        finally:
+            RW.DATA = keep
+    def test_bands_of_and_by_species(self):
+        from pxrd_review import rruff as R
+        from tests.rruff_fixture import gauss, GRID
+        pk = R.bands_of(GRID, gauss(GRID, [464, 206, 900, 120], [100, 30, 3, 50]))
+        self.assertEqual([round(p) for p, _h in pk], [206, 464])                                   # the lattice band and the 3 % band left out
+        self.assertEqual(len(R.bands_of(GRID, gauss(GRID, [300, 400, 500], [100, 80, 60]), n=2)), 2)
+        st = R.open_store(self.store)
+        by = R.by_species(st)
+        self.assertEqual(sorted(by), ['calcite', 'gypsum', 'magnesio-riebeckite', 'quartz'])
+        self.assertEqual([m['laser'] for _i, m in by['quartz']], ['532', '780'])
+        self.assertEqual(R.by_species(None), {})
+        R.close_stores()
 
 
-def gauss_any(x, centres, heights, w=6.0):
-    import math
-    return [sum(h * math.exp(-4 * math.log(2) * ((v - c) / w) ** 2) for c, h in zip(centres, heights)) for v in x]
-
-
-def write_library(folder, spectra):
-    """A small OMNIC-style pair: `spectra` = [(name, kind, [y...])] on the tool's grid; kind 'field' writes the
-    256-character name field, 'pascal' the length-prefixed name of the older records."""
-    npts = 759
-    x0, x1 = 32.783936, 1494.56176
-    lbt = bytearray(b'1024  \r\n' + b' ' * 1016)
-    ptrs = []
-    for name, kind, _y in spectra:
-        ptrs.append(len(lbt))
-        if kind == 'field':
-            lbt += b'\x8b\x01\xff' + name.encode('latin-1').ljust(255) + b'\x17' + b'0\t3367940656\t0\t0.00000\t'
-        else:
-            lbt += b'\x00\x00' + bytes([len(name)]) + name.encode('latin-1') + b' 3043070433\t0\t'
-        lbt += b'\xea\x00\x0a\x00'
-    toks = ['2794', 'Company name goes here', 'RRUFFLib', '6.0 U', '000', str(len(spectra)), '3048', '0', '0', '1', '31', '32', '4', str(npts),
-            '%f' % x0, '%f' % x1, '0.000000', '1.928467', '1.928467', '5', ' 400', 'Spectrum']
-    head = ('\r\n'.join(toks) + '\r\n').encode('latin-1').ljust(2794, b'\x00')
-    lbd = bytearray(head)
-    for (name, kind, y), ptr in zip(spectra, ptrs):
-        b0, b1, b2 = ptr & 0xff, (ptr >> 16) & 0xff, (ptr >> 8) & 0xff
-        lbd += struct.pack('<%df' % npts, *y) + bytes([b0, b1, b2, 0]) + b'\x00' * 8
-    open(os.path.join(folder, 'RRUFFLib.lbd'), 'wb').write(lbd)
-    open(os.path.join(folder, 'RRUFFLib.lbt'), 'wb').write(lbt)
-
-
-def gauss(centres, heights, width=8.0):
-    import math
-    x = [32.783936 + k * 1.928467 for k in range(759)]
-    return [sum(h * math.exp(-((v - c) / width) ** 2) for c, h in zip(centres, heights)) + 2.0 for v in x]
+from tests.rruff_fixture import write_library, omnic_gauss as gauss
 
 
 class Reader(unittest.TestCase):
@@ -71,8 +136,9 @@ class Reader(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             write_library(d, [('AbhuriteR060227_clean', 'field', gauss([300], [10])), ('Sanbornite R050001_processed', 'pascal', gauss([400], [10])),
                               ('Whiteite-(CaFeMg)R060912_785processed', 'field', gauss([500], [10]))])
-            got = RW.read_omnic(d)
-            self.assertEqual([n for n, _x, _y in got], ['AbhuriteR060227_clean', 'Sanbornite R050001_processed', 'Whiteite-(CaFeMg)R060912_785processed'])
+            got = RW.spectra_of(d, 'raman')
+            self.assertEqual([(m['name'], m['id'], m['kind']) for m, _x, _y in got], [('Abhurite', 'R060227', 'clean'), ('Sanbornite', 'R050001', 'processed'), ('Whiteite-(CaFeMg)', 'R060912', 'processed')])
+            self.assertEqual(RW.spectra_of(d, 'broad'), [])                                        # an OMNIC copy has Raman only
             x, y = got[1][1], got[1][2]
             self.assertEqual((len(x), len(y), round(x[0], 3), round(x[-1], 2)), (759, 759, 32.784, 1494.56))
             self.assertAlmostEqual(x[max(range(759), key=lambda k: y[k])], 400, delta=2)
@@ -103,6 +169,28 @@ class Assignment(unittest.TestCase):
         free = {'ν1': 1063, 'ν3': 1415, 'ν2': 879, 'ν4': 680}
         got = RW.assign('planar', list(free), [(155, 50), (283, 40), (712, 15), (1086, 100), (1436, 8)], free)
         self.assertEqual((got['ν1'], got['ν4'], got['ν3']), ([1086], [712], [1436]))
+
+    def test_the_infrared_anchor(self):
+        free = {'ν1': 983, 'ν3': 1105, 'ν4': 611, 'ν2': 450}
+        # an infrared sulfate: ν3 dominates; the anchor is the strongest band near the free ν3, ν1 is placed by ratio like the rest
+        pk = [(450, 10), (600, 30), (640, 25), (985, 20), (1090, 100), (1150, 80), (1500, 5)]
+        self.assertEqual(RW.ir_anchor(pk, free), ('ν3', 1090))
+        got = RW.assign('tetrahedral', list(free), pk, free, anchor=RW.ir_anchor(pk, free))
+        self.assertEqual((got['ν3'], got['ν1'], sorted(got['ν4']), got['ν2']), ([1090], [985], [600, 640], [450]))
+        self.assertEqual(got['(unassigned)'], [1150])                                   # 1150 is near no mode once 1090 is ν3; 1500 is under ASSIGN_STRONG
+        # no band near ν3 or ν1: left out; a group with no free value: '(no anchor)'
+        self.assertIsNone(RW.ir_anchor([(300, 100), (700, 50)], free))
+        got = RW.assign('tetrahedral', ['ν1', 'ν3'], [(900, 100)], {}, anchor=('ν3', 900))
+        self.assertEqual(dict(got), {'(no anchor)': [900]})
+
+    def test_the_o_h_region_of_a_broad_scan(self):
+        from tests.rruff_fixture import gauss, BROAD
+        y = gauss(BROAD, [1008, 1620, 3420], [100, 8, 25], w=14)
+        got = RW.oh_bands(BROAD, y)
+        self.assertAlmostEqual(got['stretch'], 3420, delta=3); self.assertAlmostEqual(got['bend'], 1620, delta=3)
+        hump = [v + 40 * __import__('math').exp(-((x - 3100) / 500) ** 2) for x, v in zip(BROAD, gauss(BROAD, [1008], [100], w=14))]
+        self.assertIsNone(RW.oh_bands(BROAD, hump)['stretch'])                          # a 1000 cm⁻¹ hump is no stretch
+        self.assertEqual(RW.oh_bands(BROAD[:10], y[:10]), {'stretch': None, 'bend': None})
 
     def test_window_and_verdict(self):
         vals = [(980 + k, 'm%d' % k) for k in range(20)] + [(1300, 'odd')]

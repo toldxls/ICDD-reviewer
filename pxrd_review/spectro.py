@@ -914,12 +914,18 @@ def check_lines(text, ex=None, cif=None, path=None, structure=None):
         about = species_lines(text, ex, name, sp, tab)
     except Exception:
         about = []
+    forms = []
     try:
-        about += library_lines(own, paper_formulas(text, name or ''))
+        forms = paper_formulas(text, name or '')
+        about += library_lines(own, forms)
     except Exception:
         pass
     try:
         about += table_lines(tab, prose)
+    except Exception:
+        pass
+    try:
+        about += rruff_lines(own, name, comparison_species(text, name, sp, forms))
     except Exception:
         pass
     lines += about
@@ -933,8 +939,9 @@ def check_lines(text, ex=None, cif=None, path=None, structure=None):
             len(res), '' if len(res) == 1 else 's', ' and '.join(x for x in ((BC if n_bc else ''), (LIB if n_lib else '')) if x), n_ok,
             ', %d with no single band to recompute from' % n_open if n_open else '')
     else:
-        head = 'spectroscopy: the stated bands beside the %s' % ' and the '.join(x for x in (('structure' if beside else ''), ('formula' if any(not ln.startswith('table:') for ln in about) else ''),
-                                                                                              ('assignment table' if any(ln.startswith('table:') for ln in about) else '')) if x)
+        head = 'spectroscopy: the stated bands beside the %s' % ' and the '.join(x for x in (('structure' if beside else ''), ('formula' if any(not ln.startswith(('table:', 'rruff:')) for ln in about) else ''),
+                                                                                              ('assignment table' if any(ln.startswith('table:') for ln in about) else ''),
+                                                                                              ('RRUFF spectra' if any(ln.startswith('rruff:') for ln in about) else '')) if x)
     return [head] + lines
 
 
@@ -1001,6 +1008,147 @@ def _wn(v):
 
 LIBRARY_MIN = 700.0             # cm-1: below this the bends of every group and the metal-oxygen modes share the axis
 LIBRARY_BANDS = 4               # a paper stating fewer bands than this gives a list, not a spectrum to set beside its formula
+
+
+_COMPARE = re.compile(r'\b(compar\w*|similar\w*|resembl\w*|close to|analog\w*|related|typical of|same as|like that of|like those of|'
+                      r'in contrast|contrast\w*|differ\w*|different|distinct\w*|common features|consistent with|agree\w*|identical)\b', re.I)
+_NAME_WORD = re.compile(r"[A-Za-zÀ-ɏ][A-Za-zÀ-ɏ'’\-]{4,}(?:-\([A-Za-z0-9+,]+\))?")
+_NOT_VIBRATIONAL = re.compile(r'reflectance|reflection|reflectivity|optical|absorption spectr|electronic|XANES|XPS|EXAFS|NMR|Mössbauer|EDS|energy[- ]dispersive|'
+                              r'impurit|admix|intergrow|inclusion|geological setting|\bppm\b|crystal field|10Dq|edge position|heterostruct', re.I)   # not a vibrational spectrum compared, or a phase in the sample
+_LIKE = re.compile(r"([A-Za-zÀ-ɏ][A-Za-zÀ-ɏ'’]{4,}(?:-\([A-Za-z0-9+,]+\))?)-(?:like|type)\b(?!\s*(?:phase|layer|structure|intergrow|unit|cell|arrangement))")
+_NOT_A_SPECIMEN = re.compile(r'^\s*(?:anvil|cell|standard|substrate|window|holder|plate|powder standard|structure|heterostruct|sheet|chain|framework|group minerals? (?:structure|type))', re.I)   # 'diamond anvil', 'quartz standard', 'perovskite structure': not a spectrum compared
+_GREEK_PREFIX = re.compile(r'(?:^|[^A-Za-zÀ-ɏ])[A-Za-zα-ωΑ-Ω]-$')                                              # 'α-quartz' (a transliterated 'a-quartz' too): a modification, not the mineral
+_NOT_A_SPECTRUM = re.compile(r'^-(?:like|type)\s*(?:phase|layer|sheet|chain|structure|intergrow|unit|cell|arrangement|compound|modification|framework|[A-Z][a-z]?[A-Z0-9])', re.I)    # 'christelite-like phase', 'rutile-like GeO2': a structure, not a spectrum compared
+COMPARE_SPAN = 160              # characters after a comparison word in which the species named is its object
+TITLE_CHARS = 300               # the paper's title and first lines: a species named there is a subject of the paper (a second mineral it describes)
+_NEW_MINERAL = re.compile(r'new (?:mineral|species)', re.I)
+
+
+def _table_like(sent):
+    """A table flattened into a 'sentence' (cell parameters, probe standards, comparative data): numbers crowd the words."""
+    nums = len(re.findall(r'\d+(?:\.\d+)?', sent)); words = len(re.findall(r'[A-Za-zÀ-ɏ]{3,}', sent))
+    return nums >= 12 and nums > 0.6 * words
+
+
+def comparison_species(text, name, sp=None, forms=None):
+    """The known species a paper sets its SPECTRUM beside -> [(species as IMA writes it, the paper's sentence)]. A sentence
+    about Raman / infrared spectra (not reflectance), not a table flattened into prose, with a comparison word followed
+    within COMPARE_SPAN characters by a mineral name of the local snapshot ('exact' or 'spelling' only — never a root:
+    'davidite' names two species), or '<species>-like'; never the paper's own mineral (its stem, diacritics folded),
+    another mineral the paper describes (one a formula is attributed to), or a word of COMMON. 'isostructural with X'
+    counts too (extra_checks._REL). Measured on the corpus before it fed a line (see the rules file). Snapshot only."""
+    from pxrd_review import mineral_names as MN
+    from pxrd_review import extra_checks as XC
+    sp = sp or split(text)
+    raw, norm = sp
+    stem = MN._fold(re.sub(r'-\(.*\)$', '', (name or '').lower()))[:7]
+    described = set()
+    for f in (forms or []):                                      # a second mineral the paper describes: its formula is attributed to it
+        for w in _NAME_WORD.findall(' '.join(str(x) for x in f[1:]) if isinstance(f, (list, tuple)) else ''):
+            described.add(MN._fold(w.lower()))
+    quote = {n: r for r, n in zip(raw, norm)}
+    folded = MN._fold((text or '').lower())
+    stop = re.search(r'[^.;]*(?:cm-1|spectr)', folded)              # the title and the lines before the first word of spectroscopy
+    head = folded[:min(TITLE_CHARS, stop.start() if stop else TITLE_CHARS)]
+    subjects = set()                                             # the species the paper DESCRIBES: in its title, or beside 'new mineral'
+    for m in re.finditer(r'new (?:mineral|species)[^.;]{0,80}', folded):
+        subjects.update(MN._fold(w.lower()) for w in _NAME_WORD.findall(m.group(0)))
+    for m in re.finditer(r'[^.;]{0,80}new (?:mineral|species)', folded):
+        subjects.update(MN._fold(w.lower()) for w in _NAME_WORD.findall(m.group(0)))
+    out, seen = [], set()
+    def names_in(span):
+        found = []
+        for m in _NAME_WORD.finditer(span):
+            w = m.group(0)
+            after = span[m.end():m.end() + 30]
+            if w.lower().endswith(('-like', '-type')):
+                after = w[w.lower().rfind('-'):] + after                   # the affix is part of the word matched: 'christelite-like phase'
+            if _GREEK_PREFIX.search(span[max(0, m.start() - 3):m.start()]) or _NOT_A_SPECIMEN.match(span[m.end():m.end() + 20]) or _NOT_A_SPECTRUM.match(after):
+                continue
+            tok, _affix = MN._clean_affix(w)
+            if not tok or tok.lower() in MN.COMMON or MN._fold(tok.lower()) in described:
+                continue
+            if stem and MN._fold(tok.lower()).startswith(stem):
+                continue
+            how, norms = MN.lookup(tok)
+            if how in ('exact', 'spelling') and len(norms) == 1:
+                key = MN._fold(tok.lower())
+                if key in head or key in subjects:
+                    continue                                              # in the title or called a new mineral: one the paper describes, not compares with
+                found.append(norms[0])
+        return found
+    for sent in norm:
+        if 'cm-1' not in sent and not re.search(r'Raman|infrared|\bIR\b|FTIR|spectr', sent):
+            continue                                              # a spectroscopy sentence only: the comparison is of spectra ('bands' alone is geology too)
+        if _NOT_VIBRATIONAL.search(sent) or _table_like(sent):
+            continue
+        spans = [sent[m.end():m.end() + COMPARE_SPAN] for m in _COMPARE.finditer(sent)] + [sent[m.end():m.end() + COMPARE_SPAN] for m in XC._REL.finditer(sent)]
+        spans += [sent[max(0, m.start() - 3):m.end() + 30] for m in _LIKE.finditer(sent)]   # three characters before ('α-quartz-type' is no mineral), thirty after ('-like GeO2')
+        for span in spans:
+            for key in names_in(span):
+                if key not in seen:
+                    seen.add(key); out.append((key, quote.get(sent, sent)))
+    return out
+
+
+RRUFF_NEAR = 6.0        # cm⁻¹: a stated band 'within' a reference band — spectrum.compare_stated's tolerance
+RRUFF_FAR = 15.0        # cm⁻¹: the wider tolerance — auto_fit's seed tolerance
+
+
+def rruff_lines(own, name, comparisons=(), lib=None):
+    """RRUFF's reference bands beside the paper's OWN stated bands — INFORMATION, one line per species: the paper's mineral
+    when RRUFF holds it (a reinvestigated species) and each species the paper compares with. The best spectrum by
+    `rruff.rank` (processed, excellent, unoriented, 532 nm); its bands by `rruff.bands_of`; when the paper's bands reach
+    the O–H region and RRUFF has a broad scan of that mineral, that scan's O–H bands too. Silent without a store."""
+    try:
+        from pxrd_review import rruff as RR, mindat as M
+        lib = lib if lib is not None else RR.libraries(None)
+    except Exception:
+        return []
+    if lib is None or not own:
+        return []
+    pos = sorted({b.pos for b in own if b.family != 'overtone' and b.pos >= 100})
+    if not pos:
+        return []
+    by = RR.by_species(lib)
+    out, seen = [], set()
+    for species in [name or ''] + [s for s, _sent in comparisons]:
+        key = M._norm(species)
+        if not key or key in seen or key not in by:
+            continue
+        seen.add(key)
+        specs = by[key]
+        i, meta = specs[0]
+        if meta.get('technique') != 'raman':
+            continue
+        try:
+            x, y = lib.xy(i)
+            ref = [p for p, _h in RR.bands_of(x, y)]
+            if pos[-1] > 2500:
+                j = next((k for k, m in specs if m.get('quality') == 'broad'), None)
+                if j is not None:
+                    bx, by_ = lib.xy(j); ref += [p for p, _h in RR.bands_of(bx, by_, lattice=2500.0, n=6)]
+        except Exception:
+            continue
+        ref = sorted({float(round(p)) for p in ref})
+        if not ref:
+            continue
+        near = [p for p in pos if any(abs(p - r) <= RRUFF_NEAR for r in ref)]
+        far = [p for p in pos if p not in near and any(abs(p - r) <= RRUFF_FAR for r in ref)]
+        none = [p for p in pos if p not in near and p not in far]
+        about = ', '.join(v for v in ((meta.get('laser') + ' nm') if meta.get('laser') else '', meta.get('quality') or '', meta.get('orient') or '') if v)
+        line = 'rruff: %s (%s%s): bands at %s cm⁻¹' % (meta.get('name') or species, meta.get('id') or 'RRUFF', ', ' + about if about else '', _wn(ref))
+        parts = []
+        if near:
+            parts.append('%s within %g of one' % (_wn(near), RRUFF_NEAR))
+        if far:
+            parts.append('%s within %g' % (_wn(far), RRUFF_FAR))
+        if none:
+            parts.append('%s near none' % _wn(none))
+        if parts:
+            line += '; the paper’s ' + ', '.join(parts)
+        out.append(line + ' (information)')
+    return out
 
 
 def library_lines(own, forms):

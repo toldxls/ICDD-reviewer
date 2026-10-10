@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.18.0](#0180--2026-10-10) | 10 Oct | The fuller RRUFF collection put to work: RRUFF's bands beside the paper's own and beside the species the paper compares with (an information line; the species read from the paper, measured first), `compare with RRUFF` and a composite spectrum per group in the window, the O–H region and the infrared modes measured for the first time, the activity column checked, an evidence report for the check-tagged rows, the library gate and the fit gauntlet shipped as tools, orientation statistics; the uranyl windows restored |
 | [0.17.1](#0171--2026-10-10) | 10 Oct | The review of 0.17.0: a RRUFF spectrum's held name made unique (one sample's orientations replaced each other), the store's file handles closed and its rebuild made atomic, the species list filtered on the server (the box's filter had searched 600 rows of 2,000), the formula rule's range and valence cases, the pick no longer overridden by a file's saved work, the folder search once per start, the X-prefixed RRUFF ids counted, docs brought in line |
 | [0.17.0](#0170--2026-10-10) | 10 Oct | Spectrum window: **Chem search** — the band library's groups picked by element, each oxoanion its own colour and its modes in shades, the species of the snapshot that hold the pick with a click opening their RRUFF spectrum; **`pxrd rruff --fetch`** pulls RRUFF's Raman and infrared collections from rruff.net into a cache store found whatever folder is open (the OMNIC copy is remembered and searched for too); the band windows re-measured on it; a reference's bands ticked under the plot; formulas, oxides and ions formatted wherever the GUI prints one |
 | [0.16.0](#0160--2026-10-09) | 9 Oct | Spectroscopy: `pxrd spectro` recomputes the distances a paper credits to Bartlett & Cooney or Libowitzky from its own bands and sets the formula beside them; `pxrd spectrum` and the GUI's spectrum window import, clean and fit a Raman / infrared spectrum — or trace one off a figure; `pxrd bands` is a band library: for a chemistry the bands expected of it, for a band what it is expected to be in that chemistry — its ranges measured on a RRUFF Raman library, and a RRUFF spectrum pulled up beside yours; an adversarial review's ten fixes; the window tidied |
@@ -42,6 +43,54 @@ package version in `pyproject.toml`.
 | [0.4.0](#040--2026-08-25) | 25 Aug | `pxrd bv`, `pxrd tables`, `pxrd refs`, and Manuscript mode |
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
+
+## [0.18.0] — 2026-10-10
+**The fuller collection put to work.** Every measurement the band library rests on is re-made on RRUFF's own collection —
+the O–H region and the infrared modes for the first time — and the reviewer gets RRUFF's bands beside the paper's own, the
+species the paper compares with, and what a group's spectrum looks like. Information throughout; no finding, no score.
+
+### Added
+- **RRUFF beside the paper** (`spectro.rruff_lines`, in the spectroscopy section of `pxrd spectro`, `pxrd paper --check`,
+  `pxrd proposal` and the Manuscript mode): for the paper's own mineral when RRUFF holds it (a reinvestigated species) and
+  for each species the paper sets its spectrum beside, one information line — the best reference spectrum (sample, laser,
+  quality, orientation), its bands, and which of the paper's own bands stand within 6 or 15 cm⁻¹ of one; the broad scan's
+  O–H bands when the paper's bands reach that region. Silent without a store.
+- **The comparison species read from the paper** (`spectro.comparison_species`): a species of the local snapshot named
+  within 160 characters after a comparison word in a sentence about Raman or infrared spectra, or 'X-like'; never the paper's
+  own mineral (diacritics folded), a second mineral it describes, a reflectance spectrum, an apparatus ('diamond anvil') or a
+  table flattened into prose. Measured on the corpus before it fed a line: 151 species on 89 of the 541 papers that state
+  bands, 85 % right on a 60-pair sample (what remains is mostly papers that describe no new mineral, where the paper's own
+  name is misread) — an information line, so a wrong species costs one harmless extra line. The window shows a
+  `compare with RRUFF <mineral> ▸` button for the mineral named in `chemistry` or by the manuscript and for each comparison
+  species; a click overlays the reference.
+- **The composite spectrum of a group** (`tools/rruff_windows.py --composites` → `data/band_composites.json.gz`; the window's
+  `composite` layer under `more ▾`): the median of RRUFF's single-group minerals' spectra, one per mineral, drawn as a faint
+  area in the group's colour for every group shown — what a sulfate looks like.
+- **The O–H region measured** (`--which broad`, RRUFF's broad scans): the water stretch on 155 minerals, the hydroxyl stretch
+  on 210, the water bend on 65 — the library's first measurement above 1500 cm⁻¹ (its windows for those rows rested on the
+  literature and the papers alone).
+- **The infrared collection measured** (`--which ir`, `data/band_windows_rruff_ir.json`): the single-group assignment on
+  infrared spectra, anchored on ν3 (the band that dominates in infrared) or ν1 — 18 modes on 8 minerals or more; `pxrd bands`
+  and the window's library table show an `RRUFF infrared` column, and an infrared spectrum's bands are named against it.
+- **The library's activity column checked** (`--activity`, report only) on the 477 minerals RRUFF holds in both techniques;
+  **an evidence report for the 79 check-tagged rows** (`--evidence`: each row's measured windows and a proposed range — the
+  keeper of the library decides; 35 rows measured, 22 agree with the range entered from memory).
+- **`tools/lib_gate.py`**: the band library's gate, shipped — `identify()` against each corpus paper's own numbered
+  assignments; 68.2 % top-1 mode, 82.0 % top-1 group at this release (the number any windows change must hold).
+- **`tools/fit_gauntlet.py`**: the fitter over the collection, region by region as the window is used — crashes, the share of
+  strong bands fitted, humps, the width of each mode's bands (`data/fit_widths.json`, shown in the library table's tooltips;
+  a band far wider or narrower than RRUFF's fits give for its mode gets one information warning). Its first run on 1,000
+  spectra is the baseline: no crash, 72 % of the strong bands fitted within 6 cm⁻¹ or half their width, 4 humps.
+- **Orientation statistics** (`--orientation`, `data/rruff_orientation.json`): how much a group's two strongest bands' ratio
+  varies across a sample's orientations (sulfate 4.7×, phosphate 5.9× over 30 samples) — a tooltip in the library table.
+
+### Fixed
+- **The uranyl windows** had never reached the written file: the free-ion anchor gate (0.17.1) left the uranyl ion out,
+  whose stretch dominates by geometry. The linear ion is exempt; `UO2 ν1` rests on 14 minerals, `UO2 ν2` on 12.
+- The windows tool picks one spectrum per RRUFF id by the same rank as the window (unoriented, 532 nm first), and tries the
+  id's next spectrum when the best has no anchor (a uranyl at 532 nm fluoresces); its writer merges — a run replaces only the
+  keys it owns — instead of overwriting the file; a strong band has one definition (`rruff.bands_of`) for the tool, the
+  overlay's ticks and the manuscript line; one species map (`rruff.by_species`) for the picker and the line.
 
 ## [0.17.1] — 2026-10-10
 **The review of 0.17.0** — four reviewers over the day's diff; every finding reproduced before it was fixed.

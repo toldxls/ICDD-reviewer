@@ -710,7 +710,17 @@ as a chemist writes it, subscripts and charges in place.
 The two are listed as one. A mineral's spectra are offered best first — processed before raw, excellent before fair, unrated,
 poor and the broad scans, unoriented before oriented, 532 nm first — each labelled with its quality and orientation (one
 sample's many orientations are numbered). An overlaid reference's own bands are ticked under the plot and the pointer names
-the nearest. Type a
+the nearest.
+
+**What the collection adds to the reading** (0.18.0). A `compare with RRUFF <mineral> ▸` button beside the band library's
+summary overlays the reference spectrum of the mineral named in `chemistry` or by the manuscript, and of each species the
+manuscript sets its spectrum beside. The `composite` layer (under `more ▾`) draws, for each group shown, the median spectrum
+of RRUFF's single-group minerals as a faint area in the group's colour — what a sulfate looks like. The library table gains an
+`RRUFF infrared` column where the infrared collection measured a mode, and the O–H rows their first measurement (water and
+hydroxyl stretch, the water bend, from the broad scans). A row's tooltip says the typical width of that mode in RRUFF's fits
+and how much a group's band ratios vary with crystal orientation. In the manuscript check, the spectroscopy section gains an
+information line per species — the paper's own mineral when RRUFF holds it, and each species the paper compares its spectrum
+with — listing the reference's bands and which of the paper's stand within 6 or 15 cm⁻¹ of one. None of this is a finding. Type a
 mineral, choose one of its spectra (sample id, processing, laser), then `open` it here as a spectrum of its own — every tool
 works on it — or tick `overlay` to draw it under the current curve, scaled to the curve in view. The library is read in
 place; nothing of it is copied or written.

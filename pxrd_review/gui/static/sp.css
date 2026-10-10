@@ -75,6 +75,9 @@ body.sp input[type=checkbox] { accent-color: var(--accent); }
 #sp-rruff-path { width: 14em; }
 #sp-rruff-more { padding: 1px 6px; }
 #sp-plot .ref-tick { stroke-width: 1.5; opacity: .9; }
+#sp-plot .composite { opacity: .16; stroke: none; pointer-events: none; }
+#sp-library button.cmp { font: inherit; font-size: .88em; padding: 0 7px; margin-left: 4px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--accent); cursor: pointer; }
+#sp-library button.cmp:hover { border-color: var(--accent); }
 #sp-rruff-set { display: inline-flex; gap: 4px; align-items: center; }
 /* the figure panel: a page or an image, the frame, the two axis marks and the traced curve over it */
 #sp-fig { position: fixed; inset: 0; z-index: 30; background: var(--bg0); display: flex; flex-direction: column; }

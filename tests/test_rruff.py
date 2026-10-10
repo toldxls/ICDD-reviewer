@@ -9,19 +9,7 @@ import os, io, json, shutil, tempfile, time, unittest, zipfile
 from pxrd_review import rruff as R
 
 
-def member(name, rid, laser, kind, x, y, chem='SiO_2_', tech='Raman'):
-    head = ['##NAMES=%s' % name, '##RRUFFID=%s' % rid, '##IDEAL CHEMISTRY=%s' % chem, '##LOCALITY=Somewhere', '##OWNER=RRUFF', '##SOURCE=a museum',
-            '##DESCRIPTION=d', '##STATUS=s', '##URL=https://www.rruff.net/odr/rruff_sample/%s' % rid, '##FILETYPE=%s %s' % (tech, 'RAW' if kind == 'raw' else 'Processed')]
-    if tech == 'Raman':
-        head.append('##RAMAN WAVELENGTH=%s' % laser)
-    body = ['%.4f, %.6g' % (a, b) for a, b in zip(x, y)]
-    fname = '%s__%s__%s__%s______%s_Data_%s__%s.txt' % (name, rid, tech, laser, tech, 'RAW' if kind == 'raw' else 'Processed', 'ab' * 14)
-    return fname, '\n'.join(head + [''] + body + ['##END=', '']).encode('utf-8')
-
-
-def gauss(x, centres, heights, w=6.0):
-    import math
-    return [sum(h * math.exp(-4 * math.log(2) * ((v - c) / w) ** 2) for c, h in zip(centres, heights)) for v in x]
+from tests.rruff_fixture import member, gauss
 
 
 class Fetch(unittest.TestCase):
@@ -135,7 +123,7 @@ class Fetch(unittest.TestCase):
         n2 = R.fetch(sets=['poor_unoriented'], raw=True, out_dir=os.path.join(self.tmp, 'store2'), log=None)
         self.assertEqual(n2, 4)
         # the union with a Thermo OMNIC copy: one list, the store first, indices running on
-        from tests.test_rruff_windows import write_library, gauss as og
+        from tests.rruff_fixture import write_library, omnic_gauss as og
         from pxrd_review import omnic_lib as OL
         om = os.path.join(self.tmp, 'RRUFF'); os.makedirs(om, exist_ok=True)                  # the name the finder looks for beside a folder
         write_library(om, [('QuartzR040031_processed', 'field', og([464, 206], [100, 30])), ('AnhydriteR040061_processed', 'field', og([1017, 500], [100, 30]))])

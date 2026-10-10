@@ -222,6 +222,41 @@ class Union(object):
         return {m: sorted(v, key=lambda t: rank(self.meta(t[0]))) for m, v in sorted(by.items(), key=lambda kv: kv[0].lower())}
 
 
+STRONG_SHARE = 0.05             # of the strongest band: a band of a reference spectrum counted at all (one number for the tool, the route, the line)
+LATTICE = 150.0                 # cm⁻¹: below this a Raman band is a lattice mode of any mineral
+
+
+def bands_of(x, y, lattice=LATTICE, share=STRONG_SHARE, n=12):
+    """The bands of a reference spectrum -> [(pos, height)] by position: `spectrum.find_peaks` on the floored curve,
+    positions at or above `lattice`, heights at or above `share` of the strongest, the strongest `n`. The ONE reading of
+    'a strong band' for the windows tool, the window's overlay ticks and the manuscript line."""
+    from pxrd_review import spectrum as SPM
+    try:
+        pk = SPM.find_peaks(x, y)
+    except Exception:
+        return []
+    pk = [(p['pos'], p['height']) for p in pk if p['pos'] >= lattice and p['height'] > 0]
+    if not pk:
+        return []
+    top = max(h for _p, h in pk)
+    pk = sorted((t for t in pk if t[1] >= share * top), key=lambda t: -t[1])
+    return sorted(pk if n is None else pk[:n])
+
+
+def by_species(lib):
+    """{mindat._norm(mineral): [(index, meta)] best first (`rank`)} over a library or union — the map the species list,
+    the manuscript line and the window share. An OMNIC meta has blank quality / orientation: callers tolerate blanks."""
+    from pxrd_review import mindat as M
+    out = {}
+    if lib is None:
+        return out
+    for m, v in lib.minerals().items():
+        out.setdefault(M._norm(m), []).extend((i, lib.meta(i)) for i, _rid, _kind, _laser in v)
+    for k in out:
+        out[k].sort(key=lambda t: rank(t[1]))
+    return out
+
+
 _STORE = {}
 
 

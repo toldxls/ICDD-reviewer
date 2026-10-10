@@ -1,0 +1,51 @@
+{
+ "about": "How much the relative intensity of a mineral's two strongest Raman bands varies with crystal orientation, from RRUFF's oriented sets: per group, the median over samples (each with 3 orientations or more) of the ratio max/min of the two bands' height ratio. A reading aid (tools/rruff_windows.py --orientation). Aggregates only.",
+ "samples": 393,
+ "groups": {
+  "Si-O": {
+   "median": 4.5,
+   "p75": 7.5,
+   "samples": 182
+  },
+  "AsO4": {
+   "median": 7.5,
+   "p75": 11.6,
+   "samples": 9
+  },
+  "SiO4": {
+   "median": 3.0,
+   "p75": 9.0,
+   "samples": 84
+  },
+  "PO4": {
+   "median": 5.9,
+   "p75": 12.9,
+   "samples": 30
+  },
+  "Ti-O": {
+   "median": 3.7,
+   "p75": 6.1,
+   "samples": 3
+  },
+  "SO4": {
+   "median": 4.7,
+   "p75": 6.0,
+   "samples": 14
+  },
+  "CO3": {
+   "median": 3.5,
+   "p75": 4.3,
+   "samples": 40
+  },
+  "sulfide": {
+   "median": 6.2,
+   "p75": 8.7,
+   "samples": 17
+  },
+  "WO4": {
+   "median": 2.7,
+   "p75": 5.3,
+   "samples": 7
+  }
+ }
+}

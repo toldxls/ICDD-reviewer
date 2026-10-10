@@ -500,6 +500,10 @@ _CLASS_WORDS = {'phosphate', 'silicate', 'arsenate', 'sulfate', 'sulphate', 'car
     'antimonide', 'phosphide', 'oxyhydroxide', 'silicide', 'mineral', 'species', 'phase',
     'member', 'analogue', 'analog', 'variety', 'polytype'}
 
+_REL = re.compile(r'\b(isostructural|isotypic|homeotypic|isomorphous|structurally\s+related)'
+                  r'\s+(with|to)\s+(?:the\s+)?([A-Za-zÀ-ɏ]{4,})', re.I)        # 'isostructural with X': group 3 is the partner
+
+
 def _relation_subject_is_other(norm, rel_start, own, partner):
     """A structural-relation phrase ('… isotypic with X') is only about THIS entry when
     this species (or a pronoun) is its grammatical SUBJECT. A bibliography entry or a cited
@@ -623,8 +627,7 @@ def check3_classification(e, text):
             # (fluormacraeite is in the Paulkerrite Group; 'isostructural with paulkerrite'
             # adds nothing). Only an OUT-of-group structural relation is worth recording.
             grp_ctx = (_docx_group_text(e) + ' ' + mindat_gname).lower()
-            REL = re.compile(r'\b(isostructural|isotypic|homeotypic|isomorphous|structurally\s+related)'
-                             r'\s+(with|to)\s+(?:the\s+)?([A-Za-zÀ-ɏ]{4,})', re.I)
+            REL = _REL
             # Scan EVERY relation phrase, not just the first: the first occurrence is often in
             # the reference list / a cited title, where it describes a DIFFERENT mineral rather
             # than this species (tarutinoite: '… (2013) Terrywallaceite, AgPb(Sb,Bi)3S6, isotypic

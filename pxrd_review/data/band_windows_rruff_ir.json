@@ -1,0 +1,248 @@
+{
+ "about": "Where the bands of single-group minerals stand in a RRUFF library (the collection fetched from rruff.net by pxrd rruff --fetch, or a Thermo OMNIC copy): percentiles per group and mode, modes assigned by the ion geometry alone (tools/rruff_windows.py); the infrared collection, anchored on ν3 or ν1. Aggregates only.",
+ "sources": {
+  "ir": "rruff: 821 spectra walked, 821 RRUFF ids, 644 single-group"
+ },
+ "percentiles": [
+  5,
+  25,
+  50,
+  75,
+  95
+ ],
+ "trim_sigmas": 3.0,
+ "min_minerals": 3,
+ "technique": "ir",
+ "windows": {
+  "AsO4 ν1": {
+   "p5": 725,
+   "p25": 789,
+   "p50": 810,
+   "p75": 822,
+   "p95": 859,
+   "n": 25,
+   "minerals": 16,
+   "dropped": 2
+  },
+  "AsO4 ν3": {
+   "p5": 745,
+   "p25": 771,
+   "p50": 780,
+   "p75": 791,
+   "p95": 823,
+   "n": 22,
+   "minerals": 18,
+   "dropped": 1
+  },
+  "AsO4 ν4": {
+   "p5": 407,
+   "p25": 411,
+   "p50": 428,
+   "p75": 446,
+   "p95": 464,
+   "n": 27,
+   "minerals": 14,
+   "dropped": 1
+  },
+  "CO3 ν1": {
+   "p5": 1028,
+   "p25": 1051,
+   "p50": 1069,
+   "p75": 1090,
+   "p95": 1107,
+   "n": 40,
+   "minerals": 17,
+   "dropped": 5
+  },
+  "CO3 ν2": {
+   "p5": 829,
+   "p25": 850,
+   "p50": 862,
+   "p75": 872,
+   "p95": 877,
+   "n": 76,
+   "minerals": 32,
+   "dropped": 15
+  },
+  "CO3 ν3": {
+   "p5": 1362,
+   "p25": 1390,
+   "p50": 1398,
+   "p75": 1414,
+   "p95": 1435,
+   "n": 65,
+   "minerals": 33,
+   "dropped": 2
+  },
+  "CO3 ν4": {
+   "p5": 646,
+   "p25": 687,
+   "p50": 712,
+   "p75": 728,
+   "p95": 746,
+   "n": 83,
+   "minerals": 31,
+   "dropped": 6
+  },
+  "MoO4 ν1": {
+   "p5": 793,
+   "p25": 801,
+   "p50": 812,
+   "p75": 858,
+   "p95": 895,
+   "n": 3,
+   "minerals": 3,
+   "dropped": 0
+  },
+  "MoO4 ν3": {
+   "p5": 717,
+   "p25": 733,
+   "p50": 733,
+   "p75": 764,
+   "p95": 804,
+   "n": 5,
+   "minerals": 3,
+   "dropped": 1
+  },
+  "PO4 ν1": {
+   "p5": 812,
+   "p25": 908,
+   "p50": 949,
+   "p75": 985,
+   "p95": 1039,
+   "n": 123,
+   "minerals": 39,
+   "dropped": 0
+  },
+  "PO4 ν2": {
+   "p5": 408,
+   "p25": 415,
+   "p50": 436,
+   "p75": 453,
+   "p95": 473,
+   "n": 72,
+   "minerals": 32,
+   "dropped": 0
+  },
+  "PO4 ν3": {
+   "p5": 937,
+   "p25": 980,
+   "p50": 1001,
+   "p75": 1023,
+   "p95": 1063,
+   "n": 79,
+   "minerals": 45,
+   "dropped": 1
+  },
+  "PO4 ν4": {
+   "p5": 505,
+   "p25": 535,
+   "p50": 565,
+   "p75": 590,
+   "p95": 633,
+   "n": 183,
+   "minerals": 44,
+   "dropped": 0
+  },
+  "SO4 ν1": {
+   "p5": 916,
+   "p25": 982,
+   "p50": 988,
+   "p75": 1010,
+   "p95": 1059,
+   "n": 36,
+   "minerals": 17,
+   "dropped": 9
+  },
+  "SO4 ν2": {
+   "p5": 410,
+   "p25": 438,
+   "p50": 457,
+   "p75": 467,
+   "p95": 484,
+   "n": 29,
+   "minerals": 14,
+   "dropped": 0
+  },
+  "SO4 ν3": {
+   "p5": 998,
+   "p25": 1047,
+   "p50": 1079,
+   "p75": 1092,
+   "p95": 1134,
+   "n": 38,
+   "minerals": 27,
+   "dropped": 2
+  },
+  "SO4 ν4": {
+   "p5": 550,
+   "p25": 595,
+   "p50": 609,
+   "p75": 633,
+   "p95": 667,
+   "n": 76,
+   "minerals": 25,
+   "dropped": 4
+  },
+  "SiO4 ν1": {
+   "p5": 700,
+   "p25": 744,
+   "p50": 833,
+   "p75": 876,
+   "p95": 931,
+   "n": 161,
+   "minerals": 31,
+   "dropped": 1
+  },
+  "SiO4 ν2": {
+   "p5": 407,
+   "p25": 413,
+   "p50": 415,
+   "p75": 422,
+   "p95": 429,
+   "n": 5,
+   "minerals": 4,
+   "dropped": 0
+  },
+  "SiO4 ν3": {
+   "p5": 815,
+   "p25": 868,
+   "p50": 891,
+   "p75": 947,
+   "p95": 990,
+   "n": 77,
+   "minerals": 32,
+   "dropped": 3
+  },
+  "SiO4 ν4": {
+   "p5": 421,
+   "p25": 459,
+   "p50": 496,
+   "p75": 538,
+   "p95": 580,
+   "n": 205,
+   "minerals": 34,
+   "dropped": 0
+  },
+  "VO4 ν3": {
+   "p5": 679,
+   "p25": 729,
+   "p50": 795,
+   "p75": 848,
+   "p95": 885,
+   "n": 10,
+   "minerals": 4,
+   "dropped": 0
+  },
+  "WO4 ν3": {
+   "p5": 774,
+   "p25": 782,
+   "p50": 787,
+   "p75": 790,
+   "p95": 792,
+   "n": 7,
+   "minerals": 3,
+   "dropped": 1
+  }
+ }
+}

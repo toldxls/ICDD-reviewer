@@ -46,7 +46,7 @@ const SP = {
   sel: -1,                // the selected band of that region
   anchors: [],
   mode: 'pan',
-  layers: { raw: false, comps: true, ticks: true, stated: true, peaks: false, reverse: false, d2: false, oo: true, uo: false, lib: true },
+  layers: { raw: false, comps: true, ticks: true, stated: true, peaks: false, reverse: false, d2: false, oo: true, uo: false, lib: true, composite: true },
   busy: 0,
   gen: 0,                 // counts the spectra shown: a fit answering for the curve before is dropped
   pseq: 0,                // … and the requests for one: the last asked for is the one shown
@@ -337,6 +337,7 @@ function renderLibrary() {
   } else {
     const sum = el('summary', null, 'Band library — expected of ');
     sum.append(el('b', null, (L.name ? L.name + ', ' : ''), chemNodes(L.formula)), L.source === 'manuscript' ? ' (the manuscript’s formula)' : '', ': ' + (L.groups.map(g => g.name).join(', ') || 'no group of the library — its bands are metal–anion and lattice modes, below about 600 cm⁻¹'));
+    for (const b of compareButtons(L)) sum.append(' ', b);
     host.append(sum);
   }
   if (!L.rows.length) return;
@@ -344,22 +345,27 @@ function renderLibrary() {
   const fitted = []; for (const reg of SP.regions) for (const c of reg.comps) fitted.push(c.pos);
   fitted.sort((a, b) => a - b);
   const tb = el('table');
-  const anyRruff = L.rows.some(r => r.rruff);
-  tb.append(el('tr', null, ...['band', 'what', 'active in', 'free ion', 'range in minerals', 'published positions'].concat(anyRruff ? ['RRUFF spectra'] : [], ['stated in the manuscript', 'fitted here']).map(h => el('th', null, h))));
+  const anyRruff = L.rows.some(r => r.rruff), anyIr = L.rows.some(r => r.rruff_ir);
+  tb.append(el('tr', null, ...['band', 'what', 'active in', 'free ion', 'range in minerals', 'published positions'].concat(anyRruff ? ['RRUFF spectra'] : [], anyIr ? ['RRUFF infrared'] : [], ['stated in the manuscript', 'fitted here']).map(h => el('th', null, h))));
   let last = null, starred = false;
   for (const r of L.rows) {
     const p = r.published && r.published.of !== 'rruff' ? r.published : null, st = stated.filter(x => libHolds(r, x)), ft = fitted.filter(x => libHolds(r, x));
     const rr = r.rruff;
     const rruffTd = anyRruff ? [el('td', { title: rr ? 'the 5th–95th percentile of this band in the Raman spectra of minerals whose formula holds this group alone (a RRUFF library; modes by the ion’s geometry)' : 'fewer than three single-group minerals of the RRUFF library' },
       rr ? rr.p5 + '–' + rr.p95 + ', median ' + rr.p50 + ' (' + rr.minerals + ' minerals)' : '')] : [];
+    const ri = r.rruff_ir;
+    const irTd = anyIr ? [el('td', { title: ri ? 'the same percentiles on RRUFF’s infrared spectra of single-group minerals, anchored on ν3 or ν1' : 'no infrared measurement of this mode' },
+      ri ? ri.p5 + '–' + ri.p95 + ', median ' + ri.p50 + ' (' + ri.minerals + ' minerals)' : '')] : [];
     const sw = el('i', { class: 'sw' }); sw.style.background = rowColour(r);
-    const name = el('td', { title: r.source }, sw, labelNodes(r.label));
+    const g = L.groups.find(q => q.key === r.group), o = g && g.orientation;
+    const name = el('td', { title: r.source + (r.width ? '. Typical width in RRUFF\'s fits: ' + r.width.p5 + '–' + r.width.p95 + ' cm⁻¹ (median ' + r.width.p50 + ', ' + r.width.n + ' bands)' : '') +
+      (o ? '. In RRUFF the relative intensity of this group\'s two strongest bands varies up to ' + o.median + '× with crystal orientation (median over ' + o.samples + ' samples)' : '') }, sw, labelNodes(r.label));
     starred = starred || r.check;
     const tr = el('tr', { class: r.group !== last ? 'g' : '' }, name, el('td', { class: 'w' }, chemNodes(r.what)), el('td', null, r.active), el('td', null, r.free == null ? '' : String(r.free)),
       el('td', { title: r.source + (r.check ? ' — entered from memory of the source, not yet compared with it line by line' : '') }, r.lo + '–' + r.hi + (r.check ? ' *' : '')),
       el('td', { title: p ? 'the 5th–95th percentile of the positions published mineral descriptions assign to this mode' + (p.of === 'any' ? '' : ' (' + (p.of === 'ir' ? 'infrared' : 'Raman') + ' only)') : 'fewer than 8 papers of the corpus assign a band to this mode' },
         p ? p.p5 + '–' + p.p95 + ', median ' + p.p50 + ' (' + p.papers + ' papers)' : ''),
-      ...rruffTd,
+      ...rruffTd, ...irTd,
       el('td', { class: st.length ? '' : 'none' }, stated.length ? (st.join(', ') || '—') : ''),
       el('td', { class: ft.length ? '' : 'none' }, fitted.length ? (ft.map(x => x.toFixed(1)).join(', ') || '—') : ''));
     last = r.group; tb.append(tr);
@@ -367,6 +373,22 @@ function renderLibrary() {
   host.append(tb);
   host.append(el('div', { class: 'foot' }, (starred ? '* entered from memory of the source, not yet compared with it line by line (data/band_library.json). ' : '') +
     'A band can belong to any mode whose range holds it: the ranges of different groups overlap. Sources: ' + [...new Set(L.rows.map(r => r.source))].join('; ') + '.'));
+}
+
+// 'compare with RRUFF ▸': the mineral named (typed, or the manuscript's) and the species the manuscript sets its spectrum
+// beside, when the library on this machine has a spectrum of them — the overlay, nothing scored
+function compareButtons(L) {
+  const out = [];
+  if (!RR.choose || !RR.minerals) return out;
+  const names = [L.name].concat(L.comparisons || []).filter(Boolean);
+  for (const n of names) {
+    const m = RR.byName[n.toLowerCase()];
+    if (!m) continue;
+    const b = el('button', { class: 'cmp', title: 'Draw the RRUFF spectrum of ' + m.name + ' under the curve (' + m.spectra.length + ' spectr' + (m.spectra.length === 1 ? 'um' : 'a') + ' in the library)' + (n === L.name ? '' : ' — a species the manuscript compares with') }, 'compare with RRUFF ' + m.name + ' ▸');
+    b.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); RR.choose(m.name, 'overlay'); });
+    out.push(b);
+  }
+  return out;
 }
 
 const sameCurve = (a, b) => a.y.length === b.y.length && a.x[0] === b.x[0] && a.y.every((v, i) => v === b.y[i]);
@@ -565,6 +587,25 @@ function draw() {
     // the reference's own bands: short ticks at the foot of the plot, in the overlay's colour (a reading aid, nothing is matched)
     for (const p of o.peaks || []) if (p >= vx0 && p <= vx1)
       g.append(sv('line', { class: 'overlay ref-tick', x1: X(p), x2: X(p), y1: M.t + ph - 7, y2: M.t + ph }, sv('title', null, 'a band of ' + o.name + ' at ' + p + ' cm⁻¹')));
+  }
+  // the composite spectrum of each group shown (the median of RRUFF's single-group minerals): a faint area in the group's
+  // hue, scaled like the overlay — what a sulfate looks like; a reading aid, never a finding
+  if (SP.layers.composite && SP.lib && SP.lib.composites && SP.lib.rows.length) {
+    const cur = SP.layers.raw ? d.cleaned : d.y;
+    let cmax = 0; for (let k = i0; k <= i1; k++) cmax = Math.max(cmax, cur[k]);
+    for (const [key, c] of Object.entries(SP.lib.composites)) {
+      const xs = [], ys = [];
+      const sm = k => { let n = 0, t = 0; for (let j = k - 3; j <= k + 3; j++) if (j >= 0 && j < c.y.length && c.y[j] != null) { t += c.y[j]; n++; } return n ? t / n : null; };   // a 14 cm⁻¹ running mean: an envelope, not the medians' jitter
+      for (let k = 0; k < c.y.length; k++) { const v = c.x0 + k * c.dx, y = sm(k); if (v >= vx0 && v <= vx1 && y != null) { xs.push(v); ys.push(y); } }
+      if (xs.length < 3) continue;
+      let omax = 0; for (const v of ys) omax = Math.max(omax, v);
+      const s = omax > 0 ? cmax / omax : 1;
+      let dd = 'M' + X(xs[0]) + ' ' + Y(0);
+      for (let k = 0; k < xs.length; k++) dd += 'L' + X(xs[k]) + ' ' + Y(ys[k] * s);
+      dd += 'L' + X(xs[xs.length - 1]) + ' ' + Y(0) + 'Z';
+      const [h, sat] = groupHue(key);
+      g.append(sv('path', { class: 'composite', d: dd, fill: 'hsl(' + h + ' ' + sat + '% 57%)' }, sv('title', null, 'the median RRUFF spectrum of ' + c.minerals + ' ' + key + ' minerals (each normalised, one per mineral) — a reading aid')));
+    }
   }
   // fits: bands, their sum, the residual; the current region's bands carry handles
   const cv = SP.regions.map(r => r.comps.length ? curves(r) : null);

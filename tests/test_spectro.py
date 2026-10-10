@@ -428,6 +428,104 @@ class Table(unittest.TestCase):
         self.assertTrue(any(ln.startswith('water:') for ln in lines))                              # the table's bands count: an O–H stretch stated, no bend
 
 
+_ISO = {}
+
+
+def setUpModule():
+    """The machine's own RRUFF store and OMNIC copy stay out: every check_lines here runs with an empty store folder."""
+    import tempfile
+    from pxrd_review import omnic_lib as OL, rruff as RR
+    _ISO['tmp'] = tempfile.mkdtemp(prefix='spectro_rr_')
+    _ISO['env'] = (os.environ.get('PXRD_RRUFF_STORE'), os.environ.pop('PXRD_RRUFF_DIR', None))
+    _ISO['ol'] = (OL.REMEMBER, OL.SEARCH_ROOTS)
+    os.environ['PXRD_RRUFF_STORE'] = os.path.join(_ISO['tmp'], 'nostore')
+    OL.REMEMBER, OL.SEARCH_ROOTS = os.path.join(_ISO['tmp'], 'remember.txt'), ()
+    OL._OPEN.clear(); RR.close_stores()
+
+
+def tearDownModule():
+    import shutil
+    from pxrd_review import omnic_lib as OL, rruff as RR
+    env, dir_ = _ISO['env']
+    if env is None:
+        os.environ.pop('PXRD_RRUFF_STORE', None)
+    else:
+        os.environ['PXRD_RRUFF_STORE'] = env
+    if dir_:
+        os.environ['PXRD_RRUFF_DIR'] = dir_
+    OL.REMEMBER, OL.SEARCH_ROOTS = _ISO['ol']
+    OL._OPEN.clear(); RR.close_stores()
+    shutil.rmtree(_ISO['tmp'], ignore_errors=True)
+
+
+PRE = 'Testite, a new mineral. ' + 'The mineral occurs as yellow plates in a granite pegmatite of the Erongo region, where it was found in 2024. ' * 4   # a title and first lines before the spectroscopy
+
+
+class RRUFFBeside(unittest.TestCase):
+    """RRUFF's reference bands beside the paper's own (rruff_lines), and the comparison species a paper names."""
+    @classmethod
+    def setUpClass(cls):
+        from tests.rruff_fixture import member, gauss, write_store, GRID, BROAD
+        cls.store = os.path.join(_ISO['tmp'], 'store')
+        write_store(cls.store, {
+            'excellent_unoriented': [member('Testite', 'R999001', '532', 'processed', GRID, gauss(GRID, [832, 990, 1010, 400], [100, 40, 30, 20])),
+                                     member('Autunite', 'R050612', '532', 'processed', GRID, gauss(GRID, [835, 990, 1120], [100, 40, 10])),
+                                     member('Torbernite', 'R050306', '780', 'processed', GRID, gauss(GRID, [830, 985], [100, 40]))],
+            'LR-Raman': [member('Autunite', 'R050612', '532', 'processed', BROAD, gauss(BROAD, [835, 3420], [100, 25], w=14))]})
+        os.environ['PXRD_RRUFF_STORE'] = cls.store
+
+    @classmethod
+    def tearDownClass(cls):
+        from pxrd_review import rruff as RR
+        RR.close_stores(); os.environ['PXRD_RRUFF_STORE'] = os.path.join(_ISO['tmp'], 'nostore')
+
+    def test_comparison_species(self):
+        t = (PRE + 'The ideal formula is Ca(UO2)2(PO4)2·11H2O. The Raman spectrum shows bands at 832, 990 and 3450 cm-1. '
+             'The spectrum is similar to that of autunite and torbernite (Frost et al. 2005). Quartz was used as a standard for calibration. '
+             'Testite is isostructural with meta-autunite. The composite spectrum is quite similar to the definite spectrum of the type material. '
+             'The infrared spectrum resembles that of uranophane and of Tęstite-(Ce). A davidite-like spectrum was also compared. '
+             'The reflectance spectrum is close to that of galena. The spectrum of gypsum was recorded for comparison. '
+             'The Raman bands are tremolite-like. Cell parameters of related minerals: anhydrite 6.99 6.24 7.00 90 90 90 1.0 2.1 3.3 4.1 5.0 6.2 7.7 8.1 9.4 10.2 11.0 12.3 compared. '
+             'The spectrum was compared in a diamond anvil cell. The bands are similar to those of a christelite-like phase. The spectrum agrees with α-quartz-type GeO2. '
+             + 'Ewingite is a new mineral described here too. The Raman spectrum of testite is similar to that of ewingite. '
+             'The optical absorption spectra are similar to those of riebeckite. Calcite impurities are similar. The bands resemble those of rutile-like GeO2.')
+        got = S.comparison_species(t, 'testite')
+        self.assertEqual([sp for sp, _s in got], ['autunite', 'torbernite', 'uranophane', 'tremolite'])
+        # quartz: no comparison word; meta-autunite: not a spectroscopy sentence; COMMON words; the own stem (diacritics folded); a root ('davidite')
+        # never; galena: reflectance; gypsum: BEFORE the comparison word; anhydrite: a table flattened into a sentence; diamond: an anvil;
+        # christelite: a '-like phase'; quartz: α-quartz-type GeO2; ewingite: called a new mineral — one the paper describes; riebeckite: optical
+        # absorption; calcite: an impurity; rutile: a '-like' structure
+        self.assertTrue(got[0][1].startswith('The spectrum is similar'))
+        self.assertEqual(S.comparison_species('The sample was heated.', 'testite'), [])
+        # a second mineral the paper describes (a formula attributed to it) is not a comparison species
+        t2 = 'Testite and autunite are two new minerals. The Raman spectra of testite and autunite are compared with that of torbernite.'
+        self.assertEqual([sp for sp, _s in S.comparison_species(t2, 'testite', forms=[('Ca(UO2)2(PO4)2', 'autunite', 'ideal')])], ['torbernite'])
+
+    def test_rruff_lines_and_the_section(self):
+        own = S.bands('The Raman spectrum of testite shows bands at 832, 990, 1105 and 3430 cm-1. ')
+        lines = S.rruff_lines(own, 'testite', [('autunite', 'similar to autunite'), ('nosuchite', 'x')])
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith('rruff: Testite (R999001, 532 nm, excellent, unoriented): bands at 400, 832, 990, 1010 cm⁻¹; the paper’s 832, 990 within 6 of one'), lines[0])
+        self.assertIn('1105, 3430 near none (information)', lines[0])
+        self.assertIn('3420', lines[1]); self.assertIn('1105, 3430 within 15', lines[1])                 # the broad scan's O–H band, since the paper's bands reach the O–H region
+        self.assertEqual(S.rruff_lines([], 'testite'), [])
+        got = S.check_lines(PRE + 'The Raman spectrum of testite shows bands at 832, 990, 1105 and 3450 cm-1. The spectrum is similar to that of autunite.', {'name': 'testite'})
+        self.assertIn('RRUFF spectra', got[0]); self.assertEqual(sum(1 for ln in got if ln.startswith('rruff:')), 2)
+        from pxrd_review import proposal as PR
+        from pxrd_review.gui import review_gui as G
+        for ln in lines:
+            self.assertFalse(PR.is_flag(ln), ln); self.assertEqual(G._calc_kind(ln), 'calcinfo', ln)
+        # with no store there is no line and the head does not mention RRUFF
+        os.environ['PXRD_RRUFF_STORE'] = os.path.join(_ISO['tmp'], 'nostore')
+        try:
+            from pxrd_review import rruff as RR
+            RR.close_stores()
+            got = S.check_lines(PRE + 'The Raman spectrum of testite shows bands at 832, 990, 1105 and 3450 cm-1. The spectrum is similar to that of autunite.', {'name': 'testite'})
+            self.assertFalse(got)                                                      # nothing else to say of this text: no section at all
+        finally:
+            os.environ['PXRD_RRUFF_STORE'] = self.store
+
+
 class Wording(unittest.TestCase):
     """Two regexes decide from a line's WORDS whether it is a finding (proposal._FLAG for the Word comments,
     review_gui._CALC_FLAG for the GUI): every finding must match both, every information line neither."""

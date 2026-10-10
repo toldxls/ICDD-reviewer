@@ -370,7 +370,7 @@ class SpectrumWindow(unittest.TestCase):
 
     def test_a_rruff_spectrum_pulled_up_beside_the_folder(self):
         # a RRUFF library beside the open folder (<folder>/RRUFF): its minerals listed, a spectrum opened here, its curve for the overlay
-        from tests.test_rruff_windows import write_library, gauss
+        from tests.rruff_fixture import write_library, omnic_gauss as gauss
         from pxrd_review import omnic_lib as OL
         d = os.path.join(self.tmp, 'RRUFF'); os.makedirs(d, exist_ok=True)
         write_library(d, [('QuartzR040031_processed', 'field', gauss([464, 206], [100, 30])), ('QuartzR040031_raw', 'field', gauss([464, 206], [100, 30])),
@@ -446,7 +446,7 @@ class SpectrumWindow(unittest.TestCase):
         self.assertTrue(all(('PO4' in x['formula'] or 'PO3OH' in x['formula']) and 'UO2' in x['formula'] for x in sp['species']))   # an acid phosphate is a phosphate
         self.assertEqual(self._post('/api/sp/species', {'groups': []})['total'], 0)
         self.assertEqual(self._post('/api/sp/species', {'groups': ['PO4'], 'limit': 5})['species'].__len__(), 5)
-        from tests.test_rruff_windows import write_library, gauss
+        from tests.rruff_fixture import write_library, omnic_gauss as gauss
         from pxrd_review import omnic_lib as OL
         d = os.path.join(self.tmp, 'RRUFF'); os.makedirs(d, exist_ok=True)
         write_library(d, [('AutuniteR050220_processed', 'field', gauss([830, 990], [100, 30])), ('AutuniteR050220_raw', 'field', gauss([830, 990], [100, 30]))])
@@ -463,7 +463,7 @@ class SpectrumWindow(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True); OL._OPEN.clear()
 
     def test_the_rruff_library_is_found_wherever_the_folder_is(self):
-        from tests.test_rruff_windows import write_library, gauss
+        from tests.rruff_fixture import write_library, omnic_gauss as gauss
         from pxrd_review import omnic_lib as OL
         home = tempfile.mkdtemp(prefix='rrhome_'); mem = os.path.join(home, 'remember.txt')
         lib = os.path.join(home, 'Desktop', 'Minerals', 'RRUFF'); os.makedirs(lib)
