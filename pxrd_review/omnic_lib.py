@@ -52,6 +52,15 @@ class Library(object):
         r = self._lbd[self._hlen + i * self._rec: self._hlen + i * self._rec + 4 * self.npts]
         return list(struct.unpack('<%df' % self.npts, r))
 
+    def xy(self, i):
+        """(x, y) of one record — the shape the fetched store (pxrd_review.rruff.Store) has."""
+        return self.x, self.spectrum(i)
+
+    def meta(self, i):
+        mineral, rid, kind = split_name(self.names[i])
+        return {'name': mineral, 'id': rid, 'kind': kind or 'processed', 'laser': laser_of(self.names[i]), 'quality': '', 'orient': '',
+                'technique': 'raman', 'chem': '', 'locality': '', 'source': 'a Thermo OMNIC copy of the RRUFF library (2007)', 'url': '', 'set': 'omnic'}
+
     def entries(self):
         """[(index, mineral, id, kind, laser)] for every record with a RRUFF id."""
         out = []
@@ -88,13 +97,91 @@ def laser_of(name):
     return (m.group(1) or m.group(2)) if m else ''
 
 
+def is_library(folder):
+    """Does `folder` hold the OMNIC pair RRUFFLib.lbd + RRUFFLib.lbt?"""
+    return bool(folder) and all(os.path.isfile(os.path.join(folder, fn)) for fn in ('RRUFFLib.lbd', 'RRUFFLib.lbt'))
+
+
+def _remember_file():
+    from pxrd_review import paths as P
+    return REMEMBER or os.path.join(P.cache_dir(), 'rruff_dir.txt')
+
+
+REMEMBER = None                 # the file the library's folder is remembered in (None: <cache_dir>/rruff_dir.txt; a test points it elsewhere)
+SEARCH_ROOTS = ('~/Desktop', '~/Documents', '~/Downloads', '~')     # looked through two levels deep for a folder named RRUFF
+SEARCH_MAX = 400                # folders listed at most in that search: it must stay instant
+
+
+def remembered():
+    """The folder a library was last found in, if it still holds one."""
+    try:
+        with open(_remember_file(), encoding='utf-8') as f:
+            folder = f.read().strip()
+    except OSError:
+        return None
+    return folder if is_library(folder) else None
+
+
+def _is_temp(folder):
+    import tempfile
+    t = os.path.realpath(tempfile.gettempdir()); f = os.path.realpath(folder)
+    return f == t or f.startswith(t + os.sep)
+
+
+def remember(folder):
+    """Keep the library's folder for every later start, whatever folder is open then (never a temp folder: a test's)."""
+    if not folder or (REMEMBER is None and _is_temp(folder)):
+        return
+    try:
+        path = _remember_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(os.path.abspath(folder) + '\n')
+    except OSError:
+        pass
+
+
+def _search():
+    """A folder named RRUFF holding the pair, up to two levels under the usual places — at most SEARCH_MAX folders listed."""
+    seen = 0
+    for root in SEARCH_ROOTS:
+        root = os.path.expanduser(root)
+        try:
+            first = sorted(os.listdir(root))
+        except OSError:
+            continue
+        for a in first:
+            if a.startswith('.'):
+                continue
+            pa = os.path.join(root, a)
+            if a.lower() == 'rruff' and is_library(pa):
+                return pa
+            if not os.path.isdir(pa):
+                continue
+            seen += 1
+            if seen > SEARCH_MAX:
+                return None
+            try:
+                second = os.listdir(pa)
+            except OSError:
+                continue
+            for b in second:
+                if b.lower() == 'rruff' and is_library(os.path.join(pa, b)):
+                    return os.path.join(pa, b)
+    return None
+
+
 def find_library(near=None):
-    """The folder holding RRUFFLib.lbd + .lbt: $PXRD_RRUFF_DIR, else 'RRUFF' beside `near` or any of its parents (four
-    levels), else ~/RRUFF; None when there is none."""
-    cands = []
+    """The folder holding RRUFFLib.lbd + .lbt: $PXRD_RRUFF_DIR, else the folder it was found in before, else 'RRUFF' beside
+    `near` or any of its parents (four levels), else ~/RRUFF, else a RRUFF folder up to two levels under Desktop / Documents /
+    Downloads / home. Once found anywhere it is remembered, so it is there whatever folder is opened next. None when there is none."""
     env = os.environ.get('PXRD_RRUFF_DIR')
     if env:
-        cands.append(env)
+        return env if is_library(env) else None
+    hit = remembered()
+    if hit:
+        return hit
+    cands = []
     if near:
         p = os.path.abspath(near)
         for _k in range(5):
@@ -104,10 +191,26 @@ def find_library(near=None):
                 break
             p = parent
     cands.append(os.path.join(os.path.expanduser('~'), 'RRUFF'))
-    for c in cands:
-        if os.path.isfile(os.path.join(c, 'RRUFFLib.lbd')) and os.path.isfile(os.path.join(c, 'RRUFFLib.lbt')):
+    found = next((c for c in cands if is_library(c)), None) or _search()
+    if found:
+        remember(found)
+    return found
+
+
+def set_library(folder):
+    """A folder named by hand (the window's 'RRUFF library…'): the folder itself, or its RRUFF subfolder -> the folder kept;
+    ValueError says what is wrong."""
+    typed = (folder or '').strip().strip('"').strip("'")
+    if not typed:
+        raise ValueError('no such folder: nothing typed')
+    folder = os.path.abspath(os.path.expanduser(typed))
+    if not os.path.isdir(folder):
+        raise ValueError('no such folder: %s' % folder)
+    for c in (folder, os.path.join(folder, 'RRUFF')):
+        if is_library(c):
+            remember(c)
             return c
-    return None
+    raise ValueError('%s holds no RRUFFLib.lbd + RRUFFLib.lbt (the Thermo OMNIC library pair)' % folder)
 
 
 _OPEN = {}

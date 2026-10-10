@@ -97,6 +97,7 @@ function opts() {
     despike: $('#sp-despike').checked, threshold: num('sp-threshold'), resolution: num('sp-resolution'),
     baseline: $('#sp-baseline').value, anchors: SP.anchors, lam: Math.pow(10, num('sp-lam') == null ? 7 : num('sp-lam')), p: num('sp-p'), width: num('sp-width'),
     cif: $('#sp-cif').value, ms: $('#sp-ms').value, laser: num('sp-laser'), formula: $('#sp-formula').value.trim(),
+    groups: SP.pick,                                        // the groups picked by hand (null: the chemistry's own)
   };
 }
 // … and how a region is to be fitted
@@ -217,12 +218,29 @@ const setReverse = on => setLayer('reverse', on);
 // name), else the one the manuscript beside the spectrum states. SP.lib is the server's answer for (typed, manuscript,
 // kind): the groups, and per mode the literature's range and the published window. It is drawn over the plot, listed
 // under the fitted bands, read by the pointer, and — on the server — names what each fitted band can be.
-const LIB_COLOURS = ['#4ea1ff', '#e6a23c', '#5fbf5f', '#e56bb0', '#9b8cff', '#3cc8c8', '#d9705a'];
+// One colour per group of the library — fixed, so sulfate is always yellow and phosphate always orange whatever else is
+// drawn: [hue, saturation]. The oxoanions take the wheel at full saturation, each its own hue, the commonest farthest
+// apart; the metal–oxygen bond groups (P–OH, Si–O, V–O …) a muted version of their anion's hue. A key not listed takes
+// a hue by its place in the pick.
+const LIB_HUES = { AsO4: [0, 80], MoO4: [14, 80], PO4: [28, 80], TeO3: [41, 80], SO4: [55, 80], TeO6: [69, 80], SO3: [83, 80], UO2: [97, 80],
+  CrO4: [111, 80], BO3: [124, 80], BO4: [138, 80], sulfide: [152, 60], CO3: [166, 80], C2O4: [180, 80], SiO4: [194, 80], H3O: [208, 80],
+  H2O: [221, 80], WO4: [235, 80], OH: [249, 80], IO3: [263, 80], NO3: [277, 80], SeO3: [291, 80], VO4: [304, 80], NH4: [318, 80],
+  SeO4: [332, 80], AsO3: [346, 80],
+  'P-OH': [28, 40], 'As-OH': [0, 40], 'V-O': [304, 40], 'Si-O': [194, 40], 'Mo-O': [14, 40], 'W-O': [235, 40], 'Ti-O': [180, 40], 'Nb-O': [263, 40] };
+const LIB_FALLBACK = [212, 32, 125, 325, 258, 182, 8, 58, 150, 290, 100, 350];
+const SHADES = [74, 62, 51, 42];                         // lightness of a group's 1st, 2nd, 3rd, 4th mode (the library's order: ν1, ν3, ν4, ν2)
 const LANE = 20;                                         // the height of one row of library bars over the plot
 const kindNow = () => $('#sp-kind').value || (SP.d && SP.d.kind) || '';
 const libSpan = r => [Math.min(r.lo, r.published ? r.published.p5 : r.lo), Math.max(r.hi, r.published ? r.published.p95 : r.hi)];
 const libHolds = (r, x) => { const [a, b] = libSpan(r); return x >= a && x <= b; };
-const libColour = r => LIB_COLOURS[Math.max(0, SP.lib.groups.findIndex(g => g.key === r.group)) % LIB_COLOURS.length];
+const groupHue = key => key in LIB_HUES ? LIB_HUES[key] : [LIB_FALLBACK[Math.max(0, (SP.lib ? SP.lib.groups : []).findIndex(g => g.key === key)) % LIB_FALLBACK.length], 80];
+const groupColour = key => { const [h, s] = groupHue(key); return 'hsl(' + h + ' ' + s + '% 57%)'; };
+const libColour = r => groupColour(r.group);
+// the modes of one group in four shades of its hue — ν1 light, ν3 mid, ν4 and ν2 dark (r.k: the mode's place in the library)
+const rowColour = r => { const [h, s] = groupHue(r.group); return 'hsl(' + h + ' ' + s + '% ' + SHADES[Math.min(SHADES.length - 1, r.k || 0)] + '%)'; };
+// an ion, a formula or a mode label as a chemist writes it — chem.js: '(SO4)2−' → (SO<sub>4</sub>)<sup>2−</sup>, 'SO4 ν3' → SO<sub>4</sub> ν3
+const ionNodes = text => chemNodes(text), labelNodes = label => chemNodes(label);
+const chemList = (items, sep = ', ') => { const f = document.createDocumentFragment(); items.forEach((t, i) => { if (i) f.append(sep); f.append(chemNodes(t)); }); return f; };
 // the chemistry typed belongs to the folder's mineral, not to one spectrum of it: kept per folder, back at the next start
 const CHEM = 'pxrd-sp-chem';
 function keepChem() {
@@ -235,18 +253,36 @@ function keepChem() {
 function recallChem() {
   try { const v = JSON.parse(localStorage.getItem(CHEM) || '{}')[(SP.state && SP.state.folder) || '']; if (v && !$('#sp-formula').value) $('#sp-formula').value = v; } catch (_) {}
 }
+// the groups picked by hand (SP.pick: null = the chemistry's own, [] = none) belong to the folder too
+const PICK = 'pxrd-sp-pick';
+function keepPick() {
+  try {
+    const all = JSON.parse(localStorage.getItem(PICK) || '{}'), k = (SP.state && SP.state.folder) || '';
+    if (SP.pick) all[k] = SP.pick; else delete all[k];
+    localStorage.setItem(PICK, JSON.stringify(all));
+  } catch (_) {}
+}
+function recallPick() {
+  try { const v = JSON.parse(localStorage.getItem(PICK) || '{}')[(SP.state && SP.state.folder) || '']; if (Array.isArray(v)) SP.pick = v.map(String); } catch (_) {}
+  pickSummary();
+}
+// 'Chem search' says when a pick is in force, and how many groups it holds
+function pickSummary() {
+  const sum = $('#sp-pick > summary'), lab = $('#sp-pick-label'); if (!sum || !lab) return;
+  lab.textContent = 'Chem search' + (SP.pick ? ' (' + SP.pick.length + ')' : ''); sum.classList.toggle('picked', !!SP.pick);
+}
 async function loadLib() {
-  const typed = $('#sp-formula').value.trim(), key = JSON.stringify([typed, $('#sp-ms').value, kindNow()]);
+  const typed = $('#sp-formula').value.trim(), key = JSON.stringify([typed, $('#sp-ms').value, kindNow(), SP.pick]);
   if (SP.lib && SP.lib.key === key) return;
   const seq = SP.libSeq = (SP.libSeq || 0) + 1;
   try {
-    const r = await api('/api/sp/bands', { formula: typed, ms: $('#sp-ms').value, kind: kindNow() });
+    const r = await api('/api/sp/bands', { formula: typed, ms: $('#sp-ms').value, kind: kindNow(), groups: SP.pick });
     if (seq !== SP.libSeq) return;
-    const was = SP.lib ? SP.lib.formula : '';
+    const was = SP.lib ? JSON.stringify([SP.lib.formula, SP.lib.groups.map(g => g.key)]) : '';
     SP.lib = Object.assign(r, { key });
     $('#sp-formula').placeholder = r.source === 'manuscript' && r.formula ? r.formula : 'chemistry: formula or mineral';
-    draw(); renderLibrary();
-    if (was !== r.formula) for (const reg of SP.regions) if (reg.fit && reg.comps.length && !reg.dirty) relabel(reg);
+    draw(); renderLibrary(); renderPicker();
+    if (was !== JSON.stringify([r.formula, r.groups.map(g => g.key)])) for (const reg of SP.regions) if (reg.fit && reg.comps.length && !reg.dirty) relabel(reg);
   } catch (e) { status(e.message, true); }
 }
 // the chemistry changed: what each fitted band is expected to be is asked again — nothing is fitted, nothing moves
@@ -282,13 +318,21 @@ function renderLibrary() {
     host.append(el('summary', null, 'Band library — no species named ‘' + L.name + '’ in the local Mindat snapshot: check the spelling, or type its formula'));
     return;
   }
-  if (!L || !L.formula) {
-    host.append(el('summary', null, 'Band library — type the mineral’s formula or its name in ‘chemistry’ above (or choose the manuscript): the bands its groups are expected to give are listed here and drawn over the plot'));
+  if (L && L.source === 'picked') {
+    const sum = el('summary', null, 'Band library — expected of the groups picked: ');
+    sum.append(el('b', null, L.groups.length ? chemList(L.groups.map(g => g.key)) : 'none'),
+      ...(L.formula ? [' (the chemistry ' + (L.name ? L.name + ', ' : ''), chemNodes(L.formula), ' holds ', L.own.length ? chemList(L.own) : 'no group of the library', ')'] : []),
+      L.groups.length ? '' : ' — pick a group under ‘Chem search’ over the plot, or go back to the chemistry’s own');
+    host.append(sum);
+    if (!L.rows.length) return;
+  } else if (!L || !L.formula) {
+    host.append(el('summary', null, 'Band library — type the mineral’s formula or its name in ‘chemistry’ above (or choose the manuscript), or pick groups by hand under ‘Chem search’ over the plot: the bands those groups are expected to give are listed here and drawn over the plot'));
     return;
+  } else {
+    const sum = el('summary', null, 'Band library — expected of ');
+    sum.append(el('b', null, (L.name ? L.name + ', ' : ''), chemNodes(L.formula)), L.source === 'manuscript' ? ' (the manuscript’s formula)' : '', ': ' + (L.groups.map(g => g.name).join(', ') || 'no group of the library — its bands are metal–anion and lattice modes, below about 600 cm⁻¹'));
+    host.append(sum);
   }
-  const sum = el('summary', null, 'Band library — expected of ');
-  sum.append(el('b', null, (L.name ? L.name + ', ' : '') + L.formula), L.source === 'manuscript' ? ' (the manuscript’s formula)' : '', ': ' + (L.groups.map(g => g.name).join(', ') || 'no group of the library — its bands are metal–anion and lattice modes, below about 600 cm⁻¹'));
-  host.append(sum);
   if (!L.rows.length) return;
   const stated = SP.d ? [...new Set(SP.d.stated.map(b => b.pos))].sort((a, b) => a - b) : [];
   const fitted = []; for (const reg of SP.regions) for (const c of reg.comps) fitted.push(c.pos);
@@ -302,10 +346,10 @@ function renderLibrary() {
     const rr = r.rruff;
     const rruffTd = anyRruff ? [el('td', { title: rr ? 'the 5th–95th percentile of this band in the Raman spectra of minerals whose formula holds this group alone (a RRUFF library; modes by the ion’s geometry)' : 'fewer than three single-group minerals of the RRUFF library' },
       rr ? rr.p5 + '–' + rr.p95 + ', median ' + rr.p50 + ' (' + rr.minerals + ' minerals)' : '')] : [];
-    const sw = el('i', { class: 'sw' }); sw.style.background = libColour(r);
-    const name = el('td', { title: r.source }, sw, r.label);
+    const sw = el('i', { class: 'sw' }); sw.style.background = rowColour(r);
+    const name = el('td', { title: r.source }, sw, labelNodes(r.label));
     starred = starred || r.check;
-    const tr = el('tr', { class: r.group !== last ? 'g' : '' }, name, el('td', { class: 'w' }, r.what), el('td', null, r.active), el('td', null, r.free == null ? '' : String(r.free)),
+    const tr = el('tr', { class: r.group !== last ? 'g' : '' }, name, el('td', { class: 'w' }, chemNodes(r.what)), el('td', null, r.active), el('td', null, r.free == null ? '' : String(r.free)),
       el('td', { title: r.source + (r.check ? ' — entered from memory of the source, not yet compared with it line by line' : '') }, r.lo + '–' + r.hi + (r.check ? ' *' : '')),
       el('td', { title: p ? 'the 5th–95th percentile of the positions published mineral descriptions assign to this mode' + (p.of === 'any' ? '' : ' (' + (p.of === 'ir' ? 'infrared' : 'Raman') + ' only)') : 'fewer than 8 papers of the corpus assign a band to this mode' },
         p ? p.p5 + '–' + p.p95 + ', median ' + p.p50 + ' (' + p.papers + ' papers)' : ''),
@@ -512,6 +556,9 @@ function draw() {
     for (let k = i0; k <= i1; k++) cmax = Math.max(cmax, cur[k]);
     const s = omax > 0 ? cmax / omax : 1;
     if (ob > oa) g.append(sv('path', { class: 'overlay', d: path(o.x, o.y.map(v => v * s), oa, ob) }, sv('title', null, o.name + ' — scaled to the curve in view')));
+    // the reference's own bands: short ticks at the foot of the plot, in the overlay's colour (a reading aid, nothing is matched)
+    for (const p of o.peaks || []) if (p >= vx0 && p <= vx1)
+      g.append(sv('line', { class: 'overlay ref-tick', x1: X(p), x2: X(p), y1: M.t + ph - 7, y2: M.t + ph }, sv('title', null, 'a band of ' + o.name + ' at ' + p + ' cm⁻¹')));
   }
   // fits: bands, their sum, the residual; the current region's bands carry handles
   const cv = SP.regions.map(r => r.comps.length ? curves(r) : null);
@@ -617,7 +664,7 @@ function draw() {
     const gl = sv('g', { class: 'lib' }), clipX = v => Math.max(M.l, Math.min(M.l + pw, X(v)));
     const both = SP.lib.rows.some(r => r.label === 'OH stretch');      // one bar for the water and the hydroxyl stretch (libLanes left the other out)
     for (const it of lanes) {
-      const r = it.r, col = libColour(r), yb = 10 + RULER * rulers.length + LANE * it.lane + 15, p = r.published;
+      const r = it.r, col = rowColour(r), yb = 10 + RULER * rulers.length + LANE * it.lane + 15, p = r.published;
       const gq = sv('g', null, sv('title', null, r.label + ' — ' + r.what + '. In minerals ' + r.lo + '–' + r.hi + ' cm⁻¹' + (r.check ? ' (from memory of the source: check)' : '') +
         (r.free != null ? '; free ion ' + r.free : '') + (p ? '; published positions ' + p.p5 + '–' + p.p95 + ', median ' + p.p50 + ' (' + p.papers + ' papers)' : '') + '; active in ' + r.active + '. ' + r.source));
       gq.append(sv('line', { class: 'range', x1: clipX(r.lo), x2: clipX(r.hi), y1: yb, y2: yb, stroke: col }));
@@ -626,7 +673,7 @@ function draw() {
         if (p.p50 >= vx0 && p.p50 <= vx1) gq.append(sv('line', { class: 'med', x1: X(p.p50), x2: X(p.p50), y1: yb - 2, y2: yb + 2 }));
       }
       if (r.free != null && r.free >= vx0 && r.free <= vx1) gq.append(sv('path', { d: 'M' + X(r.free) + ' ' + (yb - 4) + 'l3 4l-3 4l-3 -4z', fill: col }));
-      gq.append(sv('text', { x: Math.max(M.l + 2, Math.min(M.l + pw - 2, X(it.mid))), y: yb - 5, 'text-anchor': 'middle', fill: col }, both && r.label === 'OH stretch' ? 'O–H stretch' : r.label));
+      gq.append(chemSvg(sv('text', { x: Math.max(M.l + 2, Math.min(M.l + pw - 2, X(it.mid))), y: yb - 5, 'text-anchor': 'middle', fill: col }), both && r.label === 'OH stretch' ? 'O–H stretch' : r.label));
       gl.append(gq);
     }
     svg.append(gl);
@@ -650,7 +697,13 @@ function readout(ev) {
   if (ofFormula) { for (const b of [false, true]) for (const r of SP.lib.rows) if (r.broad === b && libHolds(r, x)) ws.push(r.label); }     // of this chemistry: the modes standing on their own first
   else for (const [name, e] of Object.entries(SP.state.windows || {})) { const w = e.any; if (w && x >= w.p5 && x <= w.p95) ws.push(name); }
   const ds = rulersOn().map(r => [r, rulerAt(r, x)]).filter(p => p[1] != null).map(([r, v]) => r.name.replace(' Å', '') + ' ' + v.toFixed(r.key === 'oo' ? 2 : 3) + ' Å');
-  $('#sp-readout').textContent = x.toFixed(1) + ' cm⁻¹   ' + fmt((SP.layers.raw ? SP.d.cleaned : SP.d.y)[i]) + (ds.length ? '   ' + ds.join(' · ') : '') + (ws.length ? (ofFormula ? '   — expected of the formula: ' : '   — where papers place: ') + ws.slice(0, 5).join(', ') : ofFormula ? '   — no group of the formula is expected here' : '');
+  const of = SP.lib && SP.lib.source === 'picked' ? 'the groups picked' : 'the formula', ro = $('#sp-readout');
+  ro.textContent = x.toFixed(1) + ' cm⁻¹   ' + fmt((SP.layers.raw ? SP.d.cleaned : SP.d.y)[i]) + (ds.length ? '   ' + ds.join(' · ') : '') + (ws.length ? (ofFormula ? '   — expected of ' + of + ': ' : '   — where papers place: ') : ofFormula ? '   — no group of ' + of + ' is expected here' : '');
+  if (ws.length) ro.append(chemList(ws.slice(0, 5)));
+  if (SP.overlay && SP.overlay.peaks && SP.overlay.peaks.length) {
+    const near = SP.overlay.peaks.reduce((a, b) => Math.abs(b - x) < Math.abs(a - x) ? b : a);
+    if (Math.abs(near - x) <= 8) ro.append('   · reference band at ' + near.toFixed(1));
+  }
 }
 
 function setRegion(lo, hi, zoom) {
@@ -1041,7 +1094,7 @@ function renderResult(light) {
   }
   const info = f && !reg.dirty ? f.comps : [];
   const total = info.reduce((s, c) => s + (c.area || 0), 0) || 1;
-  tb.append(el('tr', null, ...['position (cm⁻¹)', 'FWHM', 'height', 'area %', 'shape', 'hold', SP.lib && SP.lib.rows.length ? 'expected of the formula' : 'where papers place it', 'distance', ''].map(h => el('th', null, h))));
+  tb.append(el('tr', null, ...['position (cm⁻¹)', 'FWHM', 'height', 'area %', 'shape', 'hold', SP.lib && SP.lib.rows.length ? (SP.lib.source === 'picked' ? 'expected of the groups picked' : 'expected of the formula') : 'where papers place it', 'distance', ''].map(h => el('th', null, h))));
   reg.comps.forEach((c, k) => {
     const fc = info[k] || {};
     const cell = (key, digits) => {
@@ -1073,7 +1126,7 @@ function renderResult(light) {
       el('td', null, fc.area != null ? (100 * fc.area / total).toFixed(0) : ''),
       el('td', null, shape),
       el('td', { class: 'hold' }, hold('pos', 'pos', 'keep this position as it is in the fit'), hold('fwhm', 'width', 'keep this width as it is in the fit'), hold('height', 'height', 'keep this height as it is in the fit')),
-      el('td', { class: 'w' }, (fc.suggest || []).join(', ')), el('td', { class: 'w' }, fc.distance || ''),
+      el('td', { class: 'w' }, chemList(fc.suggest || [])), el('td', { class: 'w' }, chemNodes(fc.distance || '')),
       el('td', null, twin(reg, k) ? el('button', { class: 'lim', title: 'this band and the next are closer than half their width — the data cannot tell them apart: make them one band, and refit', onclick: ev => { ev.stopPropagation(); mergeBands(reg, k); } }, 'merge ↓') : null, ' ',
         el('button', { title: 'split this band into two narrower ones side by side, and refit', onclick: ev => { ev.stopPropagation(); splitBand(reg, k); } }, 'split'), ' ',
         el('button', { title: 'remove this band (Delete, when it is selected)', onclick: ev => { ev.stopPropagation(); removeBand(reg, k); } }, '×')));
@@ -1180,6 +1233,8 @@ async function applySession_(s, quiet) {
   if (o.ms && SP.state.manuscripts.includes(o.ms)) $('#sp-ms').value = o.ms;
   const chem = o.formula_typed != null ? o.formula_typed : (o.formula || '');
   if (chem) $('#sp-formula').value = chem;                  // a session that names no chemistry leaves the one in the field
+  if (Array.isArray(o.groups)) SP.pick = o.groups.map(String); else if (o.groups === null) SP.pick = null;   // a session written before the picker leaves it
+  pickSummary();
   $('#sp-file').value = file;
   SP.gen++;
   SP.file = file; SP.series = o.series || 0; SP.d = null; SP.d2 = null; SP.regions = []; SP.cur = -1; SP.sel = -1; SP.anchors = (o.anchors || []).slice(); SP.lists = []; SP.listsRedo = [];
@@ -1247,12 +1302,12 @@ function wire() {
   $('#sp-formula').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); e.stopPropagation(); });
   $('#sp-open').addEventListener('click', () => $('#sp-upload').click());
   wireRruff();
-  // the 'more ▾' layers popover closes on a click elsewhere or Escape (a <details> stays open until its summary is clicked again)
-  const more = $('#sp-more');
-  if (more) {
-    document.addEventListener('mousedown', ev => { if (more.open && !more.contains(ev.target)) more.open = false; });
-    document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && more.open) more.open = false; });
+  // the 'more ▾' and 'Chem search' popovers close on a click elsewhere or Escape (a <details> stays open until its summary is clicked again)
+  for (const pop of document.querySelectorAll('details.pop')) {
+    document.addEventListener('mousedown', ev => { if (pop.open && !pop.contains(ev.target)) pop.open = false; });
+    document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && pop.open) pop.open = false; });
   }
+  wirePicker();
   $('#sp-upload').addEventListener('change', e => { if (e.target.files.length) upload(e.target.files[0]); e.target.value = ''; });
   for (const id of ['sp-despike', 'sp-threshold', 'sp-resolution', 'sp-lam', 'sp-p', 'sp-width', 'sp-cif', 'sp-ms', 'sp-laser'])
     $('#' + id).addEventListener('change', () => process(false));
@@ -1321,28 +1376,163 @@ const FG = { name: '', i: 0, w: 0, h: 0, frames: [], box: null, x1: null, x2: nu
   ticks: [],              // the evenly spaced tick strokes found on the frame's axis (pixel x): what a mark dropped near the axis snaps to
   peaks: null };          // the tops of the traced curve's peaks (pixel x), after a Trace: what a mark dropped on a peak snaps to
 const fgStatus = (msg, bad) => { const s = $('#sp-fig-status'); s.textContent = msg || ''; s.title = msg || ''; s.style.color = bad ? 'var(--danger)' : ''; };
+// ---- the group picker: 'Chem search' over the plot -------------------------------------------------------------------
+// The library's groups by element (P: PO4, P–OH; As: AsO4, As–OH, AsO3 …) as chips; a chip toggles its group, the element
+// letter all of its groups. SP.pick is null while the pick follows the chemistry's own groups (ticked, marked ·); the
+// first click makes the pick explicit. Under the chips: the modes drawn (their colours and ranges) and the species of the
+// local Mindat snapshot holding every group picked — a RRUFF spectrum of each where this machine has one.
+const PK = { cat: null, seq: 0, filter: '', only: false, sort: 'name' };   // sort: 'name' | 'spectra' (those with one first)
+const pickNow = () => SP.pick != null ? SP.pick.slice() : (SP.lib ? SP.lib.groups.map(g => g.key) : []);
+function setPick(keys) {
+  SP.pick = keys; keepPick(); pickSummary(); saveWork(); loadLib();
+}
+function wirePicker() {
+  const pk = $('#sp-pick'); if (!pk) return;
+  pk.addEventListener('toggle', () => { if (pk.open) renderPicker(); });
+}
+async function renderPicker() {
+  const pk = $('#sp-pick'), host = $('#sp-pick-body'); if (!pk || !host || !pk.open) return;
+  if (!PK.cat) {
+    try { PK.cat = await api('/api/sp/groups'); } catch (e) { host.textContent = e.message; return; }
+    if (!pk.open) return;
+  }
+  const on = new Set(pickNow()), own = new Set(SP.lib && SP.lib.own ? SP.lib.own : []);
+  host.textContent = '';
+  const asChem = el('button', { title: 'Back to the groups of the chemistry (the ‘chemistry’ field, else the manuscript’s formula)' }, 'as the chemistry');
+  asChem.disabled = SP.pick == null; asChem.addEventListener('click', () => setPick(null));
+  const none = el('button', { title: 'No group: no bars over the plot' }, 'none'); none.addEventListener('click', () => setPick([]));
+  host.append(el('div', { class: 'pk-head' }, el('span', null, 'The groups whose bands are drawn over the plot — a chip toggles a group, the element letter all of its groups; · marks the chemistry’s own.'), asChem, none));
+  const byEl = new Map();
+  for (const g of PK.cat.groups) { if (!byEl.has(g.element)) byEl.set(g.element, []); byEl.get(g.element).push(g); }
+  const strip = el('div', { class: 'pk-strip' });
+  for (const [e, gs] of byEl) {
+    const letter = el('b', { title: (gs.every(g => on.has(g.key)) ? 'drop' : 'pick') + ' every group of ' + e + ': ' + gs.map(g => g.writes).join(', ') }, e);
+    letter.addEventListener('click', () => { const keys = pickNow(), all = gs.every(g => on.has(g.key)); setPick(all ? keys.filter(k => !gs.some(g => g.key === k)) : keys.concat(gs.filter(g => !on.has(g.key)).map(g => g.key))); });
+    const span = el('span', { class: 'pk-el' }, letter);
+    for (const g of gs) {
+      const chip = el('button', { class: 'pk-chip' + (on.has(g.key) ? ' on' : '') + (own.has(g.key) ? ' own' : ''),
+        title: g.name + ' — ' + g.modes.map(m => m.label + ' ' + m.lo + '–' + m.hi).join(', ') + '. ' + g.species + ' species of the snapshot' + (PK.cat.rruff ? ', ' + g.rruff + ' with a RRUFF spectrum' : '') + (own.has(g.key) ? '. A group of the chemistry' : '') }, ionNodes(g.writes));
+      if (on.has(g.key)) chip.style.setProperty('--c', groupColour(g.key));
+      chip.addEventListener('click', () => { const keys = pickNow(); setPick(on.has(g.key) ? keys.filter(k => k !== g.key) : keys.concat([g.key])); });
+      span.append(chip);
+    }
+    strip.append(span);
+  }
+  host.append(strip);
+  if (SP.lib && SP.lib.rows.length) {
+    const leg = el('div', { class: 'pk-legend' });
+    for (const r of SP.lib.rows) { if (r.broad) continue; const sw = el('i', { class: 'sw' }); sw.style.background = rowColour(r); leg.append(el('span', { title: r.what + '; ' + r.active }, sw, labelNodes(r.label), ' ' + r.lo + '–' + r.hi)); }
+    host.append(leg);
+  }
+  const sp = el('div', { class: 'pk-species' }); host.append(sp);
+  loadSpecies(sp);
+}
+async function loadSpecies(host) {
+  const keys = pickNow(), seq = ++PK.seq;
+  if (!keys.length) { host.append(el('span', { class: 'muted' }, 'No group picked: no species to list.')); return; }
+  host.append(el('span', { class: 'muted' }, 'looking for the species that hold ', chemList(keys, ' + '), '…'));
+  let r;
+  try { r = await api('/api/sp/species', { groups: keys }); } catch (e) { host.textContent = e.message; return; }
+  if (seq !== PK.seq) return;
+  host.textContent = '';
+  const filt = el('input', { type: 'text', placeholder: 'filter by name…', spellcheck: 'false', autocomplete: 'off' }); filt.value = PK.filter;
+  const list = el('div', { class: 'pk-list' });
+  const withSpectra = PK.cat && PK.cat.rruff && RR.choose;
+  const fill = () => {
+    list.textContent = ''; const q = PK.filter.trim().toLowerCase(); let n = 0;
+    const rows = PK.sort === 'spectra' ? r.species.slice().sort((a, b) => (!a.rruff) - (!b.rruff)) : r.species;    // a stable sort: by name within each half
+    for (const s of rows) {
+      if (q && !s.name.toLowerCase().includes(q) && !s.formula.toLowerCase().includes(q)) continue;
+      if (PK.only && !s.rruff) continue;
+      if (++n > 300) { list.append(el('div', { class: 'muted' }, '… and more: narrow the filter')); break; }
+      const f = el('span', { class: 'f' }); f.innerHTML = s.html || s.formula;             // Mindat's own sub/sup, every other tag escaped on the server
+      const row = el('div', { class: 'pk-sp' + (s.rruff ? ' rr' : '') }, el('b', { title: s.rruff ? 'open the RRUFF spectrum of ' + s.name + ' here (' + s.rruff.n + ' spectr' + (s.rruff.n === 1 ? 'um' : 'a') + ' in the library)' : s.formula }, s.name), f);
+      if (s.rruff && RR.choose) {                            // a name with a spectrum opens it in the window; 'overlay' draws it under the curve instead
+        row.firstChild.addEventListener('click', () => RR.choose(s.rruff.name, 'open'));
+        const v = el('button', { title: 'Draw the RRUFF spectrum of ' + s.name + ' under the current curve, scaled to it' }, 'overlay');
+        v.addEventListener('click', () => RR.choose(s.rruff.name, 'overlay'));
+        row.append(v);
+      }
+      list.append(row);
+    }
+    if (!n) list.append(el('div', { class: 'muted' }, (PK.only ? 'no species with a spectrum on this machine holds ' : 'no species of the snapshot holds '), chemList(keys, ' + '), (q ? ' and matches ‘' + PK.filter.trim() + '’' : '')));
+  };
+  filt.addEventListener('input', () => { PK.filter = filt.value; fill(); });
+  filt.addEventListener('keydown', e => e.stopPropagation());
+  const head = el('div', { class: 'pk-species-head' }, el('span', { class: 'muted' }, r.total + ' species of the local Mindat snapshot hold ', chemList(keys, ' + '),
+    (withSpectra ? ' · ' + r.with_rruff + ' with a RRUFF spectrum on this machine, highlighted — a name opens its spectrum here' : '') + (r.total > r.species.length ? ' · the first ' + r.species.length + ' listed' : '')), filt);
+  if (withSpectra) {
+    const sort = el('select', { title: 'The order of the list' }, el('option', { value: 'name' }, 'A–Z'), el('option', { value: 'spectra' }, 'with a spectrum first'));
+    sort.value = PK.sort; sort.addEventListener('change', () => { PK.sort = sort.value; fill(); });
+    const cb = el('input', { type: 'checkbox' }); cb.checked = PK.only; cb.addEventListener('change', () => { PK.only = cb.checked; fill(); });
+    head.append(sort, el('label', { class: 'muted', title: 'List only the species the RRUFF library on this machine has a spectrum of' }, cb, ' only with a spectrum'));
+  }
+  host.append(head, list);
+  fill();
+}
+
 // ---- the RRUFF library on this machine: a mineral's spectrum pulled up here, or drawn under the curve -------------
 // The list comes from /api/sp/rruff/list once (hidden when there is no library); a mineral typed into the box fills the
 // select with its spectra; 'open' holds the spectrum on the server under a name and opens it like a file opened here;
 // 'overlay' draws it under the current curve, scaled to the curve in view (SP.overlay = {name, x, y}; draw()).
 const RR = { minerals: null, byName: {} };
+// the list's answer put into the box (a datalist of minerals); with no library, the 'RRUFF library…' button instead
+function rruffFill(r) {
+  const box = $('#sp-rruff-box'), find = $('#sp-rruff-find'), setb = $('#sp-rruff-set');
+  if (!r || !r.minerals || !r.minerals.length) { box.classList.add('hidden'); find.classList.remove('hidden'); return false; }
+  RR.minerals = r.minerals; RR.byName = {};
+  const dl = $('#sp-rruff-list'); dl.textContent = '';
+  for (const m of r.minerals) { RR.byName[m.name.toLowerCase()] = m; dl.append(el('option', { value: m.name })); }
+  find.classList.add('hidden'); setb.classList.add('hidden'); box.classList.remove('hidden');
+  $('#sp-rruff').title = $('#sp-rruff').title.replace(/ \d+ minerals,.*$/, '') + ' ' + r.minerals.length + ' minerals, ' + r.n + ' spectra (' + r.folder + ').' + (r.citation ? ' Cite: ' + r.citation : '');
+  $('#sp-rruff-more').classList.toggle('hidden', !!r.store);  // a fuller collection can be fetched beside an OMNIC copy
+  PK.cat = null;                                               // the picker learns which species have a spectrum
+  return true;
+}
+const specLabel = s => s.id + ' ' + (s.kind || 'spectrum') + (s.laser ? ' ' + s.laser + ' nm' : '') + (s.technique === 'infrared' ? ' IR' : '') +
+  (s.quality || s.orient ? ' · ' + [s.quality, s.orient].filter(Boolean).join(', ') : '');
+// the fetch from rruff.net: started on the server, followed here every two seconds until it is done
+let fetchTimer = null;
+async function rruffFetch() {
+  try {
+    const r = await api('/api/sp/rruff/fetch', {});
+    status('fetching RRUFF from rruff.net…'); rruffFollow();
+  } catch (e) { status(e.message, true); }
+}
+function rruffFollow() {
+  clearTimeout(fetchTimer);
+  fetchTimer = setTimeout(async () => {
+    let r; try { r = await api('/api/sp/rruff/status'); } catch (e) { status(e.message, true); return; }
+    const f = r.fetch || {};
+    if (!f.finished) {
+      const mb = v => (v / 1048576).toFixed(0);
+      status(f.stage === 'reading' ? 'RRUFF: reading ' + (f.set || '') + ' — ' + (f.spectra || 0) + ' spectra so far'
+           : 'RRUFF: downloading ' + (f.set || '') + (f.total ? ' — ' + mb(f.done || 0) + ' of ' + mb(f.total) + ' MB' : ''));
+      rruffFollow(); return;
+    }
+    if (f.error) { status('RRUFF fetch failed: ' + f.error, true); return; }
+    try { const l = await api('/api/sp/rruff/list'); if (rruffFill(l)) { status('RRUFF: ' + l.n + ' spectra of ' + l.minerals.length + ' minerals in the cache — found from now on whatever folder is open'); if ($('#sp-pick').open) renderPicker(); } } catch (e) { status(e.message, true); }
+  }, 2000);
+}
 async function wireRruff() {
   const box = $('#sp-rruff-box'); if (!box) return;
-  try {
-    const r = await api('/api/sp/rruff/list');
-    if (!r.minerals || !r.minerals.length) return;
-    RR.minerals = r.minerals;
-    const dl = $('#sp-rruff-list');
-    for (const m of r.minerals) { RR.byName[m.name.toLowerCase()] = m; dl.append(el('option', { value: m.name })); }
-    box.classList.remove('hidden');
-    $('#sp-rruff').title += ' ' + r.minerals.length + ' minerals, ' + r.n + ' spectra (' + r.folder + ').';
-  } catch (_) { return; }
+  // the folder named by hand: kept by the server for every later start
+  $('#sp-rruff-find').addEventListener('click', () => { $('#sp-rruff-set').classList.toggle('hidden'); if (!$('#sp-rruff-set').classList.contains('hidden')) $('#sp-rruff-path').focus(); });
+  $('#sp-rruff-path').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') $('#sp-rruff-use').click(); if (e.key === 'Escape') $('#sp-rruff-set').classList.add('hidden'); });
+  $('#sp-rruff-fetch').addEventListener('click', rruffFetch); $('#sp-rruff-more').addEventListener('click', rruffFetch);
+  $('#sp-rruff-use').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/sp/rruff/set', { folder: $('#sp-rruff-path').value });
+      if (rruffFill(r)) { status('RRUFF library: ' + r.minerals.length + ' minerals, ' + r.n + ' spectra (' + r.folder + ') — remembered for every folder'); if ($('#sp-pick').open) renderPicker(); }
+      else status('that folder holds no spectra', true);
+    } catch (e) { status(e.message, true); }
+  });
   const specSel = $('#sp-rruff-spec'), openBtn = $('#sp-rruff-open'), ovLab = $('#sp-rruff-ov');
   const pick = () => {
     const m = RR.byName[$('#sp-rruff').value.trim().toLowerCase()];
     specSel.textContent = '';
     if (!m) { specSel.classList.add('hidden'); openBtn.classList.add('hidden'); ovLab.classList.add('hidden'); return; }
-    for (const s of m.spectra) specSel.append(el('option', { value: s.key }, s.id + ' ' + (s.kind || 'spectrum') + (s.laser ? ' ' + s.laser + ' nm' : '')));
+    for (const s of m.spectra) specSel.append(el('option', { value: s.key }, specLabel(s)));
     specSel.classList.remove('hidden'); openBtn.classList.remove('hidden'); ovLab.classList.remove('hidden');
     if ($('#sp-overlay').checked) overlayNow();
   };
@@ -1352,9 +1542,15 @@ async function wireRruff() {
     try {
       const r = await api('/api/sp/rruff/curve?key=' + enc(key));
       if (specSel.value !== key) return;                     // another was chosen while this one loaded
-      SP.overlay = { name: r.name, x: r.x, y: r.y }; draw();
+      SP.overlay = { name: r.name, x: r.x, y: r.y, peaks: r.peaks || [] }; draw();
       status(r.name + ' drawn under the curve (overlay)');
     } catch (e) { status(e.message, true); }
+  };
+  RR.choose = (name, action) => {                           // the species list of the group picker: a mineral put into the box, then opened or overlaid
+    $('#sp-rruff').value = name; pick();
+    if (!RR.byName[name.toLowerCase()]) { status('no spectrum of ' + name + ' in the RRUFF library', true); return; }
+    if (action === 'open') openBtn.click();
+    else if (action === 'overlay') { $('#sp-overlay').checked = true; overlayNow(); }
   };
   $('#sp-rruff').addEventListener('change', pick);
   $('#sp-rruff').addEventListener('input', () => { if (RR.byName[$('#sp-rruff').value.trim().toLowerCase()]) pick(); });
@@ -1367,6 +1563,10 @@ async function wireRruff() {
       await loadState(r.name);                                // the list of files now holds it (opened here); it opens as the current spectrum
     } catch (e) { status(e.message, true); }
   });
+  let r = null;                                              // wired above whether or not a library is there yet: one named later fills the same box
+  try { r = await api('/api/sp/rruff/list'); } catch (_) { r = null; }
+  rruffFill(r);
+  if (r && r.fetch && r.fetch.stage && !r.fetch.finished) { status('a RRUFF fetch is running…'); rruffFollow(); }
 }
 
 async function fgOpen() {
@@ -1613,7 +1813,7 @@ loadPrefs(); showBaselineRows(); wire();
   const q = new URLSearchParams(location.search);
   try {
     await loadState(null);
-    recallChem();
+    recallChem(); recallPick();
     if (q.get('cif') && SP.state.cifs.includes(q.get('cif'))) $('#sp-cif').value = q.get('cif');
     if (q.get('ms') && SP.state.manuscripts.includes(q.get('ms'))) $('#sp-ms').value = q.get('ms');
     const pick = q.get('file') || (SP.state.files.length === 1 ? SP.state.files[0].name : '');

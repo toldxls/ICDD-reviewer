@@ -139,6 +139,11 @@ def C(*parts):
             out.extend(p)
     return out
 
+def chem(text):
+    """A plain formula / oxide / ion as a cell of runs with its subscripts and charges (bands.chem_tokens)."""
+    from pxrd_review.bands import chem_tokens
+    return [(t, {k} if k else set()) for k, t in chem_tokens(text)]
+
 def T_plain(cell):
     return ''.join(t for t, _ in cell)
 

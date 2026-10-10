@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.17.0](#0170--2026-10-10) | 10 Oct | Spectrum window: **Chem search** — the band library's groups picked by element, each oxoanion its own colour and its modes in shades, the species of the snapshot that hold the pick with a click opening their RRUFF spectrum; **`pxrd rruff --fetch`** pulls RRUFF's Raman and infrared collections from rruff.net into a cache store found whatever folder is open (the OMNIC copy is remembered and searched for too); the band windows re-measured on it; a reference's bands ticked under the plot; formulas, oxides and ions formatted wherever the GUI prints one |
 | [0.16.0](#0160--2026-10-09) | 9 Oct | Spectroscopy: `pxrd spectro` recomputes the distances a paper credits to Bartlett & Cooney or Libowitzky from its own bands and sets the formula beside them; `pxrd spectrum` and the GUI's spectrum window import, clean and fit a Raman / infrared spectrum — or trace one off a figure; `pxrd bands` is a band library: for a chemistry the bands expected of it, for a band what it is expected to be in that chemistry — its ranges measured on a RRUFF Raman library, and a RRUFF spectrum pulled up beside yours; an adversarial review's ten fixes; the window tidied |
 | [0.15.2](#0152--2026-09-30) | 30 Sep | GUI: the Mindat pane's lists are navigable — a species name opens its record, ‹ back returns to the list, a record's group name opens the group |
 | [0.15.1](#0151--2026-09-30) | 30 Sep | GUI: the Mindat & cross-source pane looks up any species or group from the local snapshot and filters species by element on a periodic table; formulas in the pane's group list no longer break mid-token |
@@ -40,6 +41,33 @@ package version in `pyproject.toml`.
 | [0.4.0](#040--2026-08-25) | 25 Aug | `pxrd bv`, `pxrd tables`, `pxrd refs`, and Manuscript mode |
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
+
+## [0.17.0] — 2026-10-10
+**Chem search, RRUFF from the source, formulas as a chemist writes them.** The spectrum window gains a periodic-table
+picker that draws the expected bands of any chemistry and lists the species that hold it; `pxrd rruff --fetch` brings
+RRUFF's own collection to the machine; every formula the GUI prints carries its subscripts and charges.
+
+### Added
+- **Spectrum window: Chem search** (a periodic-table button in the layer bar). The band library's groups laid out by element, as
+  on an EDS spectrum — a chip toggles one group, the element letter all of its groups — and every group picked is drawn
+  over the plot in its own colour (one per oxoanion), its modes in shades; the chemistry's own groups are ticked to begin with (`as the
+  chemistry` returns to them, `none` clears the plot). Under the chips, the species of the local Mindat snapshot whose
+  formula holds every group picked, those with a RRUFF spectrum on this machine highlighted (alphabetical by default; sorted or filtered to those with a spectrum on request) — a click on the name opens that spectrum here, `overlay` draws it under the curve. The
+  pick is kept per folder, travels with the session and the written table (`expected of the groups picked`), and names
+  the fitted bands in place of the formula. Routes `/api/sp/groups`, `/api/sp/species`; `bands.catalogue`,
+  `bands.species_with` (the snapshot's formulas read in-process; nothing leaves the machine).
+- **The band library's RRUFF windows re-measured on the fetched collection** (`tools/rruff_windows.py` reads the store):
+  28 modes now rest on 8 minerals or more (sulfate ν1 on 121, phosphate ν1 on 161, arsenate ν1 on 100; uranyl, selenite and
+  nitrate windows for the first time). The report's verdicts are information for the library's keeper: silicate ν3, phosphate ν1
+  and sulfate ν3 run past their literature ranges.
+- **The RRUFF library is found whatever folder is open.** Once found anywhere — beside a folder, under Desktop / Documents /
+  Downloads, `~/RRUFF`, `$PXRD_RRUFF_DIR` — its place is remembered (`<cache>/rruff_dir.txt`); with none found the spectrum
+  window's bar shows `RRUFF library…` to name the folder once (`/api/sp/rruff/set`, `omnic_lib.set_library`).
+- **Formulas written as a chemist writes them, wherever the GUI prints one.** One rule (`gui/static/chem.js`, mirrored by
+  `bands.chem_tokens`): a number after a Latin letter or a closing bracket is a subscript, a charge a superscript, the water
+  count and a mode number (ν3) stay. Applied to the spectrum window's chips, legend, library table, plot labels, pointer
+  readout and band table; the review page's entry formulas; the Gladstone–Dale and EPMA tables' constituents; the Word
+  band table's "expected" column. Formula fields only — prose is never run through it.
 
 ## [0.16.0] — 2026-10-09
 **Spectroscopy.** The Raman and infrared bands a paper states are read and the distances it infers from them recomputed;

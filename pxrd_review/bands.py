@@ -223,6 +223,99 @@ def identify(pos, formula=None, technique=None, groups=None, windows=None):
     return out
 
 
+_ELEMENT_OF = {'OH': 'H', 'H2O': 'H', 'H3O': 'H', 'NH4': 'N', 'sulfide': 'S'}
+
+
+def element_of(key):
+    """The element a group is picked by — 'P' for PO4 and P-OH, 'S' for sulfate, sulfite and the sulfides, 'H' for
+    water, hydroxyl and hydronium, 'N' for ammonium and nitrate."""
+    return _ELEMENT_OF.get(key) or _ELEMENT.match(key).group(0)
+
+
+def catalogue():
+    """Every group the library knows, for picking: [{'key', 'name', 'writes', 'element', 'modes': [{'mode', 'label',
+    'what', 'active', 'lo', 'hi', 'broad'}]}] in the library's order."""
+    lib = library()
+    out = []
+    for g in lib['groups']:
+        out.append({'key': g['key'], 'name': g['name'], 'writes': g['writes'], 'element': element_of(g['key']),
+                    'modes': [{'mode': m['mode'], 'label': label({'group': g['key'], 'mode': m['mode']}), 'what': m['what'], 'active': lib['activity'][m['active']],
+                               'lo': m['range'][0], 'hi': m['range'][1], 'broad': bool(m.get('broad'))} for m in g['modes']]})
+    return out
+
+
+_CHEM_TOKEN = re.compile(r'(?<=[A-Za-z)\]])(\d*[+−]|\d+-(?![A-Za-z]))|(?<=[A-Za-z)\]])(\d+(?:\.\d+)?)')
+
+
+def chem_tokens(text):
+    """A plain formula, oxide or ion as runs: [(kind, text)] with kind '' | 'sub' | 'sup' — a number after a Latin letter,
+    ')' or ']' is a subscript, a charge (digits and + / −) after one a superscript; a number after '·', Σ or a Greek letter
+    (the water count, ν3) stays. The rule the page's chem.js mirrors; for formula fields only, never prose ('R1')."""
+    out, last = [], 0
+    text = '' if text is None else str(text)
+    for m in _CHEM_TOKEN.finditer(text):
+        if m.start() > last:
+            out.append(('', text[last:m.start()]))
+        out.append(('sup' if m.group(1) is not None else 'sub', m.group(0)))
+        last = m.end()
+    if last < len(text):
+        out.append(('', text[last:]))
+    return out
+
+
+_SUBSUP = re.compile(r'(</?su[bp]>)')
+
+
+def formula_html(raw):
+    """The formula with Mindat's own <sub> / <sup> kept and every other character escaped — safe to set as HTML."""
+    import html as _h
+    txt = re.sub(r'<(?!/?su[bp]>)[^>]+>', '', (raw or '').translate(_SUBS))
+    txt = re.sub(r'[\s\x00-\x1f□◻]', '', _h.unescape(txt))                   # an entity (&#9723; = the vacancy sign) read, then dropped as `clean` drops the sign
+    txt = re.sub(r'<sup>\d*[+\-−]</sup>|(?<=[A-Za-z])\d[+\-−](?!</sup>)', '', txt)   # valences dropped, as `display` drops them (Fe<sup>3+</sup>, Fe3+)
+    return ''.join(part if _SUBSUP.fullmatch(part) else _h.escape(part, quote=False) for part in _SUBSUP.split(txt))
+
+
+_SPECIES = None
+
+
+def species_index():
+    """Every species of the local Mindat snapshot with the groups its IMA formula holds: [(name, formula, frozenset of
+    keys, formula as HTML)], by name. Read once (a quarter of a second for 6,000 species); nothing leaves the machine."""
+    global _SPECIES
+    if _SPECIES is None:
+        rows = []
+        try:
+            from pxrd_review import mindat as M
+            recs = M.struct_db().get('recs', [])
+        except Exception:
+            recs = []
+        for r in recs:
+            f = r.get('formula') or ''
+            if r.get('name') and f:
+                rows.append((r['name'], display(f), frozenset(groups_of(f)), formula_html(f)))
+        rows.sort(key=lambda t: t[0].lower())
+        _SPECIES = rows
+    return _SPECIES
+
+
+def species_with(keys):
+    """The species whose formula holds EVERY one of `keys`: [(name, formula, formula as HTML)] by name — the minerals a
+    picked chemistry stands for ('PO4' + 'UO2': the autunite and phosphuranylite groups and their kin)."""
+    want = frozenset(keys)
+    if not want:
+        return []
+    return [(n, f, h) for n, f, g, h in species_index() if want <= g]
+
+
+def species_counts():
+    """{group key: how many species of the snapshot hold it}."""
+    out = {}
+    for _n, _f, g, _h in species_index():
+        for k in g:
+            out[k] = out.get(k, 0) + 1
+    return out
+
+
 def label(r):
     """'SO4 ν1', 'H2O bend', 'ν(Si–O)' — a row's short name."""
     return r['mode'] if r['mode'][:2] in ('ν(', 'δ(', 'νs', 'νa') else '%s %s' % (r['group'], r['mode'])

@@ -72,6 +72,10 @@ body.sp input[type=checkbox] { accent-color: var(--accent); }
 #sp-plot .data { fill: none; stroke: var(--text); stroke-width: 1; }
 #sp-plot .overlay { fill: none; stroke: #2a9d8f; stroke-width: 1.2; opacity: .8; }
 #sp-rruff { width: 11em; }
+#sp-rruff-path { width: 14em; }
+#sp-rruff-more { padding: 1px 6px; }
+#sp-plot .ref-tick { stroke-width: 1.5; opacity: .9; }
+#sp-rruff-set { display: inline-flex; gap: 4px; align-items: center; }
 /* the figure panel: a page or an image, the frame, the two axis marks and the traced curve over it */
 #sp-fig { position: fixed; inset: 0; z-index: 30; background: var(--bg0); display: flex; flex-direction: column; }
 #sp-fig-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex: none; white-space: nowrap; }
@@ -182,3 +186,39 @@ body.sp input[type=checkbox] { accent-color: var(--accent); }
 #sp-exported a { cursor: pointer; text-decoration: underline; margin-right: 12px; }
 #sp-exported button { margin-left: 6px; padding: 1px 8px; }
 button.primary { border-color: rgb(var(--accent-rgb) / .7); }
+
+/* the group picker: a popover under 'Chem search' — the groups by element, the modes of the pick, the species that hold it */
+#sp-pick .pop-body { white-space: normal; width: min(760px, calc(100vw - 48px)); gap: 8px; font-size: .95em; }
+#sp-pick > summary { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; margin: -2px 0; border: 1px solid var(--line); border-radius: 6px;
+  background: rgb(var(--panel-rgb) / .9); color: var(--text); line-height: 1.5; }
+#sp-pick > summary:hover { border-color: var(--accent); color: var(--accent); }
+#sp-pick[open] > summary, #sp-pick > summary.picked { border-color: var(--accent); color: var(--accent); background: rgb(var(--accent-rgb) / .14); }
+#sp-pick > summary .pt { width: 26px; height: 10.5px; fill: currentColor; opacity: .85; }
+.pk-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; color: var(--muted); }
+.pk-head button { font: inherit; font-size: .9em; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; }
+.pk-head button:disabled { opacity: .45; cursor: default; }
+.pk-strip { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.pk-el { display: inline-flex; align-items: center; gap: 4px; }
+.pk-el > b { display: inline-block; min-width: 1.6em; text-align: center; padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; color: var(--muted); font-weight: 600; }
+.pk-el > b:hover { border-color: var(--accent); color: var(--accent); }
+.pk-chip { font: inherit; font-size: .92em; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
+.pk-chip:hover { border-color: var(--accent); }
+.pk-chip.on { border-color: var(--c); background: color-mix(in srgb, var(--c) 28%, transparent); font-weight: 600; }
+.pk-chip.own::after { content: ' ·'; color: var(--muted); }
+.pk-legend { display: flex; flex-wrap: wrap; gap: 3px 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pk-legend span { white-space: nowrap; }
+.pk-legend i.sw, .pk-species i.sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.pk-species { border-top: 1px solid var(--line); padding-top: 6px; }
+.pk-species-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 4px; }
+.pk-species select { font-size: .9em; padding: 1px 4px; }
+.pk-species input[type=text] { width: 11em; background: rgb(var(--panel-rgb) / .9); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; font: inherit; }
+.pk-list { max-height: 240px; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 1px 16px; }
+.pk-sp { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; border-radius: 4px; }
+.pk-sp > b { font-weight: 500; }
+.pk-sp.rr { background: rgb(var(--accent-rgb) / .12); border-left: 3px solid var(--accent); }
+.pk-sp.rr > b { font-weight: 700; color: var(--accent); cursor: pointer; }
+.pk-sp.rr > b:hover { text-decoration: underline; }
+.pk-chip sub, .pk-chip sup, .pk-legend sub, .pk-legend sup, #sp-library sub, #sp-library sup, .pk-sp sub, .pk-sp sup { font-size: .72em; line-height: 0; }
+.pk-sp .f { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.pk-sp button { font: inherit; font-size: .82em; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--accent); cursor: pointer; }
+.pk-sp button:hover { border-color: var(--accent); }

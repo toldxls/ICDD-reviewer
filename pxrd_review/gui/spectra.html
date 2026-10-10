@@ -15,12 +15,15 @@
     <input type="file" id="sp-upload" class="hidden" title="a spectrum file, or a session (…_sp.json) written by an export">
     <button id="sp-fig-open" title="Most papers give no data — at best a figure. Read the curve off a figure: a page of a .pdf, an image of a manuscript, or an image file. The frame, two points of the axis and the curve are confirmed by hand; the traced curve then opens here like any spectrum, with the manuscript's stated bands set beside it. Good to about a pixel: for seeing where the curve has a band, not for fitting widths.">Figure…</button>
     <select id="sp-series" class="hidden" title="Which spectrum of the file (a sheet or a file may hold several)"></select>
+    <button id="sp-rruff-find" class="muted hidden" title="No RRUFF library was found on this machine (looked at $PXRD_RRUFF_DIR, the folder it was last found in, a RRUFF folder beside or above the open folder, ~/RRUFF, and two levels under Desktop, Documents and Downloads). Name the folder that holds RRUFFLib.lbd + RRUFFLib.lbt once: it is remembered for every folder opened after.">RRUFF library…</button>
+    <span id="sp-rruff-set" class="hidden"><button id="sp-rruff-fetch" title="Download RRUFF's Raman collection from rruff.net (about 700 MB; every quality, oriented and unoriented, and the broad scans to the O–H region) into this machine's cache — some 300 MB kept, found from then on whatever folder is open. The one download the tool makes beyond Mindat and GitHub, and only on this click. Please cite Lafuente, Downs, Yang &amp; Stone (2015) when its spectra are used.">fetch from rruff.net…</button><span class="muted">or</span><input id="sp-rruff-path" placeholder="folder holding RRUFFLib.lbd" spellcheck="false" autocomplete="off" title="A Thermo OMNIC copy of the library: the folder that holds RRUFFLib.lbd + RRUFFLib.lbt (or the folder above it)"><button id="sp-rruff-use" title="Use this folder, and remember it">use</button></span>
     <span id="sp-rruff-box" class="hidden">
       <input id="sp-rruff" list="sp-rruff-list" placeholder="RRUFF…" title="A mineral of the RRUFF library on this machine: type its name, choose one of its spectra, then open it here or draw it under the current curve (overlay).">
       <datalist id="sp-rruff-list"></datalist>
       <select id="sp-rruff-spec" class="hidden" title="The mineral's spectra in the library (sample id, processing, laser)"></select>
       <button id="sp-rruff-open" class="hidden" title="Open this RRUFF spectrum here, as a spectrum of its own">open</button>
-      <label id="sp-rruff-ov" class="muted hidden" title="Draw the RRUFF spectrum under the current curve, scaled to it"><input type="checkbox" id="sp-overlay"> overlay</label>
+      <label id="sp-rruff-ov" class="muted hidden" title="Draw the RRUFF spectrum under the current curve, scaled to it; its own bands are ticked under the plot"><input type="checkbox" id="sp-overlay"> overlay</label>
+      <button id="sp-rruff-more" class="muted hidden" title="Only a Thermo OMNIC copy (2007) is on this machine: fetch RRUFF's full collection from rruff.net (about 700 MB) into the cache — the two are then listed as one.">⤓ full</button>
     </span>
     <select id="sp-kind" title="What the spectrum is. An infrared transmittance spectrum is converted to absorbance before anything else.">
       <option value="">kind: as guessed</option>
@@ -137,6 +140,7 @@
           <label><input type="checkbox" data-layer="comps" checked> bands</label>
           <label><input type="checkbox" data-layer="stated" checked> manuscript</label>
           <label title="The band library over the plot: for each group of the mineral's chemistry (the ‘chemistry’ field above, else the manuscript's formula) and each of its modes, a bar where the band is expected — thin: the range in minerals from the literature; thick: where published mineral descriptions place it (5th–95th percentile, the tick their median); ◆ the free-ion value. Windows of different groups overlap: the bars say what a band CAN be in this chemistry, not what it is."><input type="checkbox" data-layer="lib" checked> expected</label>
+          <details id="sp-pick" class="pop"><summary title="Chem search: pick the groups whose bands are drawn over the plot — by element, as on an EDS spectrum: P gives PO4 ν1–ν4 and the acid phosphate, each oxoanion in its own colour, its modes in shades. The chemistry's own groups are ticked to begin with. Beneath: the species of the local Mindat snapshot that hold every group picked — those with a RRUFF spectrum on this machine highlighted, a click on the name opens it here."><svg class="pt" viewBox="0 0 18 7" aria-hidden="true"><rect x="0" y="0" width="1" height="1"/><rect x="17" y="0" width="1" height="1"/><rect x="0" y="1.2" width="2.2" height="1"/><rect x="12" y="1.2" width="6" height="1"/><rect x="0" y="2.4" width="2.2" height="1"/><rect x="12" y="2.4" width="6" height="1"/><rect x="0" y="3.6" width="18" height="1"/><rect x="0" y="4.8" width="18" height="1"/><rect x="2.4" y="6.2" width="15.6" height="0.8" opacity=".55"/></svg><span id="sp-pick-label">Chem search</span> ▾</summary><div class="pop-body" id="sp-pick-body"></div></details>
           <label title="High wavenumber on the left, as an infrared spectrum is printed."><input type="checkbox" data-layer="reverse"> high → low</label>
           <details id="sp-more" class="pop"><summary title="More layers: the structure's expected positions, the found bands, the distance rulers, the second derivative">more ▾</summary><div class="pop-body">
             <label><input type="checkbox" data-layer="ticks" checked> structure</label>
@@ -162,6 +166,7 @@
     </main>
   </div>
 
+  <script src="/static/chem.js"></script>
   <script src="/static/sp.js"></script>
 </body>
 </html>

@@ -138,7 +138,7 @@ def table(res, name='', journal_key=None):
     from pxrd_review import tables as T
     J = T.journal(journal_key)
     head = [T.C('Constituent'), T.C('wt%'), T.C(T.R('k', 'i')), T.C(T.R('k', 'i'), T.R('·wt%/100')), T.C('Source')]
-    rows = [[T.C(key), T.C('%.2f' % w), T.C(('%.3f' % k) if k is not None else '—'), T.C('%.4f' % c), T.C(src)] for key, w, k, c, src in res['rows']]
+    rows = [[T.chem(key), T.C('%.2f' % w), T.C(('%.3f' % k) if k is not None else '—'), T.C('%.4f' % c), T.C(src)] for key, w, k, c, src in res['rows']]
     rows.append([T.C(T.R('K', 'i'), T.R('C', 'sub')), T.C('%.2f' % sum(r[1] for r in res['rows'])), T.C(''), T.C('%.4f' % res['KC']), T.C('')])
     note = []
     if res.get('D_calc'):

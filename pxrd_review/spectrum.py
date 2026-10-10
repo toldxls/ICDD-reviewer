@@ -1049,13 +1049,14 @@ def compare_stated(comps, stated, tolerance=6.0):
     return {'matched': matched, 'not_fitted': lost, 'not_stated': [p for k, p in enumerate(fitted) if k not in used]}
 
 
-def inferred(comps, technique=None, formula=None):
+def inferred(comps, technique=None, formula=None, groups=None):
     """For each fitted band, what it would mean: the windows it falls in (spectro.suggest) — or, with the mineral's
     `formula`, what the band library expects there of THAT chemistry (bands.identify: the groups of the formula only,
     and a plain word when none of them has a band there) — and the distance either relation gives where one applies
-    -> [{'pos', 'suggest': [names], 'distance': str}]."""
+    -> [{'pos', 'suggest': [names], 'distance': str}]. `groups` (library keys picked by hand) stands in for the
+    formula's own groups when given."""
     from pxrd_review import spectro as SP, bands as BD
-    keys = BD.groups_of(formula) if formula else []
+    keys = list(groups) if groups is not None else BD.groups_of(formula) if formula else []
     out = []
     for c in comps:
         if keys:
@@ -1064,7 +1065,7 @@ def inferred(comps, technique=None, formula=None):
             if not names:
                 other = [BD.label(x) for x in cands if x['in_formula'] is False and not x['broad']][:3]
                 shared = [x['mode'] for x in cands if x['group'] == 'M-O']
-                names = shared or ['no group of the formula' + (' (elsewhere: %s)' % ', '.join(other) if other else '')]
+                names = shared or ['no group %s' % ('picked' if groups is not None else 'of the formula') + (' (elsewhere: %s)' % ', '.join(other) if other else '')]
             names = ['OH stretch' if n == 'H2O stretch' else n for n in names]          # water and hydroxyl stretch in one place
             names = [n for k, n in enumerate(names) if n not in names[:k]]
         else:
@@ -1135,11 +1136,11 @@ def prepare_series(every, series=0, lo=None, hi=None, kind=None, despike_on=Fals
             'kind': kind, 'noise': sig, 'notes': notes}
 
 
-def band_rows(f, technique=None, formula=None):
+def band_rows(f, technique=None, formula=None, groups=None):
     """The table of a fit: one row per band — position, width, height, area, share of the area, shape, what it may be
-    (of the chemistry `formula` names, when one is given)."""
+    (of the chemistry `formula` names, when one is given — or of the `groups` picked by hand)."""
     total = sum(c['area'] for c in f.comps) or 1.0
-    extra = {round(i['pos'], 6): i for i in inferred(f.comps, technique, formula)}
+    extra = {round(i['pos'], 6): i for i in inferred(f.comps, technique, formula, groups)}
     rows = []
     def pm(v, e, fmt):
         return (fmt % v) + (' ± ' + (fmt % e) if e else '')
@@ -1148,11 +1149,12 @@ def band_rows(f, technique=None, formula=None):
         rows.append([pm(c['pos'], c['esd'].get('pos'), '%.1f'), pm(c['fwhm'], c['esd'].get('fwhm'), '%.1f'), pm(c['height'], c['esd'].get('height'), '%.4g'),
                      '%.4g' % c['area'], '%.0f' % (100.0 * c['area'] / total), c['shape'] + (' η %.2f' % c['eta'] if c['shape'] == 'pvoigt' else ''),
                      ', '.join(i.get('suggest') or []), i.get('distance') or ''])
-    return ['position (cm⁻¹)', 'FWHM (cm⁻¹)', 'height', 'area', 'area %', 'shape', 'expected of the formula' if formula else 'window', 'distance'], rows
+    return ['position (cm⁻¹)', 'FWHM (cm⁻¹)', 'height', 'area', 'area %', 'shape',
+            'expected of the groups picked' if groups is not None else 'expected of the formula' if formula else 'window', 'distance'], rows
 
 
-def table_text(f, technique=None, title='', formula=None):
-    head, rows = band_rows(f, technique, formula)
+def table_text(f, technique=None, title='', formula=None, groups=None):
+    head, rows = band_rows(f, technique, formula, groups)
     w = [max(len(str(r[k])) for r in [head] + rows) for k in range(len(head))]
     L = [title] if title else []
     L.append('  '.join(h.ljust(w[k]) for k, h in enumerate(head)))
@@ -1245,14 +1247,18 @@ def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=N
     os.makedirs(out_dir, exist_ok=True)
     tech = 'raman' if prep['kind'] == 'raman' else 'ir' if prep['kind'].startswith('ir') else None
     formula = str((opts or {}).get('formula') or '').strip() or None      # the chemistry the bands are read against (bands.identify)
+    groups = (opts or {}).get('groups')                                     # … or the groups picked by hand in the window
+    groups = [str(k) for k in groups] if isinstance(groups, (list, tuple)) else None
     out = {}
     text = ['SPECTRUM — %s' % prep['series'].name] + ['  note: ' + n for n in prep['notes']]
     if formula:
         text.append('  chemistry: %s' % formula)
+    if groups is not None:
+        text.append('  groups picked: %s' % (', '.join(groups) or 'none'))
     if prep['spikes']:
         text.append('  %d cosmic-ray event%s removed at %s cm⁻¹' % (len(prep['spikes']), '' if len(prep['spikes']) == 1 else 's', ', '.join('%.0f' % a for a, _b in prep['spikes'][:12])))
     for f in fits:
-        text += ['', table_text(f, tech, 'Bands %g–%g cm⁻¹' % (f.lo, f.hi), formula)]
+        text += ['', table_text(f, tech, 'Bands %g–%g cm⁻¹' % (f.lo, f.hi), formula, groups)]
     out['txt'] = os.path.join(out_dir, stem + '_sp.txt')
     with open(out['txt'], 'w', encoding='utf-8') as fh:
         fh.write('\n'.join(text) + '\n')
@@ -1278,10 +1284,11 @@ def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=N
         for n_ in prep['notes']:
             ws.append([n_])
         for f in fits:
-            _head, rows = band_rows(f, tech, formula)
+            _head, rows = band_rows(f, tech, formula, groups)
             ws.append([])
             ws.append(['region %g–%g cm⁻¹: %d points, %d parameters; reduced χ² %.3g, R² %.5f%s' % (f.lo, f.hi, f.n, f.k, f.chi2, f.r2, '' if f.converged else '; NOT CONVERGED')])
-            ws.append(['position (cm⁻¹)', '± s.u.', 'FWHM (cm⁻¹)', '± s.u.', 'height', '± s.u.', 'area', 'area %', 'shape', 'η', 'expected of the formula' if formula else 'where published descriptions place it', 'distance'])
+            ws.append(['position (cm⁻¹)', '± s.u.', 'FWHM (cm⁻¹)', '± s.u.', 'height', '± s.u.', 'area', 'area %', 'shape', 'η',
+                       'expected of the groups picked' if groups is not None else 'expected of the formula' if formula else 'where published descriptions place it', 'distance'])
             for cell in ws[ws.max_row]:
                 cell.font = bold
             total = sum(c['area'] for c in f.comps) or 1.0
@@ -1317,7 +1324,7 @@ def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=N
         import docx
         doc = docx.Document()
         for f in fits:
-            head, rows = band_rows(f, tech, formula)
+            head, rows = band_rows(f, tech, formula, groups)
             doc.add_paragraph('Fitted bands, %g–%g cm⁻¹ (%s)' % (f.lo, f.hi, prep['series'].name))
             t = doc.add_table(rows=1, cols=len(head))
             for k, h in enumerate(head):
@@ -1325,7 +1332,17 @@ def export(prep, fits, out_dir, stem, opts=None, word=False, xlsx=False, ticks=N
             for r in rows:
                 cells = t.add_row().cells
                 for k, v in enumerate(r):
-                    cells[k].text = str(v)
+                    if k == 6:                                     # what the band may be: the ions with their subscripts and charges
+                        from pxrd_review.bands import chem_tokens
+                        para = cells[k].paragraphs[0]
+                        for kind, txt in chem_tokens(str(v)):
+                            run = para.add_run(txt)
+                            if kind == 'sub':
+                                run.font.subscript = True
+                            elif kind == 'sup':
+                                run.font.superscript = True
+                    else:
+                        cells[k].text = str(v)
             doc.add_paragraph('Reduced χ² %.2f, R² %.4f; %s.' % (f.chi2, f.r2, '; '.join(f.warnings) if f.warnings else 'no warning'))
         out['docx'] = os.path.join(out_dir, stem + '_sp.docx'); doc.save(out['docx'])
     return out

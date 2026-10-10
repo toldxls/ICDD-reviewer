@@ -27,6 +27,36 @@ class Groups(unittest.TestCase):
                               ('PbS', ['sulfide']), ('Ag3AsS3', ['sulfide']), ('NaCl', []), ('', [])):
             self.assertEqual(B.groups_of(formula), want, formula)
 
+    def test_the_catalogue_and_the_species_of_a_pick(self):
+        cat = B.catalogue()
+        self.assertEqual([g['key'] for g in cat], [g['key'] for g in B.library()['groups']])
+        self.assertEqual({g['key']: g['element'] for g in cat if g['element'] in ('P', 'H', 'N', 'S')},
+                         {'PO4': 'P', 'P-OH': 'P', 'H2O': 'H', 'OH': 'H', 'H3O': 'H', 'NH4': 'N', 'NO3': 'N', 'SO4': 'S', 'SO3': 'S', 'sulfide': 'S'})
+        self.assertEqual([m['label'] for m in next(g for g in cat if g['key'] == 'P-OH')['modes']], ['ν(P–OH)', 'δ(P–O–H)'])
+        if not B.species_index():                                   # no snapshot on this machine
+            return
+        both = B.species_with(['PO4', 'UO2'])
+        self.assertIn('Autunite', [n for n, _f, _h in both]); self.assertTrue(all('<' not in f for _n, f, _h in both))
+        aut = next(h for n, _f, h in both if n == 'Autunite')
+        self.assertTrue(aut.startswith('Ca(UO<sub>2</sub>)<sub>2</sub>(PO<sub>4</sub>)<sub>2</sub>'), aut)
+        self.assertEqual(B.formula_html('Fe<sup>3+</sup><sub>2</sub>O<sub>3</sub><script>x</script>'), 'Fe<sub>2</sub>O<sub>3</sub>x')
+        self.assertEqual(B.formula_html('Ca2+ & <b>Mg</b>'), 'Ca&amp;Mg')
+        self.assertEqual(B.formula_html('(&#9723;<sub>0.5</sub>Ba<sub>0.5</sub>)&lt;'), '(<sub>0.5</sub>Ba<sub>0.5</sub>)&lt;')   # an entity is read, never shown raw
+        self.assertEqual(B.species_with([]), [])
+        self.assertTrue(set(both) <= set(B.species_with(['UO2'])))
+        counts = B.species_counts()
+        self.assertEqual(counts['UO2'], len(B.species_with(['UO2']))); self.assertGreater(counts['OH'], counts['UO2'])
+
+    def test_a_formula_as_a_chemist_writes_it(self):
+        show = lambda t: ''.join(x if not k else '<%s>%s</%s>' % (k, x, k) for k, x in B.chem_tokens(t))
+        for text, want in (('Ca(UO2)2(PO4)2·11H2O', 'Ca(UO<sub>2</sub>)<sub>2</sub>(PO<sub>4</sub>)<sub>2</sub>·11H<sub>2</sub>O'),
+                           ('(SO4)2−', '(SO<sub>4</sub>)<sup>2−</sup>'), ('(OH)−', '(OH)<sup>−</sup>'), ('(NH4)+', '(NH<sub>4</sub>)<sup>+</sup>'),
+                           ('(PO3OH)2−', '(PO<sub>3</sub>OH)<sup>2−</sup>'), ('Fe3+', 'Fe<sup>3+</sup>'), ('U6+O2', 'U<sup>6+</sup>O<sub>2</sub>'),
+                           ('SO4 ν3', 'SO<sub>4</sub> ν3'), ('ν(P–OH)', 'ν(P–OH)'), ('H2O bend', 'H<sub>2</sub>O bend'), ('UO2 ν1', 'UO<sub>2</sub> ν1'),
+                           ('(Fe0.8Mg0.2)Σ1.0O4', '(Fe<sub>0.8</sub>Mg<sub>0.2</sub>)Σ1.0O<sub>4</sub>'), ('Ca(UO2)2(PO4)2·10-12H2O', 'Ca(UO<sub>2</sub>)<sub>2</sub>(PO<sub>4</sub>)<sub>2</sub>·10-12H<sub>2</sub>O'),
+                           ('Pb3-xBi', 'Pb<sub>3</sub>-xBi'), ('(SO4)2-', '(SO<sub>4</sub>)<sup>2-</sup>'), ('Si–O', 'Si–O'), ('M–S', 'M–S'), ('SiO2', 'SiO<sub>2</sub>'), ('', ''), (None, '')):
+            self.assertEqual(show(text), want, text)
+
     def test_what_is_no_group(self):
         self.assertEqual(B.groups_of('UO2'), [])                                         # uraninite is no uranyl mineral
         self.assertEqual(B.groups_of('Mg(H2O)6·H2OH2O'), ['H2O'])                         # two waters side by side spell no hydroxyl

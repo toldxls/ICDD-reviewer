@@ -1270,7 +1270,7 @@ def to_tabs(table, journal_key=None):
     if note and J['notes_prefix'] and not note.startswith(J['notes_prefix']):
         note = J['notes_prefix'] + note
     return [('epma', {'n': 1, 'label': J['caption'].format(n=1), 'caption': T._title(J, table['caption'].rstrip('.')), 'journal': J,
-                      'head': [T.C(h) for h in table['head']], 'rows': [[T.C(str(x)) for x in r] for r in table['rows']], 'note': note})]
+                      'head': [T.C(h) for h in table['head']], 'rows': [[T.chem(str(x)) if k == 0 else T.C(str(x)) for k, x in enumerate(r)] for r in table['rows']], 'note': note})]
 
 def export(ds, red, table, text, out_dir, stem, word=False, xlsx=False, journal_key=None, method=''):
     """Write review_out/<stem>_epma.txt (always) and the .xlsx / .docx asked for; {kind: path}."""

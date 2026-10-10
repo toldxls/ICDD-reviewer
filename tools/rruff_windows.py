@@ -33,6 +33,23 @@ MIN_MINERALS = 3           # a window needs this many minerals
 from pxrd_review.omnic_lib import read_omnic, split_name          # the library reader lives in the package (the window uses it too)
 
 
+def read_any(folder):
+    """[(name, x, y)] from an OMNIC folder (RRUFFLib.lbd) or a fetched store (index.json: pxrd rruff --fetch); the names
+    carry mineral, id, laser and kind the way the OMNIC records do, so `split_name` reads both alike. The store's broad
+    scans are left out (low resolution) and so are its RAW spectra."""
+    if os.path.isfile(os.path.join(folder, 'index.json')):
+        from pxrd_review.rruff import Store
+        st = Store(folder)
+        out = []
+        for i, m in enumerate(st.spectra):
+            if m.get('technique') != 'raman' or m.get('quality') == 'broad' or m.get('kind') != 'processed':
+                continue
+            x, y = st.xy(i)
+            out.append(('%s%s_%s%s' % (m['name'].replace(' ', ''), m['id'].split('-')[0], m['laser'], m['kind']), x, y))
+        return out
+    return read_omnic(folder)
+
+
 def formula_of(mineral, cache={}):
     key = mineral.lower()
     if key not in cache:
@@ -185,13 +202,13 @@ def verdict(w, lo, hi, slack=15):
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('folder', help='the folder holding RRUFFLib.lbd and RRUFFLib.lbt')
+    ap.add_argument('folder', help='the folder holding RRUFFLib.lbd and RRUFFLib.lbt, or a fetched store (pxrd rruff --fetch: index.json)')
     ap.add_argument('out_dir', nargs='?', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'review_out'))
     ap.add_argument('--write', action='store_true', help='write the aggregates to pxrd_review/data/band_windows_rruff.json')
     ap.add_argument('--check', action='store_true', help='the alignment of names and spectra: the strongest band of a few well-known minerals')
     ap.add_argument('--show', help='print every assigned band of one group (e.g. SO4)')
     a = ap.parse_args(argv)
-    spectra = read_omnic(a.folder)
+    spectra = read_any(a.folder)
     lib = BD.library()
     groups = {g['key']: g for g in lib['groups']}
     # one spectrum per RRUFF id, the best kind it has
@@ -227,8 +244,11 @@ def main(argv=None):
         pk = peaks_of(x, y)
         shape = groups[g].get('shape')
         free = {m['mode']: m.get('free') for m in groups[g]['modes']}
-        if shape and free.get('ν1') and free['ν1'] > x[-1]:
+        free_v1 = next((v for k, v in free.items() if k.startswith('ν1') and v), None)     # 'ν1' or 'ν1, ν3' (H3O): the stretch's free value
+        if shape and free_v1 and free_v1 > x[-1]:
             counts['group above the grid'] += 1; continue
+        if shape and not free_v1:
+            counts['no free-ion ν1 to anchor on'] += 1; continue      # H3O: its 'ν1, ν3' carries no free value, so 'the strongest band' would be anything
         if shape:
             got = assign(shape, [m['mode'] for m in groups[g]['modes']], pk, free)
             for mode, ps in got.items():
@@ -309,8 +329,10 @@ def main(argv=None):
     if a.write:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pxrd_review', 'data', 'band_windows_rruff.json')
         with open(path, 'w', encoding='utf-8') as fh:
-            json.dump({'about': 'Where the bands of single-group minerals stand in a RRUFF Raman library (2007 OMNIC set, %d spectra, grid to 1495 cm-1): '
-                                'percentiles per group and mode, modes assigned by the ion geometry alone (tools/rruff_windows.py). Aggregates only.' % len(spectra),
+            json.dump({'about': 'Where the bands of single-group minerals stand in a RRUFF Raman library (the collection fetched from rruff.net by '
+                                'pxrd rruff --fetch, processed Raman spectra, broad scans left out — or a Thermo OMNIC copy): percentiles per group and mode, '
+                                'modes assigned by the ion geometry alone (tools/rruff_windows.py). Aggregates only.',
+                       'source': '%s: %d spectra walked, %d RRUFF ids, %d single-group' % (os.path.basename(os.path.abspath(a.folder)), len(spectra), len(best), counts['single-group spectra']),
                        'percentiles': [5, 25, 50, 75, 95], 'trim_sigmas': TRIM, 'min_minerals': MIN_MINERALS, 'technique': 'raman', 'windows': agg}, fh, indent=1, ensure_ascii=False)
         print('written:', os.path.normpath(path))
     return 0

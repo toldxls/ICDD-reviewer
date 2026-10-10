@@ -683,8 +683,22 @@ the formula expects there (or for the groups of another chemistry, when none of 
 **Band library** table under the fitted bands lists each mode with the manuscript's stated bands and the fitted bands
 that fall in it. The formula goes into the written table and the session.
 
-**A RRUFF spectrum beside yours** (the `RRUFF mineral…` box, shown when a RRUFF library is on this machine: `$PXRD_RRUFF_DIR`,
-a `RRUFF` folder beside or above the open folder, or `~/RRUFF`, holding a Thermo OMNIC pair `RRUFFLib.lbd` + `.lbt`). Type a
+**Chem search** (the periodic-table button in the layer bar). With no chemistry to hand — or to see what another chemistry would
+give — the library's groups are picked as on an EDS spectrum: by element (P: phosphate and the acid phosphate; As: arsenate,
+acid arsenate, arsenite; …), a chip toggling one group and the element letter all of its groups. Each oxoanion is drawn
+in its own fixed colour (sulfate yellow, phosphate orange, arsenate red …), its modes in four shades of it, ν1 the lightest; the chemistry's own groups are ticked to begin with
+and marked, `as the chemistry` goes back to them, `none` clears the plot. Under the chips: the species of the local Mindat
+snapshot whose formula holds every group picked (49 hold phosphate and uranyl together), and — with a RRUFF library on
+this machine — those it has a spectrum of highlighted (a click on the name opens that spectrum here, `overlay` draws it under
+the curve). The list is alphabetical; a sort puts the species with a spectrum first, `only with a spectrum` keeps them alone. The pick is kept per folder, travels with
+the session, and names the fitted bands in place of the formula (`expected of the groups picked`). Wherever the window
+prints a formula, an ion or an oxide — chips, legend, plot labels, the pointer's readout, the band tables — it is written
+as a chemist writes it, subscripts and charges in place.
+
+**A RRUFF spectrum beside yours** (the `RRUFF…` box, shown when a RRUFF library is on this machine — a Thermo OMNIC pair
+`RRUFFLib.lbd` + `.lbt`. Looked for at `$PXRD_RRUFF_DIR`, then where it was last found, then a `RRUFF` folder beside or above
+the open folder, `~/RRUFF`, and two levels under Desktop, Documents and Downloads; once found anywhere it is remembered, so it
+is there whatever folder is opened next. With none found the bar shows `RRUFF library…`: name the folder once.) Type a
 mineral, choose one of its spectra (sample id, processing, laser), then `open` it here as a spectrum of its own — every tool
 works on it — or tick `overlay` to draw it under the current curve, scaled to the curve in view. The library is read in
 place; nothing of it is copied or written.

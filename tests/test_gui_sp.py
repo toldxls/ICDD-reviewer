@@ -28,6 +28,14 @@ class SpectrumWindow(unittest.TestCase):
         d.add_paragraph('The ν1 (UO2)2+ symmetric stretching vibration is present as a very strong band at 832 cm–1 with a shoulder at 846 cm–1. '
                         'A weak band at 880 cm–1 is assigned to the ν3 (UO2)2+ antisymmetric stretching vibration.')
         d.save(os.path.join(cls.tmp, 'testite.docx'))
+        from pxrd_review import omnic_lib as OL
+        cls._rruff_keep = (OL.REMEMBER, OL.SEARCH_ROOTS, os.environ.pop('PXRD_RRUFF_DIR', None))
+        cls._rruff_mem = tempfile.mkdtemp(prefix='rrmem_')                                     # not in the open folder: it lists every file there
+        OL.REMEMBER, OL.SEARCH_ROOTS = os.path.join(cls._rruff_mem, 'remember.txt'), ()        # the machine's own library stays out of these tests
+        cls._store_keep = os.environ.get('PXRD_RRUFF_STORE'); os.environ['PXRD_RRUFF_STORE'] = os.path.join(cls._rruff_mem, 'nostore')   # … and its fetched store
+        from pxrd_review import rruff as RRF
+        RRF._STORE.clear()
+        OL._OPEN.clear()
         cls.c = G.app.test_client()
         assert G.ms_set_folder(cls.tmp)
         if G.MS['athread']:
@@ -36,7 +44,16 @@ class SpectrumWindow(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        shutil.rmtree(cls.tmp, ignore_errors=True)
+        from pxrd_review import omnic_lib as OL
+        OL.REMEMBER, OL.SEARCH_ROOTS = cls._rruff_keep[0], cls._rruff_keep[1]
+        if cls._rruff_keep[2]:
+            os.environ['PXRD_RRUFF_DIR'] = cls._rruff_keep[2]
+        OL._OPEN.clear()
+        if cls._store_keep is None:
+            os.environ.pop('PXRD_RRUFF_STORE', None)
+        else:
+            os.environ['PXRD_RRUFF_STORE'] = cls._store_keep
+        shutil.rmtree(cls.tmp, ignore_errors=True); shutil.rmtree(cls._rruff_mem, ignore_errors=True)
 
     def _post(self, url, body, status=200):
         r = self.c.post(url, json=body)
@@ -376,6 +393,113 @@ class SpectrumWindow(unittest.TestCase):
             self.assertIn('no number', self._post('/api/sp/rruff/open', {'key': 99}, 400)['error'])
         finally:
             shutil.rmtree(d, ignore_errors=True); OL._OPEN.clear()
+
+    def test_groups_picked_by_hand(self):
+        # the catalogue for the picker: every group with its element, its modes, how many species of the snapshot hold it
+        from pxrd_review import bands as B
+        cat = json.loads(self.c.get('/api/sp/groups').data)
+        byk = {g['key']: g for g in cat['groups']}
+        self.assertEqual([g['key'] for g in cat['groups']], [g['key'] for g in B.library()['groups']])
+        self.assertEqual((byk['PO4']['element'], byk['P-OH']['element'], byk['sulfide']['element'], byk['H2O']['element'], byk['NH4']['element']), ('P', 'P', 'S', 'H', 'N'))
+        self.assertEqual([m['label'] for m in byk['PO4']['modes']], ['PO4 ν1', 'PO4 ν3', 'PO4 ν4', 'PO4 ν2'])
+        self.assertEqual(sorted(byk['PO4']['modes'][0]), ['active', 'broad', 'hi', 'label', 'lo', 'mode', 'what'])
+        # a pick stands in for the chemistry: the bars are the picked groups', the formula's own groups are still said
+        r = self._post('/api/sp/bands', {'formula': 'Ca2(UO2)3(SO4)2(OH)6·4H2O', 'kind': 'raman', 'groups': ['PO4', 'bogus'], 'at': [960]})
+        self.assertEqual((r['source'], [g['key'] for g in r['groups']], r['own'], r['formula']), ('picked', ['PO4'], ['UO2', 'SO4', 'H2O', 'OH'], 'Ca2(UO2)3(SO4)2(OH)6·4H2O'))
+        self.assertEqual({x['group'] for x in r['rows']}, {'PO4'}); self.assertEqual(r['at'][0]['own'], ['PO4 ν1', 'PO4 ν3'])
+        self.assertEqual({x['mode']: x['k'] for x in r['rows']}, {'ν1': 0, 'ν3': 1, 'ν4': 2, 'ν2': 3})      # the mode's place in its group: its shade on the plot
+        none = self._post('/api/sp/bands', {'formula': 'Ca2(UO2)3(SO4)2(OH)6·4H2O', 'groups': []})
+        self.assertEqual((none['source'], none['groups'], none['rows'], none['own']), ('picked', [], [], ['UO2', 'SO4', 'H2O', 'OH']))
+        self.assertEqual(self._post('/api/sp/bands', {'formula': 'Ca2(UO2)3(SO4)2(OH)6·4H2O', 'groups': 'PO4'})['source'], 'typed')   # not a list: no pick
+        # the fit names each band for the pick, and the files say so
+        f = self._post('/api/sp/fit', dict(self.body, lo=780, hi=960, formula='Ca2(UO2)3(SO4)2(OH)6·4H2O', groups=['SO4']))['fit']
+        self.assertTrue(f['comps'][0]['suggest'][0].startswith('no group picked'), f['comps'][0]['suggest']); self.assertEqual(f['head'][6], 'expected of the groups picked')
+        ex = self._post('/api/sp/export', dict(self.body, fmt='txt', formula='Ca2(UO2)3(SO4)2(OH)6·4H2O', groups=['SO4', 'UO2'],
+                                               regions=[{'lo': 780, 'hi': 960, 'comps': f['comps'], 'base': f['base'], 'x0': f['x0']}]))
+        try:
+            text = self.c.get('/api/sp/file?name=' + ex['files']['txt']).data.decode('utf-8')
+            self.assertIn('groups picked: UO2, SO4', text); self.assertIn('expected of the groups picked', text)
+            sess = json.loads(self.c.get('/api/sp/file?as=json&name=' + ex['files']['json']).data)
+            self.assertEqual(sess['options']['groups'], ['UO2', 'SO4'])
+            plain = self._post('/api/sp/export', dict(self.body, fmt='txt', regions=[{'lo': 780, 'hi': 960, 'comps': f['comps'], 'base': f['base'], 'x0': f['x0']}]))
+            text = self.c.get('/api/sp/file?name=' + plain['files']['txt']).data.decode('utf-8')
+            self.assertNotIn('groups picked', text); self.assertIsNone(json.loads(self.c.get('/api/sp/file?as=json&name=' + plain['files']['json']).data)['options']['groups'])
+        finally:
+            for fn in os.listdir(self.G.MS['out_dir']):
+                if fn.startswith('testite_raman_sp'):
+                    os.remove(os.path.join(self.G.MS['out_dir'], fn))
+        # the species that hold every group picked, from the local snapshot — with the RRUFF library beside the folder, its spectra first
+        if not B.species_index():
+            return
+        sp = self._post('/api/sp/species', {'groups': ['PO4', 'UO2']})
+        names = [x['name'] for x in sp['species']]
+        self.assertEqual((sp['groups'], sp['total'], sp['with_rruff']), (['UO2', 'PO4'], len(names), 0))
+        self.assertIn('Autunite', names); self.assertNotIn('Quartz', names); self.assertEqual(names, sorted(names, key=str.lower))
+        self.assertIn('<sub>', next(x['html'] for x in sp['species'] if x['name'] == 'Autunite'))
+        self.assertTrue(all(('PO4' in x['formula'] or 'PO3OH' in x['formula']) and 'UO2' in x['formula'] for x in sp['species']))   # an acid phosphate is a phosphate
+        self.assertEqual(self._post('/api/sp/species', {'groups': []})['total'], 0)
+        self.assertEqual(self._post('/api/sp/species', {'groups': ['PO4'], 'limit': 5})['species'].__len__(), 5)
+        from tests.test_rruff_windows import write_library, gauss
+        from pxrd_review import omnic_lib as OL
+        d = os.path.join(self.tmp, 'RRUFF'); os.makedirs(d, exist_ok=True)
+        write_library(d, [('AutuniteR050220_processed', 'field', gauss([830, 990], [100, 30])), ('AutuniteR050220_raw', 'field', gauss([830, 990], [100, 30]))])
+        OL._OPEN.clear()
+        try:
+            sp = self._post('/api/sp/species', {'groups': ['PO4', 'UO2']})
+            aut = next(x for x in sp['species'] if x['name'] == 'Autunite')
+            self.assertEqual((sp['with_rruff'], aut['rruff']['id'], aut['rruff']['kind'], aut['rruff']['n']), (1, 'R050220', 'processed', 2))
+            self.assertEqual([x['name'] for x in sp['species']], names)                         # by name, whatever has a spectrum: the page orders
+            self.assertEqual(sum(1 for x in sp['species'] if x['rruff']), 1)
+            cat = json.loads(self.c.get('/api/sp/groups').data)
+            self.assertTrue(cat['rruff']); self.assertEqual({g['key']: g['rruff'] for g in cat['groups'] if g['rruff']}, {'UO2': 1, 'PO4': 1, 'H2O': 1})
+        finally:
+            shutil.rmtree(d, ignore_errors=True); OL._OPEN.clear()
+
+    def test_the_rruff_library_is_found_wherever_the_folder_is(self):
+        from tests.test_rruff_windows import write_library, gauss
+        from pxrd_review import omnic_lib as OL
+        home = tempfile.mkdtemp(prefix='rrhome_'); mem = os.path.join(home, 'remember.txt')
+        lib = os.path.join(home, 'Desktop', 'Minerals', 'RRUFF'); os.makedirs(lib)
+        write_library(lib, [('QuartzR040031_processed', 'field', gauss([464, 206], [100, 30]))])
+        keep = (OL.REMEMBER, OL.SEARCH_ROOTS)
+        OL.REMEMBER, OL.SEARCH_ROOTS = mem, (os.path.join(home, 'Desktop'),)
+        OL._OPEN.clear()
+        try:
+            self.assertTrue(OL.is_library(lib)); self.assertFalse(OL.is_library(home)); self.assertFalse(OL.is_library(''))
+            # a folder opened anywhere else: the library is found two levels under 'Desktop', and remembered
+            far = os.path.join(home, 'elsewhere', 'batch'); os.makedirs(far)
+            self.assertEqual(OL.find_library(far), lib)
+            self.assertEqual(OL.remembered(), lib)
+            OL.SEARCH_ROOTS = ()                                                     # … and found from memory alone next time
+            self.assertEqual(OL.find_library(far), lib)
+            os.remove(mem)
+            self.assertIsNone(OL.find_library(far))                                  # nothing to find: no library, no error
+            # named by hand: the folder itself or the one above it; a wrong one is said
+            self.assertEqual(OL.set_library(os.path.dirname(lib)), lib); self.assertEqual(OL.remembered(), lib)
+            self.assertEqual(OL.set_library('  "' + lib + '" '), lib)
+            with self.assertRaises(ValueError) as cm:
+                OL.set_library(home)
+            self.assertIn('holds no RRUFFLib.lbd', str(cm.exception))
+            with self.assertRaises(ValueError):
+                OL.set_library(os.path.join(home, 'nowhere'))
+            os.remove(mem)
+            # the window's route: a wrong folder is a 400 with the reason; the right one answers like /list and is remembered
+            bad = self._post('/api/sp/rruff/set', {'folder': home}, 400)
+            self.assertIn('holds no RRUFFLib.lbd', bad['error'])
+            self.assertIn('no such folder', self._post('/api/sp/rruff/set', {}, 400)['error'])
+            good = self._post('/api/sp/rruff/set', {'folder': lib})
+            self.assertEqual(([m['name'] for m in good['minerals']], good['folder']), (['Quartz'], lib))
+            self.assertEqual(OL.remembered(), lib)
+            self.assertEqual([m['name'] for m in json.loads(self.c.get('/api/sp/rruff/list').data)['minerals']], ['Quartz'])
+            self.assertEqual(OL.set_library(lib), lib)
+            self.assertTrue(OL._is_temp(lib))                                        # the real memory file (REMEMBER None) never takes a temp folder: a test's
+        finally:
+            OL.REMEMBER, OL.SEARCH_ROOTS = keep
+            OL._OPEN.clear(); shutil.rmtree(home, ignore_errors=True)
+            try:                                                                   # the class's own memory, in case a test above filled it
+                os.remove(os.path.join(self._rruff_mem, 'remember.txt'))
+            except OSError:
+                pass
 
     def test_upload_stays_in_memory(self):
         before = sorted(os.listdir(self.tmp))

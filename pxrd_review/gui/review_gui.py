@@ -3348,26 +3348,81 @@ def api_sp_bands():
     tech = 'raman' if kind == 'raman' else 'ir' if kind.startswith('ir') else None
     lib = BD.library()
     names = {g['key']: g['name'] for g in lib['groups']}
-    keys = BD.groups_of(formula) if formula else []
+    own = BD.groups_of(formula) if formula else []
+    picked = _sp_groups(d)
+    keys = own if picked is None else picked                    # groups picked by hand stand in for the chemistry's own
+    if picked is not None:
+        source = 'picked'
+    order = {(g['key'], m['mode']): k for g in lib['groups'] for k, m in enumerate(g['modes'])}     # the mode's place in its group: its shade
     def row(r):
         p = r['published']
-        return {'group': r['group'], 'label': BD.label(r), 'mode': r['mode'], 'what': r['what'], 'free': r['free'], 'lo': r['lo'], 'hi': r['hi'],
+        return {'group': r['group'], 'label': BD.label(r), 'mode': r['mode'], 'what': r['what'], 'free': r['free'], 'lo': r['lo'], 'hi': r['hi'], 'k': order.get((r['group'], r['mode']), 0),
                 'active': lib['activity'][r['active']], 'source': lib['sources'][r['source']].split(' — ')[0], 'check': r['check'], 'broad': r['broad'],
                 'published': None if not p else {'p5': p['p5'], 'p50': p['p50'], 'p95': p['p95'], 'papers': p['papers'], 'of': r['published_for']},
                 'rruff': None if not r.get('rruff') else {'p5': r['rruff']['p5'], 'p50': r['rruff']['p50'], 'p95': r['rruff']['p95'], 'minerals': r['rruff']['minerals']}}
     out = {'ok': True, 'formula': BD.display(formula) if formula else '', 'name': name, 'source': source,
-           'groups': [{'key': k, 'name': names[k]} for k in keys], 'rows': [row(r) for r in BD.expected(groups=keys, technique=tech)] if keys else []}
+           'groups': [{'key': k, 'name': names[k]} for k in keys], 'own': own,
+           'rows': [row(r) for r in BD.expected(groups=keys, technique=tech)] if keys else []}
     at = d.get('at')
     if isinstance(at, list):
         res = []
         for v in at[:60]:
             if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 20000:
-                cands = BD.identify(float(v), technique=tech, groups=keys if formula else None)
+                cands = BD.identify(float(v), technique=tech, groups=keys if (formula or picked is not None) else None)
                 res.append({'pos': v, 'own': [BD.label(c) for c in cands if c['in_formula'] is not False and c['score'] is not None],
                             'other': [BD.label(c) for c in cands if c['in_formula'] is False and not c['broad']][:4],
                             'shared': [c['mode'] for c in cands if c['score'] is None]})
         out['at'] = res
     return jsonify(out)
+
+
+def _rruff_by_species():
+    """{normalised mineral name: the library's best spectrum of it ({'key', 'id', 'kind', 'laser', 'n'})} — empty with no
+    library on this machine."""
+    try:
+        lib = _rruff()
+    except Exception:
+        return {}
+    if lib is None:
+        return {}
+    from pxrd_review import mindat as M
+    out = {}
+    for m, v in lib.minerals().items():
+        i, rid, kind, laser = v[0]
+        out.setdefault(M._norm(m), {'key': i, 'id': rid, 'kind': kind, 'laser': laser, 'n': len(v), 'name': m})
+    return out
+
+
+@app.route('/api/sp/groups')
+def api_sp_groups():
+    """The groups of the band library, for picking by hand: each with its element, its modes and their ranges, how many
+    species of the local Mindat snapshot hold it, and how many of those the RRUFF library on this machine has a spectrum of."""
+    counts = BD.species_counts()
+    rr = _rruff_by_species()
+    from pxrd_review import mindat as M
+    have = {}
+    if rr:
+        for n, _f, g, _h in BD.species_index():
+            if M._norm(n) in rr:
+                for k in g:
+                    have[k] = have.get(k, 0) + 1
+    groups = [dict(g, species=counts.get(g['key'], 0), rruff=have.get(g['key'], 0)) for g in BD.catalogue()]
+    return jsonify({'ok': True, 'groups': groups, 'species': len(BD.species_index()), 'rruff': bool(rr)})
+
+
+@app.route('/api/sp/species', methods=['POST'])
+def api_sp_species():
+    """The species whose IMA formula holds every group picked: [{'name', 'formula', 'html', 'rruff': {spectrum} | None}] by
+    name — the page orders them as asked. From the local snapshot only."""
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d, dict):
+        abort(400)
+    keys = _sp_groups(d) or []
+    rr = _rruff_by_species()
+    from pxrd_review import mindat as M
+    rows = [{'name': n, 'formula': f, 'html': h, 'rruff': rr.get(M._norm(n))} for n, f, h in BD.species_with(keys)]
+    limit = int(_sp_num(d, 'limit', 1, 5000, 600))
+    return jsonify({'ok': True, 'groups': keys, 'total': len(rows), 'with_rruff': sum(1 for r in rows if r['rruff']), 'species': rows[:limit]})
 
 
 @app.route('/api/sp/upload', methods=['POST'])
@@ -3696,9 +3751,9 @@ def api_sp_fig_colour():
 # file opened here, under a name the window then opens like any other — or drawn under the current curve (overlay).
 
 def _rruff():
-    from pxrd_review import omnic_lib as OL
-    folder = OL.find_library(MS.get('folder') or STATE.get('folder'))
-    return OL.open_library(folder) if folder else None
+    """Every RRUFF library on this machine as one: the store `pxrd rruff --fetch` built, then a Thermo OMNIC copy."""
+    from pxrd_review import rruff as RR
+    return RR.libraries(MS.get('folder') or STATE.get('folder'))
 
 
 @app.route('/api/sp/rruff/list')
@@ -3708,10 +3763,32 @@ def api_sp_rruff_list():
         lib = _rruff()
     except Exception as ex:
         return jsonify({'ok': False, 'error': 'the RRUFF library could not be read (%s)' % str(ex)[:120]}), 500
+    from pxrd_review import rruff as RR
     if lib is None:
-        return jsonify({'ok': True, 'folder': '', 'minerals': []})
-    out = [{'name': m, 'spectra': [{'key': i, 'id': rid, 'kind': kind, 'laser': laser} for i, rid, kind, laser in v]} for m, v in lib.minerals().items()]
-    return jsonify({'ok': True, 'folder': lib.folder, 'n': lib.n, 'minerals': out})
+        return jsonify({'ok': True, 'folder': '', 'minerals': [], 'store': None, 'fetch': dict(RR.PROGRESS)})
+    def one(i, rid, kind, laser):
+        m = lib.meta(i)
+        return {'key': i, 'id': rid, 'kind': kind, 'laser': laser, 'quality': m.get('quality', ''), 'orient': m.get('orient', ''), 'technique': m.get('technique', 'raman')}
+    out = [{'name': m, 'spectra': [one(*t) for t in v]} for m, v in lib.minerals().items()]
+    return jsonify({'ok': True, 'folder': lib.folder, 'n': lib.n, 'minerals': out, 'store': RR.status(), 'fetch': dict(RR.PROGRESS), 'citation': RR.CITATION})
+
+
+@app.route('/api/sp/rruff/fetch', methods=['POST'])
+def api_sp_rruff_fetch():
+    """Download RRUFF's collection from rruff.net and build the store, on a thread; /status (or /list) says how far it is.
+    The one network call the window makes beyond Mindat and GitHub, and only on this request."""
+    from pxrd_review import rruff as RR
+    d = request.get_json(silent=True) or {}
+    sets = d.get('sets') if isinstance(d.get('sets'), list) else list(RR.DEFAULT_SETS)
+    if not RR.fetch_in_background(sets=sets, raw=bool(d.get('raw')), ir=bool(d.get('ir'))):
+        return jsonify({'ok': False, 'error': 'a fetch is already running'}), 409
+    return jsonify({'ok': True, 'fetch': dict(RR.PROGRESS)})
+
+
+@app.route('/api/sp/rruff/status')
+def api_sp_rruff_status():
+    from pxrd_review import rruff as RR
+    return jsonify({'ok': True, 'fetch': dict(RR.PROGRESS), 'store': RR.status()})
 
 
 def _rruff_series(key):
@@ -3721,14 +3798,29 @@ def _rruff_series(key):
     i = int(key)
     if not 0 <= i < lib.n:
         raise ValueError('the library holds %d spectra; there is no number %d' % (lib.n, i + 1))
-    name = lib.names[i]
-    from pxrd_review.omnic_lib import split_name, laser_of
-    mineral, rid, kind = split_name(name)
-    laser = laser_of(name)
-    label = '%s %s %s%s (RRUFF)' % (mineral, rid, kind or 'spectrum', ' ' + laser + ' nm' if laser else '')
-    notes = ['from the RRUFF library on this machine (%s): a Raman spectrum of %s, %s%s — the reference, not the sample under review'
-             % (os.path.basename(lib.folder), mineral, kind or 'as filed', ', %s nm' % laser if laser else '')]
-    return SPF._series(label, lib.x, lib.spectrum(i), format='rruff', source=label, notes=notes, kind='raman'), label
+    m = lib.meta(i)
+    mineral, rid, kind, laser, tech = m['name'], m['id'], m.get('kind') or 'spectrum', m.get('laser') or '', m.get('technique') or 'raman'
+    label = '%s %s %s%s%s (RRUFF)' % (mineral, rid, kind, ' ' + laser + ' nm' if laser else '', ' IR' if tech == 'infrared' else '')
+    about = ', '.join(x for x in (m.get('quality'), m.get('orient'), ('%s nm' % laser) if laser else '') if x)
+    notes = ['from the RRUFF library on this machine: %s spectrum of %s (%s, %s%s) — the reference, not the sample under review%s'
+             % ('an infrared' if tech == 'infrared' else 'a Raman', mineral, rid, kind, ', ' + about if about else '', '. ' + m['source'] if m.get('source') and m.get('set') == 'omnic' else '')]
+    if m.get('chem'):
+        notes.append('RRUFF ideal chemistry %s%s' % (m['chem'], ' — ' + m['locality'] if m.get('locality') else ''))
+    x, y = lib.xy(i)
+    return SPF._series(label, x, y, format='rruff', source=label, notes=notes, kind='ir-absorbance' if tech == 'infrared' else 'raman'), label
+
+
+@app.route('/api/sp/rruff/set', methods=['POST'])
+def api_sp_rruff_set():
+    """The RRUFF library's folder named by hand: kept for every later start; answers as /list does."""
+    d = request.get_json(silent=True) or {}
+    from pxrd_review import omnic_lib as OL
+    try:
+        folder = OL.set_library(str(d.get('folder') or '')[:1000])
+    except ValueError as ex:
+        return jsonify({'ok': False, 'error': str(ex)}), 400
+    OL._OPEN.clear()
+    return api_sp_rruff_list()
 
 
 @app.route('/api/sp/rruff/open', methods=['POST'])
@@ -3760,17 +3852,31 @@ def api_sp_rruff_curve():
         return jsonify({'ok': False, 'error': str(ex)}), 400
     except Exception as ex:
         return jsonify({'ok': False, 'error': 'the RRUFF spectrum could not be read (%s)' % str(ex)[:120]}), 500
-    return jsonify({'ok': True, 'name': label, 'x': _sp_r(series.x, 2), 'y': _sp_r(series.y, 4)})
+    try:                                                      # the reference's own bands: ticks under the plot, a reading aid
+        peaks = [round(p['pos'], 1) for p in SPM.find_bands(series.x, series.y)][:40]
+    except Exception:
+        peaks = []
+    return jsonify({'ok': True, 'name': label, 'x': _sp_r(series.x, 2), 'y': _sp_r(series.y, 4), 'peaks': sorted(peaks)})
 
 
-def _sp_fit_json(f, xs, ys, technique, share=SPM.MIN_SHARE, formula=None):
+def _sp_groups(d):
+    """The library groups a request picked by hand ('groups': a list of keys) -> [keys] in the library's order, or None
+    when the request follows the chemistry. An empty list is a pick of nothing: no bars, no naming."""
+    g = d.get('groups')
+    if not isinstance(g, list):
+        return None
+    want = {str(k) for k in g[:60]}
+    return [x['key'] for x in BD.library()['groups'] if x['key'] in want]
+
+
+def _sp_fit_json(f, xs, ys, technique, share=SPM.MIN_SHARE, formula=None, groups=None):
     m = SPM.model(xs, f.comps, f.base, f.x0)
     try:                                                  # where the residual still holds a band: what '+ band' would add, drawn as marks
         nxt = [{'pos': round(c['pos'], 1), 'height': c['height'], 'fwhm': round(c['fwhm'], 1)} for c in SPM.residual_bands(xs, ys, f, share)[:4]]
     except Exception:
         nxt = []
-    head, rows = SPM.band_rows(f, technique, formula)
-    info = SPM.inferred(f.comps, technique, formula)
+    head, rows = SPM.band_rows(f, technique, formula, groups)
+    info = SPM.inferred(f.comps, technique, formula, groups)
     return {'lo': f.lo, 'hi': f.hi, 'n': f.n, 'k': f.k, 'chi2': f.chi2, 'r2': f.r2, 'bic': f.bic, 'sigma': f.sigma, 'converged': f.converged,
             'iterations': f.iterations, 'base': list(f.base), 'x0': f.x0, 'warnings': list(f.warnings), 'head': head, 'rows': rows,
             'comps': [{'shape': c['shape'], 'pos': c['pos'], 'height': c['height'], 'fwhm': c['fwhm'], 'eta': c['eta'], 'area': c['area'],
@@ -3882,7 +3988,7 @@ def api_sp_fit():
     except Exception as ex:
         return jsonify({'ok': False, 'error': '%s: %s' % (type(ex).__name__, str(ex)[:200])}), 500
     tech = 'raman' if prep['kind'] == 'raman' else 'ir' if (prep['kind'] or '').startswith('ir') else None
-    out = _sp_fit_json(f, xs, ys, tech, _sp_num(d, 'min_share', 0.0, 50.0, 100.0 * SPM.MIN_SHARE) / 100.0, _sp_formula(d)[0] or None)
+    out = _sp_fit_json(f, xs, ys, tech, _sp_num(d, 'min_share', 0.0, 50.0, 100.0 * SPM.MIN_SHARE) / 100.0, _sp_formula(d)[0] or None, _sp_groups(d))
     if not d.get('evaluate') and not _sp_num(d, 'max_fwhm', 0.5, 5000.0):
         try:                                                    # one broad band with finer ones inside it: offered as an envelope, never done unasked
             out['envelope'] = SPM.envelope_hint(xs, ys, f)
@@ -3946,7 +4052,7 @@ def api_sp_export():
             stem += '_%d' % (o['series'] + 1)
         fmt = d.get('fmt')
         sess = dict(o, name=str(d.get('name') or ''), regions=kept, cif=str(d.get('cif') or ''), ms=str(d.get('ms') or ''), resolution=o.get('resolution'),
-                    formula=_sp_formula(d)[0], formula_typed=str(d.get('formula') or '').strip()[:300])
+                    formula=_sp_formula(d)[0], formula_typed=str(d.get('formula') or '').strip()[:300], groups=_sp_groups(d))
         paths = SPM.export(prep, fits, MS['out_dir'], stem, sess, word=fmt == 'word', xlsx=fmt == 'xlsx', ticks=ticks,
                            reverse=bool(d.get('reverse')) if isinstance(d.get('reverse'), bool) else None)
     except ValueError as ex:

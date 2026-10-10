@@ -797,6 +797,8 @@ def wavenumber(series):
 def guess_kind(series):
     """'ir-transmittance' | 'ir-absorbance' | 'raman' | '' — from the stated y unit, else from the shape: an infrared
     transmittance spectrum sits near its top (100 % or 1) and dips; counts stand on a floor and rise."""
+    if series.meta.get('kind') in ('raman', 'ir-absorbance', 'ir-transmittance'):
+        return series.meta['kind']                                   # stated by the source (a RRUFF infrared file is infrared whatever its shape)
     yu = (series.meta.get('y_unit') or '').lower()
     if 'transmit' in yu:
         return 'ir-transmittance'

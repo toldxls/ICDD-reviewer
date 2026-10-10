@@ -105,6 +105,7 @@ MODULE = {
     'spectro':    'pxrd_review.spectro',      # takes a manuscript or a paper (+ --cif) — not folder-resolved
     'spectrum':   'pxrd_review.spectrum',     # takes a Raman / infrared data file — not folder-resolved
     'bands':      'pxrd_review.bands',        # takes a formula or a mineral name — options only
+    'rruff':      'pxrd_review.rruff',        # the RRUFF spectra fetched from rruff.net — options only
     'proposal':   'pxrd_review.proposal',     # takes a folder or a manuscript — its own discovery, not folder-resolved
     'checkcif':   'pxrd_review.checkcif',     # takes a checkCIF report — not folder-resolved
 }

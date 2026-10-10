@@ -1754,7 +1754,7 @@ function renderDocx() {
 
   if (e && e.formulas && Object.keys(e.formulas).length) {
     body.append(el('div', { class: 'sub' }, 'Formulas'));
-    body.append(kvTable(Object.entries(e.formulas)));
+    body.append(kvTable(Object.entries(e.formulas).map(([k, v]) => [k, fmtFormula(v)])));
   }
   if (e && e.comments && Object.keys(e.comments).length) {
     body.append(el('div', { class: 'sub' }, 'docx comment fields'));
@@ -1834,6 +1834,7 @@ function kvTable(pairs) {
 // sanitised: only those two tags pass through, everything else stays literal text.
 function fmtFormula(s) {
   const span = el('span', { class: 'formula' });
+  if (s && !/<su[bp]>/i.test(s) && window.chemNodes) { span.append(chemNodes(s)); return span; }   // no markup of its own (an entry's field): by the rule
   span.textContent = s || '';                                   // escapes < > & to entities
   span.innerHTML = span.innerHTML.replace(/&lt;(\/?)(sub|sup)&gt;/gi, '<$1$2>')
     .replace(/((?:[)\]](?:<su[bp]>[^<]*<\/su[bp]>)*)|·)/g, '$1<wbr>');   // a line may break after a closed group (with its subscript) or a dot
