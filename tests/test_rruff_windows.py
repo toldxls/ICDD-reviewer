@@ -114,6 +114,54 @@ class StorePath(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(self.tmp, 'band_composites.json.gz')))
         finally:
             RW.DATA = keep
+    def test_orientation_follows_the_best_spectrum_and_counts_an_extinct_band_at_the_floor(self):
+        import json, io, contextlib
+        from pxrd_review import bands as B
+        from tests.rruff_fixture import member, gauss, write_store, GRID
+        if not B.resolve('anhydrite')[1]:
+            self.skipTest('no Mindat snapshot for the formula lookup')
+        store = os.path.join(self.tmp, 'store_orient')
+        sets = {'excellent_unoriented': [], 'excellent_oriented': []}
+        for name, rid, chem in (('Anhydrite', 'R040012', 'CaSO_4_'), ('Baryte', 'R040036', 'BaSO_4_'), ('Celestine', 'R040007', 'SrSO_4_')):
+            sets['excellent_unoriented'].append(member(name, rid, '532', 'processed', GRID, gauss(GRID, [1000, 450], [100, 40]), chem=chem))
+            for laser, h in (('532', 40), ('780', 20), ('785', 0)):                 # the second band halves, then goes extinct in one orientation
+                sets['excellent_oriented'].append(member(name, rid, laser, 'processed', GRID, gauss(GRID, [1000, 450], [100, h]), chem=chem))
+        write_store(store, sets)
+        path = os.path.join(self.tmp, 'orient2.json')
+        with contextlib.redirect_stdout(io.StringIO()):
+            RW.orientation(store, path)
+        got = json.load(open(path, encoding='utf-8'))
+        # ratios 2.5, 5 and 100/floor(5) = 20 across the three orientations: max/min = 8 for each of the three samples
+        self.assertEqual(got['groups'], {'SO4': {'median': 8.0, 'p75': 8.0, 'samples': 3}}); self.assertEqual(got['samples'], 3)
+
+    def test_the_fit_gauntlet_end_to_end_on_the_fixture_store(self):
+        import json, io, contextlib
+        from tools import fit_gauntlet as FG
+        self.assertEqual(FG.regions_of([(430.0, 350.0), (800.0, 350.0)], 150.0, 1349.5), [(150.0, 1150.0)])     # wide bands: one region holding both, never two overlapping
+        self.assertEqual(FG.regions_of([(464.0, 8.0), (206.0, 6.0)], 150.0, 1349.5), [(166.0, 246.0), (424.0, 504.0)])
+        self.assertEqual(FG.warn_class('pos1 and height2 are correlated at 0.97: the data fix a combination of the two, not each'), 'correlated parameters')
+        self.assertEqual(FG.warn_class('the band at 709.2 cm⁻¹ stands on the edge of the region fitted: the foot of something outside it'), 'stands on the edge')
+        self.assertEqual(FG.warn_class('3 more pairs of parameters are correlated above 0.95'), 'correlated parameters')
+        held = FG.holders(BD._rruff())
+        self.assertEqual(FG.mode_of(1056.0, ['CO3', 'SO4'], held), '')                 # a position two of the formula's modes hold is filed under neither
+        self.assertEqual(FG.mode_of(1008.0, ['SO4'], held), 'SO4 ν1')
+        self.assertIn('ν(Si–O)', held)                                                  # the groups with no ion geometry: the library range, keyed as the band table labels it
+        out = os.path.join(self.tmp, 'gauntlet')
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rc = FG.main(['--store', self.store, '--out', out, '--jobs', '2', '--tag', '_t'])
+        self.assertEqual(rc, 0, buf.getvalue())
+        recs = [json.loads(ln) for ln in open(os.path.join(out, 'fit_gauntlet_t.jsonl'), encoding='utf-8')]
+        self.assertTrue(recs and all('error' not in r for r in recs), [r.get('error') for r in recs])
+        self.assertTrue(all('mode' in c for r in recs for c in r['comps']))
+        self.assertTrue(os.path.isfile(os.path.join(out, 'fit_gauntlet_baseline.json')))     # a whole-store run (sample 0) writes the baseline
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rc = FG.main(['--store', self.store, '--out', out, '--jobs', '2', '--tag', '_s', '--sample', '2'])
+        self.assertIn('NOT the same sample', buf.getvalue())                             # a sample run is not compared with a whole-store baseline as if it were one
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rc = FG.main(['--reaggregate', '--out', out, '--tag', '_t'])
+        self.assertEqual(rc, 0); self.assertIn('re-aggregated %d spectra' % len(recs), buf.getvalue())
+        self.assertEqual(FG.main(['--reaggregate', '--out', out, '--tag', '_none']), 1)
+
     def test_bands_of_and_by_species(self):
         from pxrd_review import rruff as R
         from tests.rruff_fixture import gauss, GRID

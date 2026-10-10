@@ -228,7 +228,17 @@ def _rows(keys, technique=None, windows=None):
             pub, tech = _published(g['key'], m['mode'], technique, windows)
             yield {'group': g['key'], 'name': g['name'], 'writes': g['writes'], 'mode': m['mode'], 'what': m['what'], 'free': m.get('free'),
                    'lo': m['range'][0], 'hi': m['range'][1], 'active': m['active'], 'source': m['source'], 'check': bool(m.get('check')), 'broad': bool(m.get('broad')),
-                   'published': pub, 'published_for': tech, 'rruff': rruff_window(g['key'], m['mode']), 'rruff_ir': rruff_window(g['key'], m['mode'], 'ir')}
+                   'published': pub, 'published_for': tech, 'rruff': rruff_window(g['key'], m['mode']) or _strongest_as(g, m), 'rruff_ir': rruff_window(g['key'], m['mode'], 'ir')}
+
+
+def _strongest_as(g, m):
+    """A group with no ion geometry (Si–O, sulfide …) has a RRUFF window for its STRONGEST band only: it stands for the
+    group's first mode when its median lies inside that mode's range (a silicate's strongest band is often a bend near
+    550, outside the Si–O stretch range: shown nowhere then)."""
+    if m is not g['modes'][0] or g.get('shape'):
+        return None
+    w = _rruff().get('%s strongest' % g['key'])
+    return w if w and m['range'][0] <= w.get('p50', -1) <= m['range'][1] else None
 
 
 def expected(formula=None, technique=None, groups=None, windows=None):

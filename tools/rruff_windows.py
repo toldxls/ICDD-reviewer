@@ -373,6 +373,8 @@ def main(argv=None):
         for m, s in sorted(strongest.get(a.show, [])):
             print(a.show, 'strongest', round(m), s)
         return 0
+    if not spectra:
+        print('no %s spectra in %s (an OMNIC copy holds Raman only; the infrared set is fetched with pxrd rruff --fetch --sets infrared)' % (a.which, a.folder)); return 1
     L = ['BAND LIBRARY vs the RRUFF library, %s spectra (%d spectra, %d RRUFF ids, one spectrum each; the first grid %d–%d cm-1)' % (a.which, len(spectra), len(best), round(spectra[0][1][0]), round(spectra[0][1][-1])),
          '  ' + ', '.join('%s %d' % (k, v) for k, v in sorted(counts.items())),
          '  numbered modes by geometry alone (ν1 = the strongest band; see the file head); windows = 5th–95th percentile after a %g-sigma trim; a row needs %d minerals' % (TRIM, MIN_MINERALS),
@@ -432,7 +434,10 @@ def main(argv=None):
     print(text)
     print('written:', out)
     if a.write:
-        path = write_windows(agg, a.which, '%s: %d spectra walked, %d RRUFF ids, %d single-group' % (os.path.basename(os.path.abspath(a.folder)), len(spectra), len(best), counts['single-group spectra']))
+        if not agg:
+            print('nothing measured (no formula resolved? the Mindat snapshot is needed): %s not written' % ('band_windows_rruff_ir.json' if a.which == 'ir' else 'band_windows_rruff.json')); return 1
+        n_single = counts['H2O-only spectra'] + counts['OH-only spectra'] if a.which == 'broad' else counts['single-group spectra']
+        path = write_windows(agg, a.which, '%s: %d spectra walked, %d RRUFF ids, %d single-group' % (os.path.basename(os.path.abspath(a.folder)), len(spectra), len(best), n_single))
         print('written:', os.path.normpath(path))
     return 0
 
@@ -548,36 +553,39 @@ MIN_ORIENT = 3                 # orientations of one sample for a ratio to count
 
 def orientation(folder, path=None):
     """How much a mineral's relative band intensities depend on orientation: per sample with MIN_ORIENT or more oriented
-    spectra, the ratio of the two strongest bands' heights (the two found in the unoriented or best spectrum) across
-    its orientations, max over min; per group the median of those ratios and the count -> rruff_orientation.json."""
+    spectra, the ratio of the two strongest bands' heights (the two found in the sample's best spectrum by `rruff.rank`,
+    the unoriented one when there is one) across its orientations, max over min; a band gone under the STRONG floor in
+    one orientation counts at the floor (the largest effect, not a dropped point); per group the median of those ratios
+    and the count -> rruff_orientation.json."""
     by_id = collections.defaultdict(list)
     for meta, x, y in spectra_of(folder, 'raman'):
-        if meta.get('orient') == 'oriented' and meta.get('id'):
-            by_id[meta['id']].append((meta, x, y))
+        if meta.get('id') and (meta.get('kind') or '') in KINDS:
+            by_id[meta['id']].append((RR.rank(meta), meta, x, y))
     per_group = collections.defaultdict(list); n_samples = 0
     for rid, specs in by_id.items():
-        if len(specs) < MIN_ORIENT:
+        oriented = [t for t in specs if t[1].get('orient') == 'oriented']
+        if len(oriented) < MIN_ORIENT:
             continue
-        mineral = specs[0][0].get('name') or ''
+        mineral = specs[0][1].get('name') or ''
         f = formula_of(mineral)
         keys = [k for k in BD.groups_of(f) if k not in ('OH', 'H2O')] if f else []
         if len(keys) != 1:
             continue
+        _r, _m, bx, by_ = min(specs, key=lambda t: t[0])         # the sample's best spectrum names the two bands followed
+        ref = sorted(p for p, _h in sorted(peaks_of(bx, by_), key=lambda t: -t[1])[:2])
+        if len(ref) < 2:
+            continue
         ratios = []
-        ref = None
-        for meta, x, y in specs:
-            pk = peaks_of(x, y)
-            if len(pk) < 2:
+        for _r, meta, x, y in oriented:
+            pk = RR.bands_of(x, y, lattice=LATTICE, share=0.0, n=None)       # every band, so a weak one is found at its height
+            if not pk:
                 continue
-            top2 = sorted(pk, key=lambda t: -t[1])[:2]
-            if ref is None:
-                ref = sorted(p for p, _h in top2)                 # the two bands of the first spectrum: followed in the others
+            floor = STRONG * max(h for _p, h in pk)
             heights = []
             for r in ref:
                 near = [h for p, h in pk if abs(p - r) <= 6.0]
-                heights.append(max(near) if near else 0.0)
-            if heights[0] > 0 and heights[1] > 0:
-                ratios.append(heights[0] / heights[1])
+                heights.append(max(max(near) if near else 0.0, floor))      # gone extinct in this orientation: the floor
+            ratios.append(heights[0] / heights[1])
         if len(ratios) >= MIN_ORIENT:
             per_group[keys[0]].append(max(ratios) / min(ratios)); n_samples += 1
     out = {g: {'median': round(statistics.median(v), 1), 'p75': round(pct(v, 75), 1), 'samples': len(v)} for g, v in per_group.items() if len(v) >= MIN_MINERALS}
@@ -620,7 +628,7 @@ def composites(folder, path=None):
     for which, grid in (('raman', COMP_GRID), ('broad', COMP_OH)):
         best = _best_per_id(spectra_of(folder, which), which)
         per_group = collections.defaultdict(dict)                  # group -> mineral -> resampled, normalised
-        for rid, (_r, mineral, name, x, y) in best.items():
+        for _r, mineral, name, x, y in sorted(best.values(), key=lambda t: t[0]):      # best-ranked first: a mineral's one vote is its best sample
             f = formula_of(mineral)
             if not f:
                 continue
@@ -676,6 +684,8 @@ def owned_keys(which, keys):
 def write_windows(agg, which, source, path=None):
     """MERGE `agg` into the aggregates file: the keys this run owns are replaced, every other key stays; 'ir' goes to its
     own file (band_windows_rruff_ir.json). `sources` records each run."""
+    if not agg:
+        raise ValueError('nothing to write: the keys this run owns would be dropped and none put back')
     path = path or os.path.join(DATA, 'band_windows_rruff_ir.json' if which == 'ir' else 'band_windows_rruff.json')
     try:
         with open(path, encoding='utf-8') as fh:

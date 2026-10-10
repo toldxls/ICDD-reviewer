@@ -47,11 +47,25 @@ package version in `pyproject.toml`.
 ## [Unreleased]
 
 ### Changed
-- **`tools/fit_gauntlet.py` over the whole collection.** Each worker opens the store itself, the search per region is capped at
-  the region's strong bands + 4 components and 10 s (as a user sets the window's 'at most'), progress is printed; 14,007
-  spectra in 97 minutes at low priority: no crash, 72.1 % of the strong bands fitted within 6 cm⁻¹ or half their width, 50
-  humps, 290 regions not converged. `data/fit_widths.json` now rests on the whole collection (56 modes, 41 of them on 50
-  bands or more); this run is the baseline later runs diff against.
+- **The fit gauntlet ran over the whole RRUFF collection** (14,007 spectra, 97 min): no crash, 72 % of the strong bands fitted,
+  50 background humps. `fit_widths.json` (typical band widths per mode) now rests on all of it; this run is the baseline.
+
+### Fixed — a four-reviewer audit of 0.18.0; every item reproduced before it was fixed
+- A literature column in the paper's band table (e.g. 'Autunite (Frost et al. 2005)') was read as the paper's own bands.
+  Now only the paper's own column feeds the RRUFF, library and table lines.
+- The paper's infrared bands were set beside a Raman RRUFF spectrum. Now infrared bands go beside an infrared spectrum, or nothing.
+- The comparison reader missed 'the new mineral is similar to autunite', 'infrared absorption spectrum' sentences, and matched
+  'calcite' inside 'calcitic'. Its unused `forms` argument is gone.
+- Window: Raman composites were drawn under an infrared spectrum; the width note could name the wrong mode; the
+  'compare with RRUFF' buttons were missing until something re-rendered; names with diacritics found no spectrum; the
+  reference ticks lost the lattice region.
+- `tools/rruff_windows.py`: an empty walk crashed; a run that measured nothing wiped its keys on `--write`; the broad run's
+  source line said '0 single-group'; the orientation statistic followed the wrong spectrum and dropped the orientations where a
+  band vanishes; the composites took a mineral's first sample, not its best. Orientation and composite files re-made.
+- `tools/fit_gauntlet.py`: a band in the windows of two groups was credited to one of them; silicate and sulfide widths sat
+  under a key the band table never looked up; wide bands got regions too narrow to fit them; the warning classes kept their
+  numbers (13,000 'classes'). `--reaggregate` re-files an old run; a sample run no longer becomes the baseline.
+- The band table shows a group's 'strongest band' window beside its first mode only when the two agree.
 
 ## [0.18.0] — 2026-10-10
 **The fuller collection put to work.** Every measurement the band library rests on is re-made on RRUFF's own collection —

@@ -465,13 +465,14 @@ class RRUFFBeside(unittest.TestCase):
     """RRUFF's reference bands beside the paper's own (rruff_lines), and the comparison species a paper names."""
     @classmethod
     def setUpClass(cls):
-        from tests.rruff_fixture import member, gauss, write_store, GRID, BROAD
+        from tests.rruff_fixture import member, gauss, write_store, GRID, BROAD, IR
         cls.store = os.path.join(_ISO['tmp'], 'store')
         write_store(cls.store, {
             'excellent_unoriented': [member('Testite', 'R999001', '532', 'processed', GRID, gauss(GRID, [832, 990, 1010, 400], [100, 40, 30, 20])),
                                      member('Autunite', 'R050612', '532', 'processed', GRID, gauss(GRID, [835, 990, 1120], [100, 40, 10])),
                                      member('Torbernite', 'R050306', '780', 'processed', GRID, gauss(GRID, [830, 985], [100, 40]))],
-            'LR-Raman': [member('Autunite', 'R050612', '532', 'processed', BROAD, gauss(BROAD, [835, 3420], [100, 25], w=14))]})
+            'LR-Raman': [member('Autunite', 'R050612', '532', 'processed', BROAD, gauss(BROAD, [835, 3420], [100, 25], w=14))],
+            'infrared': [member('Testite', 'R999001', '', 'raw', IR, gauss(IR, [1106, 1630], [1, 0.4], w=20), tech='Infrared')]})
         os.environ['PXRD_RRUFF_STORE'] = cls.store
 
     @classmethod
@@ -497,9 +498,14 @@ class RRUFFBeside(unittest.TestCase):
         # absorption; calcite: an impurity; rutile: a '-like' structure
         self.assertTrue(got[0][1].startswith('The spectrum is similar'))
         self.assertEqual(S.comparison_species('The sample was heated.', 'testite'), [])
-        # a second mineral the paper describes (a formula attributed to it) is not a comparison species
+        # a second mineral the paper describes (called a new mineral in a sentence that compares nothing) is not a comparison species
         t2 = 'Testite and autunite are two new minerals. The Raman spectra of testite and autunite are compared with that of torbernite.'
-        self.assertEqual([sp for sp, _s in S.comparison_species(t2, 'testite', forms=[('Ca(UO2)2(PO4)2', 'autunite', 'ideal')])], ['torbernite'])
+        self.assertEqual([sp for sp, _s in S.comparison_species(t2, 'testite')], ['torbernite'])
+        # 'the new mineral is similar to X' names a comparison, not a second subject; 'infrared absorption spectrum' is a vibrational spectrum
+        t3 = 'The Raman spectrum of the new mineral is similar to that of autunite and torbernite. The infrared absorption spectrum of testite resembles that of uranophane.'
+        self.assertEqual([sp for sp, _s in S.comparison_species(t3, 'testite')], ['autunite', 'torbernite', 'uranophane'])
+        self.assertEqual(S.comparison_species('The optical absorption spectrum of testite resembles that of uranophane.', 'testite'), [])
+        self.assertEqual(S.comparison_species('Calcitic marble. The spectrum of testite is similar to that of calcite.', 'testite')[0][0], 'calcite')   # 'calcitic' in the head is not calcite
 
     def test_rruff_lines_and_the_section(self):
         own = S.bands('The Raman spectrum of testite shows bands at 832, 990, 1105 and 3430 cm-1. ')
@@ -509,6 +515,16 @@ class RRUFFBeside(unittest.TestCase):
         self.assertIn('1105, 3430 near none (information)', lines[0])
         self.assertIn('3420', lines[1]); self.assertIn('1105, 3430 within 15', lines[1])                 # the broad scan's O–H band, since the paper's bands reach the O–H region
         self.assertEqual(S.rruff_lines([], 'testite'), [])
+        # only the paper's OWN bands (never a literature column of its table), and infrared bands beside the species' infrared spectrum only
+        self.assertEqual(S.rruff_lines([b._replace(own=False) for b in own], 'testite'), [])
+        ir = S.bands('The infrared spectrum of testite shows bands at 1105, 1630 and 3430 cm-1.')
+        lines = S.rruff_lines(ir, 'testite', [('autunite', 'x')])
+        self.assertEqual(len(lines), 1, lines)                                                       # autunite has no infrared spectrum in the store: nothing said
+        self.assertTrue(lines[0].startswith('rruff: Testite (R999001, infrared): bands at 1106, 1630 cm⁻¹; the paper’s infrared 1105, 1630 within 6 of one, 3430 near none'), lines[0])
+        self.assertEqual(len(S.rruff_lines(own + ir, 'testite')), 2)                                 # one line a technique
+        self.assertTrue(S._other_species_column('Autunite (Frost et al. 2005)', 'testite'))
+        self.assertTrue(S._other_species_column('Torbernite [12]', 'testite'))
+        self.assertFalse(S._other_species_column('This work', 'testite')); self.assertFalse(S._other_species_column('Testite (Raman)', 'testite'))
         got = S.check_lines(PRE + 'The Raman spectrum of testite shows bands at 832, 990, 1105 and 3450 cm-1. The spectrum is similar to that of autunite.', {'name': 'testite'})
         self.assertIn('RRUFF spectra', got[0]); self.assertEqual(sum(1 for ln in got if ln.startswith('rruff:')), 2)
         from pxrd_review import proposal as PR

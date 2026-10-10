@@ -3340,11 +3340,7 @@ def _sp_ms_comparisons(key):
         from pxrd_review import paper_extract as PE
         text = PE.text_of(path)
         name = PE.mineral_name(text) or ''
-        try:
-            forms = SPC.paper_formulas(text, name)
-        except Exception:
-            forms = []
-        out = [s for s, _sent in SPC.comparison_species(text, name, None, forms)][:8]
+        out = [s for s, _sent in SPC.comparison_species(text, name)][:8]
     except Exception:
         out = []
     if len(_SP_COMP) > 40:
@@ -3399,7 +3395,7 @@ def api_sp_bands():
     comps = BD.composites(); orient = BD.orientation(); fw = BD.fit_widths()
     out = {'ok': True, 'formula': BD.display(formula) if formula else '', 'name': name, 'source': source,
            'groups': [{'key': k, 'name': names[k], 'writes': writes[k], 'orientation': orient.get(k)} for k in keys], 'own': own,
-           'composites': {k: comps[k] for k in keys if k in comps}, 'comparisons': _sp_ms_comparisons(d.get('ms')) if d.get('ms') else [],
+           'composites': {} if tech == 'ir' else {k: comps[k] for k in keys if k in comps}, 'comparisons': _sp_ms_comparisons(d.get('ms')) if d.get('ms') else [],
            'rows': [row(r) for r in BD.expected(groups=keys, technique=tech)] if keys else []}
     at = d.get('at')
     if isinstance(at, list):
@@ -3899,7 +3895,7 @@ def api_sp_rruff_curve():
     except Exception as ex:
         return jsonify({'ok': False, 'error': 'the RRUFF spectrum could not be read (%s)' % str(ex)[:120]}), 500
     from pxrd_review import rruff as RR                       # the reference's own bands: ticks under the plot, a reading aid (one reading of 'a band': rruff.bands_of)
-    peaks = [round(p, 1) for p, _h in RR.bands_of(series.x, series.y, n=40)]
+    peaks = [round(p, 1) for p, _h in RR.bands_of(series.x, series.y, lattice=0.0, n=40)]      # the lattice region too: quartz's 128 is a tick a reader wants
     return jsonify({'ok': True, 'name': label, 'x': _sp_r(series.x, 2), 'y': _sp_r(series.y, 4), 'peaks': peaks})
 
 
@@ -3923,9 +3919,10 @@ def _sp_fit_json(f, xs, ys, technique, share=SPM.MIN_SHARE, formula=None, groups
     info = SPM.inferred(f.comps, technique, formula, groups)
     fw = BD.fit_widths(); notes = []
     for c, i in zip(f.comps, info):
-        w = next((fw[n] for n in (i.get('suggest') or []) if n in fw), None)
-        if w and (c['fwhm'] > 1.5 * w['p95'] or c['fwhm'] < 0.5 * w['p5']):
-            notes.append('the band at %.1f cm⁻¹ is %.0f wide; the %s bands RRUFF\'s fits give run %g–%g (information)' % (c['pos'], c['fwhm'], next(n for n in i['suggest'] if n in fw), w['p5'], w['p95']))
+        ws = [(n, fw[n]) for n in (i.get('suggest') or []) if n in fw]          # every mode the band could be: the note needs the width outside ALL of them
+        if ws and all(c['fwhm'] > 1.5 * w['p95'] or c['fwhm'] < 0.5 * w['p5'] for _n, w in ws):
+            n, w = min(ws, key=lambda t: min(abs(c['fwhm'] - t[1]['p5']), abs(c['fwhm'] - t[1]['p95'])))   # the nearest range named
+            notes.append('the band at %.1f cm⁻¹ is %.0f wide; the %s bands RRUFF\'s fits give run %g–%g%s (information)' % (c['pos'], c['fwhm'], n, w['p5'], w['p95'], ', nor do the other modes suggested' if len(ws) > 1 else ''))
     f = f._replace(warnings=list(f.warnings) + notes[:3]) if notes else f
     return {'lo': f.lo, 'hi': f.hi, 'n': f.n, 'k': f.k, 'chi2': f.chi2, 'r2': f.r2, 'bic': f.bic, 'sigma': f.sigma, 'converged': f.converged,
             'iterations': f.iterations, 'base': list(f.base), 'x0': f.x0, 'warnings': list(f.warnings), 'head': head, 'rows': rows,

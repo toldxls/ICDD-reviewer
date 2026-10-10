@@ -359,7 +359,7 @@ function renderLibrary() {
     const sw = el('i', { class: 'sw' }); sw.style.background = rowColour(r);
     const g = L.groups.find(q => q.key === r.group), o = g && g.orientation;
     const name = el('td', { title: r.source + (r.width ? '. Typical width in RRUFF\'s fits: ' + r.width.p5 + '–' + r.width.p95 + ' cm⁻¹ (median ' + r.width.p50 + ', ' + r.width.n + ' bands)' : '') +
-      (o ? '. In RRUFF the relative intensity of this group\'s two strongest bands varies up to ' + o.median + '× with crystal orientation (median over ' + o.samples + ' samples)' : '') }, sw, labelNodes(r.label));
+      (o ? '. In RRUFF the relative intensity of this group\'s two strongest bands typically varies ' + o.median + '× with crystal orientation (the median over ' + o.samples + ' oriented samples; a quarter vary ' + o.p75 + '× or more)' : '') }, sw, labelNodes(r.label));
     starred = starred || r.check;
     const tr = el('tr', { class: r.group !== last ? 'g' : '' }, name, el('td', { class: 'w' }, chemNodes(r.what)), el('td', null, r.active), el('td', null, r.free == null ? '' : String(r.free)),
       el('td', { title: r.source + (r.check ? ' — entered from memory of the source, not yet compared with it line by line' : '') }, r.lo + '–' + r.hi + (r.check ? ' *' : '')),
@@ -382,7 +382,7 @@ function compareButtons(L) {
   if (!RR.choose || !RR.minerals) return out;
   const names = [L.name].concat(L.comparisons || []).filter(Boolean);
   for (const n of names) {
-    const m = RR.byName[n.toLowerCase()];
+    const m = RR.byName[rrKey(n)];
     if (!m) continue;
     const b = el('button', { class: 'cmp', title: 'Draw the RRUFF spectrum of ' + m.name + ' under the curve (' + m.spectra.length + ' spectr' + (m.spectra.length === 1 ? 'um' : 'a') + ' in the library)' + (n === L.name ? '' : ' — a species the manuscript compares with') }, 'compare with RRUFF ' + m.name + ' ▸');
     b.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); RR.choose(m.name, 'overlay'); });
@@ -604,7 +604,7 @@ function draw() {
       for (let k = 0; k < xs.length; k++) dd += 'L' + X(xs[k]) + ' ' + Y(ys[k] * s);
       dd += 'L' + X(xs[xs.length - 1]) + ' ' + Y(0) + 'Z';
       const [h, sat] = groupHue(key);
-      g.append(sv('path', { class: 'composite', d: dd, fill: 'hsl(' + h + ' ' + sat + '% 57%)' }, sv('title', null, 'the median RRUFF spectrum of ' + c.minerals + ' ' + key + ' minerals (each normalised, one per mineral) — a reading aid')));
+      g.append(sv('path', { class: 'composite', d: dd, fill: 'hsl(' + h + ' ' + sat + '% 57%)' }, sv('title', null, 'the median RRUFF Raman spectrum of ' + c.minerals + ' ' + key + ' minerals (each normalised, one per mineral) — a reading aid')));
     }
   }
   // fits: bands, their sum, the residual; the current region's bands carry handles
@@ -1527,17 +1527,20 @@ async function loadSpecies(host, keep) {
 // select with its spectra; 'open' holds the spectrum on the server under a name and opens it like a file opened here;
 // 'overlay' draws it under the current curve, scaled to the curve in view (SP.overlay = {name, x, y}; draw()).
 const RR = { minerals: null, byName: {} };
+// a name as a key: diacritics folded, lowercase (Mindat writes 'Nybøite', RRUFF 'Nyboite'; the server keys on mindat._norm the same way)
+const rrKey = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ø/g, 'o').replace(/Ø/g, 'O').replace(/æ/g, 'ae').replace(/ß/g, 'ss').replace(/ł/g, 'l').replace(/đ/g, 'd').toLowerCase().trim();
 // the list's answer put into the box (a datalist of minerals); with no library, the 'RRUFF library…' button instead
 function rruffFill(r) {
   const box = $('#sp-rruff-box'), find = $('#sp-rruff-find'), setb = $('#sp-rruff-set');
   if (!r || !r.minerals || !r.minerals.length) { box.classList.add('hidden'); find.classList.remove('hidden'); return false; }
   RR.minerals = r.minerals; RR.byName = {};
   const dl = $('#sp-rruff-list'); dl.textContent = '';
-  for (const m of r.minerals) { RR.byName[m.name.toLowerCase()] = m; dl.append(el('option', { value: m.name })); }
+  for (const m of r.minerals) { RR.byName[rrKey(m.name)] = m; dl.append(el('option', { value: m.name })); }
   find.classList.add('hidden'); setb.classList.add('hidden'); box.classList.remove('hidden');
   $('#sp-rruff').title = $('#sp-rruff').title.replace(/ \d+ minerals,.*$/, '') + ' ' + r.minerals.length + ' minerals, ' + r.n + ' spectra (' + r.folder + ').' + (r.citation ? ' Cite: ' + r.citation : '');
   $('#sp-rruff-more').classList.toggle('hidden', !!r.store);  // a fuller collection can be fetched beside an OMNIC copy
   PK.cat = null;                                               // the picker learns which species have a spectrum
+  if (SP.lib) renderLibrary();                                 // the library may have rendered first: its 'compare with RRUFF' buttons need the list
   return true;
 }
 const specLabel = s => s.id + ' ' + (s.kind || 'spectrum') + (s.laser ? ' ' + s.laser + ' nm' : '') + (s.technique === 'infrared' ? ' IR' : '') +
@@ -1581,7 +1584,7 @@ async function wireRruff() {
   });
   const specSel = $('#sp-rruff-spec'), openBtn = $('#sp-rruff-open'), ovLab = $('#sp-rruff-ov');
   const pick = () => {
-    const m = RR.byName[$('#sp-rruff').value.trim().toLowerCase()];
+    const m = RR.byName[rrKey($('#sp-rruff').value)];
     specSel.textContent = '';
     if (!m) { specSel.classList.add('hidden'); openBtn.classList.add('hidden'); ovLab.classList.add('hidden'); return; }
     const seen = {};
@@ -1601,12 +1604,12 @@ async function wireRruff() {
   };
   RR.choose = (name, action) => {                           // the species list of the group picker: a mineral put into the box, then opened or overlaid
     $('#sp-rruff').value = name; pick();
-    if (!RR.byName[name.toLowerCase()]) { status('no spectrum of ' + name + ' in the RRUFF library', true); return; }
+    if (!RR.byName[rrKey(name)]) { status('no spectrum of ' + name + ' in the RRUFF library', true); return; }
     if (action === 'open') openBtn.click();
     else if (action === 'overlay') { $('#sp-overlay').checked = true; overlayNow(); }
   };
   $('#sp-rruff').addEventListener('change', pick);
-  $('#sp-rruff').addEventListener('input', () => { if (RR.byName[$('#sp-rruff').value.trim().toLowerCase()]) pick(); });
+  $('#sp-rruff').addEventListener('input', () => { if (RR.byName[rrKey($('#sp-rruff').value)]) pick(); });
   specSel.addEventListener('change', overlayNow);
   $('#sp-overlay').addEventListener('change', overlayNow);
   openBtn.addEventListener('click', async () => {
