@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.19.0](#0190--2026-10-28) | 28 Oct | The paper checks' false alarms hunted down class by class, each corpus-gated: the ideal-formula wt% check (379 red lines on 139 papers → 8, four of them real slips), tables continued over a page break, bonds across disorder groups, split pairs by multiplicity, an inversion twin is not twinning, the powder radiation and Icalc convention the column itself follows, barred indices, the printed cells found, the reference splitter (orphans 163 → 115 on the fixtures); the spectrum window: overlays that toggle, a movable Chem search box, figure tracing that keeps to its frame, axis marks centred on ticks and the scale fitted through every tick |
 | [0.18.0](#0180--2026-10-10) | 10 Oct | The fuller RRUFF collection put to work: RRUFF's bands beside the paper's own and beside the species the paper compares with (an information line; the species read from the paper, measured first), `compare with RRUFF` and a composite spectrum per group in the window, the O–H region and the infrared modes measured for the first time, the activity column checked, an evidence report for the check-tagged rows, the library gate and the fit gauntlet shipped as tools, orientation statistics; the uranyl windows restored |
 | [0.17.1](#0171--2026-10-10) | 10 Oct | The review of 0.17.0: a RRUFF spectrum's held name made unique (one sample's orientations replaced each other), the store's file handles closed and its rebuild made atomic, the species list filtered on the server (the box's filter had searched 600 rows of 2,000), the formula rule's range and valence cases, the pick no longer overridden by a file's saved work, the folder search once per start, the X-prefixed RRUFF ids counted, docs brought in line |
 | [0.17.0](#0170--2026-10-10) | 10 Oct | Spectrum window: **Chem search** — the band library's groups picked by element, each oxoanion its own colour and its modes in shades, the species of the snapshot that hold the pick with a click opening their RRUFF spectrum; **`pxrd rruff --fetch`** pulls RRUFF's Raman and infrared collections from rruff.net into a cache store found whatever folder is open (the OMNIC copy is remembered and searched for too); the band windows re-measured on it; a reference's bands ticked under the plot; formulas, oxides and ions formatted wherever the GUI prints one |
@@ -66,6 +67,56 @@ package version in `pyproject.toml`.
   under a key the band table never looked up; wide bands got regions too narrow to fit them; the warning classes kept their
   numbers (13,000 'classes'). `--reaggregate` re-files an old run; a sample run no longer becomes the baseline.
 - The band table shows a group's 'strongest band' window beside its first mode only when the two agree.
+
+## [0.19.0] — 2026-10-28
+**Fewer false alarms.** Red lines that were the tool's own, not the paper's, were each traced to a class, the class fixed, and the fix run over the corpus (1,144 papers; 140 with a .cif;
+54 reference-list fixtures) before and after — what moved is listed below, and every new red line was read against its paper.
+
+### Fixed — the paper checks (`pxrd paper --check`, `pxrd proposal`, the Manuscript mode)
+- **The ideal formula's wt%** (`ideal_wt_check`): an ideal or end-member formula is read before a simplified one, the one the
+  text says 'requires' first; each element in the valence the formula writes — its superscript, or the group that fixes it
+  ((CrO4) is Cr6+, an oxalate's C2O4 is C3+), or else the oxide the paper's own list names — not the usual oxide; a formula
+  with a mixed site, a variable or a lost hydrate count, or one whose elements are not the list's, is not compared; an
+  element list ('Cu 41.93, C 15.85, O 42.22') is compared at the precision it prints, when it adds to 100 and every value is
+  near the formula's; when most of the list disagrees, one information line says the list is probably another formula's.
+  Corpus: 379 red lines on 139 papers → 8 on 7, four of them real slips in published papers (a value that makes the list
+  not add to the total it prints).
+- **An analytical table continued over a page break** is read whole (`_continued_pages`): the rows past the break had been
+  lost and the analysis read short. Corpus: no reader status moved but on the two papers it was found on, both to 'agrees'.
+- **Bond valence**: no bond between two groups of one disorder assembly (`_atom_site_disorder_group`; SHELXL's PART 1 / PART
+  2 are alternatives) — a contact between them had been read as a bond the paper's table left blank, rightly.
+- **`.cif` audit**: a split pair is summed per position of the more symmetric atom (one P on 3m with three C on m about it:
+  0.7 + 3 × 0.1 = 1, not 0.8); a bare `TWIN` — the inversion twin of a non-centrosymmetric refinement, the absolute
+  structure — no longer conflicts with 'Twinning: not observed'.
+- **Powder-table audit** (`pxrd pxrdaudit`): the wavelength is the one the powder sentence names (a microprobe's 'Fe Kα line'
+  and a single-crystal 'Mo Kα tube' had been taken), and the Icalc column itself is the oracle: another wavelength the text
+  names, or Cu, and reflections at the same d summed as one line, are taken only where the column clearly follows them;
+  a misindexed row no longer throws the dcalc back-fit off (it is set aside and named); every cell a .pdf prints is read
+  (each 'a =' with what follows it — the optic angles had been read as cell angles); a .pdf's 'dobs outside its group' is no
+  longer said (its layout reader cannot tell which observed line a calculated one sits under). Corpus (140 papers with a
+  .cif): cell flags 9 → 4, Icalc fits better on 34, worse on 4 (two of them now read more rows).
+- **Indices with a bar for the minus** ('̅1', '1̄', '¯1') are read in the .pdf powder reader: such rows had been dropped, and
+  the rows printed under them lost their observed line.
+- **Reference lists** (`pxrd refs`): a page number before an author ('… 876- 881. Gagné, O.C.') is a boundary, not an entry
+  number; O’ and d’ prefixes with the curly apostrophe; a journal abbreviation before its volume ('Zapiski RMO, 2,') and
+  'THE'/'OF' are not initials; a corporate author ('Rigaku Oxford Diffraction (2023)', '(Bruker AXS, 2022)', '(U.S. Geological
+  Survey, 2024)') in a bracketed-year list; an entry whose year is not bracketed no longer swallows the next; the list ends at
+  'Authors' remarks' / 'Chairman's remarks' (what follows is searched for citations); running heads are dropped from the list.
+  Fixtures (54 papers with a list): orphans 163 → 115, pairs 40 → 33, no new orphan or pair.
+
+### Changed — the spectrum window
+- **RRUFF overlays toggle**: 'overlay' or the species' name pressed on the mineral drawn takes it away again; the button
+  says '✓ overlaid'. The shaded areas are said to be the groups' composite spectra, with their own switch in Chem search.
+- **The Chem search box moves and resizes** (title bar, corner; remembered; once moved it stays open while the plot is used).
+- **Figure tracing**: a closed plot box is not grown into the panel above it; an open plot stops at the page's own text; a
+  y axis drawn inside the frame and its ticks are not taken for the curve; a frame drawn taller than the plot no longer
+  climbs its own sides. The accuracy gate (synthetic and the real cases) is unchanged.
+- **Axis marks**: start on the first and last LONG ticks (where numbers are printed); a box beside a mark steps it by a tenth
+  of a pixel or one and centres both marks on their ticks by the ticks' ink; the scale is the line through every tick, each
+  centred on its ink (rms reported); a typed pair that does not make a round step per tick is questioned before use; the
+  scale's value is drawn over each long tick; the magnifier is 7×.
+- **A traced curve opens with no baseline** (its zero is the frame's floor — a fitted baseline ate a broad band); 'Use this
+  curve' says which axis number is missing instead of doing nothing.
 
 ## [0.18.0] — 2026-10-10
 **The fuller collection put to work.** Every measurement the band library rests on is re-made on RRUFF's own collection —
