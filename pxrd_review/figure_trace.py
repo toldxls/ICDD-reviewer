@@ -298,7 +298,7 @@ def frames(fig, min_frac=0.18):
                     top = yy + gap
         if top is None:                                          # no y axis: up to the highest ink over the axis — not into the page's own text
             top = ya
-            texts = [(wy0, wy1) for wx0, wy0, wx1, wy1, *_t in fig.words if wx1 > xa + 4 and wx0 < xb - 4]
+            texts = [(wy0, wy1) for wx0, wy0, wx1, wy1, *_t in fig.words if wx1 > xa + 4 and wx0 < xb - 4 and wy1 < 0.09 * h]   # the page's running head, not a label of the plot
             for yy in range(ya - 3, max(0, ya - int(0.9 * h)), -1):
                 if any(wy0 - 2 <= yy <= wy1 + 2 for wy0, wy1 in texts):
                     break
@@ -320,7 +320,7 @@ def frames(fig, min_frac=0.18):
         blank = 0; yy = top - 4; limit = top if closed else max(0, top - int(0.6 * (ya - top)) - 40)
         # nor does an open plot grow into the page's own text: the running head over a figure is ink above its axis too
         # (a page's running head was taken into the frame, and the trace climbed it)
-        texts = [(wy0, wy1) for wx0, wy0, wx1, wy1, *_t in fig.words if wx1 > xa + 4 and wx0 < xb - 4]
+        texts = [(wy0, wy1) for wx0, wy0, wx1, wy1, *_t in fig.words if wx1 > xa + 4 and wx0 < xb - 4 and wy1 < 0.09 * h]   # the running head in the page's top margin: a drawn plot's own labels are page words too
         while yy > limit and blank < 14:
             if any(wy0 - 2 <= yy <= wy1 + 2 for wy0, wy1 in texts):
                 break

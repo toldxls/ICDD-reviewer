@@ -2626,3 +2626,12 @@ class ContinuedTable(unittest.TestCase):
             PE._pages = old; shutil.rmtree(tmp, ignore_errors=True)
         self.assertEqual([r['constituent'] for r in e['rows']], ['PbO', 'CuO', 'Fe2O3', 'CO2', 'P2O5', 'SO3', 'H2O'])
         self.assertEqual(e['total'], 100.00); self.assertEqual(e['page'], 1)
+
+    def test_a_table_over_three_pages_is_joined_whole(self):
+        def line(y, *cells):
+            return {'y': y, 'w': [(x, y - 8, x + 6 * len(t), y, t) for x, t in cells]}
+        p1 = [line(300, (90, 'Constituent'), (165, 'Wt.%')), line(320, (90, 'MgO'), (165, '10.00')), line(334, (90, 'CaO'), (165, '20.00')), line(788, (517, '1'))]
+        p2 = [line(43, (275, 'HEAD')), line(80, (90, 'FeO'), (165, '30.00')), line(94, (90, 'MnO'), (165, '5.00')), line(788, (517, '2'))]
+        p3 = [line(43, (275, 'HEAD')), line(80, (90, 'SiO2'), (165, '35.00')), line(94, (90, 'Total'), (165, '100.00'))]
+        first = PE._continued_pages([p1, p2, p3])[0][1]
+        self.assertEqual([ln['w'][0][4] for ln in first], ['Constituent', 'MgO', 'CaO', 'FeO', 'MnO', 'SiO2', 'Total'])

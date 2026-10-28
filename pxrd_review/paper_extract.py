@@ -816,8 +816,8 @@ def _continued_pages(pages):
     and the rows past the break were lost: SO3 and H2O of a 101 % table, TiO2 of another — the analysis read 91 and 31 %.
     -> [(page index, lines)], the joined page in the place of the first."""
     out = [(k, p) for k, p in enumerate(pages)]
-    for k in range(1, len(pages)):
-        prev, cur = pages[k - 1], pages[k]
+    for k in range(len(pages) - 1, 0, -1):                          # from the end: a table over three pages joins the third to the second first
+        prev, cur = pages[k - 1], out[k][1]
         if not prev or not cur:
             continue
         q = len(prev) - 1; skipped = 0

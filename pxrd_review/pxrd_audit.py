@@ -365,7 +365,7 @@ def _setup(st, pat, rows, merge):
     reflections share a d ((−1 2 6) and (1 1 6) in R-3); a program that prints one index for them gives their SUM
     (one table's 100 was the sum of two computed lines of 60 and 70, each of its other lines likewise), another prints each. Only a group the table lists ONE
     member of is summed (a group it lists none of is not its business; one it lists twice is printed apart), and the scale
-    is the table's: 100 at its strongest LISTED line. -> {'pat', 'match', 'listed', 'carried', 'top', 'Ieff', 'rms'}."""
+    is the table's: 100 at its strongest LISTED line. -> {'pat', 'match', 'listed', 'top', 'Ieff', 'rms'}."""
     from pxrd_review import powder_calc as PC
     idx = {}
     for x in pat:
@@ -390,7 +390,7 @@ def _setup(st, pat, rows, merge):
     for r in rows:
         x = match(r)
         listed |= PC.equivalents(st, x['hkl'] if x is not None else r['hkl'])
-    summed = {}; carried = set()
+    summed = {}
     if merge:
         by_d = []
         for x in sorted(pat, key=lambda x_: -x_['d']):
@@ -403,7 +403,6 @@ def _setup(st, pat, rows, merge):
                 tot = sum(y['I'] for y in g)
                 for y in g:
                     summed[id(y)] = tot
-                carried |= {id(y) for y in g if y['hkl'] not in listed}
     raw = lambda x: summed.get(id(x), x['I'])
     matched = [(r, match(r)) for r in rows]
     top = max((raw(x) for _r, x in matched if x is not None), default=0.0) or max((x['I'] for x in pat), default=1.0) or 1.0
@@ -413,7 +412,7 @@ def _setup(st, pat, rows, merge):
     if len(pairs) >= 8:
         mx = max(r['icalc'] for r, _ in pairs) or 1.0
         rms = math.sqrt(sum((r['icalc'] * 100.0 / mx - Ieff(x)) ** 2 for r, x in pairs) / len(pairs))
-    return {'pat': pat, 'match': match, 'listed': listed, 'carried': carried, 'top': top, 'Ieff': Ieff, 'rms': rms}
+    return {'pat': pat, 'match': match, 'listed': listed, 'top': top, 'Ieff': Ieff, 'rms': rms}
 
 def audit(manuscript, cif, lam=None):
     from pxrd_review import powder_calc as PC
@@ -496,7 +495,7 @@ def audit(manuscript, cif, lam=None):
             L.append('  dcalc: no %s cell reproduces the column (back-fit rms %.4f Å): indices or d values inconsistent' % (system, frms))
     # -- the pattern from the .cif, at the wavelength and with the convention the table's Icalc column follows
     S = choice
-    pat, match, listed, carried, top, Ieff = S['pat'], S['match'], S['listed'], S['carried'], S['top'], S['Ieff']
+    pat, match, listed, top, Ieff = S['pat'], S['match'], S['listed'], S['top'], S['Ieff']
     # -- Icalc vs the .cif
     pairs = [(r, match(r)) for r in rows if r['icalc'] is not None]
     pairs = [(r, dict(x, I=Ieff(x))) for r, x in pairs if x is not None]

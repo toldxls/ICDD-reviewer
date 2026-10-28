@@ -256,6 +256,20 @@ class Trace(unittest.TestCase):
         majors = FT.tick_majors(fig, box, marks)
         self.assertEqual([round(m / z) for m in majors], [60 + 50 * k for k in range(7)])
 
+    def test_an_open_plot_stops_at_the_running_head_not_at_its_own_labels(self):
+        # no y axis at all: the frame runs up to the highest ink over the x axis — not into the page's running head close
+        # above it, and not cut at a band label that is page text inside the plot (a drawn figure's labels are page words)
+        import fitz as _f
+        doc = _f.open(); page = doc.new_page(width=595, height=842)
+        page.insert_text((200, 52), 'RUNNING HEAD 12', fontsize=14)
+        sh = page.new_shape(); sh.draw_line((60, 400), (540, 400)); sh.finish(color=(0, 0, 0), width=1); sh.commit()
+        sh = page.new_shape(); sh.draw_polyline([(60 + k, 390 - 300 * math.exp(-((k - 240) / 15.0) ** 2)) for k in range(481)]); sh.finish(color=(0, 0, 0), width=1, closePath=False); sh.commit()
+        page.insert_text((330, 250), '1072', fontsize=9)                      # a band label, page text, inside the plot
+        fig = FT.figure('open2.pdf', 0, data=doc.tobytes()); z = fig.w / 595.0
+        box = next(b for b in FT.frames(fig) if abs(b[3] - 400 * z) < 6)
+        self.assertGreater(box[1], 56 * z)                                   # under the running head
+        self.assertLess(box[1], 95 * z)                                      # and over the peak's top at 90, past the label at 250
+
     def test_refusals(self):
         img, X = self._image(150)
         box = FT.frames(img)[0]
