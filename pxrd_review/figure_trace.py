@@ -296,9 +296,12 @@ def frames(fig, min_frac=0.18):
                     yy -= 1
                 if ya - yy >= max(40, 0.08 * h) and (top is None or yy < top):
                     top = yy + gap
-        if top is None:                                          # no y axis: up to the highest ink over the axis
+        if top is None:                                          # no y axis: up to the highest ink over the axis — not into the page's own text
             top = ya
+            texts = [(wy0, wy1) for wx0, wy0, wx1, wy1, *_t in fig.words if wx1 > xa + 4 and wx0 < xb - 4]
             for yy in range(ya - 3, max(0, ya - int(0.9 * h)), -1):
+                if any(wy0 - 2 <= yy <= wy1 + 2 for wy0, wy1 in texts):
+                    break
                 if g[yy * w + xa + 4: yy * w + xb - 4].count(1):
                     top = yy
                 elif ya - yy > 0.05 * h and top - yy > 0.04 * h:
@@ -310,10 +313,17 @@ def frames(fig, min_frac=0.18):
     out = [b for b in out if not any(o is not b and abs(o[1] - b[3]) < 6 and abs(o[0] - b[0]) < 8 and abs(o[2] - b[2]) < 8 for o in out)]
     grown = []
     for xa, top, xb, ya in out:
-        # a peak that runs above the end of the y axis (or of the box) is still of this plot: the frame grows upward
-        # while there is ink over it, and stops at a blank band or at another plot's line
-        blank = 0; yy = top - 4; limit = max(0, top - int(0.6 * (ya - top)) - 40)
+        # a peak that runs above the end of the y axis is still of this plot: the frame grows upward while there is ink
+        # over it, and stops at a blank band or at another plot's line. A CLOSED box (a line along its top) holds its
+        # plot: above it is the next panel's axis title (a stacked figure's frame took the panel above's title in)
+        closed = any(g[yy * w + xa: yy * w + xb].count(1) > 0.5 * (xb - xa) for yy in range(max(0, top - 2), min(ya, top + 3)))
+        blank = 0; yy = top - 4; limit = top if closed else max(0, top - int(0.6 * (ya - top)) - 40)
+        # nor does an open plot grow into the page's own text: the running head over a figure is ink above its axis too
+        # (a page's running head was taken into the frame, and the trace climbed it)
+        texts = [(wy0, wy1) for wx0, wy0, wx1, wy1, *_t in fig.words if wx1 > xa + 4 and wx0 < xb - 4]
         while yy > limit and blank < 14:
+            if any(wy0 - 2 <= yy <= wy1 + 2 for wy0, wy1 in texts):
+                break
             if g[yy * w + xa + 4: yy * w + xb - 4].count(1):
                 if g[yy * w + xa: yy * w + xb].count(1) > 0.5 * (xb - xa):
                     break
@@ -403,6 +413,35 @@ def tick_marks(fig, box):
         if len(reg) > len(best):
             best = reg
     return best
+
+
+def tick_majors(fig, box, marks):
+    """The LONG ticks among `marks` -> [x]: the ones a number is printed under on most axes. Where every tick is about as
+    long, all of them. The marks were first put on the first and last tick, often an unnumbered minor one, and the
+    number typed for it was the nearest printed one: the scale came out stretched."""
+    x0, y0, x1, y1 = box
+    g = fig.gray(); w, h = fig.w, fig.h
+    best = None
+    for step in (1, -1):
+        start = y1
+        while 0 < start < h - 1 and g[start * w + x0: start * w + x1 + 1].count(1) > 0.5 * (x1 - x0):
+            start += step
+        lens = []
+        for m in marks:
+            longest = 0
+            for x in range(int(m) - 1, int(m) + 2):
+                if not 0 <= x < w:
+                    continue
+                n = 0; y = start
+                while 0 <= y < h and n < 45 and g[y * w + x]:
+                    n += 1; y += step
+                longest = max(longest, n)
+            lens.append(longest)
+        if best is None or sum(lens) > sum(best):
+            best = lens
+    if not best or max(best) < 1.4 * max(1, min(best)):
+        return list(marks)
+    return [m for m, n in zip(marks, best) if n >= 0.75 * max(best)]
 
 
 def _regular(marks, slack=1.6):
@@ -567,6 +606,46 @@ def _raster_curve(fig, box, colour, tol, down, seed):
         raise ValueError('that frame is too small to trace')
     m, W = _mask(fig, xa, xb, ya, yb, colour, tol)
     H = yb - ya + 1
+    # the ticks of a y axis standing on the frame's side: short dashes from the axis line, a few rows thick — before the
+    # curve starts they were the only ink in those columns, and the trace began on them. A y axis drawn a little inside
+    # the frame (the x axis overhanging it) has nothing of the plot on its far side.
+    edge = max(3, int(0.03 * W))
+    m = bytearray(m)
+    for side in (0, 1):
+        col = (lambda c: c) if side == 0 else (lambda c: W - 1 - c)
+        at = lambda r, c: m[r * W + col(c)]
+        start = 0
+        for c in range(edge):                                    # the axis line: a column inked over half the height
+            run = best = 0
+            for r in range(H):
+                run = run + 1 if at(r, c) else 0
+                best = max(best, run)
+            if best >= 0.5 * H:
+                start = c + 1
+        if not start:
+            continue                                             # no axis line on this side: a curve running flat into the frame's edge is no dash
+        for c in range(start):
+            for r in range(H):
+                m[r * W + col(c)] = 0
+        k = 0
+        while k < H:
+            if not at(k, start):
+                k += 1; continue
+            j = k
+            while j + 1 < H and at(j + 1, start):
+                j += 1
+            lens = []
+            for r in range(k, j + 1):
+                n_ = 0
+                while start + n_ < W and at(r, start + n_):
+                    n_ += 1
+                lens.append(n_)
+            if j - k < 4 and 2 <= max(lens) <= edge:             # a dash: thin, short, attached to the axis line
+                for r, n_ in zip(range(k, j + 1), lens):
+                    for c in range(start, start + n_):
+                        m[r * W + col(c)] = 0
+            k = j + 1
+    m = bytes(m)
     # a row inked along most of the width is a grid line, a frame line or the zero line: its pixels are not the curve
     lines = set(k for k in range(H) if m[k * W: (k + 1) * W].count(1) > 0.7 * W)
     cols = []
@@ -592,6 +671,19 @@ def _raster_curve(fig, box, colour, tol, down, seed):
             i = col.find(1, j) if j < H else -1
         # a column inked over most of the height is a vertical line (a marker, a frame), not the curve
         cols.append([r for r in runs if r[1] - r[0] < 0.9 * H])
+    # the frame's own sides when the frame was drawn taller than the plot (they then fall short of 0.9 of it): near the
+    # box's ends, a run over half the height that its neighbours do not stand beside (a line, not a flank's staircase)
+    edge = max(3, int(0.03 * W))
+    for k in list(range(min(edge, W))) + list(range(max(0, W - edge), W)):
+        keep = []
+        for r in cols[k]:
+            if r[1] - r[0] >= 0.5 * H:
+                a, b = r[0] + (r[1] - r[0]) // 4, r[1] - (r[1] - r[0]) // 4
+                beside = [q for j in (k - 1, k + 1) if 0 <= j < W for q in cols[j] if q[0] <= b and q[1] >= a]
+                if not beside or any(abs(q[0] - r[0]) <= 2 and abs(q[1] - r[1]) <= 2 for q in beside):
+                    continue
+            keep.append(r)
+        cols[k] = keep
     if sum(1 for c in cols if c) < 0.2 * len(cols):
         raise ValueError('no curve of that colour is found in the frame — click on the curve to give its colour')
     # the one continuous line: the cheapest way through one run a column, where stepping to a run that touches the

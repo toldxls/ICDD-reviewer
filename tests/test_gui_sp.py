@@ -345,6 +345,12 @@ class SpectrumWindow(unittest.TestCase):
             self.assertEqual((len(det['frames']), det['frames'][0]['ticks'], det['vector']), (1, [], False))
             tr = self._post('/api/sp/fig/trace', {'name': 'shot.png', 'i': 0, 'box': det['frames'][0]['box'], 'x1': X(200) * 2, 'v1': 200, 'x2': X(1200) * 2, 'v2': 1200})
             self.assertEqual(tr['how'], 'raster'); self.assertGreater(tr['coverage'], 0.95)
+            self.assertIn('majors', det['frames'][0]); self.assertNotIn('calib', tr)
+            # the axis through every tick the page sends (each centred on its ink there), and how far they stand from its line
+            body = {'name': 'shot.png', 'i': 0, 'box': det['frames'][0]['box'], 'x1': X(200) * 2, 'v1': 200, 'x2': X(1200) * 2, 'v2': 1200}
+            tr = self._post('/api/sp/fig/trace', dict(body, calib=[[X(v) * 2, v] for v in range(200, 1300, 200)]))
+            self.assertEqual(tr['calib']['n'], 6); self.assertLess(tr['calib']['rms'], 0.5)
+            self.assertNotIn('calib', self._post('/api/sp/fig/trace', dict(body, calib=[[1, 'x'], [2, 3]])))     # not numbers: the two marks alone
             bad = self.c.post('/api/sp/fig/upload', data={'file': (io.BytesIO(b'words'), 'notes.txt')}, content_type='multipart/form-data')
             self.assertEqual(bad.status_code, 400)
             bad = self.c.post('/api/sp/fig/upload', data={'file': (io.BytesIO(b'not a picture'), 'broken.png')}, content_type='multipart/form-data')

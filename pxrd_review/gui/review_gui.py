@@ -32,7 +32,7 @@ startup — no raw paths from the page, so no path traversal. A per-launch auth 
 a shared machine out; Host-allowlist + Origin checks handle DNS rebinding and CSRF.
 No data leaves the machine.
 """
-import sys, os, re, io, bisect, json, html, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time, secrets
+import sys, os, re, io, math, bisect, json, html, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time, secrets
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
@@ -3672,7 +3672,9 @@ def api_sp_fig_detect():
         return jsonify({'ok': False, 'error': err[0]}), err[1]
     def seen(box):
         tk = FT.ticks(fig, box)
-        return {'box': list(box), 'ticks': [[round(a, 2), b] for a, b in tk], 'marks': [round(m, 2) for m in FT.tick_marks(fig, box)]}
+        mk = FT.tick_marks(fig, box)
+        return {'box': list(box), 'ticks': [[round(a, 2), b] for a, b in tk], 'marks': [round(m, 2) for m in mk],
+                'majors': [round(m, 2) for m in FT.tick_majors(fig, box, mk)] if mk else []}      # the long ticks: where the numbers are printed
     out = []; own = None
     try:
         raw = d.get('box')
@@ -3718,14 +3720,22 @@ def api_sp_fig_trace():
             return jsonify({'ok': False, 'error': 'the curve could not be traced (%s)' % type(ex).__name__}), 500
         return jsonify({'ok': True, 'pixels_only': True, 'n': len(t['pts']), 'how': t['how'], 'coverage': t['coverage'], 'down': t['down'], 'colour': t['colour'],
                         'trace': [[round(a, 1), round(b, 1)] for a, b in t['pts']], 'peaks': [round(p, 2) for p in FT.apexes(t['pts'], t['down'])]})
+    # the axis through every tick the page put a value on (the two marks' ticks and those between and beyond, each centred
+    # on its ink): the least-squares line through them, and how far the ticks stand from it
+    calib = d.get('calib')
+    calib = [(float(a), float(b)) for a, b in calib] if isinstance(calib, list) and 2 <= len(calib) <= 400 and all(
+        isinstance(p, list) and len(p) == 2 and all(isinstance(t, (int, float)) and not isinstance(t, bool) and t == t and abs(t) < 1e6 for t in p) for p in calib) else None
     try:
-        r = FT.digitize(fig, box, x1, v1, x2, v2, **kw)
+        r = FT.digitize(fig, box, x1, v1, x2, v2, calib=calib, **kw)
     except ValueError as ex:
         return jsonify({'ok': False, 'error': str(ex)}), 400
     except Exception as ex:
         return jsonify({'ok': False, 'error': 'the curve could not be traced (%s)' % type(ex).__name__}), 500
     out = {'ok': True, 'n': len(r['x']), 'how': r['how'], 'cm_per_px': r['cm_per_px'], 'coverage': r['coverage'], 'down': r['down'], 'colour': r['colour'],
            'trace': r['trace'], 'lo': min(r['x']), 'hi': max(r['x']), 'peaks': r['peaks']}
+    if calib and len(calib) > 2:
+        a_, b_ = FT.scale(calib)
+        out['calib'] = {'n': len(calib), 'rms': math.sqrt(sum((a_ + b_ * px - v) ** 2 for px, v in calib) / len(calib))}
     if d.get('use'):
         ys = [1.0 - v for v in r['y']] if r['down'] else r['y']      # bands up: the positions are what a figure gives, and they are the same either way
         label = '%s — %s (figure)' % (os.path.splitext(name)[0][:60], 'page %d' % (index + 1) if name.lower().endswith('.pdf') else 'image %d' % (index + 1))

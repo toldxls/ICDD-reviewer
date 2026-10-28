@@ -206,6 +206,56 @@ class Trace(unittest.TestCase):
         fr = FT.frames(framed)
         self.assertGreaterEqual(len(fr), 2); self.assertGreater(fr[0][0], 0.05 * framed.w)       # the plot first, the border after it
 
+    def test_a_closed_box_under_another_panel_keeps_to_its_box(self):
+        # panels stacked: the lower plot's box has a line along its top, and the upper panel's axis title sits just above
+        # it — the frame used to grow up through the title to the upper panel's axis, and the trace climbed the title
+        import fitz as _f
+        page = _f.open().new_page(width=400, height=420)
+        sh = page.new_shape()
+        sh.draw_rect(_f.Rect(40, 20, 380, 180)); sh.draw_rect(_f.Rect(40, 230, 380, 400))
+        sh.finish(color=(0, 0, 0), width=1); sh.commit()
+        page.insert_text((150, 196), 'Raman shift [cm-1]', fontsize=12)
+        for x in (60, 160, 260, 360):
+            page.insert_text((x, 212), str(x), fontsize=11); page.insert_text((x, 226), str(x), fontsize=11)
+        sh = page.new_shape(); sh.draw_polyline([(40 + k, 392 - 0.08 * k - 120 * math.exp(-((k - 170) / 12.0) ** 2)) for k in range(341)]); sh.finish(color=(0, 0, 0), width=1, closePath=False); sh.commit()
+        fig = FT.figure('panels.png', data=page.get_pixmap(dpi=144).tobytes('png'))
+        z = 2.0
+        lower = [b for b in FT.frames(fig) if abs(b[3] - 400 * z) < 6]
+        self.assertEqual(len(lower), 1)
+        self.assertGreater(lower[0][1], 222 * z)                          # its top is its own line at 230, not the title above it
+        r = FT.trace_pixels(fig, lower[0])
+        self.assertGreater(min(y for _x, y in r['pts']), 230 * z)        # the trace never left the box
+        # a frame drawn by hand past the plot's sides and below its axis: the box's own sides are no curve at its ends
+        x0, y0, x1, y1 = lower[0]
+        r = FT.trace_pixels(fig, (x0 - 8, y0 + 4, x1 + 8, y1 + 70))
+        ends = [y for _x, y in r['pts'][:6] + r['pts'][-6:]]
+        self.assertGreater(min(ends), 355 * z)                         # the baseline ends at 365 pt; the sides run up to 230
+        self.assertFalse([x for x, _y in r['pts'] if x < x0 or x > x1 + 1])   # nothing outside the plot's own sides
+
+    def test_an_open_plot_under_a_running_head_with_a_ticked_y_axis(self):
+        # no box: an x axis overhanging the y axis, the y axis ticked out and in, a running head of the page above the plot,
+        # long ticks every second one on the x axis — the frame stopped at the head, the trace started on the curve
+        import fitz as _f
+        page = _f.open().new_page(width=400, height=420)
+        page.insert_text((150, 40), 'RUNNING HEAD', fontsize=14)
+        sh = page.new_shape()
+        sh.draw_line((40, 380), (380, 380)); sh.draw_line((46, 380), (46, 70))
+        for k in range(0, 7):
+            y = 380 - 50 * k; sh.draw_line((42, y), (46, y)); sh.draw_line((46, y), (49, y))      # y ticks, out and in
+        for k in range(0, 13):
+            x = 60 + 25 * k; sh.draw_line((x, 380), (x, 386 if k % 2 == 0 else 383))            # x ticks, long and short
+        sh.finish(color=(0, 0, 0), width=1); sh.commit()
+        sh = page.new_shape(); sh.draw_polyline([(80 + k, 330 - 0.05 * k - 200 * math.exp(-((k - 150) / 10.0) ** 2)) for k in range(281)]); sh.finish(color=(0, 0, 0), width=1, closePath=False); sh.commit()
+        fig = FT.figure('open.png', data=page.get_pixmap(dpi=144).tobytes('png')); z = 2.0
+        box = FT.frames(fig)[0]
+        self.assertGreater(box[1], 50 * z)                                 # under the running head
+        r = FT.trace_pixels(fig, box)
+        self.assertGreater(r['pts'][0][0], 78 * z)                         # the curve starts at 80, the y ticks stand at 42–49
+        self.assertGreater(min(y for _x, y in r['pts']), 120 * z)          # the peak tops out at 130: nothing of the head
+        marks = FT.tick_marks(fig, box)
+        majors = FT.tick_majors(fig, box, marks)
+        self.assertEqual([round(m / z) for m in majors], [60 + 50 * k for k in range(7)])
+
     def test_refusals(self):
         img, X = self._image(150)
         box = FT.frames(img)[0]

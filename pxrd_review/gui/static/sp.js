@@ -338,7 +338,7 @@ function renderLibrary() {
     const sum = el('summary', null, 'Band library — expected of ');
     sum.append(el('b', null, (L.name ? L.name + ', ' : ''), chemNodes(L.formula)), L.source === 'manuscript' ? ' (the manuscript’s formula)' : '', ': ' + (L.groups.map(g => g.name).join(', ') || 'no group of the library — its bands are metal–anion and lattice modes, below about 600 cm⁻¹'));
     for (const b of compareButtons(L)) sum.append(' ', b);
-    host.append(sum);
+    host.append(sum); markOverlays();
   }
   if (!L.rows.length) return;
   const stated = SP.d ? [...new Set(SP.d.stated.map(b => b.pos))].sort((a, b) => a - b) : [];
@@ -385,6 +385,7 @@ function compareButtons(L) {
     const m = RR.byName[rrKey(n)];
     if (!m) continue;
     const b = el('button', { class: 'cmp', title: 'Draw the RRUFF spectrum of ' + m.name + ' under the curve (' + m.spectra.length + ' spectr' + (m.spectra.length === 1 ? 'um' : 'a') + ' in the library)' + (n === L.name ? '' : ' — a species the manuscript compares with') }, 'compare with RRUFF ' + m.name + ' ▸');
+    b.dataset.rr = m.name; b.dataset.title = b.title;
     b.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); RR.choose(m.name, 'overlay'); });
     out.push(b);
   }
@@ -399,6 +400,15 @@ async function process(resetView) {
     status('reading…');
     const d = await api('/api/sp/process', opts());
     if (seq !== SP.pseq) return;                             // another spectrum was asked for meanwhile: that one is shown
+    // a curve read off a figure has its zero already — the frame's floor: a baseline fitted under it ate a broad band (the
+    // O–H of an infrared figure fell to a quarter) and bent up at the end. Off once when such a curve opens (no is the default
+    // anyway); turned on again by hand, it stays on.
+    if (d.notes.some(t => /^read off a figure/.test(t)) && $('#sp-baseline').value !== 'none' && SP.figBase !== SP.file) {
+      SP.figBase = SP.file; $('#sp-baseline').value = 'none'; showBaselineRows();
+      await process(resetView);
+      status('a curve read off a figure: no baseline under it (its zero is the frame’s floor) — choose one on the left to have one');
+      return;
+    }
     keepFigure(d);
     const same = !resetView && before && sameCurve(before, d);   // the manuscript or the .cif beside it changed, not the curve
     SP.d = d; SP.d2 = null;
@@ -1351,7 +1361,7 @@ function wire() {
   wireRruff();
   // the 'more ▾' and 'Chem search' popovers close on a click elsewhere or Escape (a <details> stays open until its summary is clicked again)
   for (const pop of document.querySelectorAll('details.pop')) {
-    document.addEventListener('mousedown', ev => { if (pop.open && !pop.contains(ev.target)) pop.open = false; });
+    document.addEventListener('mousedown', ev => { if (pop.open && !pop.contains(ev.target) && !pop.querySelector('.pop-body.floating')) pop.open = false; });   // a box moved off its place stays while the plot is used
     document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && pop.open) pop.open = false; });
   }
   wirePicker();
@@ -1433,9 +1443,55 @@ const pickNow = () => SP.pick != null ? SP.pick.slice() : (SP.lib ? SP.lib.group
 function setPick(keys) {
   SP.pick = keys; keepPick(); pickSummary(); saveWork(); loadLib();
 }
+// The Chem search box moves and resizes (the owner: it covered the overlaid spectra): dragged by its title bar it floats
+// where it is put — kept per browser in pxrd-sp-pickbox, inside the window — and stays open while the plot is used; the
+// corner resizes it (CSS resize), 'reset' puts it back where it opens.
+const PICKBOX = 'pxrd-sp-pickbox';
+function pickBoxPlace() {
+  const box = $('#sp-pick-pop'); let p = null;
+  try { p = JSON.parse(localStorage.getItem(PICKBOX) || 'null'); } catch (_) {}
+  box.classList.toggle('floating', !!(p && p.left != null));
+  if (p && p.left != null) {
+    const w = p.w || box.offsetWidth, h = p.h || box.offsetHeight;
+    box.style.left = Math.max(0, Math.min(window.innerWidth - Math.min(w, 120), p.left)) + 'px';
+    box.style.top = Math.max(0, Math.min(window.innerHeight - 40, p.top)) + 'px';
+  } else { box.style.left = box.style.top = ''; }
+  if (p && p.w) { box.style.width = p.w + 'px'; box.style.height = p.h + 'px'; } else { box.style.width = box.style.height = ''; }
+}
+function pickBoxKeep(ch) {
+  let p = {}; try { p = JSON.parse(localStorage.getItem(PICKBOX) || '{}') || {}; } catch (_) {}
+  Object.assign(p, ch); localStorage.setItem(PICKBOX, JSON.stringify(p));
+}
 function wirePicker() {
   const pk = $('#sp-pick'); if (!pk) return;
-  pk.addEventListener('toggle', () => { if (pk.open) renderPicker(); });
+  pk.addEventListener('toggle', () => { if (pk.open) { pickBoxPlace(); renderPicker(); } });
+  const box = $('#sp-pick-pop'), grip = box.querySelector('.pk-grip');
+  grip.addEventListener('mousedown', ev => {
+    if (ev.button !== 0 || ev.target.tagName === 'BUTTON') return;
+    ev.preventDefault();
+    const r = box.getBoundingClientRect(), dx = ev.clientX - r.left, dy = ev.clientY - r.top;
+    box.classList.add('floating'); box.style.width = r.width + 'px'; box.style.height = r.height + 'px';
+    const move = e => {
+      box.style.left = Math.max(0, Math.min(window.innerWidth - 120, e.clientX - dx)) + 'px';
+      box.style.top = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - dy)) + 'px';
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up);
+      const b = box.getBoundingClientRect(); pickBoxKeep({ left: b.left, top: b.top, w: b.width, h: b.height });
+    };
+    move(ev); window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  });
+  // a size set at the corner is kept (the observer also fires on opening: only a change while open is a resize)
+  let seen = null;
+  new ResizeObserver(() => {
+    if (!pk.open) { seen = null; return; }
+    const b = box.getBoundingClientRect(), key = Math.round(b.width) + 'x' + Math.round(b.height);
+    if (seen && seen !== key && box.style.height) pickBoxKeep({ w: b.width, h: b.height });   // a size set by hand (the corner writes it inline), not the list growing
+    seen = key;
+  }).observe(box);
+  $('#sp-pick-home').addEventListener('click', () => { localStorage.removeItem(PICKBOX); pickBoxPlace(); });
+  $('#sp-pick-x').addEventListener('click', () => { pk.open = false; });
+  window.addEventListener('resize', () => { if (pk.open) pickBoxPlace(); });
 }
 async function renderPicker() {
   const pk = $('#sp-pick'), host = $('#sp-pick-body'); if (!pk || !host || !pk.open) return;
@@ -1470,6 +1526,13 @@ async function renderPicker() {
     const leg = el('div', { class: 'pk-legend' });
     for (const r of SP.lib.rows) { if (r.broad) continue; const sw = el('i', { class: 'sw' }); sw.style.background = rowColour(r); leg.append(el('span', { title: r.what + '; ' + r.active }, sw, labelNodes(r.label), ' ' + r.lo + '–' + r.hi)); }
     host.append(leg);
+    // the shaded areas under the curve are the groups' composites, not species: said here, and switched off here as under 'more ▾'
+    if (SP.lib.composites && Object.keys(SP.lib.composites).length) {
+      const cb = el('input', { type: 'checkbox' }); cb.checked = SP.layers.composite;
+      cb.addEventListener('change', () => { setLayer('composite', cb.checked); savePrefs(); draw(); });
+      host.append(el('label', { class: 'pk-comp muted', title: 'One shaded area per group picked: the median of RRUFF’s Raman spectra of the minerals holding that group alone (each normalised, one per mineral), scaled to the curve in view — what such a mineral looks like, not any one species. A species’ own spectrum is drawn with ‘overlay’ in the list below.' },
+        cb, ' shaded composites (the median spectrum of each group’s minerals, not a species)'));
+    }
   }
   const sp = el('div', { class: 'pk-species' }); host.append(sp);
   loadSpecies(sp);
@@ -1495,9 +1558,11 @@ async function loadSpecies(host, keep) {
       if (++n > 600) { list.append(el('div', { class: 'muted' }, '… and more: narrow the filter')); break; }
       const f = el('span', { class: 'f' }); f.innerHTML = s.html || s.formula;             // Mindat's own sub/sup, every other tag escaped on the server
       const row = el('div', { class: 'pk-sp' + (s.rruff ? ' rr' : '') }, el('b', { title: s.rruff ? 'open the RRUFF spectrum of ' + s.name + ' here (' + s.rruff.n + ' spectr' + (s.rruff.n === 1 ? 'um' : 'a') + ' in the library)' : s.formula }, s.name), f);
-      if (s.rruff && RR.choose) {                            // a name with a spectrum opens it in the window; 'overlay' draws it under the curve instead
+      if (s.rruff && RR.choose) {                            // a name with a spectrum opens it in the window; 'overlay' draws it under the curve instead — either, pressed on the one drawn, takes it away
+        row.firstChild.dataset.rr = s.rruff.name; row.firstChild.dataset.title = row.firstChild.title;
         row.firstChild.addEventListener('click', () => RR.choose(s.rruff.name, 'open'));
         const v = el('button', { title: 'Draw the RRUFF spectrum of ' + s.name + ' under the current curve, scaled to it' }, 'overlay');
+        v.dataset.rr = s.rruff.name; v.dataset.title = v.title;
         v.addEventListener('click', () => RR.choose(s.rruff.name, 'overlay'));
         row.append(v);
       }
@@ -1518,7 +1583,7 @@ async function loadSpecies(host, keep) {
     head.append(sort, el('label', { class: 'muted', title: 'List only the species the RRUFF library on this machine has a spectrum of' }, cb, ' only with a spectrum'));
   }
   host.append(head, list);
-  fill();
+  fill(); markOverlays();
   if (had) { filt.focus(); try { filt.setSelectionRange(caret, caret); } catch (_) {} }
 }
 
@@ -1526,7 +1591,22 @@ async function loadSpecies(host, keep) {
 // The list comes from /api/sp/rruff/list once (hidden when there is no library); a mineral typed into the box fills the
 // select with its spectra; 'open' holds the spectrum on the server under a name and opens it like a file opened here;
 // 'overlay' draws it under the current curve, scaled to the curve in view (SP.overlay = {name, x, y}; draw()).
-const RR = { minerals: null, byName: {} };
+const RR = { minerals: null, byName: {}, overlaid: null };     // overlaid: the mineral drawn under the curve now, or null
+// every button that overlays a mineral (data-rr = its name) says whether it is the one drawn: pressed again, it takes it away
+function markOverlays() {
+  const on = RR.overlaid && $('#sp-overlay').checked ? rrKey(RR.overlaid) : null;
+  for (const b of document.querySelectorAll('button[data-rr]')) {
+    const mine = on != null && rrKey(b.dataset.rr) === on;
+    b.classList.toggle('on', mine);
+    if (!b.classList.contains('cmp')) b.textContent = mine ? '✓ overlaid' : 'overlay';
+    b.title = mine ? 'Take the RRUFF spectrum of ' + b.dataset.rr + ' away from under the curve' : b.dataset.title;
+  }
+  for (const n of document.querySelectorAll('.pk-sp > b[data-rr]')) {
+    const mine = on != null && rrKey(n.dataset.rr) === on;
+    n.classList.toggle('on', mine);
+    n.title = mine ? 'drawn under the curve — click to take it away' : n.dataset.title;
+  }
+}
 // a name as a key: diacritics folded, lowercase (Mindat writes 'Nybøite', RRUFF 'Nyboite'; the server keys on mindat._norm the same way)
 const rrKey = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ø/g, 'o').replace(/Ø/g, 'O').replace(/æ/g, 'ae').replace(/ß/g, 'ss').replace(/ł/g, 'l').replace(/đ/g, 'd').toLowerCase().trim();
 // the list's answer put into the box (a datalist of minerals); with no library, the 'RRUFF library…' button instead
@@ -1594,15 +1674,20 @@ async function wireRruff() {
   };
   const overlayNow = async () => {
     const key = specSel.value;
-    if (!key || !$('#sp-overlay').checked) { SP.overlay = null; draw(); return; }
+    if (!key || !$('#sp-overlay').checked) { SP.overlay = null; RR.overlaid = null; markOverlays(); draw(); return; }
+    const m = RR.byName[rrKey($('#sp-rruff').value)];
     try {
       const r = await api('/api/sp/rruff/curve?key=' + enc(key));
-      if (specSel.value !== key) return;                     // another was chosen while this one loaded
-      SP.overlay = { name: r.name, x: r.x, y: r.y, peaks: r.peaks || [] }; draw();
+      if (specSel.value !== key || !$('#sp-overlay').checked) return;   // another was chosen, or the overlay taken away, while this one loaded
+      SP.overlay = { name: r.name, x: r.x, y: r.y, peaks: r.peaks || [] }; RR.overlaid = m ? m.name : r.name; markOverlays(); draw();
       status(r.name + ' drawn under the curve (overlay)');
     } catch (e) { status(e.message, true); }
   };
   RR.choose = (name, action) => {                           // the species list of the group picker: a mineral put into the box, then opened or overlaid
+    if (RR.overlaid && $('#sp-overlay').checked && rrKey(name) === rrKey(RR.overlaid)) {     // the one drawn now, pressed again (its name or its button): taken away
+      $('#sp-overlay').checked = false; SP.overlay = null; RR.overlaid = null; markOverlays(); draw();
+      status(name + ' no longer drawn under the curve'); return;
+    }
     $('#sp-rruff').value = name; pick();
     if (!RR.byName[rrKey(name)]) { status('no spectrum of ' + name + ' in the RRUFF library', true); return; }
     if (action === 'open') openBtn.click();
@@ -1614,7 +1699,7 @@ async function wireRruff() {
   $('#sp-overlay').addEventListener('change', overlayNow);
   openBtn.addEventListener('click', async () => {
     const key = specSel.value; if (!key) return;
-    if ($('#sp-overlay').checked) { $('#sp-overlay').checked = false; SP.overlay = null; }   // the reference becomes the curve: not drawn under itself
+    if ($('#sp-overlay').checked) { $('#sp-overlay').checked = false; SP.overlay = null; RR.overlaid = null; markOverlays(); }   // the reference becomes the curve: not drawn under itself
     try {
       const r = await api('/api/sp/rruff/open', { key: +key });
       await loadState(r.name);                                // the list of files now holds it (opened here); it opens as the current spectrum
@@ -1661,7 +1746,7 @@ async function fgPages(name) {
 }
 async function fgPage(i) {
   FG.i = i; FG.box = null; FG.trace = null; FG.colour = null; FG.seed = null; FG.frames = []; FG.x1 = FG.x2 = null; FG.downSet = false; FG.ticks = []; FG.peaks = null;
-  $('#sp-fig-use').disabled = true; $('#sp-fig-v1').value = ''; $('#sp-fig-v2').value = ''; $('#sp-fig-down').checked = false; $('#sp-fig-swatch').style.background = '';
+  fgUseState(); $('#sp-fig-v1').value = ''; $('#sp-fig-v2').value = ''; $('#sp-fig-down').checked = false; $('#sp-fig-swatch').style.background = '';
   const img = $('#sp-fig-img');
   fgStatus('opening…');
   await new Promise(res => { img.onload = res; img.onerror = res; img.src = '/api/sp/fig/image?name=' + enc(FG.name) + '&i=' + i + '&t=' + Date.now(); });
@@ -1680,14 +1765,16 @@ async function fgPage(i) {
   fgDraw();
 }
 function fgTake(f, keepAxis) {
-  FG.box = f.box.slice(); FG.trace = null; FG.peaks = null; $('#sp-fig-use').disabled = true;
-  FG.ticks = f.marks || [];
+  fgMarkBox(false);
+  FG.box = f.box.slice(); FG.trace = null; FG.peaks = null; fgUseState();
+  FG.ticks = f.marks || []; FG.majors = f.majors || [];
   if (keepAxis) return;
   if (f.ticks && f.ticks.length >= 2) {
     const a = f.ticks[0], b = f.ticks[f.ticks.length - 1];
     FG.x1 = a[0]; FG.x2 = b[0]; $('#sp-fig-v1').value = a[1]; $('#sp-fig-v2').value = b[1];
-  } else if (FG.ticks.length >= 2) {                         // a picture: the marks start on its first and last tick, their numbers to be typed
-    FG.x1 = FG.ticks[0]; FG.x2 = FG.ticks[FG.ticks.length - 1]; $('#sp-fig-v1').value = ''; $('#sp-fig-v2').value = '';
+  } else if (FG.ticks.length >= 2) {                         // a picture: the marks start on its first and last LONG tick (where numbers are printed), their numbers to be typed
+    const mj = FG.majors.length >= 2 ? FG.majors : FG.ticks;   // (on the first and last tick, often unnumbered minor ones, the nearest printed number was typed: a stretched scale)
+    FG.x1 = mj[0]; FG.x2 = mj[mj.length - 1]; $('#sp-fig-v1').value = ''; $('#sp-fig-v2').value = '';
   } else {
     const wd = FG.box[2] - FG.box[0];
     FG.x1 = FG.box[0] + 0.1 * wd; FG.x2 = FG.box[2] - 0.1 * wd; $('#sp-fig-v1').value = ''; $('#sp-fig-v2').value = '';
@@ -1695,6 +1782,95 @@ function fgTake(f, keepAxis) {
 }
 // a mark let go: onto the nearest tick when it is dropped near the axis, onto the nearest peak's top when it is dropped
 // higher on a traced curve — within nine screen pixels, and not at all with Alt held
+// 'centre on ticks': each mark onto the middle of the tick mark it stands near, read from the picture's own pixels — the
+// darkness-weighted centre of the tick's ink in the rows that touch the axis line (inside or outside the frame; the
+// numbers under the ticks are left out by stopping at the first blank row), taken twice so a mark dropped off-centre is
+// pulled onto it. Good to a fraction of a pixel where the tick is two or more pixels wide.
+let fgPix = null;                                            // {src, w, h, data}: the picture's pixels, read once per picture
+function fgPixels() {
+  const img = $('#sp-fig-img');
+  if (fgPix && fgPix.src === img.src) return fgPix;
+  const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const cx = c.getContext('2d', { willReadFrequently: true }); cx.drawImage(img, 0, 0);
+  fgPix = { src: img.src, w: c.width, h: c.height, data: cx.getImageData(0, 0, c.width, c.height).data };
+  return fgPix;
+}
+function fgTickCentre(x) {
+  const b = FG.box; if (!b) return null;
+  const P = fgPixels(), k = P.w / FG.w;                         // picture pixels per figure unit (1 unless the page was rendered otherwise)
+  const gray = (px, py) => { const i = 4 * (py * P.w + px); return (P.data[i] + P.data[i + 1] + P.data[i + 2]) / 3; };
+  const half = Math.max(3, 8 / FG.scale) * k;                  // eight screen pixels either side of the mark
+  const axis = Math.round(b[3] * k), x0 = Math.round(b[0] * k), x1 = Math.round(b[2] * k);
+  const inked = py => { let n = 0; for (let px = x0; px <= x1; px += 2) if (gray(px, py) < 128) n++; return n > 0.125 * (x1 - x0); };   // every second pixel looked at: a quarter of the width
+  let cx = x * k;
+  for (let pass = 0; pass < 2; pass++) {
+    const a = Math.max(0, Math.floor(cx - half)), z = Math.min(P.w - 1, Math.ceil(cx + half));
+    let bg = 0; for (let px = a; px <= z; px++) for (const py of [axis - 14 * k, axis + 14 * k]) if (py >= 0 && py < P.h) bg = Math.max(bg, gray(px, Math.round(py)));
+    if (bg < 128) bg = 255;
+    // the axis line's rows, then the tick's rows on either side of them, out to the first row with no ink in the window
+    let lo = axis;                                             // the frame's floor drawn by hand may be a few rows off its axis line
+    for (let d = 0; d <= 6 * k; d++) { if (inked(axis + d)) { lo = axis + d; break; } if (inked(axis - d)) { lo = axis - d; break; } }
+    if (!inked(lo)) return null;
+    let hi = lo;
+    while (lo > 0 && inked(lo - 1)) lo--;
+    while (hi < P.h - 1 && inked(hi + 1)) hi++;
+    let sw = 0, sx = 0;
+    for (const dir of [1, -1]) {                               // the ticks under the axis first; inside the frame only when there are none outside
+      if (sw > 0) break;                                       // (inside, a curve on its baseline runs along the axis line)
+      let skipped = 0;
+      for (let py = dir < 0 ? lo - 1 : hi + 1, n = 0; py >= 0 && py < P.h && n < 40 * k; py += dir, n++) {
+        // each row's own even grey taken off (the axis line's anti-aliased edge runs the whole window): what is left is the tick
+        const dk = []; for (let px = a; px <= z; px++) dk.push(Math.max(0, bg - gray(px, py) - 25));
+        const floor = Math.min(...dk);
+        let rw = 0, rx = 0, cols = 0;
+        dk.forEach((d, j) => { d -= floor; rw += d; rx += d * (a + j + 0.5); if (d > 0) cols++; });
+        if (rw === 0 || cols > 0.7 * dk.length) {             // a blank row ends the tick; a row inked across the window is no tick —
+          if (sw === 0 && skipped < 3) { skipped++; continue; }  // but the first few rows off the axis may be its soft edge
+          break;
+        }
+        sw += rw; sx += rx;
+      }
+    }
+    if (sw === 0) return null;
+    cx = sx / sw;
+  }
+  return cx / k;
+}
+function fgCentre() {
+  if (!FG.box) { fgStatus('drag a frame around the plot first', true); return; }
+  const said = [];
+  for (const [key, side] of [['x1', 'left'], ['x2', 'right']]) {
+    if (FG[key] == null) continue;
+    let c = null; try { c = fgTickCentre(FG[key]); } catch (e) { fgStatus('the picture could not be read here (' + e.message + ')', true); return; }
+    if (c == null) { said.push(side + ': no tick within eight screen pixels'); continue; }
+    said.push(side + ' ' + (c - FG[key] >= 0 ? '+' : '−') + Math.abs(c - FG[key]).toFixed(2) + ' px');
+    FG[key] = c;
+  }
+  FG.trace = null; fgUseState(); fgDraw(); fgMarkBox();
+  fgStatus('centred on the ticks (' + said.join('; ') + ') — Trace again');
+}
+// the mark box: opened beside a mark when it is let go — steps and the centring, off the panel's bar (it pushed Close
+// off the screen); under the axis at the mark, so the loupe above the axis stays clear
+function fgMarkBox(show) {
+  const mb = $('#sp-fig-markbox'), key = FG.active || 'x1';
+  if (show === false || !FG.box || FG[key] == null || $('#sp-fig').classList.contains('hidden')) { mb.classList.add('hidden'); return; }
+  if (show) mb.classList.remove('hidden');
+  if (mb.classList.contains('hidden')) return;
+  $('#sp-fig-mb-name').textContent = key === 'x1' ? 'left mark' : 'right mark';
+  $('#sp-fig-mb-at').textContent = 'at ' + FG[key].toFixed(2) + ' px';
+  const r = $('#sp-fig-svg').getBoundingClientRect(), w = mb.offsetWidth || 240;
+  mb.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + FG[key] * FG.scale - w / 2)) + 'px';
+  mb.style.top = Math.max(8, Math.min(window.innerHeight - (mb.offsetHeight || 90) - 8, r.top + FG.box[3] * FG.scale + 34)) + 'px';
+}
+// ← / →: the mark last touched moved by a tenth of a picture pixel (Shift: one), the loupe on it while it moves
+let fgLoupeTimer = null;
+function fgNudge(dx) {
+  const key = FG.active || 'x1'; if (FG[key] == null || !FG.box) return;
+  FG[key] = Math.max(0, Math.min(FG.w, FG[key] + dx)); FG.trace = null; fgUseState(); fgDraw(); fgMarkBox();
+  const r = $('#sp-fig-svg').getBoundingClientRect(), y = FG.box[3] + 3;
+  fgLoupe({ clientX: r.left + FG[key] * FG.scale, clientY: r.top + y * FG.scale }, FG[key], y);
+  clearTimeout(fgLoupeTimer); fgLoupeTimer = setTimeout(() => fgLoupe(null), 1500);
+}
 function fgSnap(key, x, y, free) {
   const b = FG.box; if (!b || free) return '';
   const nearAxis = y > b[3] - 0.2 * (b[3] - b[1]);
@@ -1708,12 +1884,13 @@ function fgSnap(key, x, y, free) {
 function fgLoupe(ev, x, y) {
   const lp = $('#sp-fig-loupe');
   if (!ev) { lp.classList.add('hidden'); return; }
-  const Z = Math.max(3, 2.5 / FG.scale);                    // image pixels enlarged: at least three screen pixels each
+  const Z = Math.max(7, 6 / FG.scale);                      // image pixels enlarged: at least seven screen pixels each — a tick and the hairline told apart to a pixel
   lp.classList.remove('hidden');
+  const W = lp.clientWidth || 280, H = lp.clientHeight || 180;
   lp.style.backgroundImage = 'url("' + $('#sp-fig-img').src + '")';
   lp.style.backgroundSize = (FG.w * Z) + 'px ' + (FG.h * Z) + 'px';
-  lp.style.backgroundPosition = (110 - x * Z) + 'px ' + (75 - y * Z) + 'px';
-  lp.style.left = Math.min(window.innerWidth - 240, ev.clientX + 24) + 'px'; lp.style.top = Math.max(8, ev.clientY - 180) + 'px';
+  lp.style.backgroundPosition = (W / 2 - x * Z) + 'px ' + (H / 2 - y * Z) + 'px';
+  lp.style.left = Math.min(window.innerWidth - W - 20, ev.clientX + 24) + 'px'; lp.style.top = Math.max(8, ev.clientY - H - 30) + 'px';
 }
 function fgDraw() {
   const img = $('#sp-fig-img'), svg = $('#sp-fig-svg'), view = $('#sp-fig-view');
@@ -1734,20 +1911,31 @@ function fgDraw() {
   }
   if (FG.box) {
     const b = FG.box;
+    svg.append(sv('rect', { class: 'f-halo', x: b[0], y: b[1], width: b[2] - b[0], height: b[3] - b[1] }));      // drawn over black axes, the line alone could not be seen
     svg.append(sv('rect', { class: 'f-box', x: b[0], y: b[1], width: b[2] - b[0], height: b[3] - b[1] }));
     for (const [key, id] of [['x1', 'sp-fig-v1'], ['x2', 'sp-fig-v2']]) {
       const x = FG[key]; if (x == null) continue;
-      const top = Math.max(b[1] - 26 * px, 16 * px), g = sv('g', { class: 'f-mark' },      // the handle over the frame — inside the picture when the frame reaches its top
+      const top = Math.max(b[1] - 26 * px, 16 * px), g = sv('g', { class: 'f-mark' + (key === (FG.active || 'x1') ? ' on' : '') },      // the handle over the frame — inside the picture when the frame reaches its top
         sv('line', { x1: x, x2: x, y1: top, y2: b[3] + 10 * px }),
         sv('path', { d: 'M' + (x - 8 * px) + ',' + (top - 12 * px) + ' h' + 16 * px + ' v' + 9 * px + ' l' + (-8 * px) + ',' + 9 * px + ' l' + (-8 * px) + ',' + (-9 * px) + ' Z' }),
         sv('rect', { x: x - 7 * px, y: top, width: 14 * px, height: b[3] - top }),
         sv('text', { x: x + 10 * px, y: top - 2 * px, 'font-size': 13 * px }, $('#' + id).value === '' ? '?' : $('#' + id).value),
-        sv('title', null, 'drag onto a numbered tick of the axis, then type its number (' + (key === 'x1' ? 'left' : 'right') + ' mark)'));
-      g.addEventListener('mousedown', ev => { ev.stopPropagation(); ev.preventDefault(); FG.drag = { kind: 'mark', key }; });
+        sv('title', null, 'drag onto a numbered tick of the axis, then type its number (' + (key === 'x1' ? 'left' : 'right') + ' mark) — ← / → move the mark last touched by a tenth of a pixel, with Shift by one; ‘centre on ticks’ sets both on the middle of the tick under them'));
+      g.addEventListener('mousedown', ev => { ev.stopPropagation(); ev.preventDefault(); FG.drag = { kind: 'mark', key }; FG.active = key; });
       svg.append(g);
     }
   }
-  if (FG.box) for (const t of FG.ticks) svg.append(sv('line', { class: 'f-tick', x1: t, x2: t, y1: FG.box[3] + 2 * px, y2: FG.box[3] + 9 * px }));
+  // what the scale typed gives each long tick, under it: a number that differs from the printed one shows a mark on the wrong tick
+  const v1_ = num('sp-fig-v1'), v2_ = num('sp-fig-v2');
+  if (FG.box && v1_ != null && v2_ != null && FG.x1 != null && FG.x2 != null && FG.x2 !== FG.x1) {
+    const at = x => v1_ + (x - FG.x1) * (v2_ - v1_) / (FG.x2 - FG.x1);
+    for (const t of (FG.majors && FG.majors.length >= 2 ? FG.majors : FG.ticks))
+      svg.append(sv('text', { class: 'f-val', x: t, y: FG.box[3] - 8 * px, 'font-size': 12 * px, 'text-anchor': 'middle' }, String(Math.round(at(t)))));
+  }
+  if (FG.box) for (const t of FG.ticks) {
+    const major = (FG.majors || []).some(m => Math.abs(m - t) < 0.5);
+    svg.append(sv('line', { class: 'f-tick' + (major ? ' major' : ''), x1: t, x2: t, y1: FG.box[3] + 2 * px, y2: FG.box[3] + (major ? 16 : 9) * px }, sv('title', null, major ? 'a long tick: a number is printed under it' : 'a tick')));
+  }
   if (FG.trace) svg.append(sv('polyline', { class: 'f-trace', points: FG.trace.map(p => p[0] + ',' + p[1]).join(' ') }));
   if (FG.trace && FG.peaks) {                                // the tops a mark can be dropped on
     const yAt = x => { let b = FG.trace[0]; for (const p of FG.trace) if (Math.abs(p[0] - x) < Math.abs(b[0] - x)) b = p; return b[1]; };
@@ -1763,16 +1951,66 @@ function fgPoint(ev) {
   const r = $('#sp-fig-svg').getBoundingClientRect();
   return [Math.max(0, Math.min(FG.w, (ev.clientX - r.left) / FG.scale)), Math.max(0, Math.min(FG.h, (ev.clientY - r.top) / FG.scale))];
 }
+// the axis through EVERY tick, not two: the marks say which ticks carry v1 and v2, the ticks between and beyond take the
+// values the even spacing gives them, and each stands where its own ink is centred (contrast). Null — the two marks
+// alone — where a mark is not on a tick (a peak top) or the marks are not a whole number of tick spaces apart.
+function fgCalib(v1, v2) {
+  const T = FG.ticks || [];
+  if (T.length < 3 || v1 == null || v2 == null || FG.x1 == null || FG.x2 == null) return null;
+  const d = T.slice(1).map((t, k) => t - T[k]).sort((a, b) => a - b), pitch = d[Math.floor(d.length / 2)];
+  const near = x => T.reduce((b, t) => Math.abs(t - x) < Math.abs(b - x) ? t : b);
+  const t1 = near(FG.x1), t2 = near(FG.x2);
+  if (Math.abs(t1 - FG.x1) > 0.3 * pitch || Math.abs(t2 - FG.x2) > 0.3 * pitch) return null;
+  const n = (t2 - t1) / pitch, k2 = Math.round(n);
+  if (!k2 || Math.abs(n - k2) > 0.15) return null;
+  const dv = (v2 - v1) / k2, out = [];
+  for (const t of T) {
+    let x = t;
+    try { const c = fgTickCentre(t); if (c != null && Math.abs(c - t) < 0.3 * pitch) x = c; } catch (_) {}
+    out.push([x, v1 + Math.round((t - t1) / pitch) * dv]);
+  }
+  return out;
+}
+// 'Use this curve' traces again itself, so it waits for nothing but a frame: disabled, it took a click in silence when
+// the axis numbers were still missing (the curve followed in pixels only) and Close then had nothing to open
+function fgUseState() { $('#sp-fig-use').disabled = !FG.box; FG.oddOK = false; }
+// the step the two typed numbers give from one tick to the next -> {dv, round} (null when a mark is not on a tick). An
+// axis is ticked in round steps — 1, 2, 2.5, 5 … × 10ⁿ — so a step like 269.2 means a mark stands on another tick than
+// the one whose number was typed (the left mark on the 500 tick with 250 typed stretched an IR figure's scale 7 %)
+function fgStep(v1, v2) {
+  const T = FG.ticks || [];
+  if (T.length < 3 || v1 == null || v2 == null || FG.x1 == null || FG.x2 == null) return null;
+  const d = T.slice(1).map((t, k) => t - T[k]).sort((a, b) => a - b), pitch = d[Math.floor(d.length / 2)];
+  const near = x => T.reduce((b, t) => Math.abs(t - x) < Math.abs(b - x) ? t : b);
+  const t1 = near(FG.x1), t2 = near(FG.x2);
+  if (Math.abs(t1 - FG.x1) > 0.3 * pitch || Math.abs(t2 - FG.x2) > 0.3 * pitch) return null;
+  const k2 = Math.round((t2 - t1) / pitch); if (!k2) return null;
+  const dv = Math.abs((v2 - v1) / k2), e = Math.pow(10, Math.floor(Math.log10(dv))), m = dv / e;
+  return { dv, round: [1, 2, 2.5, 3, 4, 5, 10].some(c => Math.abs(m - c) < 0.01 * c) };
+}
+// the axis numbers still to be typed: outlined, the first focused — said on the button's press, not left to be guessed
+function fgNeed(focus) {
+  let first = null;
+  for (const id of ['sp-fig-v1', 'sp-fig-v2']) { const e = $('#' + id), miss = num(id) == null; e.classList.toggle('need', miss); if (miss && !first) first = e; }
+  if (focus && first) first.focus();
+}
 async function fgTrace(use) {
   if (!FG.box) { fgStatus('drag a frame around the plot first', true); return; }
   const v1 = num('sp-fig-v1'), v2 = num('sp-fig-v2');
-  if (use && (v1 == null || v2 == null)) { fgStatus('type the axis values at the two marks (drag each onto a numbered tick first)', true); return; }
+  if (use && (v1 == null || v2 == null)) { fgStatus('the axis is not scaled yet: type the numbers printed under the two marks’ ticks (outlined in red), then Use this curve', true); fgNeed(true); return; }
+  const st = fgStep(v1, v2);
+  if (use && st && !st.round && !FG.oddOK) {
+    FG.oddOK = true; fgDraw();
+    fgStatus('the two numbers typed make ' + (+st.dv.toFixed(2)) + ' cm⁻¹ from one tick to the next — not a round step: a mark probably stands on another tick than the one whose number was typed. The values this scale gives the long ticks are drawn under them in blue: compare them with the printed numbers. Press Use this curve again to use it as it is.', true);
+    return;
+  }
   const body = { name: FG.name, i: FG.i, box: FG.box, x1: FG.x1, v1, x2: FG.x2, v2, colour: FG.colour, seed: FG.seed, use: !!use };
+  const calib = fgCalib(v1, v2); if (calib) body.calib = calib;
   if (FG.downSet) body.down = $('#sp-fig-down').checked;
   try {
     fgStatus('tracing…');
     const r = await api('/api/sp/fig/trace', body);
-    FG.trace = r.trace; FG.peaks = r.peaks || null; $('#sp-fig-use').disabled = !!r.pixels_only;
+    FG.trace = r.trace; FG.peaks = r.peaks || null; fgUseState(); if (r.pixels_only) fgNeed();
     if (!FG.downSet) $('#sp-fig-down').checked = r.down;
     if (r.colour) $('#sp-fig-swatch').style.background = 'rgb(' + r.colour.join(',') + ')';
     if (r.pixels_only) {                                     // the curve followed, the axis not scaled yet
@@ -1780,6 +2018,7 @@ async function fgTrace(use) {
       fgDraw(); return;
     }
     fgStatus(r.n + ' points, ' + Math.round(r.lo) + '–' + Math.round(r.hi) + ' cm⁻¹; a pixel is ' + r.cm_per_px.toFixed(1) + ' cm⁻¹; ' + (r.how === 'vector' ? 'the drawing’s own curve' : 'followed through the pixels') +
+      (r.calib ? '; the axis scaled through ' + r.calib.n + ' ticks, which stand ' + r.calib.rms.toFixed(1) + ' cm⁻¹ rms from its line' + (r.calib.rms > 1.5 * r.cm_per_px ? ' — more than a pixel and a half: check the two numbers typed and that each mark is on its tick' : '') : '; the axis scaled on the two marks') +
       (r.coverage < 0.9 ? '; found on ' + Math.round(100 * r.coverage) + ' % of the frame’s width — click on the curve if this is not it' : '') + (r.down ? '; bands down' : ''));
     fgDraw();
     if (use && r.name) {
@@ -1800,7 +2039,7 @@ function wireFig() {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     await fgUpload(f);
   });
-  for (const id of ['sp-fig-v1', 'sp-fig-v2']) $('#' + id).addEventListener('input', () => { FG.trace = null; $('#sp-fig-use').disabled = true; fgDraw(); });
+  for (const id of ['sp-fig-v1', 'sp-fig-v2']) $('#' + id).addEventListener('input', () => { FG.trace = null; fgUseState(); $('#' + id).classList.toggle('need', num(id) == null && $('#' + id).classList.contains('need')); fgDraw(); });
   $('#sp-fig-down').addEventListener('change', () => { FG.downSet = true; });
   $('#sp-fig-trace').addEventListener('click', () => fgTrace(false));
   $('#sp-fig-use').addEventListener('click', () => fgTrace(true));
@@ -1814,7 +2053,7 @@ function wireFig() {
     const d = FG.drag; if (!d || $('#sp-fig').classList.contains('hidden')) return;
     const [x, y] = fgPoint(ev);
     if (d.kind === 'mark') {                                  // the loupe on the axis while the mark is near it (the ticks under the hairline), on the pointer higher up (a peak)
-      FG[d.key] = x; $('#sp-fig-use').disabled = true;
+      FG[d.key] = x; fgUseState();
       const b = FG.box; fgLoupe(ev, x, b && y > b[3] - 0.2 * (b[3] - b[1]) ? b[3] + 3 : y);
     }
     else { d.x = x; d.y = y; d.moved = d.moved || Math.abs(x - d.x0) * FG.scale > 5 || Math.abs(y - d.y0) * FG.scale > 5; }
@@ -1827,7 +2066,7 @@ function wireFig() {
       fgLoupe(null);
       const [x, y] = fgPoint(ev), on = fgSnap(d.key, x, y, ev.altKey);
       fgStatus(on ? 'the mark is on ' + on + ': type its number' : 'the mark is where it was dropped (no tick or peak within reach): type its number');
-      fgDraw(); return;
+      fgDraw(); fgMarkBox(true); return;
     }
     if (d.moved) {                                           // a frame of the user's own
       const box = [Math.round(Math.min(d.x0, d.x)), Math.round(Math.min(d.y0, d.y)), Math.round(Math.max(d.x0, d.x)), Math.round(Math.max(d.y0, d.y))];
@@ -1841,7 +2080,7 @@ function wireFig() {
     }
     try {                                                    // a click: the curve's colour, and which curve
       const r = await api('/api/sp/fig/colour', { name: FG.name, i: FG.i, x: d.x0, y: d.y0 });
-      FG.colour = r.colour; FG.seed = r.seed; FG.trace = null; $('#sp-fig-use').disabled = true;
+      FG.colour = r.colour; FG.seed = r.seed; FG.trace = null; fgUseState();
       $('#sp-fig-swatch').style.background = 'rgb(' + r.colour.join(',') + ')';
       fgStatus('the curve’s colour taken: Trace');
     } catch (e) { fgStatus(e.message, true); }
@@ -1850,8 +2089,18 @@ function wireFig() {
   window.addEventListener('resize', () => { if (!$('#sp-fig').classList.contains('hidden')) fgDraw(); });
   window.addEventListener('keydown', ev => {                 // Escape hides the panel (its state is kept) — not from inside one of its fields
     const t = ev.target || {};
+    if (ev.key === 'Escape' && !$('#sp-fig-markbox').classList.contains('hidden')) { fgMarkBox(false); return; }      // the mark box first, the panel at the next Escape
     if (ev.key === 'Escape' && !$('#sp-fig').classList.contains('hidden') && !((t.tagName === 'INPUT' || t.tagName === 'SELECT') && $('#sp-fig').contains(t))) $('#sp-fig').classList.add('hidden');
+    if ((ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && !$('#sp-fig').classList.contains('hidden') && t.tagName !== 'INPUT' && t.tagName !== 'SELECT' && t.tagName !== 'TEXTAREA') {
+      ev.preventDefault(); fgNudge((ev.key === 'ArrowLeft' ? -1 : 1) * (ev.shiftKey ? 1 : 0.1));
+    }
   });
+  $('#sp-fig-centre').addEventListener('click', fgCentre);
+  for (const b of document.querySelectorAll('#sp-fig-markbox [data-d]')) b.addEventListener('click', () => fgNudge(+b.dataset.d));
+  $('#sp-fig-mb-close').addEventListener('click', () => fgMarkBox(false));
+  $('#sp-fig-view').addEventListener('scroll', () => fgMarkBox());       // kept under its mark while the figure scrolls
+  window.addEventListener('resize', () => fgMarkBox());
+  $('#sp-fig-close').addEventListener('click', () => fgMarkBox(false));
 }
 async function fgUpload(f) {
   const fd = new FormData(); fd.append('file', f);
