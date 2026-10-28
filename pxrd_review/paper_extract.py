@@ -809,12 +809,42 @@ def _structural_caption(cap):
 # labels a wt% row never carries but an apfu block does — read below a Total, they open the apfu block
 _ION_ROWS = {'SO4', 'PO4', 'AsO4', 'VO4', 'SiO4', 'CO3', 'BO3', 'NO3', 'OH', 'NH4', 'UO2', 'H3O', 'SeO4', 'CrO4', 'MoO4', 'WO4'}
 
+def _continued_pages(pages):
+    """The pages with an analytical table that runs over a page break joined: a page that ends in constituent rows
+    (its page number aside) followed by one whose first rows (its running head aside) stand in the same column (within
+    15 pt) is read as the first page's lines and then the second's rows, below them. The reader took a page at a time,
+    and the rows past the break were lost: SO3 and H2O of a 101 % table, TiO2 of another — the analysis read 91 and 31 %.
+    -> [(page index, lines)], the joined page in the place of the first."""
+    out = [(k, p) for k, p in enumerate(pages)]
+    for k in range(1, len(pages)):
+        prev, cur = pages[k - 1], pages[k]
+        if not prev or not cur:
+            continue
+        q = len(prev) - 1; skipped = 0
+        while q >= 0 and skipped < 2 and not _row_at(prev[q]['w'], None):
+            q -= 1; skipped += 1                                      # the page number, a footer
+        if q < 1:
+            continue
+        last = _row_at(prev[q]['w'], None); above = _row_at(prev[q - 1]['w'], None)
+        if not last or not above or last[1] != 'constituent':
+            continue
+        r = 0
+        while r < len(cur) and r < 3 and not _row_at(cur[r]['w'], None):
+            r += 1                                                    # the running head
+        first = _row_at(cur[r]['w'], None) if r < len(cur) else None
+        if not first or abs(first[3] - last[3]) > 15:
+            continue
+        step = max(8.0, prev[q]['y'] - prev[q - 1]['y']); dy = prev[q]['y'] + step - cur[r]['y']
+        moved = [dict(ln, y=ln['y'] + dy, w=[(w[0], w[1] + dy, w[2], w[3] + dy) + tuple(w[4:]) for w in ln['w']]) for ln in cur[r:]]
+        out[k - 1] = (k - 1, list(prev[:q + 1]) + moved)
+    return out
+
 def epma_table(pdf, name=''):
     """The analytical table with the most constituent rows: {'rows': [{'constituent', 'mean',
     'range', 'sd', 'standard'}], 'total', 'header', 'page'}; None when no table is found.
     Both layouts are read: constituents down the rows (usual) or across a header line."""
     best = None; cands = []
-    for pno, lines in enumerate(_pages(pdf)):
+    for pno, lines in _continued_pages(_pages(pdf)):
         tr = _transposed(lines, pno, name)
         if tr:
             cands.append(tr)
@@ -1744,6 +1774,7 @@ def _num1(v):
 def _hkl_of(raw):
     """One index group's tokens -> (h, k, l) | None: 'h k l' as three tokens, 'h k i l', '001' as one word,
     '2.1.10' with dots, '01 1' broken by the font."""
+    raw = [_barred(t) for t in raw]                                    # '̅1': a bar for the minus
     hk = [t for t in raw if _HKL.match(t)]
     if len(hk) == 4 and abs(int(hk[0].replace('−', '-')) + int(hk[1].replace('−', '-'))) != abs(int(hk[2].replace('−', '-'))):
         hk = hk[:3]                                                    # not h k i l: a fourth token is the next column's (78279: a bond table's '1' beside '4 2 2')
@@ -1841,9 +1872,17 @@ def _split_words(ws):
             out.append((w[0] + k * step, w[1], w[0] + (k + 1) * step, w[3], p))
     return out
 
+def _barred(t):
+    """An index with a bar for its minus -> '-1': the combining macron (U+0304) or overline (U+0305), or a macron (U+00AF),
+    before the digit as some fonts place it ('̅1': every barred row of a trigonal powder table was dropped, and the
+    rows below it lost their observed line) or after it, in Unicode's own order ('1̄')."""
+    t = re.sub(r'^[\u0304\u0305\u00af]\s*(?=\d)', '-', t)
+    t = re.sub(r'^(\d)[\u0304\u0305]', r'-\1', t)
+    return t.replace('\u0304', '-').replace('\u0305', '-').replace('\u00af', '-')
+
 def _pt_token(t):
     """A table token -> ('num', value, decimals, signed, has_esd) | ('dot', 'h.k.l') | ('word', t) | None."""
-    t = t.replace('̄', '-').replace('¯', '-')
+    t = _barred(t)
     if _PT_DOTTED.match(t.replace('−', '-')):
         return ('dot', t.replace('−', '-'))
     m = _PT_TOKEN.match(t)
@@ -2064,7 +2103,7 @@ def _pt_hkl(grp, li):
     if len(grp) == 1:
         raw = grp[0]['cells'].get(li, [])
         if len(raw) == 1:
-            t = raw[0].replace('−', '-').replace('̄', '-').replace('¯', '-').rstrip(',;')   # '111,': the first triple of a multiply-indexed line
+            t = _barred(raw[0].replace('−', '-')).rstrip(',;')   # '111,': the first triple of a multiply-indexed line
             if re.fullmatch(r'-?\d{3}', t):
                 return tuple(int(ch) for ch in t.lstrip('-')) if not t.startswith('-') else (-int(t[1]), int(t[2]), int(t[3]))
             if _PT_DOTTED.match(t):
@@ -4943,29 +4982,67 @@ def printed_codes_check(pdf, cif):
     res['lines'] = B.printed_bond_code_lines(res, frame)
     return res
 
-_IDEAL_F = re.compile(r'(?:ideal(?:ized)?|end-?member|simplified)\s+formula\s*(?:(?:of|for)\s+[\w-]+\s+)?(?:is|[:=])\s*(\S{4,90}(?:\s*[·•]\s*\d*\s*H2O)?)', re.I)   # a comma may sit inside the brackets: 'Ba3(Mg,Fe)…'
+_IDEAL_F = re.compile(r'(ideal(?:ized)?(?:\s+(?:chemical|end-?member))?|end-?member|simplified)\s+formula\s*(?:(?:of|for)\s+[\w-]+\s+)?(?:is|[:=])\s*(\S{4,90}(?:\s*[·•]\s*\d*\s*H2O)?)', re.I)   # a comma may sit inside the brackets: 'Ba3(Mg,Fe)…'
+_IDEAL_REQ = re.compile(r'requires?|correspond(?:s|ing)? to', re.I)
 
 def ideal_formula(text):
-    """The ideal formula the paper states ('Ideal formula: …', 'The ideal formula is …'): (text, {element: apfu}) or None."""
+    """The ideal formula the paper states ('Ideal formula: …', 'The ideal formula is …'): (text, {element: apfu}) or None.
+    An ideal or end-member formula before a simplified one, and the one the paper says 'requires' its wt% before any other:
+    a simplified formula has mixed sites, '(Ba,Sr)(Ca,Y)…', whose wt% no paper states — read first, it put a finding on
+    every oxide of a correct 'requires' list."""
+    found = []
     for m in _IDEAL_F.finditer(text or ''):
-        f = m.group(1).rstrip(',.;:')
-        if f.count('(') != f.count(')') or f.count('[') != f.count(']') or f.endswith(('(', '[')):
-            continue                                                 # cut short (a line break, a footnote): not the formula
+        f = m.group(2).rstrip(',.;:')
+        if f.count('(') != f.count(')') or f.count('[') != f.count(']') or f.endswith(('(', '[', '·', '•', '⋅')):
+            continue                                                 # cut short (a line break, a footnote, the hydrate's count lost): not the formula
         try:
             counts = EP.parse_icdd_formula(_journal_to_icdd(f))[0]
         except Exception:
             continue
         if counts and sum(counts.values()) > 1 and any(el not in ('H', 'O') for el in counts):
-            return f, counts
-    return None
+            rank = (0 if m.group(1).lower().startswith('simplified') else 2) + (1 if _IDEAL_REQ.search(text[m.end():m.end() + 120]) else 0)
+            found.append((-rank, m.start(), f, counts))
+    if not found:
+        return None
+    _r, _s, f, counts = min(found)
+    return f, counts
 
-def ideal_wt(counts):
-    """{constituent: wt%} for an ideal formula's element counts (gd.formula_to_wt: the usual oxides, H as H2O)."""
+def formula_valences(ftxt):
+    """{element: valence} an ideal formula writes ('KFe3+3(SO4)2(OH)6' -> {'Fe': 3}), or None when it writes one element in
+    two valences (Fe2+Fe3+2O4: its counts cannot be split between two oxides)."""
+    val = {}
+    for el, v in re.findall(r'([A-Z][a-z]?)([1-7])\+', ftxt or ''):
+        if val.get(el, int(v)) != int(v):
+            return None
+        val[el] = int(v)
+    for pat, el, v in _POLY:                                         # the valence a group fixes: (CrO4) is Cr6+, CrO3 not the usual Cr2O3
+        if v > 0 and el not in ('N', 'P', 'Si', 'B', 'H') and re.search(pat, ftxt or ''):     # C: an oxalate's C2O4 is C3+ (C2O3), a carbonate's the usual CO2
+            if val.get(el, v) != v:
+                return None
+            val[el] = v
+    return val
+
+def _oxide_of(el, v):
+    """The oxide of an element in a valence: Fe 3 -> 'Fe2O3', Fe 2 -> 'FeO', Ti 4 -> 'TiO2'."""
+    return el + ('O' if v == 2 else 'O%d' % (v // 2)) if v % 2 == 0 else el + '2O' + ('' if v == 1 else str(v))
+
+def ideal_wt(counts, ftxt=None, named=None):
+    """{constituent: wt%} for an ideal formula's element counts (gd.formula_to_wt: the usual oxides, H as H2O) — each
+    element in the valence the formula `ftxt` writes for it (Fe3+ as Fe2O3, not the usual FeO: every
+    other oxide of its correct list came out a finding). None when the formula writes an element in two valences."""
     from pxrd_review import gd as GD
-    wt, _fw = GD.formula_to_wt({el: n for el, n in counts.items() if el != 'O'})
+    val = formula_valences(ftxt) if ftxt else {}
+    if val is None:
+        return None
+    ox = {el: _oxide_of(el, v) for el, v in val.items() if el in counts and el not in ('H', 'O', 'F', 'Cl')}
+    for c in named or ():                                            # an element the formula writes with no valence: the oxide the paper's own list names
+        m_ = re.fullmatch(r'([A-Z][a-z]?)\d*O\d*', c)
+        if m_ and m_.group(1) in counts and m_.group(1) not in ox and m_.group(1) not in ('H', 'O'):
+            ox[m_.group(1)] = c
+    wt, _fw = GD.formula_to_wt({el: n for el, n in counts.items() if el != 'O'}, oxides=ox)
     return {k: v for k, v in wt.items() if not k.startswith('O=')}
 
-_REQUIRES = re.compile(r'(?:requires?|corresponds? to|ideal(?:ly)?)[^.]{0,20}?((?:[A-Z][a-z]?\d*\+?\d*O?\d*(?:\s*\(?\w{0,6}\)?)?\s+\d{1,2}\.\d{1,2}\s*,?\s*(?:and\s+)?){2,12})(?:total\s+(\d{2,3}\.\d{1,2}))?', re.I)
+_REQUIRES = re.compile(r'(?:requires?|correspond(?:s|ing)? to|ideal(?:ly)?)[^.]{0,20}?((?:[A-Z][a-z]?\d*\+?\d*O?\d*(?:\s*\(?\w{0,6}\)?)?\s+\d{1,2}\.\d{1,2}\s*,?\s*(?:and\s+)?){2,12})(?:total\s+(\d{2,3}\.\d{1,2}))?', re.I)
 
 def ideal_wt_check(text, ex):
     """The ideal wt% the paper prints (a 'requires MgO 17.06, … total 100.00' sentence; the analytical table's Ideal
@@ -4975,16 +5052,14 @@ def ideal_wt_check(text, ex):
     if not idf:
         return []
     ftxt, counts = idf
-    try:
-        wt = ideal_wt(counts)
-    except Exception:
-        return []
     norm = lambda c: re.sub(r'\d\+|\(\w*\)|[§*†‡]', '', c).replace(' ', '')
     stated = []                                                     # (constituent, value, where)
+    places = {}                                                     # (constituent, value) -> decimals printed
     for m in _REQUIRES.finditer(text.replace('−', '-')):
         vals = re.findall(r'([A-Z][a-z]?\d*\+?\d*O?\d*)\s+(\d{1,2}\.\d{1,2})', m.group(1))
         if len(vals) >= 2:
             stated += [(norm(c), float(v), 'the text') for c, v in vals]
+            places.update({(norm(c), float(v)): len(v.split('.')[1]) for c, v in vals})
             if m.group(2):
                 tot = sum(float(v) for _c, v in vals)
                 if abs(tot - float(m.group(2))) > 0.011 * len(vals):
@@ -4999,7 +5074,38 @@ def ideal_wt_check(text, ex):
                     stated.append((norm(r['constituent']), float(v), "the table's Ideal column"))
     if not stated:
         return []
-    L = ['ideal formula: %s gives %s' % (ftxt, ', '.join('%s %.2f' % kv for kv in wt.items()))]
+    named_ox = [c for c, _v, _w in stated if c != 'total']
+    try:
+        wt = ideal_wt(counts, ftxt, named_ox)
+    except Exception:
+        return []
+    if not wt:
+        return []                                                   # an element in two valences: no wt% to compare
+    # the list and the formula must be of one composition: a mixed site has no end-member wt% ('Ag16(Fe,Hg,Cu)(As,Sb)4S15'),
+    # and a list naming other elements than the formula read is another phase's, or the formula was read cut short
+    # ('Ba2Mn3+' for a silicate) — each had put a finding on every oxide of a list nobody had got wrong
+    if re.search(r'[(\[][^()\[\]]*,[^()\[\]]*[)\]]', ftxt) or re.search(r'[·⋅•]\s*[nxyz](?![a-z])|C[nx]H', ftxt):
+        return []                                                   # … or a formula with a variable in it ('SiO2·nCxH2x+2'): no wt% to compare
+    el_of = lambda c: 'H' if c.startswith('H2O') else (re.match(r'[A-Z][a-z]?', c).group(0) if re.match(r'[A-Z][a-z]?', c) else c)
+    named = {el_of(c) for c, _v, _w in stated if c != 'total'}
+    if named - {'O'} != set(counts) - {'O'}:
+        return []
+    if 'O' not in counts and any(re.search(r'[A-Za-z]\d*O\d*$', c) for c in named_ox):
+        return []                                                   # an oxide list beside a formula with no O: the formula was read cut short ('ScYNb2')
+    # an organic or an element list ('Cu 30.03, O 45.36, C 22.70, H 1.91'): the elements' own wt%, when every value
+    # stated is of a bare element no oxide of the formula is named like
+    elwt = {}
+    if all(re.fullmatch(r'[A-Z][a-z]?', c) for c, _v, _w in stated if c != 'total'):    # bare elements only (an I or a Cl among them is still an element list)
+        tot_ = sum(n * EP.ATOMIC_WEIGHTS[el] for el, n in counts.items() if el in EP.ATOMIC_WEIGHTS)
+        elwt = {el: 100.0 * n * EP.ATOMIC_WEIGHTS[el] / tot_ for el, n in counts.items() if el in EP.ATOMIC_WEIGHTS} if tot_ else {}
+    if elwt:
+        # an element list must be this formula's wt%: adding to 100, and every value near the formula's (at.%, apfu and
+        # another phase's analysis are element lists too — on the corpus each of them came out a 'finding')
+        vals = [(c, v) for c, v, _w in stated if c != 'total']
+        if abs(sum(v for _c, v in vals) - 100) > 1.5 or any(c in elwt and abs(v - elwt[c]) > 0.10 * elwt[c] for c, v in vals):
+            return []
+    shown = elwt or wt
+    L = ['ideal formula: %s gives %s' % (ftxt, ', '.join('%s %.2f' % kv for kv in shown.items()))]
     seen = set()
     for c, v, where in stated:
         if c == 'total':
@@ -5007,13 +5113,20 @@ def ideal_wt_check(text, ex):
             if m_:
                 L.append('the ideal wt%% listed in the text add to %s vs the total printed, %.2f' % (m_.group(1), v))
             continue
-        key = next((k for k in wt if norm(k) == c), None)
+        key = next((k for k in shown if norm(k) == c), None)
         if key is None or (c, v, where) in seen:
             continue
         seen.add((c, v, where))
-        if abs(wt[key] - v) > 0.02:
-            L.append('%s %.2f in %s vs %.2f from the ideal formula' % (c, v, where, wt[key]))
+        d = places.get((c, v), 2)
+        if abs(shown[key] - v) > 0.5 * 10 ** -d + 0.015:            # the rounding of the value as printed: 30.3 is not 30.03, but 30.0 is
+            L.append('%s %s in %s vs %.2f from the ideal formula' % (c, ('%.' + str(d) + 'f') % v, where, shown[key]))
     L = [x for x in L if x]
+    # a slip moves one value or two; when most of the list disagrees, the list is of another formula than the one read
+    # (a subscript lost, the empirical formula's, a second mineral's) — said once, as information, not a line per oxide
+    compared = len({(c, w) for c, _v, w in stated if c != 'total' and any(norm(k) == c for k in shown)})
+    off = [x for x in L[1:] if ' from the ideal formula' in x]
+    if len(off) >= 2 and len(off) > compared / 2:
+        return [L[0], 'the ideal wt%% listed: %d of %d disagree with %s — most likely the list of another formula than the one read (information)' % (len(off), compared, ftxt)]
     return L if len(L) > 1 else []
 
 # elements whose valence the formula, the analysis or the species must state before a charge is summed
@@ -5167,7 +5280,7 @@ def gd_grid(ex, comp, stmt, cif=None):
     M_ideal = None
     if idf:
         try:
-            kc, _rows = GD.kc(ideal_wt(idf[1]))
+            kc, _rows = GD.kc(ideal_wt(idf[1], idf[0]))
             if kc:
                 kcs.append(('the ideal formula', kc))
             M_ideal = _formula_mass_counts(idf[1])

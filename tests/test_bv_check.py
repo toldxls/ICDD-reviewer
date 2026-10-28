@@ -1082,3 +1082,43 @@ class ReaderKeepsTheCode(unittest.TestCase):
         from pxrd_review import paper_bonds as PB
         self.assertEqual([PB._code(t) for t in ('O1vi', '–O3ii', 'O(2)′', 'Al1-O10Hiv', 'O12W', 'O4(×3)')],
                          ['vi', 'ii', '′', 'iv', None, None])
+
+
+DISORDER = """data_d
+_cell_length_a 8
+_cell_length_b 8
+_cell_length_c 8
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+loop_
+_space_group_symop_operation_xyz
+'x, y, z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_disorder_assembly
+_atom_site_disorder_group
+P1 P 0.5 0.5 0.5 0.7 B 1
+O1 O 0.69 0.5 0.5 0.7 B 1
+C1 C 0.52 0.5 0.5 0.3 B 2
+O1A O 0.67 0.52 0.5 0.3 B 2
+O2 O 0.5 0.69 0.5 1 . .
+"""
+
+
+class DisorderGroups(unittest.TestCase):
+    def test_two_groups_of_one_assembly_are_alternatives_not_neighbours(self):
+        # a PO4 and a CO3 in one place (PART 1 / PART 2): P1–O1A at 0.2 Å had been read as a bond of several vu
+        tmp = tempfile.mkdtemp()
+        try:
+            st = B.Structure(_write(tmp, 'd.cif', DISORDER))
+            near = lambda lab: sorted(o.label for o, d, n in st.neighbours(st.site(lab), 3.0))
+            self.assertEqual(near('P1'), ['O1', 'O2'])                          # not C1, not O1A
+            self.assertEqual(near('C1'), ['O1A', 'O2'])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)

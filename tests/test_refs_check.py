@@ -182,6 +182,24 @@ class Splitter(unittest.TestCase):
         self.assertEqual(len(ents), 5)
         self.assertTrue(ents[-1].startswith('———'))
 
+    def test_page_numbers_curly_names_journals_and_corporate_authors(self):
+        blob = ('Flack, H.D. (1983) On enantiomorph-polarity estimation. Acta Crystallographica, A39, 876-\n881.\n'
+                'Gagné, O.C. and Hawthorne, F.C. (2015) Comprehensive derivation. Acta Crystallographica, B71, 562-578.\n'
+                'Bosi, F., Biagioni, C., Oberti, R. (2019b) On the chemical identification. Minerals, 9, 591.\n'
+                'Britvin, S.N., Dolivo-Dobrovolsky, D.V. (2017) Software. Zapiski RMO, 146, 104–107.\n'
+                'Ivanov, A.B., Petrov, C.D. (2024a) Testite, a new mineral. Zapiski RMO, 2, 75–92.\n'
+                'Ivanov, A.B., Sidorov E.F. (2024b) Mineralogy of the vein. Mineralogical Almanac, 29, 120 pp.\n'
+                'Nickel, E.H. and Grice, J.D. (1998) The IMA Commission. The Canadian Mineralogist, 36, 913-926.\n'
+                'O’Keeffe, M. and Brese, N.E. (1992) Bond-valence parameters. Acta Crystallographica, B48, 152-154.\n'
+                'Smith, J., Jones, K. (1995) A phosphate. Mineralogical Magazine, 59, 143–148.\n'
+                'Rigaku Oxford Diffraction (2023) CrysAlisPro Software system.\n'
+                'Sheldrick G.M. (2015) Crystal structure refinement with SHELXL. Acta Crystallographica, C71, 3–8.\n'
+                'Brown A.B. Single-crystal structure validation. J. Appl. Cryst. 2003, 36, 7-11.\n'
+                'Green F., Black G. (2022) Another mineral. Acta Geologica Sinica, 96, 2007–2014.')
+        firsts = [R.surnames(e[:40])[:1] for e in R.split_reference_block(blob)]
+        self.assertEqual(firsts, [['flack'], ['gagne'], ['bosi'], ['britvin'], ['ivanov'], ['ivanov'], ['nickel'], ['okeeffe'],
+                                  ['smith'], ['rigaku'], ['sheldrick'], ['brown'], ['green']], firsts)
+
     def test_numbered_split_and_editor_guard(self):
         blob = ('1. Sharygin, V.V.; Yakovlev, G.A. Title. Minerals 2019, 9, 123.\n'
                 '2. Okada, A.; Keil, K. Caswellsilverite. In Meteorites; Smith, J., Ed.; Press: City, 1982.\n'

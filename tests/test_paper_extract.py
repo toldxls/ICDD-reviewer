@@ -2600,3 +2600,29 @@ class ParameterSetCitations(unittest.TestCase):
     def test_a_source_the_tool_lacks_after_are_from(self):
         r = PE.bv_statement('Bond-valence parameters (vu) are from Brown (1981); the sums are in Table 7.')
         self.assertIsNone(r['params']); self.assertEqual(r.get('foreign'), 'Brown (1981)')
+
+
+class ContinuedTable(unittest.TestCase):
+    def test_an_analytical_table_over_a_page_break_is_read_whole(self):
+        # the rows past the break were lost: the last oxide and the water, and the analysis read short
+        def line(y, *cells):
+            return {'y': y, 'w': [(x, y - 8, x + 6 * len(t), y, t) for x, t in cells]}
+        head = [line(60, (90, 'RUNNING')), line(300, (90, 'Table'), (120, '1.'), (140, 'Chemical'), (190, 'composition')),
+                line(320, (90, 'Constituent'), (165, 'Wt.%'), (250, 'Range'), (360, 'Stand.'), (400, 'Dev.'))]
+        rows1 = [('PbO', '30.10', '29.90–30.34', '0.14'), ('CuO', '6.20', '6.07–6.37', '0.15'), ('Fe2O3', '30.00', '29.66–30.32', '0.25'),
+                 ('CO2', '5.00', '4.85–5.11', '0.09'), ('P2O5', '14.00', '13.81–14.18', '0.13')]
+        p1 = head + [line(340 + 14 * k, (90, c), (165, v), (250, r), (360, sd)) for k, (c, v, r, sd) in enumerate(rows1)] + [line(788, (517, '4'))]
+        p2 = [line(43, (275, 'RUNNING')), line(57, (261, 'HEAD')),
+              line(80, (90, 'SO3'), (165, '1.00'), (250, '0.83–1.16'), (360, '0.11')), line(94, (90, 'H2O*'), (165, '13.70')),
+              line(108, (90, 'Total'), (162, '100.00')), line(123, (72, '*'), (81, 'Calculated'))]
+        import fitz
+        tmp = tempfile.mkdtemp(); pdf = os.path.join(tmp, 'x.pdf')
+        doc = fitz.open(); doc.new_page(); doc.new_page(); doc.save(pdf); doc.close()
+        old = PE._pages
+        PE._pages = lambda _p: [p1, p2]                                     # the page lines as a layout reader gives them
+        try:
+            e = PE.epma_table(pdf)
+        finally:
+            PE._pages = old; shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual([r['constituent'] for r in e['rows']], ['PbO', 'CuO', 'Fe2O3', 'CO2', 'P2O5', 'SO3', 'H2O'])
+        self.assertEqual(e['total'], 100.00); self.assertEqual(e['page'], 1)

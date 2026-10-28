@@ -163,6 +163,13 @@ def load_pdf(path):
     raw = re.sub(r'(\w)-[ \t]*\n[ \t]*(?=[a-z])', r'\1', raw)     # re-join "diffrac-\ntometer"
     raw = re.sub(r'(\w)-[ \t]*\n[ \t]*(?=[A-Z])', r'\1-', raw)    # keep "Frank-\nKamenetskaya"
     lines = [ln.strip() for ln in raw.split('\n')]
+    # the running head of every page: short lines printed again and again — inside the list they were glued to an entry
+    # ('… San Francisco. 2026-001 TESTITE 9') or cut one in two. The bare page number stays: before an author it is
+    # the boundary a list split on ('… Cambridge University Press 12 Walenta K. (1979)')
+    from collections import Counter
+    rep = Counter(ln for ln in lines if 5 <= len(ln) <= 40)
+    head_like = lambda ln: re.search(r'\d', ln) or ln.isupper() or len(ln.split()) >= 3   # '2026-001', 'TESTITE' — not a lone 'and' or 'The' of justified text
+    lines = [ln for ln in lines if not (5 <= len(ln) <= 40 and rep[ln] >= 4 and head_like(ln) and not YEAR_TOKEN.search(ln))]
     def is_head(t):
         if re.fullmatch(r'(?:[A-Za-z]\s){4,}[A-Za-z]', t):
             t = t.replace(' ', '')                          # 'R E F E R E N C E S'
@@ -246,9 +253,9 @@ HEADING = re.compile(r'^\s*(?:\d+\.?\s*)?(references?(?:\s+cited|\s+and\s+notes)
 # '[3] Kampf', '3. Kampf' — a surname followed by initials. A journal name ('American Mineralogist,
 # 108') has no initials and never matches; 'YAO ET AL.' (a running header) is excluded outright.
 _PARTS = (r"(?:\b(?:[Vv]an|[Vv]on|[Dd]e|[Dd]er|[Dd]en|[Dd]el|[Dd]ella|[Dd]i|[Dd]a|[Dd]u|[Dd]os|[Dd]as|"
-          r"[Ll]a|[Ll]e|[Tt]en|[Tt]er|[Ee]l|d'|D'|Mac|Mc|O'|St\.?)\s?)*")
+          r"[Ll]a|[Ll]e|[Tt]en|[Tt]er|[Ee]l|d'|D'|d’|D’|Mac|Mc|O'|O’|St\.?)\s?)*")   # O’Keeffe: the curly apostrophe too
 ENTRY_START = re.compile(_PARTS + r"[A-ZÀ-ÞĀ-ſ][^\W\d_]+(?:[-'’][^\W\d_]+)*"
-                         r"(?:,\s*|\s+)(?:[A-Z]\.|(?!ET\b|AND\b|AL\b|IMA\b|USA\b|UK\b|Ed\b|Eds\b)[A-Z]{1,3}(?![A-Za-z0-9]))")   # 'Acta A71': a volume, not an initial
+                         r"(?:,\s*|\s+)(?:[A-Z]\.|(?!ET\b|AND\b|AL\b|THE\b|OF\b|IMA\b|USA\b|UK\b|Ed\b|Eds\b)[A-Z]{1,3}(?![A-Za-z0-9])(?!\s*,\s*\d)(?![-–]\d))")   # 'Acta A71': a volume, not an initial; 'Zapiski RMO, 2,': a journal and its volume
 NUMBERED_LINE = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)[.)])(?:\s+|$)')
 # An entry's author block as a grammar: 'Kampf, A.R.' | 'Kampf AR' | 'A.R. Kampf' | 'J.-P. Smith',
 # joined by ',' / ';' / 'and' / '&' / a space, optionally closed by 'et al.'. It stops at the first
@@ -274,7 +281,7 @@ AUTHOR_LIST = re.compile(r"^\s*(?:\[\d+\]|\d+[.)])?\s*(" + _AUTHOR + r"(?:" + _S
                          r"(?:,?\s*et\s+al\.?)?)")
 DASHES = re.compile(r'[—–\-_]{2,}')
 
-def _author_boundary(gap):
+def _author_boundary(gap, corporate=False):
     """Offset in `gap` (the text between one entry's year and the next's) where the next entry's
     author block begins: the FIRST surname+initials that follows a sentence/DOI/page boundary
     (a leading '12.' / '[12]' numbering token is kept with the entry), or a '———' standing for
@@ -289,7 +296,8 @@ def _author_boundary(gap):
             head = before[:num.start()]     # '8.' (no space before it) is a page
             if not head.strip() or re.search(r'[.;:)\d]\s*$', head):
                 return num.start()
-            continue
+            # otherwise the number is the previous entry's last page ('876- 881.' rejoined across a line, '9, 591.'):
+            # the author after it starts an entry like any other — skipping it merged Flack with Gagné & Hawthorne
         if not re.search(r'[.;:)\d]\s+$', before):
             continue                                            # mid-author-list: 'A.R., Adams'
         if re.search(r'\b[Ii]n:?\s+(?:[A-Z]\.\s*)*$', before):
@@ -300,6 +308,13 @@ def _author_boundary(gap):
     d = DASHES.search(gap)
     if d and d.start() > 0 and re.search(r'[.;:)\d]\s+$', gap[:d.start()]):
         return d.start()
+    # a corporate author has no initials ('Rigaku Oxford Diffraction (2023)', 'Bruker AXS Inc., (2022)'): capitalised
+    # words standing right before the next year, after a sentence's end — only where that year is bracketed (in a list
+    # of bare years 'Simferopol: Krymizdat, 1960.' is a publisher), and not a running head in capitals
+    if corporate:
+        c = re.search(r'(?<=[.;)\d]\s)((?:[A-Z]\.){0,3}\s?[A-Z][\w&’\'\-]+(?:\s+[A-Z][\w&’\'\-.]*){0,5}),?\s*$', gap)   # 'U.S. Geological Survey'
+        if c and c.start(1) > 0 and (re.match(r'(?:[A-Z]\.)+', c.group(1)) or re.search(r'[a-z]', c.group(1).split()[0])):
+            return c.start(1)
     return None
 
 def split_reference_block(text):
@@ -327,16 +342,24 @@ def split_reference_block(text):
             return [' '.join(lines[a:b]) for a, b in zip(starts, starts[1:] + [len(lines)])]
     # 2. year-anchored
     flat = ' '.join(lines)
-    years = list(PAREN_YEAR.finditer(flat))
+    years = list(PAREN_YEAR.finditer(flat)); bracketed = True
     if len(years) < 3:
-        years = list(YEAR_TOKEN.finditer(flat))
+        years = list(YEAR_TOKEN.finditer(flat)); bracketed = False
     if len(years) >= 2:
         starts = [0]
         for prev, cur in zip(years, years[1:]):
             gap = flat[prev.end():cur.start()]
-            pos = _author_boundary(gap)
-            if pos is not None:
-                starts.append(prev.end() + pos)
+            pos = _author_boundary(gap, bracketed); base = 0
+            while pos is not None:
+                starts.append(prev.end() + base + pos)
+                base += pos
+                # one more entry in the same gap when its year is not bracketed ('Smith A.B. … J. Appl. Cryst. 2003, 36,
+                # 7-11. Jones C., …(2022)'): another author start past a bare year
+                rest = gap[base:]
+                nxt = _author_boundary(rest, bracketed)
+                if nxt is None or not YEAR_TOKEN.search(rest[:nxt]):
+                    break
+                pos = nxt
         if len(starts) >= 2:
             return [flat[a:b].strip() for a, b in zip(starts, starts[1:] + [len(flat)])]
     # 3. line-based
@@ -352,7 +375,7 @@ def split_reference_block(text):
 LIST_END = re.compile(r'^\s*(?:\d+\.?\s*)?(figure\s+captions?|figures?|tables?|table\s+\d|appendix|'
                       r'appendices|supplement(?:ary|al)?|supporting|acknowledg|author\s+contributions?|'
                       r'conflicts?\s+of\s+interest|data\s+availability|funding|highlights|'
-                      r'graphical\s+abstract)\b', re.I)
+                      r'graphical\s+abstract|authors?[\'’]?\s+remarks|chairman[\'’]?s?\s+remarks)\b', re.I)   # a description's remarks sections follow its list
 NUMBERING = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)\s*[.)]|(\d+)\s+(?=[A-Z]))\s*')
 
 def _entry_like(text):
@@ -602,11 +625,15 @@ def _mk_cites(m, para, offset, out, seen_spans, narrative=False):
     before = para.text[:offset + m.start()]
     after = para.text[offset + m.end():]
     alts = []
-    lead = re.search(r"((?:[A-ZÀ-ÞĀ-ſ][^\W\d_'’\-]*\s+){1,3})$", before) if narrative and len(names) == 1 else None
-    # 'Sen Gupta et al. (1992)': a two-word surname reads as 'Gupta' with a leading word
-    if lead:                                        # 'Rigaku Oxford Diffraction (2022)'
+    lead = None
+    if len(names) == 1:
+        # 'Sen Gupta et al. (1992)': a two-word surname reads as 'Gupta' with a leading word; 'Rigaku Oxford Diffraction (2022)'
+        # and, inside brackets, '(Bruker AXS, 2022)' / '(…; Rigaku Oxford Diffraction, 2023)': a corporate author read as its last word
+        lead = (re.search(r"((?:[A-ZÀ-ÞĀ-ſ][^\W\d_'’\-]*\s+){1,3})$", before) if narrative
+                else re.search(r"[(\[;]\s*((?:(?:[A-Z]\.)+\s*|[A-ZÀ-ÞĀ-ſ][^\W\d_'’\-.]*\.?\s+){1,5})$", before))     # '(Niigata Prefecture Archeological Research Corporation, 2006)', '(U.S. Geological Survey, 2024)'
+    if lead:
         lw = lead.group(1).split()
-        alts = [_fold(''.join(lw[i:]) + words[0]) for i in range(len(lw))]
+        alts = [_fold(''.join(lw[i:]) + words[0]) for i in range(len(lw))] + [_fold(w) for w in lw]   # the whole name joined, and each word: the list files it under one of them
     soft = (names[0] in _SOFT
             or (first.isupper() and len(first) <= 8)                     # IMA, USGS, NIST
             or bool(lead)

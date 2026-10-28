@@ -269,6 +269,51 @@ END
 """
 
 
+CIF_SPLIT = CIF_OCC.split('loop_\n_space_group_symop_operation_xyz')[0] + """loop_
+_space_group_symop_operation_xyz
+'x, y, z'
+'-x, -y, -z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_U_iso_or_equiv
+P1 P 0 0 0.5 0.010
+C1 C 0.03 0 0.5 0.010
+O1 O 0.25 0.25 0.25 0.010
+_shelx_res_file
+;
+TITL split
+CELL 0.71073 8 8 8 90 90 90
+SFAC P C O
+UNIT 1 2 2
+P1    1   0.000000  0.000000  0.500000  10.30000  0.01000
+C1    2   0.030000  0.000000  0.500000  10.20000  0.01000
+O1    3   0.250000  0.250000  0.250000  11.00000  0.01000
+HKLF 4
+END
+;
+"""
+
+
+class SplitPairMultiplicity(unittest.TestCase):
+    def test_the_partner_on_the_lower_symmetry_site_counts_once_per_position(self):
+        # P1 on the inversion centre (occupancy 0.6: sof 0.3) with C1 at two positions about it (0.2 each): one atom's
+        # place, 0.6 + 2 × 0.2 = 1 — not 0.8
+        tmp = tempfile.mkdtemp()
+        try:
+            path = os.path.join(tmp, 's.cif'); open(path, 'w', encoding='utf-8').write(CIF_SPLIT)
+            texts = [r['text'] for r in CA.check_occupancies(B.Structure(path))]
+            self.assertFalse(any(t.startswith('split pair') for t in texts), texts)
+            path2 = os.path.join(tmp, 's2.cif'); open(path2, 'w', encoding='utf-8').write(CIF_SPLIT.replace('10.20000', '10.10000'))
+            texts = [r['text'] for r in CA.check_occupancies(B.Structure(path2))]
+            self.assertTrue(any('0.600 + 2 × 0.100' in t and 'adding to 0.800' in t for t in texts), texts)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class TwinLaw(unittest.TestCase):
     def _st(self, twin):
         self.tmp = tempfile.mkdtemp(prefix='ciftwin_')
@@ -329,6 +374,14 @@ class TwinLaw(unittest.TestCase):
         self.assertTrue(any('the text prints, (1 0 0; 0 1 0; 0 0 1), is the identity' in t for t in texts), texts)
         self.assertFalse(any('describes a rotation or reflection twin' in t for t in texts), texts)
         self.assertEqual(CA.printed_twin_matrix('twin law ¯101,0¯10,00¯1 for the merohedral twin'), [[-1, 0, 1], [0, -1, 0], [0, 0, -1]])
+        # a bare TWIN is the inversion twin: the absolute structure, which 'Twinning: not observed' says nothing against
+        st = self._st('TWIN\nBASF 0.008')
+        recs = CA.check_refinement(st, [('p', 'Morphology. Habit: prismatic. Twinning: not observed.')])
+        self.assertFalse(any('refines a twin' in r['text'] for r in recs), [r['text'] for r in recs])
+        self.assertTrue(any('inversion-twin fraction refined to 0.008' in r['text'] for r in CA.check_twin(st, None)))
+        st = self._st('TWIN 0 1 0 1 0 0 0 0 -1 2\nBASF 0.30')
+        recs = CA.check_refinement(st, [('p', 'Morphology. Habit: prismatic. Twinning: not observed.')])
+        self.assertTrue(any('refines a twin' in r['text'] and r['severity'] == 'flag' for r in recs), [r['text'] for r in recs])
         # a twin fraction that refined to nothing
         recs = CA.check_twin(self._st('TWIN -1 0 0 0 -1 0 0.41680 0 1 2\nBASF 0.004'), None)
         self.assertTrue(any('second component is absent' in r['text'] for r in recs), [r['text'] for r in recs])

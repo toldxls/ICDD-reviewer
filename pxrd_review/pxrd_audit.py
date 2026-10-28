@@ -285,15 +285,19 @@ def manuscript_cells(text_lines, system_hint):
     """Every cell the manuscript prints as 'a = … b = … c = … β = …' (over up to five lines):
     [(label, cell, decimals printed)] — None where a value is a default, not printed."""
     out = []
-    for i, t in enumerate(text_lines):
-        if not _CELL_LINE.search(t):
-            continue
-        seg = ' '.join(text_lines[i:i + 5]).replace('−', '-').replace('–', '-')
+    # every 'a =' of the text, read with what follows it: a .pdf's text comes as long lines (a paragraph, or the whole
+    # paper), and reading a line from its start took the first cell of the paper every time — with the optic angles'
+    # 'α = 1.554' for its α. An angle is one between 60 and 150°.
+    full = ' '.join(text_lines).replace('−', '-').replace('–', '-')
+    for m0 in _CELL_LINE.finditer(full):
+        seg = full[m0.start(): m0.start() + 260]
         def g(k):
-            m = re.search(r'(?<![A-Za-z])%s\s*=\s*(\d+\.\d+)' % k, seg)
-            if not m:
-                return None, None
-            return float(m.group(1)), len(m.group(1).split('.')[1])
+            for m in re.finditer(r'(?<![A-Za-z])%s\s*=\s*(\d+\.\d+)' % k, seg):
+                v = float(m.group(1))
+                if k in ('α', 'β', 'γ', 'alpha', 'beta', 'gamma') and not 60 <= v <= 150:
+                    continue
+                return v, len(m.group(1).split('.')[1])
+            return None, None
         a, b, c = g('a'), g('b'), g('c')
         al = g('α') if g('α')[0] else g('alpha'); be = g('β') if g('β')[0] else g('beta'); ga = g('γ') if g('γ')[0] else g('gamma')
         need = {'monoclinic-a': [al], 'monoclinic-b': [be], 'monoclinic-c': [ga], 'triclinic': [al, be, ga]}.get(system_hint, [])
@@ -338,55 +342,31 @@ def _fmt_cell(cell, system):
     return s
 
 
-def audit(manuscript, cif, lam=None):
+_KA = re.compile(r'\b(Cu|Mo|Co|Cr|Fe|Ag)\s*K\s*[αa]', re.I)
+_POWDER_WORDS = re.compile(r'powder|PXRD|XRPD|Gandolfi|Debye|Guinier|diffractometer with a curved|image[- ]plate', re.I)
+_OTHER_WORDS = re.compile(r'microprobe|\bWDS\b|\bEDS\b|analy[sz]ing crystal|emission|X-ray line|flank|single[- ]crystal|SCXRD|structure (?:refinement|solution)', re.I)
+
+def powder_radiation(text):
+    """The anode of the POWDER data: the 'X Kα' a sentence about the powder pattern names. The first Kα of the text had
+    been taken — a microprobe's 'ninth-order Fe Kα line' and a single-crystal 'Mo Kα tube' put the powder pattern at the
+    wrong wavelength. Each mention is scored on the 250 characters before it and 80 after: powder words for it, microprobe
+    and single-crystal words against; the best, the earliest among equals. -> 'Cu' | 'Mo' | … or None."""
+    best = None
+    for m in _KA.finditer(text or ''):
+        ctx = text[max(0, m.start() - 250): m.end() + 80]
+        sc = 2 * len(_POWDER_WORDS.findall(ctx)) - len(_OTHER_WORDS.findall(ctx))
+        if best is None or sc > best[0]:
+            best = (sc, m.group(1).capitalize())
+    return best[1] if best else None
+
+def _setup(st, pat, rows, merge):
+    """The table's rows against one computed pattern: how each row finds its line, the lines listed, and — with `merge` —
+    reflections at the SAME d summed as one line. In a trigonal, hexagonal or tetragonal Laue class two inequivalent
+    reflections share a d ((−1 2 6) and (1 1 6) in R-3); a program that prints one index for them gives their SUM
+    (one table's 100 was the sum of two computed lines of 60 and 70, each of its other lines likewise), another prints each. Only a group the table lists ONE
+    member of is summed (a group it lists none of is not its business; one it lists twice is printed apart), and the scale
+    is the table's: 100 at its strongest LISTED line. -> {'pat', 'match', 'listed', 'carried', 'top', 'Ieff', 'rms'}."""
     from pxrd_review import powder_calc as PC
-    st = B.Structure(cif)
-    is_docx = manuscript.lower().endswith('.docx')
-    rows, decimals = read_docx_powder(manuscript) if is_docx else read_pdf_powder(manuscript)
-    recs = []; L = ['Powder-table audit — %s vs %s' % (os.path.basename(manuscript), os.path.basename(cif))]
-    if len(rows) < 8:
-        L.append('  no powder table with dcalc and hkl was read'); return {'records': recs, 'lines': L, 'rows': rows}
-    if is_docx:
-        from pxrd_review import cif_audit as CA
-        text_lines = [t for _k, t in CA.docx_lines(manuscript)]
-        text = '\n'.join(text_lines)
-    else:
-        from pxrd_review import paper_extract as PE
-        text = PE.text_of(manuscript); text_lines = text.split('\n')
-    m = re.search(r'\b(Cu|Mo|Co|Cr|Fe|Ag)\s*K\s*[αa]', text, re.I)
-    lam = PC.wavelength(lam or (m.group(1) if m else 'Cu'))
-    groups = {}
-    for r in rows:
-        if r['group']:
-            groups.setdefault(r['group'], []).append(r)
-    n_calc = len(rows); n_obs = len(groups)
-    L.append('  %d calculated lines under %d observed, d to %d decimals, λ %.4f Å' % (n_calc, n_obs, decimals, lam))
-    # -- the cell behind dcalc
-    system = _system(st.cell, st.sg)
-    fit = fit_cell(rows, system)
-    if fit:
-        fcell, frms, fsig = fit
-        rounding = 0.5 * 10 ** -decimals
-        def _dec(t):
-            v = (st.block['items'].get(t) or '').split('(')[0]
-            return len(v.split('.')[1]) if '.' in v else 0
-        cif_dec = tuple(_dec(t) for t in ('_cell_length_a', '_cell_length_b', '_cell_length_c', '_cell_angle_alpha', '_cell_angle_beta', '_cell_angle_gamma'))
-        cands = [('the .cif', st.cell, cif_dec)] + manuscript_cells(text_lines, system)
-        judged = [(lab, cell) + cell_matches(fcell, cell, dec, system, fsig) for lab, cell, dec in cands
-                  if all(60 <= v <= 150 for v in cell[3:])]
-        ok = [j for j in judged if j[2]]
-        if ok:
-            L.append('  dcalc: the column follows from %s (within %.2f %%; back-fit %s ± %s, rms %.4f Å)'
-                     % (ok[0][0], 100 * ok[0][3], _fmt_cell(fcell, system), '/'.join('%.4f' % x for x in fsig[:3]), frms))
-        elif frms <= 3 * rounding:
-            recs.append({'kind': 'cell', 'severity': 'flag',
-                         'text': 'dcalc: the column follows from %s (± %s; rms %.4f Å), a cell the manuscript does not report — %s'
-                                 % (_fmt_cell(fcell, system), '/'.join('%.4f' % x for x in fsig[:3]), frms, '; '.join('%s %s is off by %.2f %%' % (lab, _fmt_cell(cell, system), 100 * worst) for lab, cell, _ok, worst in judged))})
-        else:
-            L.append('  dcalc: no %s cell reproduces the column (back-fit rms %.4f Å): indices or d values inconsistent' % (system, frms))
-    # -- the pattern from the .cif
-    dmin = max(0.8, min(r['dcalc'] for r in rows) - 0.02)
-    pat = PC.pattern(cif, lam, dmin, structure=st)
     idx = {}
     for x in pat:
         for e in PC.equivalents(st, x['hkl']):
@@ -410,9 +390,116 @@ def audit(manuscript, cif, lam=None):
     for r in rows:
         x = match(r)
         listed |= PC.equivalents(st, x['hkl'] if x is not None else r['hkl'])
+    summed = {}; carried = set()
+    if merge:
+        by_d = []
+        for x in sorted(pat, key=lambda x_: -x_['d']):
+            if by_d and abs(by_d[-1][0]['d'] - x['d']) <= 0.0015 * x['d']:
+                by_d[-1].append(x)
+            else:
+                by_d.append([x])
+        for g in by_d:
+            if len(g) > 1 and sum(1 for y in g if y['hkl'] in listed) == 1:
+                tot = sum(y['I'] for y in g)
+                for y in g:
+                    summed[id(y)] = tot
+                carried |= {id(y) for y in g if y['hkl'] not in listed}
+    raw = lambda x: summed.get(id(x), x['I'])
+    matched = [(r, match(r)) for r in rows]
+    top = max((raw(x) for _r, x in matched if x is not None), default=0.0) or max((x['I'] for x in pat), default=1.0) or 1.0
+    Ieff = lambda x: raw(x) * 100.0 / top
+    pairs = [(r, x) for r, x in matched if x is not None and r['icalc'] is not None]
+    rms = None
+    if len(pairs) >= 8:
+        mx = max(r['icalc'] for r, _ in pairs) or 1.0
+        rms = math.sqrt(sum((r['icalc'] * 100.0 / mx - Ieff(x)) ** 2 for r, x in pairs) / len(pairs))
+    return {'pat': pat, 'match': match, 'listed': listed, 'carried': carried, 'top': top, 'Ieff': Ieff, 'rms': rms}
+
+def audit(manuscript, cif, lam=None):
+    from pxrd_review import powder_calc as PC
+    st = B.Structure(cif)
+    is_docx = manuscript.lower().endswith('.docx')
+    rows, decimals = read_docx_powder(manuscript) if is_docx else read_pdf_powder(manuscript)
+    recs = []; L = ['Powder-table audit — %s vs %s' % (os.path.basename(manuscript), os.path.basename(cif))]
+    if len(rows) < 8:
+        L.append('  no powder table with dcalc and hkl was read'); return {'records': recs, 'lines': L, 'rows': rows}
+    if is_docx:
+        from pxrd_review import cif_audit as CA
+        text_lines = [t for _k, t in CA.docx_lines(manuscript)]
+        text = '\n'.join(text_lines)
+    else:
+        from pxrd_review import paper_extract as PE
+        text = PE.text_of(manuscript); text_lines = text.split('\n')
+    said = powder_radiation(text)
+    if lam:
+        tries = [lam]
+    else:                                                          # the powder sentence's anode first, then any other the text names, then Cu
+        tries = list(dict.fromkeys([a for a in [said] + [m.group(1).capitalize() for m in _KA.finditer(text)] + ['Cu'] if a]))
+    dmin = max(0.8, min(r['dcalc'] for r in rows) - 0.02)
+    choice = None
+    for a in tries:
+        pat_a = PC.pattern(cif, PC.wavelength(a), dmin, structure=st)
+        for merge in (False, True):                                 # each line alone first (the old reading); summed when the column clearly follows that
+            S = _setup(st, pat_a, rows, merge)
+            S['lam'] = PC.wavelength(a)
+            # another wavelength or convention only when the column clearly follows it — a quarter lower and half a point:
+            # a Mo Kα fit at 1.1 against a Cu one at 1.0 is the same fit, and the paper's own word stands
+            if choice is None or (S['rms'] is not None and (choice['rms'] is None or (S['rms'] < 0.75 * choice['rms'] and S['rms'] < choice['rms'] - 0.5))):
+                choice = S
+    lam = choice['lam']
+    groups = {}
+    for r in rows:
+        if r['group']:
+            groups.setdefault(r['group'], []).append(r)
+    n_calc = len(rows); n_obs = len(groups)
+    picked = said and abs(PC.wavelength(said) - lam) < 1e-4
+    L.append('  %d calculated lines under %d observed, d to %d decimals, λ %.4f Å%s' % (n_calc, n_obs, decimals, lam,
+             '' if picked or len(tries) < 2 else ' (the one the Icalc column follows%s)' % (', not the text\'s %s Kα' % said if said else '')))
+    # -- the cell behind dcalc
+    system = _system(st.cell, st.sg)
+    fit = fit_cell(rows, system)
+    rounding = 0.5 * 10 ** -decimals
+    if fit and fit[1] > 3 * rounding:
+        # one misindexed row ('2 2 ¯1' printed for a line at 2.4253 that index puts at 3.609) throws the whole back-fit off and
+        # hides what the rest of the column follows: rows standing far off a first fit are set aside (a tenth of the table at
+        # most), the fit is made again, and each row set aside is said
+        res = sorted(((abs(d_of(fit[0], r['hkl']) - r['dcalc']), i) for i, r in enumerate(rows) if r['dcalc'] and r['hkl']), reverse=True)
+        med = res[len(res) // 2][0] if res else 0.0
+        out_ = [i for e, i in res[:max(1, len(res) // 10)] if e > max(10 * med, 20 * rounding)]
+        if out_:
+            fit2 = fit_cell([r for i, r in enumerate(rows) if i not in out_], system)
+            if fit2 and fit2[1] <= 3 * rounding:
+                fit = fit2
+                for i in out_:
+                    r = rows[i]
+                    recs.append({'kind': 'cell', 'severity': 'note',
+                                 'text': 'dcalc %.4f (%s) does not follow the cell the rest of the column follows: that index gives %.4f — a misprinted index, or a row read apart (left out of the back-fit)'
+                                         % (r['dcalc'], ' '.join(str(v) for v in r['hkl']), d_of(fit[0], r['hkl']))})
+    if fit:
+        fcell, frms, fsig = fit
+        def _dec(t):
+            v = (st.block['items'].get(t) or '').split('(')[0]
+            return len(v.split('.')[1]) if '.' in v else 0
+        cif_dec = tuple(_dec(t) for t in ('_cell_length_a', '_cell_length_b', '_cell_length_c', '_cell_angle_alpha', '_cell_angle_beta', '_cell_angle_gamma'))
+        cands = [('the .cif', st.cell, cif_dec)] + manuscript_cells(text_lines, system)
+        judged = [(lab, cell) + cell_matches(fcell, cell, dec, system, fsig) for lab, cell, dec in cands
+                  if all(60 <= v <= 150 for v in cell[3:])]
+        ok = [j for j in judged if j[2]]
+        if ok:
+            L.append('  dcalc: the column follows from %s (within %.2f %%; back-fit %s ± %s, rms %.4f Å)'
+                     % (ok[0][0], 100 * ok[0][3], _fmt_cell(fcell, system), '/'.join('%.4f' % x for x in fsig[:3]), frms))
+        elif frms <= 3 * rounding:
+            recs.append({'kind': 'cell', 'severity': 'flag',
+                         'text': 'dcalc: the column follows from %s (± %s; rms %.4f Å), a cell the manuscript does not report — %s'
+                                 % (_fmt_cell(fcell, system), '/'.join('%.4f' % x for x in fsig[:3]), frms, '; '.join('%s %s is off by %.2f %%' % (lab, _fmt_cell(cell, system), 100 * worst) for lab, cell, _ok, worst in judged))})
+        else:
+            L.append('  dcalc: no %s cell reproduces the column (back-fit rms %.4f Å): indices or d values inconsistent' % (system, frms))
+    # -- the pattern from the .cif, at the wavelength and with the convention the table's Icalc column follows
+    S = choice
+    pat, match, listed, carried, top, Ieff = S['pat'], S['match'], S['listed'], S['carried'], S['top'], S['Ieff']
     # -- Icalc vs the .cif
     pairs = [(r, match(r)) for r in rows if r['icalc'] is not None]
-    pairs = [(r, x) for r, x in pairs if x is not None]
+    pairs = [(r, dict(x, I=Ieff(x))) for r, x in pairs if x is not None]
     rms = None
     if len(pairs) >= 8:
         mx = max(r['icalc'] for r, _ in pairs) or 1.0
@@ -432,14 +519,15 @@ def audit(manuscript, cif, lam=None):
         # a program that merges near-coincident lines prints one index with the summed intensity: a
         # listed neighbour whose printed Icalc carries the missing line's intensity has not omitted it
         matched = [(r, match(r)) for r in rows if r['icalc'] is not None]
-        matched = [(r, x) for r, x in matched if x is not None]
+        matched = [(r, dict(x, I=x['I'] * 100.0 / top)) for r, x in matched if x is not None]   # the listed line's own intensity: what its printed Icalc holds beyond it is what it carries
         def absorbed(x):
             for r, y in matched:
                 if abs(y['d'] - x['d']) <= 0.004 * x['d'] and r['icalc'] * scale - y['I'] >= 0.5 * x['I']:
                     return True
             return False
         omitted = []; merged = 0
-        for x in pat:
+        for x0 in pat:
+            x = dict(x0, I=x0['I'] * 100.0 / top)
             if x['I'] < floor or x['hkl'] in listed:
                 continue
             for g, rs in groups.items():
@@ -463,9 +551,13 @@ def audit(manuscript, cif, lam=None):
             # a pdf's table is read by a layout reader that can drop a row: information there, a flag for a .docx read cell by cell
             recs.append({'kind': 'omitted', 'severity': 'flag' if (strong and is_docx) else 'note', 'text': text})
     # -- Iobs / ΣIcalc and dobs against the group
+    # a .pdf's rows come from a layout reader that cannot tell which observed line a calculated line is printed under
+    # (a barred index lifts its row's calculated cells into the line above): its groups are by d, so the intensity under an
+    # observed line is every calculated line within 0.6 % of it, and a dobs 'outside its group' is not said at all
+    near_sum = lambda rs: sum(r['icalc'] or 0 for r in rows if rs[0]['dobs'] and abs(r['dcalc'] - rs[0]['dobs']) <= 0.006 * rs[0]['dobs'])
     ratios = []
     for g, rs in groups.items():
-        s = sum(r['icalc'] or 0 for r in rs); iobs = rs[0]['iobs']
+        s = sum(r['icalc'] or 0 for r in rs) if is_docx else near_sum(rs); iobs = rs[0]['iobs']
         if s > 0 and iobs:
             ratios.append((iobs / s, rs))
     if len(ratios) >= 5:
@@ -474,7 +566,7 @@ def audit(manuscript, cif, lam=None):
         if odd:
             recs.append({'kind': 'ratio', 'severity': 'note',
                          'text': 'Iobs/ΣIcalc: median %.2f; %d observed lines are %g× off it — %s' % (med, len(odd), RATIO_FACTOR,
-                                 '; '.join('dobs %.3f (Iobs %g, ΣIcalc %g: %.2f)' % (rs[0]['dobs'], rs[0]['iobs'], sum(r['icalc'] or 0 for r in rs), ratio) for ratio, rs in odd[:8]))})
+                                 '; '.join('dobs %.3f (Iobs %g, ΣIcalc %g: %.2f)' % (rs[0]['dobs'], rs[0]['iobs'], sum(r['icalc'] or 0 for r in rs) if is_docx else near_sum(rs), ratio) for ratio, rs in odd[:8]))})
     offs = []
     for g, rs in groups.items():
         lo = min(r['dcalc'] for r in rs); hi = max(r['dcalc'] for r in rs); dobs = rs[0]['dobs']
@@ -486,7 +578,7 @@ def audit(manuscript, cif, lam=None):
             recs.append({'kind': 'dobs', 'severity': 'note',
                          'text': 'dobs run %+.2f %% from the calculated lines over the table (median of %d): the powder cell differs from the cell behind dcalc' % (100 * med, len(offs))})
         off = [o for o in offs if o[0] != 0.0 and abs(o[0] - med) > GROUP_TOL]
-        if off:
+        if off and is_docx:
             recs.append({'kind': 'dobs', 'severity': 'note',
                          'text': 'dobs outside its group%s: %s' % (' (beyond the table\'s own offset)' if abs(med) > GROUP_TOL else '',
                                  '; '.join('%.3f vs %s (%+.2f %%)' % (dobs, ('%.3f–%.3f' % (lo, hi)) if hi != lo else '%.3f' % lo, 100 * o) for o, dobs, lo, hi in off[:10]))})

@@ -30,6 +30,41 @@ class Readers(unittest.TestCase):
         self.assertEqual(f, 'Ba3(Mg,Fe)Si2O8'); self.assertIn('Ba', counts)
         self.assertIsNone(PE.ideal_formula('The ideal formula is Ba3(Mg'))                     # cut short: not read
 
+    def test_the_ideal_formula_before_a_simplified_one_and_its_valences(self):
+        # a simplified formula with mixed sites read first put a finding on every oxide of a correct 'requires' list
+        t = ('The simplified formula is (Ba,Sr)(Ca,Y)Ti2O6. '
+             'The ideal formula is BaCaTi2O6 which requires BaO 41.54, CaO 15.19, TiO2 43.27, total 100 wt.%.')
+        self.assertEqual(PE.ideal_formula(t)[0], 'BaCaTi2O6')
+        self.assertEqual(PE.ideal_wt_check(t, {}), [])
+        # Fe3+ is Fe2O3, not the usual FeO: every other oxide came out a finding
+        t = 'The ideal formula is KFe3+3(SO4)2(OH)6 which requires K2O 9.40, Fe2O3 47.83, SO3 31.97, H2O 10.79, total 99.99 wt.%.'
+        self.assertEqual(PE.ideal_wt_check(t, {}), [])
+        self.assertIsNone(PE.ideal_wt({'Fe': 3.0, 'O': 4.0}, 'Fe2+Fe3+2O4'))               # one element in two valences: no wt%
+        self.assertEqual([PE._oxide_of(*a) for a in (('Fe', 3), ('Fe', 2), ('Ti', 4), ('V', 5), ('Na', 1))], ['Fe2O3', 'FeO', 'TiO2', 'V2O5', 'Na2O'])
+
+    def test_an_element_list_at_the_precision_it_prints(self):
+        # an organic mineral's ideal composition in elements; '41.3' for 41.93 is a slip, '41.9' would be its rounding
+        t = 'Ideal formula: Cu(C2O4). The ideal formula corresponds to (in wt%) Cu 41.3, C 15.85, O 42.22, sum 100.00.'
+        L = PE.ideal_wt_check(t, {})
+        self.assertEqual(L[1:], ['Cu 41.3 in the text vs 41.93 from the ideal formula'], L)
+        self.assertEqual(PE.ideal_wt_check(t.replace('Cu 41.3', 'Cu 41.9'), {}), [])
+
+    def test_a_list_of_another_formula_is_information_and_a_slip_is_red(self):
+        # every value off: the list is not of the formula read (a subscript lost) — one information line
+        t = 'The ideal formula is MgMn3+(PO4)2(OH)2·4H2O, which requires MgO 9.37, Mn2O3 36.70, P2O5 32.99, H2O 20.94, total 100.00 wt%.'
+        L = PE.ideal_wt_check(t, {})
+        self.assertEqual(len(L), 2, L); self.assertIn('(information)', L[1])
+        # one value off, and the list then not adding to its total: the slip (CuO 24.38 for 24.78)
+        t = 'The simplified end-member formula is CuZn(SO4)2 which requires CuO 24.38, ZnO 25.35, SO3 49.87, total 100.00 wt.%.'
+        L = PE.ideal_wt_check(t, {})
+        self.assertIn('CuO 24.38 in the text vs 24.78 from the ideal formula', L)
+        # a valence the formula leaves out, the list names: Fe2O3, not the usual FeO (GeO2 45.59 is right, H2O 17.48 is not)
+        t = 'The ideal chemical formula is FeGeO6H5 which requires Fe2O3 34.80, GeO2 45.59, H2O 17.48, total 100 wt.%.'
+        self.assertEqual(PE.ideal_wt_check(t, {})[1:], ['H2O 17.48 in the text vs 19.62 from the ideal formula'])
+        # an oxalate: C2O4 is C3+, C2O3 — and a formula with a variable has no wt%
+        self.assertEqual(PE.ideal_wt_check('The ideal formula is Zn(C2O4)·2H2O, which requires ZnO 42.96, C2O3 38.02, H2O 19.02, total 100.00 wt%.', {}), [])
+        self.assertEqual(PE.ideal_wt_check('The ideal formula is SiO2·nCxH2x+2, which requires SiO2 88.22, H2O 11.78.', {}), [])
+
     def test_ideal_formula_and_its_wt(self):
         f, counts = PE.ideal_formula(TEXT)
         self.assertEqual(f, 'Mg(AsO3OH)·4H2O'); self.assertEqual(counts, {'Mg': 1.0, 'As': 1.0, 'O': 8.0, 'H': 9.0})

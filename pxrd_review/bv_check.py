@@ -343,6 +343,13 @@ class Structure:
         zs = [_num(v) for v in _col(tags, rows, '_atom_site_fract_z')]
         occ = [_num(v) if _num(v) is not None else 1.0 for v in _col(tags, rows, '_atom_site_occupancy', '1')]
         uiso = [_num(v) for v in _col(tags, rows, '_atom_site_u_iso_or_equiv', '.')]
+        # disorder: atoms of two different groups of one assembly are alternatives (SHELXL's PART 1 / PART 2), never
+        # present together — no bond joins them (a PO4 and a CO3 in one place: a P–O contact of 1.1 Å between them was read as a
+        # bond of over 2 vu that the paper's table had left blank, rightly)
+        self.disorder = {}
+        for lab, asm, grp in zip(labels, _col(tags, rows, '_atom_site_disorder_assembly', '.'), _col(tags, rows, '_atom_site_disorder_group', '.')):
+            if grp not in ('.', '?', '') and grp.lstrip('-').isdigit() and int(grp) > 0:
+                self.disorder[lab] = (asm if asm not in ('?',) else '.', int(grp))
         # oxidation numbers from the _atom_type loop, if any
         type_ox = {}
         ttags, trows = _loop(b, '_atom_type_oxidation_number')
@@ -493,6 +500,8 @@ class Structure:
         p0 = site.positions[0]
         found = []
         for other in self.sites:
+            if self.apart(site, other):
+                continue                                                 # two alternatives of one disordered place
             for q in other.positions:
                 for i, j, k in self._images_within(p0, q, cutoff):
                     d = self.dist(p0, [q[0] + i, q[1] + j, q[2] + k])
@@ -506,6 +515,13 @@ class Structure:
             else:
                 merged.append([other, d, 1])
         return [(o, d, n) for o, d, n in merged]
+
+    def apart(self, a, b):
+        """True when sites `a` and `b` belong to two different groups of one disorder assembly: alternatives, not
+        neighbours. A site merged from several rows takes its first row's group."""
+        dis = getattr(self, 'disorder', None) or {}                       # a structure built from a paper's table carries none
+        da = dis.get(a.label.split('/')[0]); db = dis.get(b.label.split('/')[0])
+        return bool(da and db and da[1] != db[1] and (da[0] == db[0] or '.' in (da[0], db[0])))
 
     def images(self, p0, cutoff, sites=None):
         """Every atom image within cutoff of the fractional position p0: [(site, distance,

@@ -137,3 +137,18 @@ class Audit(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PowderRadiation(unittest.TestCase):
+    def test_the_powder_sentence_names_the_anode(self):
+        t = ('The Fe oxidation state was measured with the flank method, avoiding the ninth-order Fe Kα X-ray line of the microprobe. '
+             'Single-crystal data were collected with a Mo Kα tube. Powder X-ray diffraction data were collected with CoKα radiation '
+             'on a Rigaku R-AXIS Rapid II with an image plate.')
+        self.assertEqual(PA.powder_radiation(t), 'Co')
+        self.assertEqual(PA.powder_radiation('Data were collected with Cu Kα radiation.'), 'Cu')
+        self.assertIsNone(PA.powder_radiation('no radiation named'))
+
+    def test_a_barred_index(self):
+        from pxrd_review import paper_extract as PE
+        self.assertEqual([PE._barred(t) for t in ('\u03051', '1\u0304', '\u00af2', '12', '1')], ['-1', '-1', '-2', '12', '1'])
+        self.assertEqual(PE._hkl_of(['\u03051', '2', '3']), (-1, 2, 3))

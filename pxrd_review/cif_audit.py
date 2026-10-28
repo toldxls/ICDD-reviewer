@@ -173,7 +173,7 @@ def check_occupancies(st):
         if v is None or s is None or not s.mult:
             continue
         sym = s.mult / float(general)
-        rows.append({'label': a['label'], 'el': a['element'] or s.element, 'xyz': a['xyz'], 'occ': v / sym if sym else v, 'kind': kind, 'k': k, 'part': a['part']})
+        rows.append({'label': a['label'], 'el': a['element'] or s.element, 'xyz': a['xyz'], 'occ': v / sym if sym else v, 'kind': kind, 'k': k, 'part': a['part'], 'mult': s.mult})
     recs = []
     groups = {}                                                  # species sharing one position add up on one site
     for r in rows:
@@ -203,15 +203,22 @@ def check_occupancies(st):
                 continue
             seen.add((r['label'], r2['label']))
             tied = r['k'] is not None and r['k'] == r2['k'] and {r['kind'], r2['kind']} == {'fv', '1-fv'}
-            tot = r['occ'] + r2['occ']
+            # around one position of the atom on the more symmetric site stand mult(other)/mult(this) positions of the
+            # other: those are what add to one (a P on 3m with three C positions on m about it: 0.7 + 3 × 0.1 = 1,
+            # not 0.8)
+            lo_, hi_ = (r, r2) if (r['mult'] or 0) <= (r2['mult'] or 0) else (r2, r)
+            f = float(hi_['mult']) / lo_['mult'] if lo_['mult'] else 1.0
+            f = round(f) if f >= 1 and abs(f - round(f)) < 0.01 else 1.0
+            tot = lo_['occ'] + f * hi_['occ']
+            terms = ('%.3f + %.3f' % (r['occ'], r2['occ'])) if f == 1 else ('%.3f + %d × %.3f' % (lo_['occ'], f, hi_['occ']))
             if tot > OCC_OVER:
                 recs.append({'kind': 'occupancy', 'severity': 'flag',
-                             'text': 'split pair %s/%s (%.2f Å apart): occupancies %.3f + %.3f add to %.3f vs 1 — two positions of one atom cannot both be there that often'
-                                     % (r['label'], r2['label'], d, r['occ'], r2['occ'], tot)})
+                             'text': 'split pair %s/%s (%.2f Å apart): occupancies %s add to %.3f vs 1 — two positions of one atom cannot both be there that often'
+                                     % (r['label'], r2['label'], d, terms, tot)})
             elif not tied and abs(tot - 1.0) > 0.02:
                 recs.append({'kind': 'occupancy', 'severity': 'note',
-                             'text': 'split pair %s/%s (%.2f Å apart): occupancies %.3f and %.3f refined without a common free variable, adding to %.3f'
-                                     % (r['label'], r2['label'], d, r['occ'], r2['occ'], tot)})
+                             'text': 'split pair %s/%s (%.2f Å apart): occupancies %s refined without a common free variable, adding to %.3f'
+                                     % (r['label'], r2['label'], d, terms, tot)})
     return recs
 
 
@@ -276,6 +283,8 @@ def check_refinement(st, lines=None):
                  % (tmin, floor, mu, dmax, ctype, -math.log(tmin) / mu), 'flag')
     basf = (m or {}).get('basf') or []
     twinned = bool(basf) or bool((m or {}).get('twin')) or items.get('_twin_individual_mass_fraction_refined') not in (None, '', '?')
+    if _inversion_only(m):
+        twinned = False                                          # a bare TWIN (−1 0 0 / 0 −1 0 / 0 0 −1) is the absolute-structure test, not twinning: 'Twinning: not observed' says nothing against it
     if twinned and lines:
         text = ' '.join(t for _k, t in lines)
         mneg = _NO_TWIN.search(text)
@@ -588,6 +597,12 @@ def printed_twin_matrix(twin_text):
 _R_DROP = re.compile(r'R\s*1?\s*(?:value|factor|index)?\s*(?:dropped|decreased|fell|improved|reduced|lowered|went)\b[^.]{0,80}?twin|twin[^.]{0,120}?R\s*1?\s*(?:value|factor|index)?\s*(?:dropped|decreased|fell|improved|reduced|lowered)', re.I)
 
 
+def _inversion_only(m):
+    """True when the .res's one TWIN law is the inversion (SHELXL's bare TWIN): an inversion twin, refined to settle the
+    absolute structure of a non-centrosymmetric crystal — not a twin anyone would describe."""
+    tw = (m or {}).get('twin')
+    return bool(tw) and all(abs(tw[0][i][j] - (-1 if i == j else 0)) < 1e-6 for i in range(3) for j in range(3))
+
 def check_twin(st, lines=None):
     """The twin law in the .res (TWIN + BASF) or the .cif's twin loop, judged in the cell's geometry and against the
     manuscript's words. Flags: a law that is the identity or a symmetry operation of the space group (no twin), a law
@@ -687,7 +702,10 @@ def check_twin(st, lines=None):
                     pass
     for b in basf:
         if b < 0.02:
-            rec('the twin fraction refined to %.3f: the second component is absent, and the twin law can be dropped' % b, 'note')
+            if _inversion_only(m):
+                rec('the inversion-twin fraction refined to %.3f: the absolute structure as modelled is the right one (the TWIN can be dropped)' % b, 'note')
+            else:
+                rec('the twin fraction refined to %.3f: the second component is absent, and the twin law can be dropped' % b, 'note')
     return recs
 
 
