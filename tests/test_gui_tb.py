@@ -87,8 +87,10 @@ class TablesMode(unittest.TestCase):
         self.assertEqual(full['html'].count('data-kind='), 3)          # rutile: coords, bonds, bvs (no H)
         co = self._get('/api/tb/tables/rutile?part=coords')
         self.assertIn('data-kind="coords"', co['html']); self.assertNotIn('data-kind="bvs"', co['html'])
+        self.assertEqual([c['code'] for c in co['symcodes']], ['3_555'])   # the cheat sheet comes with the bond table
         bv = self._get('/api/tb/tables/rutile?part=bvs&params=bo')
         self.assertIn('data-kind="bvs"', bv['html']); self.assertNotIn('data-kind="coords"', bv['html'])
+        self.assertEqual(bv['symcodes'], [])
         self.assertIn("Brese and O&#x27;Keeffe (1991)", bv['html'])            # the footnote follows the buttons
         self.assertIn('Brown and Altermatt (1985)', self._get('/api/tb/tables/rutile?part=bvs&params=ba')['html'])
         self.assertIn('Gagné and Hawthorne (2015)', self._get('/api/tb/tables/rutile?part=bvs')['html'])
@@ -108,6 +110,16 @@ class TablesMode(unittest.TestCase):
         self.assertIn('wollastonite', r['html']); self.assertIn('Anorthite', r['html'].replace('anorthite', 'Anorthite'))
         self.assertEqual(dict(r['wt'])['SiO2'], 43.2)
         # a bad basis is a 400 with the tool's own message, not a 500
+        self.assertEqual((r['blocks'] and len(r['blocks']), r['block']), (1, 0))       # one block: the chooser stays hidden
+        self.assertEqual(self._get('/api/tb/epma/probe.csv?basis=O%3D8&block=0')['block'], 0)
+        self.assertEqual(self.c.get('/api/tb/epma/probe.csv?basis=O%3D8&block=5').status_code, 400)
+        g = self._get('/api/tb/epma/probe.csv/grid')                                  # the sheet picker: cells, sheets, blocks with their boxes
+        self.assertEqual((g['sheets'], g['default'], g['blocks'][0]['box']), (['probe.csv'], 0, [0, 1, 3, 4]))   # B1:E4
+        self.assertEqual(g['rows'][0][:2], ['point', 'CaO'])
+        self.assertEqual(self._get('/api/tb/epma/probe.csv?basis=O%3D8&sheet=probe.csv&region=A1:E2')['n_points'], 1)
+        self.assertEqual(self.c.get('/api/tb/epma/probe.csv?basis=O%3D8&region=A1:D2').status_code, 400)   # a region needs its sheet
+        self.assertEqual(self.c.get('/api/tb/epma/nope.csv/grid').status_code, 404)
+        self.assertEqual(self.c.get('/api/tb/epma/paper:x/grid').status_code, 404)
         bad = self.c.get('/api/tb/epma/probe.csv?basis=zzz'); self.assertEqual(bad.status_code, 400)
         self.assertIn('basis', json.loads(bad.data)['error'])
         # a text file that is no probe file: reported, not crashed
@@ -281,9 +293,22 @@ class DocxPaper(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def test_subfolders_offered(self):
+        # a parent of proposal folders (memos only, no .cif or data file): its subfolders that hold files are offered
+        self.assertEqual(json.loads(self.c.get('/api/tb/state').data)['subfolders'], [])          # this folder has a .cif: none
+        parent = tempfile.mkdtemp(prefix='tbparent_')
+        try:
+            os.makedirs(os.path.join(parent, 'P1')); os.makedirs(os.path.join(parent, 'empty')); os.makedirs(os.path.join(parent, 'review_out'))
+            open(os.path.join(parent, 'P1', 'probe.xlsx'), 'wb').close()
+            open(os.path.join(parent, 'P1', 'paper.pdf'), 'wb').close()
+            self.assertEqual([(f['name'], f['n']) for f in self.G._tb_subfolders(parent)], [('P1', 2)])
+        finally:
+            shutil.rmtree(parent, ignore_errors=True)
+
     def test_docx_listed_and_filled(self):
         st = json.loads(self.c.get('/api/tb/state').data)
         self.assertEqual([d['name'] for d in st['pdfs']], ['Rutile manuscript.docx'])
+        self.assertTrue(all(x['mtime'] > 0 for x in st['pdfs'] + st['cifs'] + st['data']))   # what the sidebar sorts 'newest first' by
         r = self.c.post('/api/tb/extract?pdf=Rutile%20manuscript')
         self.assertEqual(r.status_code, 200, r.data[:200]); d = json.loads(r.data)
         self.assertTrue(d['ok']); self.assertEqual(d['fill']['epma']['file'], 'Rutile manuscript_docx_epma.csv')
@@ -294,6 +319,13 @@ class DocxPaper(unittest.TestCase):
         with open(os.path.join(self.tmp, 'review_out', d['fill']['epma']['file']), encoding='utf-8') as f:
             self.assertEqual(f.read().splitlines(), ['TiO2,FeO,SiO2', '99.1,0.4,0.3'])
         self.assertEqual(self.c.post('/api/tb/extract?pdf=nope').status_code, 404)
+        # the EPMA tab reads the same table in place, picked as 'paper:<key>' from its probe-file list
+        e = json.loads(self.c.get('/api/tb/epma/paper:Rutile%20manuscript?basis=O%3D2&ideal=TiO2').data)
+        self.assertTrue(e['ok'], e); self.assertEqual(e['n_points'], 1); self.assertIn('Rutile manuscript.docx', e['source'])
+        self.assertTrue(e['formula_ideal'].startswith('Ti0.99O2'), e['formula_ideal']); self.assertTrue(any('Fe' in n for n in e['layout_notes']))
+        x = json.loads(self.c.post('/api/tb/epma/paper:Rutile%20manuscript/export?fmt=xlsx&basis=O%3D2').data)
+        self.assertEqual(x['file'], 'Rutile manuscript_docx_epma.xlsx')
+        self.assertEqual(self.c.get('/api/tb/epma/paper:nope?basis=O%3D2').status_code, 404)
         self.assertEqual(self.c.get('/api/ms/pdf/nope.pdf/page/1.png').status_code, 404)   # a page only of the folder's own papers
 
     def test_powder_table_finding(self):

@@ -2104,7 +2104,8 @@ const THEME_PRESETS = {
   'clear-dark': { opacity: 0.72, blur: 14 }, 'solid-dark': { opacity: 1, blur: 0 },
   'midnight': { opacity: 0.74, blur: 14 }, 'graphite': { opacity: 0.78, blur: 12 },
 };
-const PANE_OF = { findings: '#findings', docx: '#docx', mindat: '#mindat' };
+// every pane with a ▾ button: the Manuscript mode's two were missing here, so their button recorded a state nothing applied
+const PANE_OF = { findings: '#findings', docx: '#docx', mindat: '#mindat', 'ms-findings': '#ms-findings', 'ms-report': '#ms-report' };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 let CFG;
@@ -2127,6 +2128,9 @@ function updateSplitterStates() {
   if (find) find.classList.toggle('disabled', CFG.collapsed.findings);
   const dr = document.querySelector('.splitter[data-resize="docrow"]');
   if (dr) dr.classList.toggle('disabled', CFG.collapsed.docx || CFG.collapsed.mindat);
+  const mf = document.querySelector('#ms-app .splitter[data-resize="find"]'), ms = document.querySelector('#ms-app .splitter[data-resize="side"]');
+  if (mf) mf.classList.toggle('disabled', !!CFG.collapsed['ms-findings']);
+  if (ms) ms.classList.toggle('disabled', !!CFG.collapsed['ms-report']);
 }
 function applyCollapse() {
   for (const name in PANE_OF) {
@@ -2221,7 +2225,7 @@ function initAppearance() {
     CFG = JSON.parse(JSON.stringify(DEFAULTS)); saveCfg(); applyCfg(); syncNamesUI();
   });
   document.querySelectorAll('.pane .collapse').forEach(btn => btn.addEventListener('click', () => {
-    const id = btn.closest('.pane').id;       // findings / docx / mindat
+    const id = btn.closest('.pane').id;       // findings / docx / mindat / ms-findings / ms-report
     CFG.collapsed[id] = !CFG.collapsed[id]; saveCfg(); applyCollapse();
   }));
   const hn = $('#hide-notes');

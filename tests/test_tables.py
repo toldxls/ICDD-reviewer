@@ -55,6 +55,19 @@ class Rutile(unittest.TestCase):
         self.assertIn('Symmetry codes: (1) −y+½, x+½, z+½', text)
         self.assertNotIn('no _geom_bond loop', bonds['note'])
 
+    def test_symcode_legend(self):
+        # the GUI's cheat sheet: n_klm = operator n, then k−5, l−5, m−5 cells along a, b, c; a pair the
+        # table lists twice (Ti1–O1 at 1.9485 and 1.9800) is told apart by its distance
+        leg = dict(self.tabs)['bonds']['symcodes']
+        self.assertEqual(leg, [{'n': 1, 'code': '3_555', 'op': '−y+½, x+½, z+½', 'used': ['Ti1–O1 (1.9800)'],
+                                'base_n': 3, 'base': '−y+½, x+½, z+½', 'shift': [0, 0, 0]}])
+        codes = T.SymCodes(self.st)
+        codes.begin_table('bonds')
+        self.assertIsNone(codes.index('.', 'Ti1–O1', '1.9485(5)'))
+        self.assertEqual(codes.index('3_466', 'Ti1–O1', '1.9800(2)'), 1)
+        (c,) = codes.legend()
+        self.assertEqual((c['op'], c['shift'], c['used']), ('−y−½, x+3/2, z+3/2', [-1, 1, 1], ['Ti1–O1 (1.9800)']))
+
     def test_bvs_table(self):
         bvs = dict(self.tabs)['bvs']
         rows = [[T.plain(c) for c in r] for r in bvs['rows']]

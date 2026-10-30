@@ -357,5 +357,135 @@ class ICDDReplication(unittest.TestCase):
         self.assertIsNone(r); self.assertIn('ideal', lines[0])
 
 
+class WorkedUpSheets(unittest.TestCase):
+    """The constituents DOWN a column with the wt% beside them (a worked-up sheet), and the ideal formula as the layout of
+    the empirical one — plain, and live in the xlsx."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='epma_')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _xlsx(self, rows, name='w.xlsx'):
+        import openpyxl
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'calc'
+        for r in rows:
+            ws.append(r)
+        p = os.path.join(self.tmp, name); wb.save(p)
+        return p
+
+    def test_down_column_takes_the_wt_column(self):
+        # a brochantite-type sheet: wt%, then MW / moles / apfu columns derived from it, a Σ row and a formula row under it
+        p = self._xlsx([['8 O apfu', 'wt%', 'MW', 'mol O', 'apfu'],
+                        ['CuO', 69.0, 79.545, 0.867, 3.9], ['ZnO', 1.8, 81.379, 0.022, 0.1], ['SO3', 17.6, 80.057, 0.66, 1.0],
+                        ['H2O', 11.8, 18.015, 0.65, 6.0], ['Σ', 100.2, None, 2.2, 8], [], ['Empirical formula', '(Cu…)']])
+        ds = E.load_probe(p)
+        self.assertEqual([c.formula for c in ds.constituents], ['CuO', 'ZnO', 'SO3', 'H2O'])
+        self.assertEqual(ds.points, [[69.0, 1.8, 17.6, 11.8]]); self.assertEqual(ds.labels, ['wt%'])
+        # no header: the numeric columns beside the names are the points, up to the first derived one
+        p = self._xlsx([['CaO', 20.1, 20.3, 'x'], ['Al2O3', 36.7, 36.5, 'x'], ['SiO2', 43.2, 43.1, 'x'], ['O=F', 0, 0, ''], ['Total', 100, 99.9, '']], 'pts.xlsx')
+        ds = E.load_probe(p)
+        self.assertEqual(len(ds.points), 2); self.assertEqual(ds.points[1], [20.3, 36.5, 43.1])
+        self.assertAlmostEqual(E.reduce(ds, ('O', 8)).rows['SiO2'].apfu, 2.00, places=2)
+        # a probe export (oxides across a header row) still reads as before
+        p = _csv(self.tmp, 'an.csv', ['CaO', 'Al2O3', 'SiO2'], [[20.16, 36.65, 43.19], [20.20, 36.60, 43.20]])
+        self.assertEqual(len(E.load_probe(p).points), 2)
+
+    def test_ideal_formula_lays_out_the_empirical_one(self):
+        p = self._xlsx([['', 'wt%'], ['CuO', 69.0], ['ZnO', 1.8], ['SO3', 17.6], ['H2O', 11.8]])
+        ds, red, table, text = E.prepare(p, basis='O=10', ideal='(Cu,Zn)4SO4(OH)6')
+        apfu = {k: r.apfu for k, r in red.rows.items()}
+        want = '(Cu%.2fZn%.2f)S%.2fO4(OH)%.2f' % (apfu['CuO'], apfu['ZnO'], apfu['SO3'], apfu['H2O'])
+        self.assertEqual(E.laid_out_text(red.layout), want); self.assertEqual(red.layout_notes, [])
+        self.assertIn('laid out as the ideal formula (Cu,Zn)4SO4(OH)6: ' + want, text)
+        self.assertEqual(table['head'][-1], 'Ideal')                        # end-member Cu4SO4(OH)6: CuO 70.35, SO3 17.70, H2O 11.95
+        ideal = {r[0]: r[-1] for r in table['rows']}
+        self.assertEqual((ideal['CuO'], ideal['ZnO'], ideal['SO3'], ideal['H2O'], ideal['Total']), ('70.35', '0.00', '17.70', '11.95', '100.00'))
+        # the xlsx: a live formula of the apfu cells, which evaluates to the same text
+        from tests.xl_eval import Book
+        out = os.path.join(self.tmp, 'o.xlsx'); E.write_xlsx(red, table, out, ds)
+        b = Book(out); ws = b.wb['reduction']
+        row = next(c.row for c in ws['A'] if isinstance(c.value, str) and c.value.startswith('empirical formula (live'))
+        self.assertEqual(ws.cell(row, 2).value, '="(Cu"&TEXT(J2,"0.00")&"Zn"&TEXT(J3,"0.00")&")S"&TEXT(J4,"0.00")&"O4(OH)"&TEXT(J5,"0.00")')
+        self.assertEqual(b.value('reduction', 'B%d' % row), want)
+
+    def test_layout_rules(self):
+        p = _csv(self.tmp, 'gy.csv', ['CaO', 'SO3', 'H2O'], [[32.57, 46.50, 20.93]])
+        lay = lambda ideal, **kw: (lambda red: (E.laid_out_text(red.layout), red.layout_notes))(E.prepare(p, ideal=ideal, **kw)[1])
+        self.assertEqual(lay('CaSO4·2H2O', basis='O=6'), ('Ca1.00S1.00O4·2.00H2O', []))             # a hydrate's count stands before it
+        self.assertEqual(lay('Ca(SO4)·2H2O', basis='O=6')[0], 'Ca1.00(S1.00O4)·2.00H2O')
+        txt, notes = lay('Ca(SO4)(OH)2·H2O', basis='O=6')                                          # two H groups: one H2O cannot be split
+        self.assertEqual(txt, 'Ca1.00(S1.00O4)(OH)2·H2O'); self.assertIn('cannot be split', notes[0])
+        txt, notes = lay('CaSO4·2H2O', basis='cations=2')
+        self.assertIn('O is written as the ideal formula writes it', notes[0])
+        # an element under a multiplied group carries its share; an analysed element the formula does not name is said
+        p = _csv(self.tmp, 'j.csv', ['K2O', 'FeO', 'SO3', 'H2O', 'MgO'], [[9.4, 47.9, 31.9, 10.8, 0.3]])
+        red = E.prepare(p, basis='O=14', ideal='KFe3(SO4)2(OH)6')[1]
+        self.assertIn('(S%.2fO4)2' % (red.rows['SO3'].apfu / 2), E.laid_out_text(red.layout))
+        self.assertEqual(len(red.layout_notes), 1); self.assertIn('Mg (0.04 apfu) is analysed but not placed', red.layout_notes[0])
+        self.assertIn('e.g. (Fe,Mg)', red.layout_notes[0])
+        red = E.prepare(p, basis='O=14', ideal='KFe3+3(SO4)2(OH)6')[1]                             # Fe3+ written, FeO analysed: as typed, and said
+        self.assertIn('Fe3+3(', E.laid_out_text(red.layout)); self.assertIn('analysed as FeO', red.layout_notes[0])
+        # the Fe2+/Fe3+ split: each valence its own row
+        p = _csv(self.tmp, 'm.csv', ['FeO'], [[93.1]])
+        red = E.prepare(p, basis='cations=3', charge='Fe', anions=4, ideal='Fe2+Fe3+2O4')[1]
+        self.assertEqual(E.laid_out_text(red.layout), 'Fe2+1.00Fe3+2.00O4')
+        for bad in ('Xx2O3', '(Cu,Zn4', '(Cu2,Zn)4', ''):
+            with self.assertRaises(ValueError, msg=bad):
+                E.parse_template(bad)
+        _ds, red, table, _t = E.prepare(p.replace('m.csv', 'gy.csv'), basis='O=6', ideal='CaO=1,SO3=1,H2O=2')   # constituent apfu: the Ideal column alone
+        self.assertIsNone(red.layout); self.assertEqual(table['head'][-1], 'Ideal')
+
+    def test_blocks_of_a_messy_workbook(self):
+        # one header row holding the oxide wt%, the same analysis as element wt% (counted twice if read), then the oxide names
+        # again for another quantity; under it a worked-up block down a column, and an 'ideal' block beside it
+        rows = [['Point', 'CaO', 'Al2O3', 'SiO2', 'Ca', 'Al', 'Si', 'CaO', 'Al2O3', 'SiO2']]
+        for i in range(4):
+            rows.append([i + 1, 20.1 + i * 0.1, 36.6, 43.2, 14.4, 19.4, 20.2, 0.02, 0.03, 0.02])
+        rows += [[], ['ideal', None, 'empirical'], ['CaO', 20.16, 'CaO', 20.2], ['Al2O3', 36.65, 'Al2O3', 36.6], ['SiO2', 43.19, 'SiO2', 43.1]]
+        p = self._xlsx(rows, 'messy.xlsx')
+        bl = E.probe_blocks(p)
+        heads = [b['heads'] for b in bl]
+        self.assertIn(['CaO', 'Al2O3', 'SiO2'], heads)
+        self.assertNotIn(['CaO', 'Al2O3', 'SiO2', 'Ca', 'Al', 'Si'], heads)              # the element columns of the same analysis are left out
+        self.assertNotIn('ideal', ' '.join(b['label'] for b in bl).split(':')[0])
+        d = E.default_block(bl)
+        self.assertEqual((bl[d]['heads'], len(bl[d]['points'])), (['CaO', 'Al2O3', 'SiO2'], 4))   # the raw points: biggest plausible
+        self.assertFalse(next(b for b in bl if b['points'][0][0] == 0.02)['plausible'])           # the second run sums to 0.07
+        down = next(i for i, b in enumerate(bl) if b['labels'] == ['empirical'] or 'C' in b['label'].split(':')[0])
+        ds = E.load_probe(p, block=down)
+        self.assertEqual(ds.points, [[20.2, 36.6, 43.1]])                                 # the empirical column, not the ideal one beside it
+        with self.assertRaises(ValueError):
+            E.load_probe(p, block=len(bl))
+        red = E.prepare(p, basis='O=8', block=down)[1]
+        self.assertEqual((red.block, len(red.blocks)), (down, len(bl)))
+        self.assertIn('Σ 99.9', red.blocks[down])
+        self.assertEqual(bl[d]['box'], (0, 1, 4, 3))                                 # B1:D5, the header and the four points
+        # a range picked by hand: only the blocks inside it — points 2-3 of the raw block, or the ideal column the reader skips
+        bl2 = E.probe_blocks(p, 'calc', E.parse_region('B1:D3'))
+        self.assertEqual(len(bl2[E.default_block(bl2)]['points']), 2)
+        ds = E.load_probe(p, 'calc', region=E.parse_region('A8:B10'))
+        self.assertEqual(ds.points, [[20.16, 36.65, 43.19]])
+        self.assertEqual(E.parse_region('d5:b2'), (1, 1, 4, 3))
+        for bad in ('B2', 'B2:', '2B:F3'):
+            with self.assertRaises(ValueError):
+                E.parse_region(bad)
+        with self.assertRaises(ValueError):
+            E.prepare(p, basis='O=8', region='A8:B10')                             # a region needs its sheet
+
+    def test_region_skips_empty_columns(self):
+        # the points of a worked-up sheet across columns, a rejected one left blank: a picked range reads past the gap
+        p = self._xlsx([['', 1, 2, None, 4], ['CaO', 20.1, 20.3, None, 20.0], ['Al2O3', 36.7, 36.5, None, 36.6], ['SiO2', 43.2, 43.1, None, 43.3]], 'gap.xlsx')
+        self.assertEqual(len(E.load_probe(p).points), 2)                              # the whole file: the block ends at the gap
+        self.assertEqual(len(E.load_probe(p, 'calc', region=E.parse_region('A1:E4')).points), 3)
+
+    def test_paper_table_as_a_dataset(self):
+        ds = E.dataset_from_table([{'constituent': 'CaO', 'mean': 20.1}, {'constituent': 'Al2O3', 'mean': 36.7}, {'constituent': 'SiO2', 'mean': 43.2},
+                                   {'constituent': 'Total', 'mean': 100.0}], 'paper.pdf: page 3')
+        self.assertEqual([c.formula for c in ds.constituents], ['CaO', 'Al2O3', 'SiO2']); self.assertEqual(ds.labels, ['mean'])
+        self.assertIn('not read: Total', ds.source)
+        self.assertAlmostEqual(E.prepare(ds, basis='O=8')[1].rows['CaO'].apfu, 1.0, places=2)
+
+
 if __name__ == '__main__':
     unittest.main()

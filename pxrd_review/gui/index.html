@@ -209,9 +209,9 @@
           </section>
           <div class="splitter v" data-resize="side"></div>
           <div id="ms-right">
-            <section id="ms-report" class="pane" data-collapse="row">
+            <section id="ms-report" class="pane" data-collapse="col">
               <div class="pane-title">
-                <button class="collapse" title="collapse">▾</button>
+                <button class="collapse" title="fold the report away (the document gets the room); click again to bring it back">▾</button>
                 <span class="ptitle">Report</span>
                 <span class="muted" id="ms-report-note"></span>
               </div>
@@ -229,10 +229,18 @@
        (review_out/tables_opts.json). The page sends file keys and option strings, never paths. -->
   <div id="tb-app" class="hidden">
     <aside id="tb-sidebar">
+      <div class="side-head tb-sort-row"><span class="muted">sort the lists</span>
+        <select id="tb-sort" title="order every list below: by name, or by when the file was last saved">
+          <option value="name">name</option>
+          <option value="newest">newest first</option>
+          <option value="oldest">oldest first</option>
+        </select></div>
       <div class="side-head"><div class="muted">.cif files</div></div>
       <ul id="tb-list" class="tb-side-list"></ul>
       <div class="side-head"><div class="muted">data files — probe analyses, peak lists</div></div>
       <ul id="tb-data" class="tb-side-list"></ul>
+      <div class="side-head"><div class="muted">papers — .pdf / .docx (their analytical table → EPMA)</div></div>
+      <ul id="tb-papers" class="tb-side-list"></ul>
       <div class="side-head"><div class="muted">written to review_out</div></div>
       <ul id="tb-outputs" class="tb-side-list"></ul>
     </aside>
@@ -305,20 +313,23 @@
           </div>
 
           <div class="head-meta tb-opts tb-pane hidden" data-pane="epma">
-            <label class="opt"><span class="muted">probe file</span> <select id="tb-epma-file" data-opt="file"></select></label>
+            <label class="opt"><span class="muted">probe file</span> <select id="tb-epma-file" data-opt="file" title="a probe export or worked-up sheet of the folder — or a paper (.pdf / .docx), whose analytical table is read in place"></select></label>
+            <button id="tb-epma-sheet" class="ghost mini" title="open the workbook: every block of analyses the reader finds is shaded and numbered — click one to use it, or drag over the cells to read exactly that range">sheet ▸</button>
+            <input type="hidden" data-opt="region" value="">
             <label class="opt"><span class="muted">sheet</span> <input type="text" class="n" data-opt="sheet" placeholder="auto" title="sheet name (xlsx) — default: the biggest block of oxide columns"></label>
+            <label class="opt hidden" id="tb-epma-block-l"><span class="muted">block</span> <select id="tb-epma-block" title="the blocks of analyses the file holds (raw points, a worked-up column, an ideal one, another mineral's …): sheet and first cell, constituents, how many points, the median total. Default: the biggest that looks like analyses (each constituent once, a total of 40–120 wt%)"></select><input type="hidden" data-opt="block" value=""></label>
             <label class="opt"><span class="muted">points</span> <input type="text" class="n" data-opt="points" placeholder="all" title="rows to use, e.g. 1-8 or 1,3,5"></label>
             <label class="opt"><span class="muted">basis</span> <input type="text" class="n" data-opt="basis" placeholder="O=21" title="normalisation: O=N (anions, F/Cl included, O=F applied), cations=N, U=5, Si+Al=4 …"></label>
-            <label class="opt"><span class="muted">charge</span> <select data-opt="charge" title="balance charge: H2O adds the hydrogen the analysis lacks (cation/element basis + anions N); Fe splits FeO into FeO + Fe2O3"></label>
+            <label class="opt"><span class="muted">charge</span> <select data-opt="charge" title="balance charge: H2O adds the hydrogen the analysis lacks (cation/element basis + anions N); Fe splits FeO into FeO + Fe2O3">
               <option value="">none</option><option value="H2O">H2O</option><option value="Fe">Fe2+/Fe3+</option>
-            </select>
+            </select></label>
             <label class="opt"><span class="muted">anions</span> <input type="text" class="n" data-opt="anions" placeholder="N" title="total anions (O + F) per formula unit from the structure, for charge = H2O"></label>
             <label class="chk mini" title="count oxide O and halogens both, without the O=F reduction (the spreadsheet convention, e.g. 21.5)"><input type="checkbox" data-opt="raw"> raw anions</label>
             <label class="opt"><span class="muted">add</span> <input type="text" class="w" data-opt="add" placeholder="H2O=structure:6, CO2=wt:14.02, H2O=difference" spellcheck="false" autocomplete="off" title="constituents the probe does not give: X=structure:N (apfu), X=wt:V (wt%), X=difference (100 − total)"></label>
             <label class="opt"><span class="muted">convert</span> <input type="text" data-opt="convert" placeholder="UO2=UO3" spellcheck="false" autocomplete="off" title="re-express a constituent (by MW ratio)"></label>
             <label class="opt"><span class="muted">drop</span> <input type="text" data-opt="drop" placeholder="Cl" spellcheck="false" autocomplete="off" title="constituents to leave out"></label>
             <label class="opt"><span class="muted">standards</span> <input type="text" class="w" data-opt="standards" placeholder="CaO=anorthite,UO3=UO2" spellcheck="false" autocomplete="off" title="Standard column of the published table"></label>
-            <label class="opt"><span class="muted">ideal</span> <input type="text" class="w" data-opt="ideal" placeholder="CaO=3,UO3=1,CO2=3,F=1,H2O=6" spellcheck="false" autocomplete="off" title="ideal formula as constituent apfu → the Ideal column"></label>
+            <label class="opt"><span class="muted">ideal</span> <input type="text" class="w" data-opt="ideal" placeholder="(Cu,Zn)4SO4(OH)6" spellcheck="false" autocomplete="off" title="the ideal formula → the Ideal column, and the empirical formula written in its layout: (Cu,Zn)4SO4(OH)6 gives (Cu3.90Zn0.10)S1.00O4(OH)6.00 — in the .xlsx a live formula (TEXT of the apfu cells). A mixed site (Cu,Zn) lists each analysed element; (OH) / ·nH2O take their count from the H2O row; O is written as typed. Constituent apfu (CaO=3,UO3=1,H2O=6) still give the Ideal column alone."></label>
             <input type="hidden" data-opt="method" value="">
             <label class="opt"><span class="muted">name</span> <input type="text" class="n" data-opt="name" placeholder="mineral"></label>
             <span class="spacer"></span>
@@ -343,6 +354,7 @@
           </div>
           <div id="tb-status" class="muted ellip"></div>
         </section>
+        <div id="tb-sheet" class="tb-sheet hidden"></div>
         <div id="tb-body" class="tb-body"></div>
       </div>
     </main>

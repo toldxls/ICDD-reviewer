@@ -50,6 +50,9 @@ async function msLoad() {
   $('#folder').dataset.path = r.folder || '';
   MSS.files = r.files || []; MSS.ncifs = (r.cifs || []).length;
   msRenderList();
+  // the paper just used in the Tables mode opens here, so it need not be searched for again (taken once)
+  const carry = window.TB_CARRY; window.TB_CARRY = null;
+  if (carry && window.MODE === 'manuscript' && carry !== MSS.key && MSS.files.some(f => f.key === carry)) msOpen(carry);
   if (r.pending > 0 && window.MODE === 'manuscript') MSS.pollTimer = setTimeout(msLoad, 1000);
 }
 

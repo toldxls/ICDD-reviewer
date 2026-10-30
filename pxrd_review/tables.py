@@ -239,10 +239,15 @@ class SymCodes:
     a CIF code '17_544' (operator 17, translation 0,−1,−1) -> (n, 'x−y, x, −z−1')."""
     def __init__(self, st):
         self.st = st; self.codes = OrderedDict(); self.used = set()
-    def begin_table(self):
-        self.used = set()
-    def index(self, code):
+        self.parts = {}; self.uses = OrderedDict(); self.pairs = {}; self.table = ''
+    def begin_table(self, name=''):
+        self.used = set(); self.table = name
+    def index(self, code, pair=None, d=None):
+        """pair / d: the bond the code is used for (the cheat sheet's 'used for'); every bond of the
+        table is counted, so a pair that occurs twice is told apart by its distance."""
         code = (code or '.').strip()
+        if pair:
+            self.pairs[(self.table, pair)] = self.pairs.get((self.table, pair), 0) + 1
         if code in ('.', '', '?', '1_555'):
             return None
         self.used.add(code)
@@ -254,8 +259,11 @@ class SymCodes:
             if 1 <= n <= len(self.st.ops):
                 rot, tr = self.st.ops[n - 1]
                 self.codes[code] = symop_string(rot, [tr[i] + t[i] for i in range(3)])
+                self.parts[code] = (n, symop_string(rot, tr), t)
             else:
                 self.codes[code] = code
+        if pair:
+            self.uses.setdefault(code, []).append((self.table, pair, d))
         return list(self.codes).index(code) + 1
     def note(self, phrase='Symmetry codes:'):
         """The codes THIS table used (numbering shared across tables)."""
@@ -263,6 +271,21 @@ class SymCodes:
         if not items:
             return ''
         return phrase + ' ' + '; '.join('(%d) %s' % (i, s) for i, s in items) + '.'
+    def legend(self):
+        """Every code numbered, for the cheat sheet: n, the CIF code, the operator with its
+        translation, the .cif operator it starts from and the shift along a, b, c, and the bonds
+        that use it ('Cd1–OH2 (2.246)' when the pair occurs more than once in its table)."""
+        out = []
+        for i, (c, s) in enumerate(self.codes.items()):
+            base = self.parts.get(c)
+            used = []
+            for table, pair, d in self.uses.get(c, []):
+                lab = pair + (' (%s)' % re.sub(r'\(\d+\)$', '', d) if d and self.pairs.get((table, pair), 0) > 1 else '')
+                used.append(lab if table != 'hbonds' else lab + ' (H bond)')
+            out.append({'n': i + 1, 'code': c, 'op': s, 'used': used,
+                        'base_n': base[0] if base else None, 'base': base[1] if base else None,
+                        'shift': base[2] if base else None})
+        return out
 
 def _label_cell(label, code_idx):
     return C(label, R(str(code_idx), 'sup') if code_idx else None)
@@ -439,7 +462,7 @@ def _neighbours_with_codes(st, site, cutoff):
 
 def bond_table(st, codes, P, J=None):
     J = J or journal(None)
-    codes.begin_table()
+    codes.begin_table('bonds')
     src, from_loop = _bond_source(st, P)
     blocks = []
     for site in st.cations:
@@ -454,7 +477,7 @@ def bond_table(st, codes, P, J=None):
             if key in seen:
                 continue
             seen.add(key)
-            rows.append((_bond_cell(site.label, an, codes.index(code)), C(d), B._num(d), an))
+            rows.append((_bond_cell(site.label, an, codes.index(code, '%s–%s' % (site.label, an), d)), C(d), B._num(d), an))
         # means: uranyl gets <U–Oyl> (the two shortest) and <U–Oeq>
         anion_elems = sorted({st.sites[[s.label for s in st.sites].index(an)].element if an in [s.label for s in st.sites]
                               else re.sub(r'\d.*$', '', an) for _, _, _, an in rows}, key=lambda e: (e != 'O', e))
@@ -495,13 +518,13 @@ def hbond_table(st, codes, J=None, hbonds=(), hmax=None):
     """The hydrogen-bond geometry (loop, else from the H positions); without H atoms, the D⋯A
     contacts proposed from the O⋯O geometry (bv_check), clearly labelled as a proposal."""
     J = J or journal(None)
-    codes.begin_table()
+    codes.begin_table('hbonds')
     geo = B.hbond_geometry(st)
     out = []
     if geo:
         for g in geo:
             D, H, A = g['labels']
-            idx = codes.index(g['code'])
+            idx = codes.index(g['code'], '%s–%s⋯%s' % (D, H, A), g['da'])
             out.append([C(D, '–', H, '⋯', A, R(str(idx), 'sup') if idx else None), C(g['dh']), C(g['ha']), C(g['da']), C(g['ang'])])
         head = [C(R('D', 'i'), '–', R('H', 'i'), '⋯', R('A', 'i')), C(R('D', 'i'), '–', R('H', 'i')), C(R('H', 'i'), '⋯', R('A', 'i')),
                 C(R('D', 'i'), '⋯', R('A', 'i')), C('∠', R('DHA', 'i'))]
@@ -595,6 +618,7 @@ def build(cif, params='gh', ox=None, cutoff=None, include_h=True, journal_key=No
     if hbt:
         tabs.append(('hbonds', hbt))
     tabs.append(('bvs', bvs_table(st, P, result, anion_sum, cells, J, hbonds)))
+    tabs[1][1]['symcodes'] = codes.legend()          # the GUI's cheat sheet: every code, after the H-bond table numbered its own
     for i, (k, t) in enumerate(tabs, 1):
         t['n'] = i
         t['label'] = J['caption'].format(n=i)

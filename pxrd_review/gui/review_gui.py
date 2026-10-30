@@ -2099,19 +2099,49 @@ def api_update():
 def api_update_status():
     return jsonify(UPD.run_status())
 
+def _mtime(path):
+    """A file's modification time (s), 0 when it is gone — what the sidebar sorts 'newest first' by."""
+    try:
+        return int(os.path.getmtime(path))
+    except OSError:
+        return 0
+
 @app.route('/api/tb/state')
 def api_tb_state():
     out = MS['out_dir'] or ''
-    cifs = [{'key': k, 'name': os.path.basename(p), 'has_word': os.path.exists(os.path.join(out, k + '_tables.docx'))}
+    cifs = [{'key': k, 'name': os.path.basename(p), 'has_word': os.path.exists(os.path.join(out, k + '_tables.docx')), 'mtime': _mtime(p)}
             for k, p in sorted(MS['cifs'].items())]
-    data = [{'key': k, 'name': k, 'kind': _tb_data_kind(k)} for k in sorted(MS['data'], key=str.lower)]
+    data = [{'key': k, 'name': k, 'kind': _tb_data_kind(k), 'mtime': _mtime(MS['data'][k])} for k in sorted(MS['data'], key=str.lower)]
     outputs = []
     if out and os.path.isdir(out):
         outputs = sorted(fn for fn in os.listdir(out) if _TB_OUTPUT.fullmatch(fn) and not fn.endswith('.txt'))
-    pdfs = [{'key': k, 'name': k} for k in sorted(MS.get('pdfs') or {}, key=str.lower)]
-    pdfs += [{'key': k, 'name': os.path.basename(v)} for k, v in sorted(MS['files'].items(), key=lambda kv: kv[0].lower()) if v.lower().endswith('.docx')]   # a manuscript .docx is a paper too
+    pdfs = [{'key': k, 'name': k, 'mtime': _mtime(v)} for k, v in sorted((MS.get('pdfs') or {}).items(), key=lambda kv: kv[0].lower())]
+    pdfs += [{'key': k, 'name': os.path.basename(v), 'mtime': _mtime(v)} for k, v in sorted(MS['files'].items(), key=lambda kv: kv[0].lower())
+             if v.lower().endswith('.docx')]                                              # a manuscript .docx is a paper too
+    subs = _tb_subfolders(MS['folder']) if MS['folder'] and not (cifs or data) else []   # a parent of proposal folders (memos only, say)
     return jsonify({'folder': MS['folder'], 'cifs': cifs, 'data': data, 'outputs': outputs, 'opts': MS['tb_opts'], 'pdfs': pdfs,
+                    'subfolders': subs,
                     'journals': [{'key': k, 'name': v['name']} for k, v in TB.JOURNALS.items()], 'default_journal': TB.DEFAULT_JOURNAL})
+
+_TB_FILE_EXT = ('.cif', '.pdf', '.docx') + _DATA_EXT
+
+def _tb_subfolders(folder, cap=200):
+    """A folder with no .cif or data file of its own (a parent of the proposal folders): its subfolders that hold files, one level down,
+    so the page can offer them — the lists are never recursive, and an empty sidebar told nothing of where the files were."""
+    out = []
+    try:
+        dirs = sorted((e for e in os.scandir(folder) if e.is_dir() and not e.name.startswith(('.', '~')) and e.name != 'review_out'),
+                      key=lambda e: e.name.lower())[:cap]
+    except OSError:
+        return out
+    for d in dirs:
+        try:
+            n = sum(1 for f in os.scandir(d.path) if f.is_file() and not f.name.startswith(('.', '~$')) and f.name.lower().endswith(_TB_FILE_EXT))
+        except OSError:
+            continue
+        if n:
+            out.append({'name': d.name, 'path': d.path, 'n': n})
+    return out
 
 @app.route('/api/tb/opts/<tab>', methods=['POST'])
 def api_tb_opts(tab):
@@ -2135,10 +2165,12 @@ def api_tb_tables(key):
         st, tabs = TB.build(MS['cifs'][key], **opts)
     except Exception as ex:
         return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
+    symcodes = dict(tabs)['bonds'].get('symcodes', [])
     if keep:
         tabs = [(k, t) for k, t in tabs if k in keep]
     return jsonify({'ok': True, 'name': st.name, 'formula': st.formula, 'sg': st.sg,
-                    'notes': st.notes, 'html': TB.render_html(tabs), 'text': TB.render_text(tabs)})
+                    'notes': st.notes, 'html': TB.render_html(tabs), 'text': TB.render_text(tabs),
+                    'symcodes': symcodes if 'bonds' in dict(tabs) else []})
 
 @app.route('/api/tb/bvs/<key>/export', methods=['POST'])
 def api_tb_bvs_export(key):
@@ -2297,18 +2329,88 @@ def _tb_epma_args():
                 anions=_qf('anions', 0.1, 500), raw_anions=a.get('raw') == '1',
                 adds=split(_q('add', '', 400)), converts=split(_q('convert', '', 200)), drop=split(_q('drop', '', 200)),
                 points=_q('points', '', 60), standards=_q('standards', '', 400), ideal=_q('ideal', '', 400),
-                name=_q('name', '', 80), sheet=_q('sheet', '', 80) or None, method=_q('method', '', 1400))
+                name=_q('name', '', 80), sheet=_q('sheet', '', 80) or None, method=_q('method', '', 1400),
+                block=int(a['block']) if (a.get('block') or '').isdigit() and int(a['block']) < 1000 else None,
+                region=_q('region', '', 20) or None)
+
+_TB_PAPER_TABLE = {}                                   # path -> (mtime, epma_table): a paper is read once, not on every option typed
+
+def _tb_paper_path(key):
+    """The paper of a 'paper:<key>' EPMA key (a .pdf or manuscript .docx of the folder), else None."""
+    if not key.startswith('paper:'):
+        return None
+    k = key[len('paper:'):]
+    return (MS.get('pdfs') or {}).get(k) or _tb_docx_path(k)
+
+def _tb_epma_known(key):
+    return bool(_tb_paper_path(key)) if key.startswith('paper:') else key in MS['data']
+
+def _tb_epma_source(key):
+    """(path, what EP.prepare reads, output stem, {constituent: standard}) of a known EPMA key: a data file of the folder, or
+    'paper:<key>' — the analytical table of one of the folder's papers, read locally by paper_extract.epma_table."""
+    if key.startswith('paper:'):
+        path = _tb_paper_path(key)
+        from pxrd_review import paper_extract as PE
+        mt = os.path.getmtime(path)
+        hit = _TB_PAPER_TABLE.get(path)
+        if not hit or hit[0] != mt:
+            hit = (mt, PE.epma_table(path, PE.mineral_name(PE.text_of(path)) or ''))
+            _TB_PAPER_TABLE[path] = hit
+        tab = hit[1]
+        if not tab or not tab.get('rows'):
+            raise ValueError('no analytical table found in %s' % os.path.basename(path))
+        where = ('page %d' % tab['page']) if tab.get('page') else (tab.get('caption') or 'a table')[:60]
+        read = sum(r_['mean'] for r_ in tab['rows'] if r_.get('mean') is not None)
+        if tab.get('total') and abs(read - tab['total']) > 0.6:              # rows the reader missed (or took twice): never a silent partial table
+            where += ' — the rows read sum to %.2f, the table prints a total of %.2f: check the table' % (read, tab['total'])
+        ds = EP.dataset_from_table(tab['rows'], '%s: %s' % (os.path.basename(path), where))
+        stem = os.path.splitext(os.path.basename(path))[0] + ('_docx' if path.lower().endswith('.docx') else '_paper')
+        return path, ds, stem, {r_['constituent']: r_['standard'] for r_ in tab['rows'] if r_.get('standard')}
+    return MS['data'][key], MS['data'][key], os.path.splitext(key)[0], {}
 
 def _tb_epma(key):
-    if key not in MS['data']:
-        abort(404)
-    path = MS['data'][key]
+    if not _tb_epma_known(key):
+        abort(404)                                                          # outside the try: an HTTPException is an Exception too
+    path = key
     try:
-        return path, EP.prepare(path, **_tb_epma_args()), None
+        path, src, _stem, stds = _tb_epma_source(key)
+        args = _tb_epma_args()
+        if stds and not args['standards']:                                  # the paper's Standard column, unless typed otherwise
+            args['standards'] = ','.join('%s=%s' % kv for kv in stds.items())
+        return path, EP.prepare(src, **args), None
     except ValueError as ex:
         return path, None, (str(ex), 400)
     except Exception as ex:
         return path, None, (E.explain(ex, path), 500)
+
+_TB_GRID_MAX = (400, 80)                               # rows × columns of a sheet sent to the page (an ICP sheet runs to thousands)
+
+@app.route('/api/tb/epma/<key>/grid')
+def api_tb_epma_grid(key):
+    """One sheet of a probe workbook for the page's region picker: its cells (capped), the sheet names, and every block of
+    analyses the reader finds (index, label, sheet, cell box, the default) so the page can outline them."""
+    if key.startswith('paper:') or key not in MS['data']:
+        abort(404)
+    path = MS['data'][key]
+    try:
+        sheets = EP._cells_from_file(path)
+        blocks = EP.probe_blocks(path)
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': E.explain(ex, path)}), 500
+    titles = [t for t, _ in sheets]
+    d = EP.default_block(blocks)
+    want = request.args.get('sheet') or (blocks[d]['sheet'] if blocks else titles[0] if titles else '')
+    if want not in titles:
+        want = titles[0] if titles else ''
+    grid = dict(sheets).get(want) or []
+    R, C = _TB_GRID_MAX
+    ncols = max((len(r) for r in grid), default=0)
+    cell = lambda v: None if v is None else (round(v, 6) if isinstance(v, float) else v if isinstance(v, (int, bool)) else str(v)[:60])
+    rows = [[cell(v) for v in r[:C]] for r in grid[:R]]
+    return jsonify({'ok': True, 'sheets': titles, 'sheet': want, 'rows': rows, 'nrows': len(grid), 'ncols': ncols,
+                    'truncated': len(grid) > R or ncols > C,
+                    'blocks': [{'i': i, 'label': b['label'], 'sheet': b['sheet'], 'box': b['box'], 'cols': b['cols'], 'plausible': b['plausible'] and b['reducible']}
+                               for i, b in enumerate(blocks)], 'default': d})
 
 @app.route('/api/tb/epma/<key>')
 def api_tb_epma(key):
@@ -2318,6 +2420,8 @@ def api_tb_epma(key):
     ds, red, table, text = res
     return jsonify({'ok': True, 'html': TB.render_html(EP.to_tabs(table, _tb_journal())), 'text': text,
                     'formula': red.formula(), 'factor': red.factor, 'charge': red.charge, 'total': red.total,
+                    'formula_ideal': EP.laid_out_text(red.layout) if red.layout else '', 'layout_notes': red.layout_notes,
+                    'blocks': red.blocks, 'block': red.block,
                     'wt': [[k, round(r.wt, 3)] for k, r in red.rows.items()],
                     'constituents': [c.formula for c in ds.constituents], 'n_points': len(ds.points), 'source': ds.source})
 
@@ -2328,7 +2432,7 @@ def api_tb_epma_export(key):
     if err:
         return jsonify({'ok': False, 'error': err[0]}), err[1]
     ds, red, table, text = res
-    stem = os.path.splitext(key)[0]
+    stem = _tb_epma_source(key)[2]
     try:
         paths = EP.export(ds, red, table, text, MS['out_dir'], stem, word=fmt == 'word', xlsx=fmt == 'xlsx', journal_key=_tb_journal(),
                           method=_q('method', '', 1400))

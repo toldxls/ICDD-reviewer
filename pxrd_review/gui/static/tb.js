@@ -13,7 +13,7 @@ const TB_HINT = {
   coords: 'Select a .cif in the sidebar — Table 1 (coordinates and displacement parameters), Table 2 (selected bond distances with symmetry codes) and the hydrogen-bond table are built from it. Equivalent command: pxrd tables mineral.cif --word',
   bvs:    'Select a .cif in the sidebar — the bond-valence analysis, one anion column per cation row. Equivalent command: pxrd tables mineral.cif (Table 4) / pxrd bv mineral.cif',
   gd:     'Give the composition (ideal formula as atoms per formula unit, or wt% oxides — the EPMA tab can hand its means over), the mean refractive index and a density (measured, or from a .cif and Z). Equivalent command: pxrd gd --formula "Ca=1,U=2,H2O=4" --n 1.70 --cif mineral.cif',
-  epma:   'Pick the probe file (xlsx / csv / txt with the oxide wt% columns and one row per point) and the normalisation basis: O=21 (anions), cations=8, U=5, Si+Al=4 … Additions: H2O=structure:6, CO2=wt:14.02, H2O=difference. Equivalent command: pxrd epma probe.xlsx --basis O=21 --add H2O=structure:6 --xlsx',
+  epma:   'Pick the probe file (xlsx / csv / txt: the oxide wt% columns and one row per point, or a worked-up sheet with the oxides down column A and their wt% beside them) — or a paper of the folder, whose analytical table is read — and the normalisation basis: O=21 (anions), cations=8, U=5, Si+Al=4 … Additions: H2O=structure:6, CO2=wt:14.02, H2O=difference. The ideal formula, (Cu,Zn)4SO4(OH)6, gives the Ideal column and writes the empirical formula in its layout — live in the .xlsx. Equivalent command: pxrd epma probe.xlsx --basis O=21 --add H2O=structure:6 --ideal "(Cu,Zn)4SO4(OH)6" --xlsx',
   pxrd:   'Pick the observed peak list (JADE export, or any d / I list) and the calculated pattern; lines are matched by hkl then by d, unobserved reflections within the tolerance join the nearest strong peak, and the eight strongest observed lines are bold. Equivalent command: pxrd pxrd obs.txt calc.txt --dmin 1.45 --word',
 };
 
@@ -26,7 +26,7 @@ async function tbLoad() {
   $('#folder').textContent = r.folder ? ((parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/')) : '(no folder — click to choose)';
   $('#folder-ctl').title = (r.folder || '') + '  — click to change folder';
   $('#folder').dataset.path = r.folder || '';
-  TBS.cifs = r.cifs || []; TBS.data = r.data || []; TBS.outputs = r.outputs || []; TBS.pdfs = r.pdfs || [];
+  TBS.cifs = r.cifs || []; TBS.data = r.data || []; TBS.outputs = r.outputs || []; TBS.pdfs = r.pdfs || []; TBS.subfolders = r.subfolders || [];
   if (r.journals && r.journals.length && !TBS.journals.length) {
     TBS.journals = r.journals; TBS.journal = r.default_journal || TBS.journal;
     try { const j = localStorage.getItem('pxrd-tb-journal'); if (j && r.journals.some(x => x.key === j)) TBS.journal = j; } catch (_) {}
@@ -42,11 +42,20 @@ async function tbLoad() {
   tbRender();
 }
 
-// ---- sidebar
+// ---- sidebar: every list in one order — by name, or by when the file was last saved (remembered, like the Manuscript list's)
+function tbSortKey() { try { return localStorage.getItem('pxrd-tb-sort') || 'name'; } catch (_) { return 'name'; } }
+function tbSorted(list) {
+  const name = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  const cmp = { name, newest: (a, b) => (b.mtime || 0) - (a.mtime || 0) || name(a, b),
+                oldest: (a, b) => (a.mtime || 0) - (b.mtime || 0) || name(a, b) }[tbSortKey()] || name;
+  return [...list].sort(cmp);
+}
+(() => { const sel = $('#tb-sort'); if (!sel) return; sel.value = tbSortKey(); if (sel.value !== tbSortKey()) sel.value = 'name';
+  sel.addEventListener('change', () => { try { localStorage.setItem('pxrd-tb-sort', sel.value); } catch (_) {} tbFillSelects(); tbRenderLists(); }); })();
 function tbRenderLists() {
   const ul = $('#tb-list'); ul.innerHTML = '';
   if (!TBS.cifs.length) ul.append(el('li', { class: 'muted' }, 'no .cif files'));
-  for (const c of TBS.cifs) {
+  for (const c of tbSorted(TBS.cifs)) {
     ul.append(el('li', { class: c.key === TBS.key ? 'sel' : '', onclick: () => tbPickCif(c.key) },
       el('div', { class: 'row1' }, el('span', { class: 'nm' }, c.name)),
       el('div', { class: 'row2' }, c.has_word ? badgeEl({ level: 'fix', label: 'tables.docx written' }) : '')));
@@ -54,11 +63,26 @@ function tbRenderLists() {
   const ud = $('#tb-data'); ud.innerHTML = '';
   if (!TBS.data.length) ud.append(el('li', { class: 'muted' }, 'no data files (txt / csv / xlsx)'));
   const used = new Set([tbOpt('epma', 'file'), tbOpt('pxrd', 'obs'), tbOpt('pxrd', 'calc')]);
-  for (const d of TBS.data) {
+  for (const d of tbSorted(TBS.data)) {
     ud.append(el('li', { class: used.has(d.key) ? 'sel' : '', onclick: () => tbPickData(d.key, d.kind),
                          title: 'click to use in the ' + (TBS.tab === 'pxrd' ? 'PXRD' : 'EPMA') + ' tab' },
       el('div', { class: 'row1' }, el('span', { class: 'nm' }, d.name)),
       el('div', { class: 'row2 muted' }, d.kind ? 'looks like: ' + { probe: 'probe data', obs: 'observed peaks', calc: 'calculated pattern' }[d.kind] : '')));
+  }
+  const up = $('#tb-papers'); up.innerHTML = '';
+  const epf = tbOpt('epma', 'file');
+  if (!TBS.pdfs.length) up.append(el('li', { class: 'muted' }, 'no .pdf or .docx in this folder'));
+  for (const p of tbSorted(TBS.pdfs))
+    up.append(el('li', { class: epf === 'paper:' + p.key ? 'sel' : '', onclick: () => tbPickData('paper:' + p.key, 'paper'),
+                         title: 'read its analytical table in the EPMA tab (locally — nothing is sent anywhere)' },
+      el('div', { class: 'row1' }, el('span', { class: 'nm' }, p.name))));
+  if (TBS.subfolders && TBS.subfolders.length) {
+    // nothing in the folder itself: the lists are not recursive — say where the files are, one click to open one
+    const hint = el('li', { class: 'muted' }, 'no .cif or data file in this folder (its subfolders are not searched) — open one of its subfolders:');
+    $('#tb-data').replaceChildren(hint);
+    for (const f of TBS.subfolders)
+      $('#tb-data').append(el('li', { onclick: () => msOpenFolder(f.path), title: 'open ' + f.path },
+        el('div', { class: 'row1' }, el('span', { class: 'nm' }, f.name + ' ↘')), el('div', { class: 'row2 muted' }, f.n + ' file' + (f.n === 1 ? '' : 's'))));
   }
   const uo = $('#tb-outputs'); uo.innerHTML = '';
   if (!TBS.outputs.length) uo.append(el('li', { class: 'muted' }, 'nothing written yet'));
@@ -72,7 +96,15 @@ function tbPickCif(key) {
   tbRenderLists();
 }
 
+// the paper last used here opens in the Manuscript mode on the next switch (msLoad takes it): its .pdf key is a file name, the
+// manuscript list's key is the stem — a .docx key already is
+function tbCarryPaper(key) { window.TB_CARRY = key ? key.replace(/^paper:/, '').replace(/\.pdf$/i, '') : null; }
 function tbPickData(key, kind) {
+  if (kind === 'paper' || key.startsWith('paper:')) {                // a paper's analytical table: the EPMA tab's input
+    if (TBS.tab !== 'epma') tbSetTab('epma');
+    tbSetOpt('epma', 'file', key); tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', ''); tbCarryPaper(key);
+    tbRenderLists(); tbRender(); return;
+  }
   if (TBS.tab === 'pxrd') {
     const slot = kind === 'calc' ? 'calc' : (kind === 'obs' ? 'obs' : (tbOpt('pxrd', 'obs') ? 'calc' : 'obs'));
     tbSetOpt('pxrd', slot, key);
@@ -128,11 +160,19 @@ function tbFillSelects() {
     for (const it of items) sel.append(el('option', { value: it.key }, it.name));
     if (Array.from(sel.options).some(o => o.value === cur)) sel.value = cur;
   };
-  fill($('#tb-gd-cif'), TBS.cifs, '(no .cif — measured density only)');
-  fill($('#tb-paper'), TBS.pdfs, TBS.pdfs.length ? '(choose a paper)' : '(no .pdf or .docx in the folder)');
-  fill($('#tb-epma-file'), TBS.data.filter(d => d.kind !== 'obs' && d.kind !== 'calc'), '(choose the probe file)');
-  fill($('#tb-pxrd-obs'), TBS.data, '(observed peak list)');
-  fill($('#tb-pxrd-calc'), TBS.data, '(calculated pattern)');
+  fill($('#tb-gd-cif'), tbSorted(TBS.cifs), '(no .cif — measured density only)');
+  fill($('#tb-paper'), tbSorted(TBS.pdfs), TBS.pdfs.length ? '(choose a paper)' : '(no .pdf or .docx in the folder)');
+  const ep = $('#tb-epma-file'), cur = ep.value;                     // before fill(): a paper's option is not there yet
+  fill(ep, tbSorted(TBS.data).filter(d => d.kind !== 'obs' && d.kind !== 'calc'), '(choose the probe file)');
+  // the folder's papers too: their analytical table read in place (the same reader as Fill ▸, the paper's means)
+  if (TBS.pdfs.length) {
+    const g = el('optgroup', { label: 'analytical table of a paper (.pdf / .docx)' });
+    for (const p of tbSorted(TBS.pdfs)) g.append(el('option', { value: 'paper:' + p.key }, p.name));
+    ep.append(g);
+  }
+  if (cur && Array.from(ep.options).some(o => o.value === cur)) ep.value = cur;
+  fill($('#tb-pxrd-obs'), tbSorted(TBS.data), '(observed peak list)');
+  fill($('#tb-pxrd-calc'), tbSorted(TBS.data), '(calculated pattern)');
 }
 
 // ---- query strings per tab
@@ -174,6 +214,7 @@ function tbSetTab(tab) {
   TBS.tab = tab;
   document.querySelectorAll('#tb-tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   document.querySelectorAll('.tb-pane').forEach(p => p.classList.toggle('hidden', p.dataset.pane !== tab));
+  if (tab !== 'epma') tbSheetClose();
   try { localStorage.setItem('pxrd-tb-tab', tab); } catch (_) {}
   tbRenderLists(); tbRender();
 }
@@ -190,17 +231,153 @@ async function tbRender() {
   let r;
   try { r = await fetch(url).then(x => x.json()); } catch (ex) { r = { ok: false, error: String(ex) }; }
   if (seq !== TBS.seq || tab !== TBS.tab) return;
-  if (!r.ok) { tbRenderBody('<div class="empty muted">⚠ ' + esc(r.error || 'failed') + '</div>'); return; }
+  if (!r.ok) { tbRenderBody('<div class="empty muted">⚠ ' + esc(r.error || 'failed') + '</div>'); if (tab === 'epma') tbEpmaBlocks({}); return; }
   let status = '';
   if (tab === 'coords' || tab === 'bvs') status = [r.name, r.formula, r.sg].filter(Boolean).join(' · ') + ((r.notes || []).length ? ' — ' + r.notes.join(' · ') : '');
   else if (tab === 'gd') status = (r.summary || []).map(s => s[0] + ' D ' + s[1].toFixed(3) + ': 1 − KP/KC = ' + (s[3] >= 0 ? '+' : '') + s[3].toFixed(3) + ' (' + s[4] + ')').join(' · ') || ('K_C = ' + r.KC.toFixed(4) + ' — give a density for the compatibility');
-  else if (tab === 'epma') { status = r.formula + ' · factor ' + r.factor.toFixed(4) + ' · charge ' + (r.charge >= 0 ? '+' : '') + r.charge.toFixed(3) + ' · ' + r.n_points + ' points'; TBS.epmaWt = r.wt; }
+  else if (tab === 'epma') { status = (r.formula_ideal || r.formula) + ' · factor ' + r.factor.toFixed(4) + ' · charge ' + (r.charge >= 0 ? '+' : '') + r.charge.toFixed(3) + ' · ' + (r.n_points === 1 ? 'one row (the means)' : r.n_points + ' points') + ' · ' + r.source
+                                     + ((r.layout_notes || []).length ? ' — ' + r.layout_notes.join(' · ') : ''); TBS.epmaWt = r.wt; tbEpmaBlocks(r); }
   else if (tab === 'pxrd') status = r.n_obs + ' observed, ' + r.n_calc + ' calculated → ' + r.n_rows + ' rows (' + r.n_calc_only + ' calc-only)';
   $('#tb-status').textContent = status; $('#tb-status').title = status;
-  const html = r.html + (r.text && tab !== 'coords' && tab !== 'bvs' ? '<details class="tb-text"><summary class="muted">reduction / working (as pxrd prints it)</summary><pre>' + esc(r.text) + '</pre></details>' : '');
+  const html = r.html + (r.text && tab !== 'coords' && tab !== 'bvs' ? '<details class="tb-text"><summary class="muted">reduction / working (as pxrd prints it)</summary><pre>' + esc(r.text) + '</pre></details>' : '')
+             + (tab === 'coords' ? tbSymCodes(r.symcodes || []) : '');
   tbRenderBody(html);
   if (tab === 'bvs' && TBS.mscheck && (TBS.mscheck.fromPaper || TBS.mscheck.key === TBS.key)) tbShowCheck(TBS.mscheck);
   if (tab === 'epma' && TBS.papercheck) tbShowCheck(TBS.papercheck, 'what the paper says, checked against itself');
+}
+
+// ---- EPMA: the blocks of analyses a messy workbook holds — the one reduced is chosen here (stored in the hidden data-opt input)
+function tbEpmaBlocks(r) {
+  const sel = $('#tb-epma-block'), list = r.blocks || [];
+  $('#tb-epma-block-l').classList.toggle('hidden', list.length < 2);
+  sel.innerHTML = '';
+  list.forEach((b, i) => sel.append(el('option', { value: String(i) }, (i + 1) + '. ' + b)));
+  if (r.block != null) sel.value = String(r.block);
+}
+$('#tb-epma-block').addEventListener('change', e => { tbSetOpt('epma', 'block', e.target.value); tbRender(); });
+$('#tb-epma-file').addEventListener('change', e => {                      // another file: its own default block, no region (runs before the pane's re-render)
+  tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', '');
+  if (e.target.value.startsWith('paper:')) tbCarryPaper(e.target.value);
+  if (!$('#tb-sheet').classList.contains('hidden')) tbSheetOpen();
+});
+
+// ---- the sheet picker: the workbook as the reader sees it. Each block of analyses is shaded and numbered (click: use it);
+// a drag over the cells picks a range, read by the same rules (`region`, on its sheet). The panel sits above the table.
+const TBSH = { data: null, a: null, b: null, drag: false };
+const tbColName = c => { let s = ''; c += 1; while (c) { const m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = (c - m - 1) / 26; } return s; };
+const tbRange = (a, b) => tbColName(Math.min(a[1], b[1])) + (Math.min(a[0], b[0]) + 1) + ':' + tbColName(Math.max(a[1], b[1])) + (Math.max(a[0], b[0]) + 1);
+async function tbSheetOpen(sheet) {
+  const key = tbOpt('epma', 'file'), panel = $('#tb-sheet');
+  panel.classList.remove('hidden');
+  if (!key || key.startsWith('paper:')) { panel.innerHTML = '<div class="tb-sheet-bar muted">' + (key ? 'a paper has no sheet: its analytical table is read from the text' : 'choose a probe file first') + ' <span class="spacer"></span><button class="ghost mini" data-x>close ✕</button></div>'; panel.querySelector('[data-x]').onclick = tbSheetClose; return; }
+  const sh = sheet || (tbOpt('epma', 'region') && tbOpt('epma', 'sheet')) || '';
+  let r;
+  try { r = await fetch('/api/tb/epma/' + enc(key) + '/grid' + (sh ? '?sheet=' + enc(sh) : '')).then(x => x.json()); } catch (ex) { r = { ok: false, error: String(ex) }; }
+  if (!r.ok) { panel.innerHTML = '<div class="tb-sheet-bar">⚠ ' + esc(r.error || 'failed') + '</div>'; return; }
+  TBSH.data = r; TBSH.a = TBSH.b = null;
+  tbSheetDraw();
+}
+function tbSheetClose() { $('#tb-sheet').classList.add('hidden'); }
+function tbSheetDraw() {
+  const r = TBSH.data, panel = $('#tb-sheet');
+  const region = tbOpt('epma', 'region'), chosen = tbOpt('epma', 'block');
+  const cur = region || tbOpt('epma', 'sheet') ? -1 : (chosen !== '' ? +chosen : r.default);   // a typed sheet numbers its own blocks: no claim then
+  const owner = {};                                                       // 'row,col' -> the block shading it (the first listed wins)
+  r.blocks.filter(b => b.sheet === r.sheet).forEach(b => {
+    const [r0, c0, r1, c1] = b.box;
+    const cols = b.cols && b.cols.length ? b.cols : null;                  // only the columns read: not the MW / moles beside a worked-up column
+    for (let i = r0; i <= r1; i++) for (let j = c0; j <= c1; j++) if ((!cols || cols.includes(j)) && !((i + ',' + j) in owner)) owner[i + ',' + j] = b;
+  });
+  const ncol = Math.max(0, ...r.rows.map(x => x.length));
+  let h = '<table class="tb-grid"><thead><tr><th class="rh"></th>';
+  for (let j = 0; j < ncol; j++) h += '<th>' + tbColName(j) + '</th>';
+  h += '</tr></thead><tbody>';
+  r.rows.forEach((row, i) => {
+    h += '<tr><th class="rh">' + (i + 1) + '</th>';
+    for (let j = 0; j < ncol; j++) {
+      const v = row[j], b = owner[i + ',' + j];
+      const cls = [typeof v === 'number' ? 'num' : '', b ? 'blk b' + (b.i % 6) : '', b && b.i === cur ? 'cur' : ''].filter(Boolean).join(' ');
+      const badge = b && b.box[0] === i && b.box[1] === j ? '<span class="bno">' + (b.i + 1) + '</span>' : '';
+      h += '<td data-r="' + i + '" data-c="' + j + '"' + (cls ? ' class="' + cls + '"' : '') + (b ? ' title="' + esc((b.i + 1) + '. ' + b.label) + ' — click to use it"' : '') + '>'
+         + badge + (v == null ? '' : esc(typeof v === 'number' ? String(+v.toPrecision(6)) : String(v))) + '</td>';
+    }
+    h += '</tr>';
+  });
+  h += '</tbody></table>';
+  const tabs = r.sheets.length > 1 ? r.sheets.map(t => '<button class="ghost mini' + (t === r.sheet ? ' on' : '') + '" data-sheet="' + esc(t) + '">' + esc(t) + '</button>').join('') : '<span class="muted">' + esc(r.sheet) + '</span>';
+  const now = region ? 'reading the range ' + esc(tbOpt('epma', 'sheet')) + '!' + esc(region) : (cur != null && cur >= 0 ? 'reading block ' + (cur + 1) : tbOpt('epma', 'sheet') ? 'reading the sheet ' + esc(tbOpt('epma', 'sheet')) : 'no block found');
+  panel.innerHTML = '<div class="tb-sheet-bar">' + tabs + '<span class="muted">· ' + now + ' · click a shaded block to use it, or drag over the cells (shift-click extends) to read a range'
+    + (r.truncated ? ' · the first ' + r.rows.length + ' rows / 80 columns shown (' + r.nrows + ' rows)' : '') + '</span><span class="spacer"></span>'
+    + '<span id="tb-sheet-pick" class="muted"></span><button class="mini" data-use disabled title="read only these cells (the blocks inside them, by the same rules)">Use range</button>'
+    + (region ? '<button class="ghost mini" data-clear title="back to the blocks of the whole file">whole file</button>' : '')
+    + '<button class="ghost mini" data-x>close ✕</button></div>'
+    + '<div class="tb-sheet-scroll">' + h + '<div class="tb-sel hidden"></div></div>';
+  panel.querySelectorAll('[data-sheet]').forEach(b => b.onclick = () => tbSheetOpen(b.dataset.sheet));
+  panel.querySelector('[data-x]').onclick = tbSheetClose;
+  const clr = panel.querySelector('[data-clear]');
+  if (clr) clr.onclick = () => { tbSetOpt('epma', 'region', ''); tbSetOpt('epma', 'sheet', ''); tbSetOpt('epma', 'block', ''); tbRender(); tbSheetDraw(); };
+  panel.querySelector('[data-use]').onclick = () => {
+    if (!TBSH.a) return;
+    tbSetOpt('epma', 'sheet', r.sheet); tbSetOpt('epma', 'region', tbRange(TBSH.a, TBSH.b)); tbSetOpt('epma', 'block', '');
+    tbRender(); tbSheetDraw();
+  };
+  const grid = panel.querySelector('.tb-grid'), sel = panel.querySelector('.tb-sel'), scroll = panel.querySelector('.tb-sheet-scroll');
+  const at = e => { const td = e.target.closest('td[data-r]'); return td ? [+td.dataset.r, +td.dataset.c] : null; };
+  const paint = () => {
+    if (!TBSH.a) { sel.classList.add('hidden'); return; }
+    const td = (i, j) => grid.querySelector('td[data-r="' + i + '"][data-c="' + j + '"]');
+    const p = td(Math.min(TBSH.a[0], TBSH.b[0]), Math.min(TBSH.a[1], TBSH.b[1])), q = td(Math.max(TBSH.a[0], TBSH.b[0]), Math.max(TBSH.a[1], TBSH.b[1]));
+    const o = scroll.getBoundingClientRect(), pr = p.getBoundingClientRect(), qr = q.getBoundingClientRect();
+    Object.assign(sel.style, { left: (pr.left - o.left + scroll.scrollLeft) + 'px', top: (pr.top - o.top + scroll.scrollTop) + 'px',
+                               width: (qr.right - pr.left) + 'px', height: (qr.bottom - pr.top) + 'px' });
+    sel.classList.remove('hidden');
+    $('#tb-sheet-pick').textContent = r.sheet + '!' + tbRange(TBSH.a, TBSH.b);
+    panel.querySelector('[data-use]').disabled = false;
+  };
+  grid.addEventListener('mousedown', e => {
+    const p = at(e); if (!p || e.button !== 0) return;
+    e.preventDefault();
+    if (e.shiftKey && TBSH.a) { TBSH.b = p; paint(); return; }             // shift-click: extend to here (scroll between the two corners)
+    TBSH.a = TBSH.b = p; TBSH.drag = true; TBSH.moved = false;
+  });
+  grid.addEventListener('mouseover', e => { if (!TBSH.drag) return; const p = at(e); if (p && (p[0] !== TBSH.b[0] || p[1] !== TBSH.b[1])) { TBSH.b = p; TBSH.moved = true; paint(); } });
+  grid.addEventListener('mouseup', e => {
+    if (!TBSH.drag) return; TBSH.drag = false;
+    const td = e.target.closest('td[data-r]'), b = td && owner[td.dataset.r + ',' + td.dataset.c];
+    if (!TBSH.moved && b) {                                                // a click on a shaded block: use that block of the whole file
+      TBSH.a = null; paint();
+      tbSetOpt('epma', 'region', ''); tbSetOpt('epma', 'sheet', ''); tbSetOpt('epma', 'block', String(b.i));
+      tbRender(); tbSheetDraw(); return;
+    }
+    paint();
+  });
+  const first = grid.querySelector('td.cur');
+  if (first) first.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+$('#tb-epma-sheet').addEventListener('click', () => $('#tb-sheet').classList.contains('hidden') ? tbSheetOpen() : tbSheetClose());
+
+// ---- the symmetry-code cheat sheet under the bond tables: each superscript, the CIF code it came from, the
+// operator with its translation and the bonds that use it; the tooltips say how a code n_klm is read
+const TB_SYMTIP = 'A CIF symmetry code is n_klm. n = the operator\'s number in the .cif\'s symmetry-operator list '
+  + '(_space_group_symop_operation_xyz). k, l, m = the lattice translation along a, b, c, written as 5 + the shift: '
+  + '5 = no shift, 4 = −1, 6 = +1 (3 = −2, 7 = +2). The translation is added to the operator: 3_666 with operator 3 = '
+  + '−x, −y, −z gives −x+1, −y+1, −z+1. A bond with no code (. or 1_555) is to the atom as listed: no superscript.';
+function tbShift(t) {
+  return t.map((v, i) => v ? (v > 0 ? '+' : '−') + Math.abs(v) + ' along ' + 'abc'[i] : '').filter(Boolean).join(', ') || 'no shift';
+}
+function tbSymCodes(list) {
+  const rows = list.map(c => {
+    const tip = c.base ? 'operator ' + c.base_n + ' of the .cif (' + c.base + '), translation ' + (c.code.split('_')[1] || '555')
+                       + ' = ' + tbShift(c.shift) + ' → ' + c.op : 'not an n_klm code: written as the .cif gives it';
+    return '<tr><td><sup>' + c.n + '</sup></td><td title="' + esc(tip) + '"><code>' + esc(c.code) + '</code></td><td>' + esc(c.op)
+         + '</td><td>' + esc(c.used.join(', ')) + '</td></tr>';
+  }).join('');
+  return '<details class="tb-text tb-symcodes" open><summary class="muted" title="' + esc(TB_SYMTIP) + '">symmetry codes — cheat sheet ⓘ</summary>'
+       + '<p class="muted" title="' + esc(TB_SYMTIP) + '">CIF code n_klm: operator n of the .cif, then a shift of k−5, l−5, m−5 cells along a, b, c '
+       + '(5 = no shift, 4 = −1, 6 = +1). Hover a code for its breakdown.</p>'
+       + (rows ? '<table><thead><tr><th>code</th><th>CIF</th><th>operator</th><th>used for</th></tr></thead><tbody>' + rows + '</tbody></table>'
+               : '<p class="muted">no symmetry codes: every bond is to an atom as listed in the .cif.</p>')
+       + '</details>';
 }
 
 // ---- the manuscript's own tables against the .cif (pxrd bv --table): the report goes above the tool's tables
@@ -233,6 +410,7 @@ async function tbFillFromPaper(pdfKey) {
   }
   const key = $('#tb-paper').value;
   if (!key) { msStatus('pick a paper (.pdf or a manuscript .docx) first'); return; }
+  tbCarryPaper(key);
   const btn = $('#tb-fill'); const label = btn.textContent; btn.disabled = true; btn.textContent = 'Reading…';
   let r;
   try { r = await fetch('/api/tb/extract?pdf=' + enc(key), { method: 'POST' }).then(x => x.json()); } catch (ex) { r = { ok: false, error: String(ex) }; }
@@ -303,7 +481,11 @@ function tbOutputName(tab) {
   const stem = s => (s || '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '');
   let cands = [];
   if (tab === 'coords' || tab === 'bvs') cands = TBS.key ? [TBS.key + '_tables.docx'] : [];
-  else if (tab === 'epma') { const f = tbOpt('epma', 'file'); if (f) { const st = f.replace(/\.[^.]+$/, ''); cands = [st + '_epma.docx', st + '_epma.xlsx']; } }
+  else if (tab === 'epma') {
+    const f = tbOpt('epma', 'file'), pp = TBS.pdfs.find(p => 'paper:' + p.key === f);    // a paper's table writes <stem>_docx / _paper, as the server names it
+    const st = pp ? pp.name.replace(/\.[^.]+$/, '') + (/\.docx$/i.test(pp.name) ? '_docx' : '_paper') : (f || '').replace(/\.[^.]+$/, '');
+    if (f) cands = [st + '_epma.docx', st + '_epma.xlsx'];
+  }
   else if (tab === 'gd') { const st = stem(tbOpt('gd', 'name')) || 'gd'; cands = [st + '_gd.docx', st + '_gd.xlsx']; }
   else if (tab === 'pxrd') { const st = stem(tbOpt('pxrd', 'name')) || (tbOpt('pxrd', 'obs') || '').replace(/\.[^.]+$/, ''); if (st) cands = [st + '_pxrd.docx', st + '_pxrd.xlsx']; }
   return cands.find(n => TBS.outputs.includes(n)) || null;

@@ -563,6 +563,8 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 #ms-findings { flex: 0 0 var(--w-find); }
 #ms-view { flex: 1 1 auto; min-width: 140px; }
 #ms-right { flex: 0 0 var(--w-side); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#ms-right:has(> #ms-report.collapsed) { flex: 0 0 28px; }          /* the folded report: a spine, the document takes the room */
+#ms-report.collapsed { flex: 1 1 auto !important; }
 #ms-report { flex: 1 1 auto; min-height: 56px; }
 .ms-pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: .82em; line-height: 1.35; padding: 8px 10px; margin: 0; color: var(--text); }
@@ -591,6 +593,7 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 .tb-side-list li:hover { background: rgb(255 255 255 / .04); }
 .tb-side-list li.sel { background: rgb(var(--accent-rgb) / .12); }
 #tb-sidebar .side-head + .side-head { border-top: 1px solid var(--line); }
+.tb-sort-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: .88em; }
 #tb-tabs button { padding: 3px 10px; }
 .tb-pane { flex-wrap: wrap; row-gap: 6px; }
 .tb-pane.hidden { display: none; }
@@ -604,12 +607,35 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 .tb-opts .mini { padding: 1px 6px; }
 #tb-status { padding: 0 2px; }
 .tb-text { margin-top: 14px; }
+.tb-symcodes table { border-collapse: collapse; font-size: .85em; margin-top: 4px; }
+.tb-symcodes th, .tb-symcodes td { text-align: left; padding: 2px 12px 2px 0; border-bottom: 1px solid var(--line); }
+.tb-symcodes td[title], .tb-symcodes [title] { cursor: help; }
+.tb-symcodes p { margin: 4px 0; font-size: .85em; }
 .tb-text pre { font-size: .82em; line-height: 1.35; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
 #tb-detail { flex: 1; min-width: 0; overflow: hidden; }
 #tb-doc { height: 100%; display: flex; flex-direction: column; min-height: 0; }
-#tb-head { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--line); }
+#tb-head { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+/* a select is as wide as its longest option (a manuscript's file name, a block's label): capped, so the rows wrap inside the
+   window and the Write / open buttons stay reachable at any width or zoom; the whole name shows in the open list and on hover */
+#tb-head select { max-width: min(26em, 70vw); text-overflow: ellipsis; }
 .tb-opts input[type=text] { width: 150px; }
 .tb-body { flex: 1; overflow: auto; padding: 14px 18px 30px; }
+/* the EPMA tab's sheet: the workbook as the reader sees it, blocks shaded, a range picked by dragging */
+.tb-sheet { display: flex; flex-direction: column; max-height: 46vh; min-height: 180px; border-bottom: 1px solid var(--line); }
+.tb-sheet-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 18px; font-size: .85em; }
+.tb-sheet-bar .on { border-color: var(--accent); color: var(--accent); }
+.tb-sheet-scroll { position: relative; overflow: auto; flex: 1; margin: 0 18px 8px; border: 1px solid var(--line); user-select: none; }
+.tb-grid { border-collapse: collapse; font-size: .78em; font-variant-numeric: tabular-nums; }
+.tb-grid td, .tb-grid th { border: 1px solid var(--line); padding: 1px 5px; white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.tb-grid th { position: sticky; top: 0; background: rgb(var(--panel-rgb)); color: var(--muted); font-weight: normal; z-index: 1; }
+.tb-grid th.rh { position: sticky; left: 0; z-index: 1; }
+.tb-grid td.num { text-align: right; }
+.tb-grid td.blk { cursor: pointer; }
+.tb-grid td.b0 { background: rgba(90,169,255,.16); } .tb-grid td.b1 { background: rgba(87,201,138,.16); } .tb-grid td.b2 { background: rgba(255,180,84,.16); }
+.tb-grid td.b3 { background: rgba(200,140,255,.16); } .tb-grid td.b4 { background: rgba(255,107,107,.14); } .tb-grid td.b5 { background: rgba(108,196,255,.12); }
+.tb-grid td.cur { box-shadow: inset 0 0 0 1px var(--fix); }
+.tb-grid .bno { display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: 3px; background: var(--accent); color: #000; font-size: .85em; }
+.tb-sel { position: absolute; pointer-events: none; border: 2px solid var(--fix); background: rgba(255,216,107,.12); }
 .pubtable { margin: 0 0 26px; max-width: 1100px; }
 .pubcap { font-weight: 600; margin: 0 0 6px; }
 .pubtable table { border-collapse: collapse; font-size: .9em; border-top: 1.5px solid var(--text); border-bottom: 1.5px solid var(--text); }
