@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.20.0](#0200--2026-10-30) | 30 Oct | The EPMA tab reads worked-up sheets (oxides down a column) and messy workbooks — every block of analyses listed, the plausible one by default, the sheet opened to pick a block or a range; an exporter's element columns no longer counted twice; an ideal formula lays out the empirical one (a live formula in the .xlsx); a paper's analytical table read in place; the Tables sidebar sorts by name or date and lists the papers; the Manuscript panes fold; a symmetry-code cheat sheet under the bond tables |
 | [0.19.0](#0190--2026-10-28) | 28 Oct | The paper checks' false alarms hunted down class by class, each corpus-gated: the ideal-formula wt% check (379 red lines on 139 papers → 8, four of them real slips), tables continued over a page break, bonds across disorder groups, split pairs by multiplicity, an inversion twin is not twinning, the powder radiation and Icalc convention the column itself follows, barred indices, the printed cells found, the reference splitter (orphans 163 → 115 on the fixtures); the spectrum window: overlays that toggle, a movable Chem search box, figure tracing that keeps to its frame, axis marks centred on ticks and the scale fitted through every tick |
 | [0.18.0](#0180--2026-10-10) | 10 Oct | The fuller RRUFF collection put to work: RRUFF's bands beside the paper's own and beside the species the paper compares with (an information line; the species read from the paper, measured first), `compare with RRUFF` and a composite spectrum per group in the window, the O–H region and the infrared modes measured for the first time, the activity column checked, an evidence report for the check-tagged rows, the library gate and the fit gauntlet shipped as tools, orientation statistics; the uranyl windows restored |
 | [0.17.1](#0171--2026-10-10) | 10 Oct | The review of 0.17.0: a RRUFF spectrum's held name made unique (one sample's orientations replaced each other), the store's file handles closed and its rebuild made atomic, the species list filtered on the server (the box's filter had searched 600 rows of 2,000), the formula rule's range and valence cases, the pick no longer overridden by a file's saved work, the folder search once per start, the X-prefixed RRUFF ids counted, docs brought in line |
@@ -45,28 +46,50 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
-## [Unreleased]
+## [0.20.0] — 2026-10-30
+**The EPMA tab takes the sheets people actually keep.** A worked-up spreadsheet lists the oxides down a column with their wt%
+beside it; a probe export prints the analysis twice (oxide and element wt%); a working file holds several blocks — raw
+points, a worked-up column, an ideal composition, another mineral's. The reader now finds each, and says which it took.
 
-### Changed
-- **The fit gauntlet ran over the whole RRUFF collection** (14,007 spectra, 97 min): no crash, 72 % of the strong bands fitted,
-  50 background humps. `fit_widths.json` (typical band widths per mode) now rests on all of it; this run is the baseline.
+### Added — the EPMA tab (`pxrd epma`, Tables ▸ EPMA)
+- **Constituents down a column** are read: the wt% column by its header (wt%, mean, average), else the columns whose values
+  sum to an analysis total — an unlabelled MW or moles column is never taken as a point; a block headed 'ideal' / 'calc' is
+  a composition, not an analysis; Σ / total / O=F rows end the block.
+- **Every block of analyses** in a workbook is listed (`--blocks`, `--block N`; the tab's 'block' list): sheet and first
+  cell, constituents, points, median total. The default is the biggest block that looks like analyses (two or more
+  constituents, each once, a total of 40–120 wt%) and that the reduction can use (an oxide, water or an anion); ties go in
+  reading order.
+- **The sheet itself** (`sheet ▸`): the workbook as the reader sees it, each block shaded and numbered — click one to use it,
+  or drag over the cells (shift-click extends) and 'Use range' to read exactly that range (`--sheet S --region B2:F20`); a
+  picked range steps over empty columns (a rejected point) and asks no total.
+- **An ideal formula lays out the empirical one** (`--ideal "(Cu,Zn)4SO4(OH)6"`): a mixed site lists each analysed element
+  and drops its count, an (OH) / (H2O) / ·nH2O group takes its count from the H2O row, O is written as typed, a valence picks
+  the oxide of that charge. The .xlsx's reduction sheet carries it as a live formula of the apfu cells
+  (`="(Cu"&TEXT(J2,"0.00")&…`); the Ideal column comes from the same formula. An analysed element the formula does not name
+  is said, not dropped. Constituent apfu (`CaO=3,UO3=1,…`) still give the Ideal column alone.
+- **A paper's analytical table** (a folder's .pdf or manuscript .docx) can be the EPMA input directly, with its Standard
+  column; when the rows read do not add to the total the table prints, the status says so.
 
-### Fixed — a four-reviewer audit of 0.18.0; every item reproduced before it was fixed
-- A literature column in the paper's band table (e.g. 'Autunite (Frost et al. 2005)') was read as the paper's own bands.
-  Now only the paper's own column feeds the RRUFF, library and table lines.
-- The paper's infrared bands were set beside a Raman RRUFF spectrum. Now infrared bands go beside an infrared spectrum, or nothing.
-- The comparison reader missed 'the new mineral is similar to autunite', 'infrared absorption spectrum' sentences, and matched
-  'calcite' inside 'calcitic'. Its unused `forms` argument is gone.
-- Window: Raman composites were drawn under an infrared spectrum; the width note could name the wrong mode; the
-  'compare with RRUFF' buttons were missing until something re-rendered; names with diacritics found no spectrum; the
-  reference ticks lost the lattice region.
-- `tools/rruff_windows.py`: an empty walk crashed; a run that measured nothing wiped its keys on `--write`; the broad run's
-  source line said '0 single-group'; the orientation statistic followed the wrong spectrum and dropped the orientations where a
-  band vanishes; the composites took a mineral's first sample, not its best. Orientation and composite files re-made.
-- `tools/fit_gauntlet.py`: a band in the windows of two groups was credited to one of them; silicate and sulfide widths sat
-  under a key the band table never looked up; wide bands got regions too narrow to fit them; the warning classes kept their
-  numbers (13,000 'classes'). `--reaggregate` re-files an old run; a sample run no longer becomes the baseline.
-- The band table shows a group's 'strongest band' window beside its first mode only when the two agree.
+### Fixed — reading probe workbooks
+- A probe export that prints oxide wt% and then element wt% for the same analysis ('CaO … MoO3', then 'Ca … Mo') had both
+  read — every cation counted twice; the element columns are now left out when their oxide is there.
+- A header row holding two blocks (the wt% and then the same names for another quantity) is cut at the repeated name.
+- A bare element is a constituent only when it stands alone ('Si', 'Si (Mass%)'): 'INT ZONE', 'PINK', 'Mn2+', 'Al+Cr' and a
+  formula written as a heading had been read as elements; a header row's points stop at the next block's names.
+- Measured over ~130 working workbooks, the old reader against the new: a plausible analysis read by default in 70 (was 19),
+  none read worse; every changed read listed and checked.
+
+### Changed — the GUI
+- **Tables sidebar**: a 'papers' list (click: its analytical table in the EPMA tab), a sort for every list and dropdown
+  (name, newest first, oldest first; remembered), and — in a folder with no .cif or data file of its own — its subfolders
+  that hold files, one click to open one (the lists never search subfolders).
+- **The paper used in the Tables mode opens in the Manuscript mode** on the next switch.
+- **The Manuscript mode's Findings and Report panes fold** (their ▾ had done nothing); the folded Report gives its column to
+  the document.
+- **The option rows wrap at any width or zoom**: a mis-nested label had held the EPMA row on one line, pushing the Write and
+  open buttons off-screen; long dropdowns are capped.
+- **Symmetry codes — a cheat sheet** under the bond tables: each superscript, the .cif code it came from (operator and
+  lattice shift spelled out on hover) and the bonds that use it.
 
 ## [0.19.0] — 2026-10-28
 **Fewer false alarms.** Red lines that were the tool's own, not the paper's, were each traced to a class, the class fixed, and the fix run over the corpus (1,144 papers; 140 with a .cif;
@@ -117,6 +140,27 @@ package version in `pyproject.toml`.
   scale's value is drawn over each long tick; the magnifier is 7×.
 - **A traced curve opens with no baseline** (its zero is the frame's floor — a fitted baseline ate a broad band); 'Use this
   curve' says which axis number is missing instead of doing nothing.
+
+### Also in 0.19.0 — changed
+- **The fit gauntlet ran over the whole RRUFF collection** (14,007 spectra, 97 min): no crash, 72 % of the strong bands fitted,
+  50 background humps. `fit_widths.json` (typical band widths per mode) now rests on all of it; this run is the baseline.
+
+### Also in 0.19.0 — fixed: a four-reviewer audit of 0.18.0; every item reproduced before it was fixed
+- A literature column in the paper's band table (e.g. 'Autunite (Frost et al. 2005)') was read as the paper's own bands.
+  Now only the paper's own column feeds the RRUFF, library and table lines.
+- The paper's infrared bands were set beside a Raman RRUFF spectrum. Now infrared bands go beside an infrared spectrum, or nothing.
+- The comparison reader missed 'the new mineral is similar to autunite', 'infrared absorption spectrum' sentences, and matched
+  'calcite' inside 'calcitic'. Its unused `forms` argument is gone.
+- Window: Raman composites were drawn under an infrared spectrum; the width note could name the wrong mode; the
+  'compare with RRUFF' buttons were missing until something re-rendered; names with diacritics found no spectrum; the
+  reference ticks lost the lattice region.
+- `tools/rruff_windows.py`: an empty walk crashed; a run that measured nothing wiped its keys on `--write`; the broad run's
+  source line said '0 single-group'; the orientation statistic followed the wrong spectrum and dropped the orientations where a
+  band vanishes; the composites took a mineral's first sample, not its best. Orientation and composite files re-made.
+- `tools/fit_gauntlet.py`: a band in the windows of two groups was credited to one of them; silicate and sulfide widths sat
+  under a key the band table never looked up; wide bands got regions too narrow to fit them; the warning classes kept their
+  numbers (13,000 'classes'). `--reaggregate` re-files an old run; a sample run no longer becomes the baseline.
+- The band table shows a group's 'strongest band' window beside its first mode only when the two agree.
 
 ## [0.18.0] — 2026-10-10
 **The fuller collection put to work.** Every measurement the band library rests on is re-made on RRUFF's own collection —
