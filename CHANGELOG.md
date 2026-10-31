@@ -46,6 +46,24 @@ package version in `pyproject.toml`.
 | [0.3.0–0.3.5](#035--2026-07-16) | 13–16 Jul | The review GUI; the reference-title check writes a tracked change; two security passes |
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
+## [Unreleased]
+### Fixed — the bug check of 0.20.0
+- **A probe file picked in the Tables sidebar kept the last file's block, range and sheet** (only the dropdown cleared
+  them): the next file was read with the previous one's block number — a block other than its default, silently — or with
+  a range on a sheet it does not have. Any change of file now starts from the file's own default.
+- **`--ideal` takes the mixed sites mineral formulas write**: an anion site, `(OH,F)` (the OH from the H2O row, the F
+  from its own), a vacancy, `(Na,□)`, and O in a site, `(O,OH)2` — a vacancy or an O is what the site's count leaves once
+  every other member is known (live in the .xlsx as `MAX(0, n − …)`); an over-full site writes 0 and says so. These had
+  been refused ('a mixed site lists elements only').
+- A hydrate in brackets, `·5(H2O)`, is laid out like `·5H2O` (it had written `·5(H2O)2.81`).
+- An analysed element the ideal formula writes in two places is said to be that ('written in 2 places … cannot be split');
+  the note had said the formula does not name it. The site suggested for an unplaced element no longer varies run to run.
+- A second block on one header row (the names met again) takes its point labels from the row's label column ('Point',
+  'Line Numbers'), not from the first block's Total; a sample name repeated on every row numbers the points instead.
+  Over 137 working workbooks: no value, block or default changed, 13 files' labels corrected.
+- A csv cell reading `NaN` / `inf` stays text: as a number it made the sheet panel's JSON unreadable.
+- `pxrd epma --block 0` is an error, not the default block.
+
 ## [0.20.0] — 2026-10-30
 **The EPMA tab takes the sheets people actually keep.** A worked-up spreadsheet lists the oxides down a column with their wt%
 beside it; a probe export prints the analysis twice (oxide and element wt%); a working file holds several blocks — raw

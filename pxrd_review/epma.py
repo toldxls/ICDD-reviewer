@@ -127,9 +127,10 @@ def _read_cells(path):
 
 def _num_or_str(c):
     try:
-        return float(c)
+        v = float(c)
     except (TypeError, ValueError):
         return c
+    return v if math.isfinite(v) else c                    # 'NaN' / 'inf' written by an instrument: text, never a number
 
 def _is_num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
@@ -159,6 +160,7 @@ def _constituent_label(cell):
 _DERIVED_HEAD = re.compile(r'\bM\.?W\b|mol|apfu|a\.?p\.?f\.?u|cation|anion|atom|oxygen|\bO\b|norm|ratio|prop|factor|charge|ideal|calc|formula|s\.?d|std|stdev|σ|range|min|max|detect|standard', re.I)
 _WT_HEAD = re.compile(r'wt|mass|mean|average|avg|oxide\s*%', re.I)
 _IDEAL_HEAD = re.compile(r'ideal|theor|calc|end.?member', re.I)
+_LABEL_HEAD = re.compile(r'\b(point|sample|line|number|no\.|comment|descr|label|name|analys|spot|id)', re.I)
 _STOP_ROW = re.compile(r'^\s*(Σ|sum\b|total|O\s*[=≡])', re.I)
 
 def _down_column(grid, title, path, gaps=False):
@@ -278,6 +280,14 @@ def probe_blocks(path, sheet=None, region=None):
                 # numeric rows below, until a blank / non-numeric run
                 pts, labels = [], []; gap = 0
                 first_col = min(run)
+                # the point labels: the column just left of the run — unless that column is headed as another quantity (the
+                # first run's Total or its last constituent, when a header row holds two runs): then the nearest column left of
+                # it headed as labels ('Point', 'Line Numbers'), if there is one
+                lab_col = first_col - 1; searched = False
+                left = row[lab_col] if 0 <= lab_col < len(row) else None
+                if isinstance(left, str) and left.strip() and not _LABEL_HEAD.search(left):
+                    lab_col = next((c for c in range(first_col - 2, -1, -1) if c < len(row) and isinstance(row[c], str) and _LABEL_HEAD.search(row[c])), lab_col)
+                    searched = lab_col != first_col - 1
                 last = ri
                 for k2, r2 in enumerate(grid[ri + 1:]):
                     vals = [r2[ci] if ci < len(r2) else None for ci in run]
@@ -285,15 +295,17 @@ def probe_blocks(path, sheet=None, region=None):
                         break                                   # a name under the header: a column of names (before any number) or the next block ('n.d.' is a value)
                     if sum(_is_num(v) for v in vals) >= max(1, len(run) // 2):
                         pts.append([float(v) if _is_num(v) else float('nan') for v in vals]); gap = 0; last = ri + 1 + k2
-                        lab = r2[first_col - 1] if first_col >= 1 and len(r2) > first_col - 1 and r2[first_col - 1] is not None else len(pts)
+                        lab = r2[lab_col] if lab_col >= 0 and len(r2) > lab_col and r2[lab_col] is not None else len(pts)
                         labels.append(str(lab).strip() if isinstance(lab, str) else ('%g' % lab if _is_num(lab) else str(lab)))
                     elif pts:
                         gap += 1                                # a comment / blank line inside the block
                         if gap > 6 or any(isinstance(v, str) and re.search(r'average|mean|std|s\.d', v, re.I) for v in vals):
                             break
+                if searched and len(labels) > 1 and len(set(labels)) == 1:
+                    labels = [str(k + 1) for k in range(len(labels))]          # a sample name on every row ('Finchite'): number the points
                 if pts:
                     add(list(run.values()), pts, labels, _standards_from(grid), title, (ri, first_col), 'rows', (ri, first_col, last, max(run)),
-                        ([first_col - 1] if first_col else []) + list(run))
+                        ([lab_col] if lab_col >= 0 else []) + list(run))
     return out
 
 def _header_runs(heads):
@@ -654,14 +666,8 @@ def parse_template(s):
                     raise ValueError('unbalanced brackets in %r' % s)
                 inner = s[i + 1:j - 1]
                 m = _TPL_N.match(s, j); count = m.group(0) if m else ''
-                if ',' in inner and not any(c in inner for c in _CLOSE):           # (Cu,Zn): a mixed site
-                    els = []
-                    for tok in inner.split(','):
-                        e = _TPL_EL.fullmatch(tok)
-                        if not e or e.group(3) or e.group(1) not in ATOMIC_WEIGHTS:
-                            raise ValueError('a mixed site lists elements only, like (Cu,Zn)4: %r' % inner)
-                        els.append((e.group(1), int(e.group(2)) if e.group(2) else None))
-                    out.append(('site', ch, _CLOSE[ch], els, count))
+                if ',' in inner and not any(c in inner for c in _CLOSE):           # (Cu,Zn), (OH,F), (Na,□): a mixed site
+                    out.append(('site', ch, _CLOSE[ch], [_site_member(tok, inner) for tok in inner.split(',')], count))
                 else:
                     kids, _ = seq(i + 1, _CLOSE[ch])
                     out.append(('grp', ch, _CLOSE[ch], kids, count))
@@ -669,6 +675,12 @@ def parse_template(s):
             if ch == '·':
                 m = _TPL_N.match(s, i + 1); count = m.group(0) if m else ''
                 j = i + 1 + len(count)
+                if j < len(s) and s[j] in _CLOSE:                                   # '·5(H2O)': the bracketed group is the hydrate
+                    kids, end = seq(j + 1, _CLOSE[s[j]])
+                    m2 = _TPL_N.match(s, end)
+                    if m2 and not count:                                            # '·(H2O)5'
+                        count = m2.group(0); end += len(count)
+                    out.append(('lit', '·')); out.append(('grp', '', '', kids, count, (s[j], _CLOSE[s[j]]))); i = end; continue
                 k = j
                 while k < len(s) and s[k] not in '·' + ''.join(_CLOSE) + ''.join(_CLOSE.values()):
                     k += 1
@@ -695,17 +707,51 @@ def parse_template(s):
         raise ValueError('not a formula: %r' % s)
     return nodes
 
+_VACANCY = '□☐◻▢'
+_TPL_HGRP = re.compile(r'(?:[OH]\d*)+')
+
+def _site_member(tok, inner):
+    """One member of a mixed site -> (symbol, valence): an element ('Fe2+' -> ('Fe', 2)), a vacancy ('□'), O, or an O/H
+    group ('OH', 'H2O'). An anion's charge ('O2-', 'OH−') is dropped. ValueError for anything else."""
+    tok = re.sub(r'(?<=[A-Za-z\d])[1-3]?[-−]$', '', tok)
+    if len(tok) == 1 and tok in _VACANCY:
+        return ('□', None)
+    if _TPL_HGRP.fullmatch(tok) and 'H' in tok:
+        return (tok, None)
+    e = _TPL_EL.fullmatch(tok)
+    if not e or e.group(3) or e.group(1) not in ATOMIC_WEIGHTS:
+        raise ValueError('a mixed site lists elements, □, O or an O/H group, like (Cu,Zn)4, (Na,□), (OH,F)2: %r' % inner)
+    return (e.group(1), int(e.group(2)) if e.group(2) else None)
+
+def _member_kind(sym):
+    """A site member's role in the layout: 'el' (an analysed row), 'h' (OH / H2O: its count from the H2O row), 'rem' (□ or O:
+    what the site's count leaves)."""
+    if sym in ('□', 'O'):
+        return 'rem'
+    if _TPL_HGRP.fullmatch(sym) and 'H' in sym:
+        return 'h'
+    return 'el'
+
+def _h_of(sym):
+    """H atoms in an O/H group: 'OH' 1, 'H2O' 2, 'H3O2' 3."""
+    return sum(float(n) if n else 1.0 for el, n in re.findall(r'([OH])(\d*)', sym) if el == 'H')
+
 def _num(count):
     return float(count) if count else 1.0
 
 def template_counts(nodes, mult=1.0, out=None):
-    """{element: apfu} of the ideal formula itself — a mixed site counted as its first element (the end-member)."""
+    """{element: apfu} of the ideal formula itself — a mixed site counted as its first member that is not a vacancy (the
+    end-member; an O/H group counted as its O and H)."""
     out = OrderedDict() if out is None else out
     for n in nodes:
         if n[0] == 'el':
             out[n[1]] = out.get(n[1], 0) + _num(n[3]) * mult
         elif n[0] == 'site':
-            out[n[3][0][0]] = out.get(n[3][0][0], 0) + _num(n[4]) * mult
+            first = next((e[0] for e in n[3] if e[0] != '□'), None)
+            if first is None:
+                continue
+            for el, k in (re.findall(r'([OH])(\d*)', first) if _member_kind(first) != 'el' else [(first, '')]):
+                out[el] = out.get(el, 0) + _num(k) * _num(n[4]) * mult
         elif n[0] == 'grp':
             template_counts(n[3], mult * _num(n[4]), out)
     return out
@@ -719,9 +765,11 @@ def lay_out(red, nodes):
     (value, [row keys], divisor) pieces — the apfu of those rows summed, over the divisor (the multipliers of the groups around
     it) — so the same list gives the plain formula (`laid_out_text`) and the live Excel one (`laid_out_excel`).
     Rules: O, and anything not analysed, is written as the ideal formula writes it; a mixed site lists each analysed element
-    with its own apfu and drops the site's count; an (OH) / (H2O) group's multiplier comes from the H apfu when the formula
-    has one such group (more than one: the H cannot be split between them, all are written as typed); an element written in
-    two places is written as typed (its apfu cannot be split)."""
+    with its own apfu and drops the site's count; an (OH) / (H2O) group's multiplier — or an OH / H2O member of a mixed site,
+    (OH,F)2 — comes from the H apfu when the formula has one such H carrier (more than one: the H cannot be split between
+    them, all are written as typed); a vacancy or an O in a mixed site, (Na,□), (O,OH)2, is what the site's count leaves
+    once every other member is known ((value, ('rem', count, [(row keys, divisor) …])) pieces); an element written in two
+    places is written as typed (its apfu cannot be split)."""
     notes = []
     def rows_of(sym, val):
         ks = [k for k, r in red.rows.items() if r.c.element == sym and r.c.kind != 'water'
@@ -735,24 +783,59 @@ def lay_out(red, nodes):
                 places[(n[1], n[2])] = places.get((n[1], n[2]), 0) + 1
             elif n[0] == 'site':
                 for e in n[3]:
-                    places[e] = places.get(e, 0) + 1
+                    if _member_kind(e[0]) == 'el':
+                        places[e] = places.get(e, 0) + 1
             elif n[0] == 'grp' and not _is_h_group(n):
                 count_places(n[3])
     count_places(nodes)
-    h_groups = []
+    h_groups = []                                                          # every H carrier: (OH) groups and OH / H2O site members
     def find_h(ns):
         for n in ns:
             if _is_h_group(n):
                 h_groups.append(n)
             elif n[0] == 'grp':
                 find_h(n[3])
+            elif n[0] == 'site':
+                h_groups.extend(e for e in n[3] if _member_kind(e[0]) == 'h')
     find_h(nodes)
     if len(h_groups) > 1 and water:
         notes.append('the H is written as the ideal formula writes it: %d (OH)/(H2O) groups, and one H2O analysis cannot be split between them' % len(h_groups))
+    one_h = len(h_groups) == 1 and bool(water)
     used = set()
     def fmt_el(sym, val):
         return sym + ('%d+' % val if val else '')
     parts = []
+    def site(n, div):
+        members = []                                                       # (member, kind, piece or None)
+        for e in n[3]:
+            kind = _member_kind(e[0]); piece = None
+            if kind == 'el':
+                ks = rows_of(*e) if places.get(e, 0) == 1 else []
+                if ks:
+                    piece = (sum(red.rows[k].apfu for k in ks) / div, ks, div)
+            elif kind == 'h' and one_h:
+                h = _h_of(e[0]) * div
+                piece = (sum(red.rows[k].apfu for k in water) / h, water, h)
+            members.append((e, kind, piece))
+        known = [p for _e, _k, p in members if p]
+        if not known:                                                      # nothing of it analysed: as typed
+            parts.append(n[1] + ','.join(fmt_el(*e) for e in n[3]) + n[2] + n[4]); return
+        rem = [i for i, (_e, kind, _p) in enumerate(members) if kind == 'rem']
+        if len(rem) == 1 and all(p for _e, kind, p in members if kind == 'h'):
+            tot = _num(n[4]); left = tot - sum(p[0] for p in known)
+            if left < -0.005:
+                notes.append('the site %s%s%s%s is over-full: its members sum to %.2f — %s written as 0'
+                             % (n[1], ','.join(fmt_el(*e) for e in n[3]), n[2], n[4], tot - left, members[rem[0]][0][0]))
+            members[rem[0]] = (members[rem[0]][0], 'rem', (max(0.0, left), ('rem', tot, [(p[1], p[2]) for p in known])))
+        parts.append(n[1])
+        for e, kind, piece in members:
+            if piece:
+                parts.append(fmt_el(*e)); parts.append(piece)
+                if kind != 'rem':
+                    used.update(piece[1])
+            elif kind != 'el':
+                parts.append(fmt_el(*e))                                   # an OH or □ whose count is not known: named, no number
+        parts.append(n[2])
     def walk(ns, div):
         for n in ns:
             if n[0] == 'lit':
@@ -765,33 +848,37 @@ def lay_out(red, nodes):
                 else:
                     parts.append(fmt_el(sym, val) + count)
             elif n[0] == 'site':
-                got = [(e, rows_of(*e)) for e in n[3] if places.get(e, 0) == 1]
-                got = [(e, ks) for e, ks in got if ks]
-                if not got:
-                    parts.append(n[1] + ','.join(fmt_el(*e) for e in n[3]) + n[2] + n[4]); continue
-                parts.append(n[1])
-                for e, ks in got:
-                    parts.append(fmt_el(*e)); parts.append((sum(red.rows[k].apfu for k in ks) / div, ks, div)); used.update(ks)
-                parts.append(n[2])
+                site(n, div)
             elif n[0] == 'grp':
-                if _is_h_group(n) and len(h_groups) == 1 and water:
+                wrap = n[5] if len(n) > 5 else None                                           # '·5(H2O)': the hydrate's own brackets
+                if _is_h_group(n) and one_h:
                     h_in = sum(_num(k[3]) for k in n[3] if k[1] == 'H')
                     inner = ''.join(fmt_el(k[1], k[2]) + k[3] for k in n[3])
+                    if wrap:
+                        inner = wrap[0] + inner + wrap[1]
                     val = (sum(red.rows[k].apfu for k in water) / (h_in * div), water, h_in * div); used.update(water)
                     parts.extend([val, inner] if not n[1] else [n[1] + inner + n[2], val])    # ·2.00H2O: a hydrate's count stands before it
                     continue
                 if not n[1]:                                                                  # ·2H2O not analysed: as typed
-                    parts.append(n[4]); walk(n[3], div * _num(n[4])); continue
+                    parts.append(n[4] + (wrap[0] if wrap else '')); walk(n[3], div * _num(n[4]))
+                    if wrap:
+                        parts.append(wrap[1])
+                    continue
                 parts.append(n[1]); walk(n[3], div * _num(n[4])); parts.append(n[2] + n[4])
     walk(nodes, 1.0)
     for k, r in red.rows.items():
         if k not in used and r.c.kind != 'water' and r.c.element != 'O':
+            twice = [(v, c) for (el, v), c in places.items() if el == r.c.element and c > 1 and (v is None or abs(v - r.c.charge) < 1e-6)]
+            if twice:                                                      # CaFe(SO4)2Fe(OH)2: named, but in two places
+                notes.append('%s is written in %d places of the ideal formula: written as typed there — its %.2f apfu cannot be split between them'
+                             % (r.c.element, max(c for _v, c in twice), r.apfu))
+                continue
             vals = sorted({v for (el, v) in places if el == r.c.element and v})
             if vals:                                                       # the formula writes Fe3+, the analysis has FeO
                 notes.append('%s is analysed as %s (%s%g+) but the ideal formula writes %s: written as typed — convert the oxide, or write %s without a valence'
                              % (r.c.element, k, r.c.element, r.c.charge, ', '.join('%s%d+' % (r.c.element, v) for v in vals), r.c.element))
                 continue
-            host = next((red.rows[u].c.element for u in used if red.rows[u].c.kind != 'water' and abs(red.rows[u].c.charge - r.c.charge) < 1e-6), None)
+            host = next((red.rows[u].c.element for u in red.rows if u in used and red.rows[u].c.kind != 'water' and abs(red.rows[u].c.charge - r.c.charge) < 1e-6), None)
             notes.append('%s (%.2f apfu) is analysed but not placed: the ideal formula does not name it — write it into a site%s'
                          % (r.c.element, r.apfu, ', e.g. (%s,%s)' % (host, r.c.element) if host else ''))
     if red.basis[0] != 'O' and places.get(('O', None)):
@@ -804,17 +891,23 @@ def laid_out_text(parts, digits=2):
 def laid_out_excel(parts, cell_of, digits=2):
     """The live formula: ="(Cu"&TEXT(J2,"0.00")&"Zn"&TEXT(J3,"0.00")&")S"&… — cell_of(row key) -> its apfu cell."""
     out, lit = [], ''
-    for p in parts:
-        if isinstance(p, str):
-            lit += p; continue
-        if lit:
-            out.append('"%s"' % lit.replace('"', '""')); lit = ''
-        _v, ks, div = p
+    def term(ks, div):
         expr = '+'.join(cell_of(k) for k in ks)
         if len(ks) > 1 and div != 1:
             expr = '(%s)' % expr
         if div != 1:
             expr += '/%g' % div
+        return expr
+    for p in parts:
+        if isinstance(p, str):
+            lit += p; continue
+        if lit:
+            out.append('"%s"' % lit.replace('"', '""')); lit = ''
+        if len(p) == 2:                                                    # a vacancy / O: the site's count less its other members
+            _v, (_rem, tot, terms) = p
+            expr = 'MAX(0,%g-(%s))' % (tot, '+'.join(term(ks, div) for ks, div in terms))
+        else:
+            expr = term(p[1], p[2])
         out.append('TEXT(%s,"0.%s")' % (expr, '0' * digits))
     if lit:
         out.append('"%s"' % lit.replace('"', '""'))
@@ -1751,7 +1844,7 @@ def main(argv=None):
         return
     try:
         ds, red, table, text = prepare(a.probe, a.basis, a.charge, a.anions, a.raw_anions, a.add, a.convert, a.drop,
-                                       a.points, a.standards, a.ideal, a.name, a.sheet, block=a.block - 1 if a.block else None,
+                                       a.points, a.standards, a.ideal, a.name, a.sheet, block=a.block - 1 if a.block is not None else None,
                                        region=a.region)
     except ValueError as e:
         raise SystemExit('epma: %s' % e)

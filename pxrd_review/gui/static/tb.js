@@ -99,10 +99,17 @@ function tbPickCif(key) {
 // the paper last used here opens in the Manuscript mode on the next switch (msLoad takes it): its .pdf key is a file name, the
 // manuscript list's key is the stem — a .docx key already is
 function tbCarryPaper(key) { window.TB_CARRY = key ? key.replace(/^paper:/, '').replace(/\.pdf$/i, '') : null; }
+// another probe file: its own default block, and no range or sheet — a block number, a range and a sheet name all belong
+// to the file they were picked on (the sidebar set the file alone, and the next file was read with the last one's block)
+function tbEpmaFileSet(key) {
+  const changed = key !== tbOpt('epma', 'file');
+  tbSetOpt('epma', 'file', key);
+  if (changed) { tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', ''); tbSetOpt('epma', 'sheet', ''); }
+}
 function tbPickData(key, kind) {
   if (kind === 'paper' || key.startsWith('paper:')) {                // a paper's analytical table: the EPMA tab's input
     if (TBS.tab !== 'epma') tbSetTab('epma');
-    tbSetOpt('epma', 'file', key); tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', ''); tbCarryPaper(key);
+    tbEpmaFileSet(key); tbCarryPaper(key);
     tbRenderLists(); tbRender(); return;
   }
   if (TBS.tab === 'pxrd') {
@@ -110,7 +117,7 @@ function tbPickData(key, kind) {
     tbSetOpt('pxrd', slot, key);
   } else {
     if (TBS.tab !== 'epma') tbSetTab('epma');
-    tbSetOpt('epma', 'file', key);
+    tbEpmaFileSet(key);
   }
   tbRenderLists(); tbRender();
 }
@@ -256,7 +263,7 @@ function tbEpmaBlocks(r) {
 }
 $('#tb-epma-block').addEventListener('change', e => { tbSetOpt('epma', 'block', e.target.value); tbRender(); });
 $('#tb-epma-file').addEventListener('change', e => {                      // another file: its own default block, no region (runs before the pane's re-render)
-  tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', '');
+  tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', ''); tbSetOpt('epma', 'sheet', '');
   if (e.target.value.startsWith('paper:')) tbCarryPaper(e.target.value);
   if (!$('#tb-sheet').classList.contains('hidden')) tbSheetOpen();
 });

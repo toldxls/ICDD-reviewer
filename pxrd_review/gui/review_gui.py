@@ -2405,7 +2405,8 @@ def api_tb_epma_grid(key):
     grid = dict(sheets).get(want) or []
     R, C = _TB_GRID_MAX
     ncols = max((len(r) for r in grid), default=0)
-    cell = lambda v: None if v is None else (round(v, 6) if isinstance(v, float) else v if isinstance(v, (int, bool)) else str(v)[:60])
+    cell = lambda v: None if v is None else ((round(v, 6) if math.isfinite(v) else str(v)) if isinstance(v, float)   # NaN is no JSON
+                                             else v if isinstance(v, (int, bool)) else str(v)[:60])
     rows = [[cell(v) for v in r[:C]] for r in grid[:R]]
     return jsonify({'ok': True, 'sheets': titles, 'sheet': want, 'rows': rows, 'nrows': len(grid), 'ncols': ncols,
                     'truncated': len(grid) > R or ncols > C,

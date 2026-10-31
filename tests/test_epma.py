@@ -436,6 +436,52 @@ class WorkedUpSheets(unittest.TestCase):
         _ds, red, table, _t = E.prepare(p.replace('m.csv', 'gy.csv'), basis='O=6', ideal='CaO=1,SO3=1,H2O=2')   # constituent apfu: the Ideal column alone
         self.assertIsNone(red.layout); self.assertEqual(table['head'][-1], 'Ideal')
 
+    def test_layout_mixed_anion_and_vacancy_sites(self):
+        from tests.xl_eval import Book
+        def lay(p, ideal, **kw):
+            ds, red, table, _t = E.prepare(p, ideal=ideal, **kw)
+            out = os.path.join(self.tmp, 'o.xlsx'); E.write_xlsx(red, table, out, ds)
+            b = Book(out); ws = b.wb['reduction']
+            row = next(c.row for c in ws['A'] if isinstance(c.value, str) and c.value.startswith('empirical formula (live'))
+            txt = E.laid_out_text(red.layout)
+            self.assertEqual(b.value('reduction', 'B%d' % row), txt, msg=ideal)       # the live cell says what the text says
+            return txt, red
+        # (OH,F): the OH from the H2O row, the F from its own
+        p = _csv(self.tmp, 'ap.csv', ['CaO', 'P2O5', 'F', 'H2O'], [[55.0, 41.5, 1.9, 0.9]])
+        txt, red = lay(p, 'Ca5(PO4)3(OH,F)', basis='O=13')
+        self.assertEqual(txt, 'Ca%.2f(P%.2fO4)3(OH%.2fF%.2f)' % (red.rows['CaO'].apfu, red.rows['P2O5'].apfu / 3, red.rows['H2O'].apfu, red.rows['F'].apfu))
+        self.assertEqual(red.layout_notes, [])
+        # a vacancy is what the site's count leaves; an over-full site writes 0 and says so
+        p = _csv(self.tmp, 'na.csv', ['Na2O', 'CaO', 'SiO2'], [[5.0, 20.0, 60.0]])
+        txt, red = lay(p, '(Na,□)Ca2Si4O10', basis='O=10')
+        self.assertTrue(txt.startswith('(Na%.2f□%.2f)' % (red.rows['Na2O'].apfu, 1 - red.rows['Na2O'].apfu)), txt)
+        txt, red = lay(p, '(Na,Ca,□)2Si4O10', basis='O=10')
+        self.assertIn('□0.00)', txt); self.assertIn('over-full', red.layout_notes[0])
+        # an O in a site: the rest of the site's count once the OH is known
+        p = _csv(self.tmp, 'cu.csv', ['CuO', 'SO3', 'H2O'], [[62.0, 33.0, 4.0]])
+        txt, red = lay(p, 'Cu2(SO4)(O,OH)2', basis='O=6')
+        self.assertTrue(txt.endswith('(O%.2fOH%.2f)' % (2 - red.rows['H2O'].apfu, red.rows['H2O'].apfu)), txt)
+        txt, red = lay(p, 'Cu2(SO4)(OH,H2O)', basis='O=6')                            # two H carriers in one site: as typed, said
+        self.assertTrue(txt.endswith('(OH,H2O)')); self.assertIn('cannot be split', red.layout_notes[0])
+        # a hydrate in brackets takes its count from the H2O row like a bare one
+        p = _csv(self.tmp, 'cs.csv', ['CuO', 'SO3', 'H2O'], [[31.9, 32.1, 36.1]])
+        self.assertEqual(lay(p, 'Cu(SO4)·5(H2O)', basis='O=9')[0], 'Cu1.00(S1.00O4)·5.00(H2O)')
+        # an element written twice: named, so not 'not placed'
+        p = _csv(self.tmp, 'fe.csv', ['CaO', 'FeO', 'SO3', 'H2O'], [[20, 20, 40, 15]])
+        red = lay(p, 'CaFe(SO4)2Fe(OH)2', basis='O=10')[1]
+        self.assertEqual(len(red.layout_notes), 1); self.assertIn('written in 2 places', red.layout_notes[0])
+        self.assertEqual(E.parse_template('(Fe2+,Mg)(O2-,OH−)')[1][3], [('O', None), ('OH', None)])
+        with self.assertRaises(ValueError):
+            E.parse_template('(Na,X)')
+
+    def test_second_header_run_and_nan_cells(self):
+        # the names met again on the header row: the second block's points are labelled from the Point column too
+        p = _csv(self.tmp, 'b.csv', ['Point', 'CaO', 'SiO2', 'Total', 'CaO', 'SiO2'], [['p1', 40, 58, 98, 0.01, 0.02], ['p2', 41, 57, 98, 0.01, 0.02]])
+        self.assertEqual([b['labels'] for b in E.probe_blocks(p)], [['p1', 'p2'], ['p1', 'p2']])
+        # 'NaN' written by an instrument stays text: a float NaN is no JSON for the sheet panel
+        p = _csv(self.tmp, 'n.csv', ['CaO', 'SiO2'], [['NaN', 58], [40, 'inf']])
+        self.assertEqual([r[1:] for r in E._cells_from_file(p)[0][1][1:]], [['NaN', 58.0], [40.0, 'inf']])
+
     def test_blocks_of_a_messy_workbook(self):
         # one header row holding the oxide wt%, the same analysis as element wt% (counted twice if read), then the oxide names
         # again for another quantity; under it a worked-up block down a column, and an 'ideal' block beside it
