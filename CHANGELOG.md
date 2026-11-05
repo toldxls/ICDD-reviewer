@@ -78,6 +78,26 @@ in a second set of papers (75 → 88 %); every reader-status change on the whole
   table that happened to reproduce the formula had explained a typo away. Seeded recall of a mean-only typo: 21 → 25 % at
   10 %, 20 → 24 % at 20 %; a wt% slip 36 → 37 / 38 %; papers never caught 310 → 303.
 
+### Fixed — the analytical table, second round
+Tables that add up to their printed total: 639 of 774 → 652 of 759 corpus tables with one (83 → 86 %; the 15 gone had
+a total that was another column's), 136 of 154 → 139 of 150 in the second set (88 → 93 %); every reader-status change on the whole-corpus A/B towards 'agrees' / 'ok' or
+read by hand (one new flag: an abstract whose printed formula does not add to its own Σ); seeded wt% and typo recall up
+one to two papers at every size; the statements gauntlet's contradictions still 0, 17 EPMA sheets amber → clean.
+- **A Total under the Normalised column only** (Mean | Range | S.D. | Standard | Norm., an H2O* by structure printed in the
+  Norm. column alone) is not the Mean column's total: the reader had reported the rows 'short' of it and the total oracle
+  had a gap to explain. It is kept as `total_other`, which still tells the composition check that the analysis is whole.
+- **The oxygen equivalent printed on a line of its own** (`O = S –1.82`, `O¼S 2.87`, `−O ≡F`, `O”F,Cl`) is read as the
+  deduction it is and used as printed — O ≡ S is no factor of F or Cl. A spaced `O = S –1.82` had been read as a row of S.
+- **An element as analysed above its split** (`Cr2O3` as analysed, then the structure's `Cr2O3` / `CrO3`; `FeO` and then
+  `(Fe2O3)a` / `(FeO)a`): the split's oxide printed again smaller is no longer taken for the start of the apfu block, and a
+  parenthesised oxide with its footnote letter is read.
+- **Labels**: a mark between the O and a subscript (`B2O∗3`, `Fe2O∗3`), a mark with its footnote number (`Fe2O3*1`,
+  `H2O*2`), the qualifier as a word of its own (`H2O calc. 1.78`, `BeO (calc.)`; never 'tot').
+- **A block started one row inside the table** is no longer a candidate: its 'header' was the table's first row, and it
+  could outscore the block from the table's start.
+- **Staggered tables**: the rows whose mean sits above their label were marked by position in a block that is filtered
+  afterwards (a ppm row dropped), so a dropped row shifted the marks onto their neighbours.
+
 ### Fixed
 - Table 2's means are over every bond: a loop that writes a ×4 bond once had counted it once (rutile's `<Ti–O>` 1.964 for
   1.959).

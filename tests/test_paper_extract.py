@@ -2771,7 +2771,7 @@ class TableCompleteness(unittest.TestCase):
     def _read(self, name, rows, **kw):
         p = os.path.join(self.tmp, name); self._pdf(p, rows, **kw)
         e = PE.epma_table(p, 'comptestite')
-        return e, PE.rows_add_up(e['rows'], e['total'])
+        return e, PE.rows_add_up(e['rows'], e['total'], o_eq=e.get('o_eq'))
 
     def test_welded_calc_and_an_element_tables_oxygen(self):
         self.assertEqual([PE._constituent_ok(t)[0] for t in ('Ccalc', 'Hcalc', 'Ocalc', 'Ncalc', 'H2O*.', 'Cacalc')], ['C', 'H', 'O', None, 'H2O', None])
@@ -2816,3 +2816,42 @@ class TableCompleteness(unittest.TestCase):
         doc.save(p); doc.close()
         e = PE.epma_table(p, 'comptestite')
         self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'SiO2': 61.06, 'Al2O3': 17.40, 'Na2O': 19.10, 'K2O': 2.07})
+
+    def test_marks_and_qualifiers_in_the_label(self):
+        # a mark between the O and the subscript; a mark with its footnote number; the qualifier as a word of its own
+        self.assertEqual([PE._constituent_ok(t)[0] for t in ('B2O∗3', 'Fe2O∗3', 'Fe2O3*1', 'FeO*1', 'H2O*2', '(Fe2O3)a', '(FeO)a', '(H2O)', '(Total)')],
+                         ['B2O3', 'Fe2O3', 'Fe2O3', 'FeO', 'H2O', 'Fe2O3', 'FeO', None, None])
+        e, (read, ok) = self._read('calc.pdf', [('SiO2', '40.10', '39.8-40.5', '0.2'), ('Al2O3', '30.05', '29.9-30.3', '0.1'), ('CaO', '20.07', '19.9-20.3', '0.1'),
+                                                ('BeO calc.', '7.11'), ('H2O calc.', '2.50'), ('Total', '99.83')])
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'SiO2': 40.10, 'Al2O3': 30.05, 'CaO': 20.07, 'BeO': 7.11, 'H2O': 2.50})
+        self.assertTrue(ok, (read, e['total']))
+
+    def test_a_split_below_the_element_as_analysed(self):
+        # Cr2O3 as analysed, then the Cr2O3 / CrO3 split the structure gives: the Total follows the split, and the split's
+        # Cr2O3 printed again smaller is not the start of an apfu block
+        e, (read, ok) = self._read('split.pdf', [('PbO', '74.02', '73.03-74.44', '0.54'), ('Cr2O3', '12.01', '11.45-12.73', '0.39'), ('Cr2O3*1', '3.47'),
+                                                 ('CrO3*1', '11.24'), ('SO3', '4.79', '4.06-5.14', '0.35'), ('H2O*2', '3.54'), ('Total', '97.06')])
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'PbO': 74.02, 'Cr2O3': 3.47, 'CrO3': 11.24, 'SO3': 4.79, 'H2O': 3.54})
+        self.assertTrue(ok, (read, e['total']))
+
+    def test_a_total_under_the_normalised_column_only(self):
+        # Mean | Range | S.D. | Standard | Norm.: the H2O* the structure gives and the Total 100.00 stand under Norm. alone. That
+        # Total is not the Mean column's (no 'rows miss their total' from it), but it still says the analysis is whole
+        rows = [('MgO', '14.19', '14.02-14.33', '0.12', 'forsterite', '10.86'), ('CaO', '0.14', '0.13-0.15', '0.01', 'anorthite', '0.11'),
+                ('V2O5', '64.90', '64.41-65.33', '0.34', 'V2O5', '49.65'), ('H2O*', '', '', '', '', '39.38'), ('Total', '', '', '', '', '100.00')]
+        e, _ = self._read('norm.pdf', rows, head=('Const.', 'Mean', 'Range', 'S.D.', 'Standard', 'Norm.'), xs=(35, 107, 176, 270, 334, 420))
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'MgO': 14.19, 'CaO': 0.14, 'V2O5': 64.90})
+        self.assertIsNone(e['total']); self.assertEqual(e['total_other'], 100.0)
+
+    def test_the_oxygen_equivalent_printed_on_its_own_line(self):
+        # 'O = S' is the deduction for a sulfide in an oxide table, read as printed (no factor of F or Cl gives it), and never a
+        # row of S; 'Sum, O = S, O = Cl, Total': each deduction counts
+        e, (read, ok) = self._read('oeqs.pdf', [('PbO', '73.81', '73.0-74.5', '0.3'), ('SO3', '15.87', '15.5-16.2', '0.2'), ('S', '5.76', '5.5-6.0', '0.1'),
+                                                ('H2O*', '2.38'), ('Sum', '97.82'), ('O = S', '-2.80'), ('O = Cl', '-0.07'), ('Total', '94.95')])
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'PbO': 73.81, 'SO3': 15.87, 'S': 5.76, 'H2O': 2.38})
+        self.assertAlmostEqual(e['o_eq'], 2.87); self.assertEqual(e['total'], 94.95)
+        self.assertTrue(ok, (read, e['total'], e['o_eq']))
+        ws = lambda s_: [(40 + 60 * i, 0, 70 + 60 * i, 10, w) for i, w in enumerate(s_.split())]
+        for line, c in (('O = S –1.82 –1.38', 'O=S'), ('O¼S 2.87', 'O=S'), ('−O ≡F −0.19', 'O=F'), ('O”F,Cl 0.92', 'O=F,Cl')):
+            self.assertEqual(PE._row_at(ws(line), None)[:2], (c, 'total'), line)
+        self.assertEqual(PE._row_at(ws('O 45.10 44.2-46.0'), None)[:2], ('O', 'constituent'))

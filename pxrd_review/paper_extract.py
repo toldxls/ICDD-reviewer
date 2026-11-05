@@ -392,13 +392,24 @@ def _dash(t):
     word-position reader on a negative cell. Normalise once, here, rather than at each call."""
     return (t or '').translate(_DASHES)
 
+_KNOWN_OXIDES = set(EP._USUAL_OXIDE.values()) | EP._OXIDES_SEEN
+
+
 @functools.lru_cache(maxsize=8192)
 def _constituent_ok(tok):
     """(constituent as the parser reads it, 'constituent' | 'total') or (None, None). A pure function
     of the token, memoised: the table readers ask it of every word of every candidate line — half
     a million times over forty papers, a dozen regex passes each — and a paper's vocabulary is a
     few hundred distinct tokens."""
-    t = re.sub(r'\([^)]*\)$', '', tok.translate(_CYR))               # 'Fe2O3(tot)', 'H2O(calc)': a qualifier
+    t = tok.translate(_CYR)
+    m_p = re.fullmatch(r'\(((?!H)[A-Z][a-z]?\d*O\d*)\)[a-d*∗†‡§]?', t)   # never '(H2O)': a pfu block's row label
+    if m_p:
+        t = m_p.group(1)                                              # '(Fe2O3)a', '(FeO)a': the split of a total-iron row, set in parentheses with its footnote
+    t = re.sub(r'\([^)]*\)$', '', t)                                 # 'Fe2O3(tot)', 'H2O(calc)': a qualifier
+    m_in = re.fullmatch(r'(.*O)[*∗⁎†‡§]+(\d)', t)
+    if m_in:                                                          # a mark between the O and a digit: 'B2O∗3' (the subscript after it), 'H2O*2' / 'FeO*1' (a footnote number)
+        t = m_in.group(1) + m_in.group(2) if m_in.group(1) + m_in.group(2) in _KNOWN_OXIDES else m_in.group(1)
+    t = re.sub(r'(?<=\d)[*∗⁎†‡§]+\d$', '', t)                         # 'Fe2O3*1': the mark and its footnote number after the formula's last subscript
     t = re.sub(r'[*∗⁎†‡§¹²³#¶°]+[.,:;]?$', '', t)                     # a footnote mark, in whichever glyph the font delivers the asterisk ('H2O*.': and the period after it)
     t = re.sub(r'(?<=[O\d])(?:calc|calcd|meas|str|diff)\.?[a-d]?$', '', t, flags=re.I)   # 'H2Ocalc', 'CO2calc', 'H2Ocalcb' (a footnote letter after it): the qualifier welded onto the name — never 'tot': a total-iron row beside the FeO/Fe2O3 split is not a constituent
     t = re.sub(r'^([CHO])(?:calc|calcd|diff)\.?[a-d]?$', r'\1', t)   # 'Ccalc', 'Hcalc', 'Ocalc': the C, H and O of an organic mineral from the stoichiometry, the subscript welded on — C, H, O only: a sulfosalt's 'Ncalc' is its homologue order, not nitrogen
@@ -477,6 +488,22 @@ def _row_at(ws, x_col):
     ws = merged
     toks = [w[4] for w in ws]
     for k, w in enumerate(ws):
+        # the oxygen equivalent of the halogens / sulfide, deducted on a line of its own: 'O = S –1.82', 'O¼S 2.87', '−O ≡F −0.19',
+        # 'O”F,Cl 0.92' — a correction row (its X is not a row of X: 'O = S –1.82' had been read as S = −1.82)
+        m_oe = re.fullmatch(r'[−–-]?O\s*[=≡¼”"]\s*((?:F|Cl|S|Br|I)\d?(?:\s*,\s*(?:F|Cl|S|Br|I)\d?)*)', toks[k])
+        k_oe = None
+        if m_oe:
+            k_oe = k + 1
+        elif re.fullmatch(r'[−–-]?O', toks[k]) and k + 1 < len(toks):
+            if toks[k + 1] in ('=', '≡', '¼', '”', '"') and k + 2 < len(toks) and re.fullmatch(r'(?:F|Cl|S|Br|I)\d?(?:,(?:F|Cl|S|Br|I)\d?)*,?', toks[k + 2]):
+                k_oe = k + 3
+            elif re.fullmatch(r'[=≡¼”"]\s*(?:F|Cl|S|Br|I)\d?(?:,(?:F|Cl|S|Br|I)\d?)*', toks[k + 1]):
+                k_oe = k + 2
+        if k_oe is not None:
+            vals_oe = _numbers([r[4] for r in ws[k_oe:]])
+            if any(kk == 'num' for kk, _ in vals_oe) and (x_col is None or abs(w[0] - x_col) <= 30):
+                return 'O=' + re.sub(r'^[−–-]?O\s*[=≡¼”"]?\s*', '', ' '.join(toks[k:k_oe])).replace(' ', '').lstrip('=≡¼”"'), 'total', \
+                    [(kk, v) for kk, v in vals_oe if kk in ('num', 'range', 'na')][:12], w[0]
         c, kind = _constituent_ok(toks[k])
         if c is None and toks[k] in ('O', '-O', '–O', '−O') and k + 2 < len(toks) and toks[k + 1] in ('=', '≡'):
             c, kind = 'O=' + toks[k + 2], 'total'; rest = ws[k + 3:]
@@ -500,6 +527,8 @@ def _row_at(ws, x_col):
                 keep.append((kk, v)); continue
             if not keep and re.fullmatch(r'[a-d*†‡§¹²³]{1,2}', v):
                 continue                                    # a footnote mark printed as its own word: 'TiO2 a 15.36'
+            if not keep and kind == 'constituent' and re.fullmatch(r'\(?(?:calc|calcd|calculated|meas|measured|diff|by\s?diff)\.?\)?[*∗a-d]?', v, re.I):
+                continue                                    # the qualifier as a word of its own: 'H2O calc. 1.78', 'BeO (calc.) 7.11' — never 'tot' (a total-iron row)
             if r[0] > last_num_x + 130 or words >= 3 or v.lower() in _STOP or v.endswith((',', '.', ';', ':')):
                 break
             keep.append((kk, v)); words += 1
@@ -840,7 +869,7 @@ def _continued_pages(pages):
         out[k - 1] = (k - 1, list(prev[:q + 1]) + moved)
     return out
 
-def rows_add_up(rows, total, slack=0.6):
+def rows_add_up(rows, total, slack=0.6, o_eq=None):
     """(sum of the rows' means, whether it is the printed total) — net of the O ≡ F, Cl a table deducts on its own line, which
     the reader does not take as a row (a fluorine-bearing table's rows add to the total PLUS 0.42 × F + 0.23 × Cl)."""
     read = sum(r['mean'] for r in rows if r.get('mean') is not None)
@@ -849,7 +878,7 @@ def rows_add_up(rows, total, slack=0.6):
     f = sum(r['mean'] for r in rows if r.get('constituent') == 'F' and r.get('mean') is not None)
     cl = sum(r['mean'] for r in rows if r.get('constituent') == 'Cl' and r.get('mean') is not None)
     net = read - 0.4211 * f - 0.2257 * cl
-    return read, abs(read - total) <= slack or abs(net - total) <= slack
+    return read, abs(read - total) <= slack or abs(net - total) <= slack or (bool(o_eq) and abs(read - o_eq - total) <= slack)
 
 
 def epma_table(pdf, name=''):
@@ -902,6 +931,11 @@ def epma_table(pdf, name=''):
             j = last_row
             block = [b for b in block if not (b[1] == 'constituent' and re.fullmatch(r'[A-Z][a-z]?', b[0]) and next((v for kk, v in b[2] if kk == 'num'), 0) > 110)]
             n_const = sum(1 for c, k, v, _ in block if k == 'constituent')                     # 'Ba 201': ppm, not wt%
+            if n_const >= 3 and i >= 1 and block and block[0][1] == 'constituent':
+                above_ = _row_at(lines[i - 1]['w'], x_col)
+                if above_ and above_[1] == 'constituent' and any(kk == 'num' for kk, _ in above_[2]):
+                    i += 1; continue                                             # the line above is a row of this table: a block started inside it (its 'header' would be
+                                                                                 # that row) — the block from the table's first row is the table
             if n_const >= 3:
                 head = []; head_ws = []
                 for k in (i - 1, i - 2):
@@ -950,7 +984,7 @@ def epma_table(pdf, name=''):
             if n_const >= 3 and ((top >= 3 and top >= len(syms) / 2) or sum(1 for v in firsts if re.search(r'\.\d{4,}', v)) > len(firsts) / 2):
                 i = j; continue                                                  # Si Si Si … or 0.8641-style values: a structure table
             if n_const >= 3:
-                rows = []; total = None
+                rows = []; total = None; total_other = None; o_eq = None   # o_eq: the O ≡ F, Cl, S the table deducts on a line of its own, as printed   # total_other: a Total printed under another column only (a Normalised one)
                 has_std = bool(re.search(r'standard|std|prob', ' '.join(head), re.I))   # names count only under such a column
                 n_oxide = sum(1 for c, k, v, _ in block if k == 'constituent' and re.search(r'[A-Za-z]\d*O\d*$', c) and c != 'O' and not c.startswith('H2O'))
                 oxide_els = {m_.group(0) for m_ in (re.match(r'[A-Z][a-z]?', c) for c, k, v, _ in block if k == 'constituent' and re.search(r'O\d*$', c)) if m_}
@@ -986,6 +1020,13 @@ def epma_table(pdf, name=''):
                     if re.fullmatch(r'n|N|no\.?|number of analyses|no\. of analyses|analyses', (c_ or '').strip()) and v_ and v_[0][0] == 'num' and 1 <= v_[0][1] <= 200 and float(v_[0][1]).is_integer():
                         n_points = n_points or int(v_[0][1])
                 bare = lambda c_: bool(re.fullmatch(r'[A-Z][a-z]?', c_))
+                # an element the block prints as two oxides (Cr2O3 as analysed, then the Cr2O3 / CrO3 split): its oxide printed again smaller
+                # is the split's, not the apfu block's
+                forms_ = {}
+                for c_, k_, v_, wr_ in block:
+                    if k_ == 'constituent' and not bare(c_) and _parses(c_):
+                        forms_.setdefault(EP.parse_constituent(c_).element, set()).add(c_)
+                split_els = {c_ for f_ in forms_.values() if len(f_) >= 2 for c_ in f_}
                 # Below the Total the apfu block begins with the first row that can only be one (a bare
                 # element, a constituent again, an ion such as SO4 or UO2), and from there on EVERY row
                 # is apfu — 'SO4 3.808', 'UO2 8.192', 'H2O 26.0' under sejkoraite's Total were read as
@@ -1013,6 +1054,11 @@ def epma_table(pdf, name=''):
                     if k_ == 'constituent' and c_ != 'O':
                         above.append(c_)
                 element_table = len(above) >= 2 and sum(1 for c_ in above if bare(c_)) >= 0.75 * len(above)
+                # the same, counting only numbers right of the label column: on a two-column page a line's first number may be
+                # the facing column's (a reflectance table beside the analysis)
+                own_xs = sorted(x_ for x_ in (next(((w[0] + w[2]) / 2 for w in wr_ if _numlike(w[4]) and w[0] > x_col), None)
+                                               for c_, k_, v_, wr_ in block if k_ == 'constituent') if x_ is not None)
+                own_x_med = own_xs[len(own_xs) // 2] if len(own_xs) >= 3 else None
                 mx_ = sorted(merged_x[id(b_)] for b_ in block if id(b_) in merged_x)    # the rows the block still holds
                 stagger_x = mx_[len(mx_) // 2] if len(mx_) >= 3 and mean_x is None else None   # the means' column, where they sit above their labels
                 for b_row in block:
@@ -1028,7 +1074,7 @@ def epma_table(pdf, name=''):
                         if bare(c) and v0 is not None and 0 < v0 < 60:
                             apfu.setdefault(c, v0)
                         in_apfu = True; continue                                 # the apfu block, once begun, runs to the end
-                    if kind == 'constituent' and c in first_val and v0 is not None and v0 < first_val[c] / 2:
+                    if kind == 'constituent' and c in first_val and v0 is not None and v0 < first_val[c] / 2 and (bare(c) or c not in split_els):
                         if bare(c) and 0 < v0 < 60:
                             apfu.setdefault(c, v0)
                         in_apfu = in_apfu or past_total
@@ -1064,6 +1110,15 @@ def epma_table(pdf, name=''):
                     rng = next((v for k, v in vals if k == 'range'), None)
                     texts = [v for k, v in vals if k == 'text' and not re.fullmatch(r'[a-d*†‡§]+', v)] if has_std else []
                     if kind == 'total':
+                        if c.startswith('O=') and nums and not in_apfu:
+                            v_oe = abs(nums[0])                  # 'Sum 101.15, O = S −1.82, O = Cl −0.05, Total 99.28': each deduction counts
+                            if mean_x is not None:
+                                cand = [(abs((w[0] + w[2]) / 2 - mean_x), w[4]) for w in ws_row if _numlike(w[4])]
+                                if cand and min(cand)[0] < 22:
+                                    v_oe = abs(float(re.match(r'-?\d+\.?\d*', min(cand)[1].replace('−', '-').replace('–', '-').lstrip('(')).group(0)))
+                            if v_oe < 20:
+                                o_eq = (o_eq or 0.0) + v_oe
+                            continue
                         if (c.lower().startswith(('total', 'sum')) or c in ('Σ', 'Сумма', 'Итого')) and nums:
                             was = total
                             total = nums[0]; past_total = True
@@ -1071,9 +1126,17 @@ def epma_table(pdf, name=''):
                                 cand = [(abs((w[0] + w[2]) / 2 - mean_x), w[4]) for w in ws_row if _numlike(w[4])]
                                 if cand and min(cand)[0] < 22:
                                     total = float(re.match(r'-?\d+\.?\d*', min(cand)[1].replace('−', '-').lstrip('(')).group(0))
+                                elif cand and min(cand)[0] > 60 and mean_hits >= max(2, n_const // 2):
+                                    total_other = total; total = None                      # every number of the Total under another column (a Normalised one): the Mean column prints none
                             elif total < 40 and any(40 <= v <= 120 for v in nums):
                                 total = next(v for v in nums if 40 <= v <= 120)   # 'Total 1.3 99.5': an s.d. or a range first, the total after it
-                            if total < 40:
+                            elif own_x_med is not None and stagger_x is None:
+                                xs_t = [(w[0] + w[2]) / 2 for w in ws_row if _numlike(w[4]) and w[0] > x_col]
+                                if xs_t and min(xs_t) > own_x_med + 40:
+                                    # 'Total 100.00' under the Norm. column only, the H2O* the structure gives beside it: the
+                                    # Mean column prints no total of its own, and the normalised one is not its total
+                                    total_other = total; total = None
+                            if total is not None and total < 40:
                                 # under 40 is the formula block's sum ('Σ 2.01', 'Total 8.00' of the cations), not the analysis's:
                                 # it never replaces a wt% total read above it, and under rows that add like an analysis it is none
                                 if was is not None and was >= 40:
@@ -1143,7 +1206,7 @@ def epma_table(pdf, name=''):
                             break                                                # the caption: the header ends here
                         if len(in_span) <= 8:
                             head_span += [(w[4], (w[0] + w[2]) / 2) for w in in_span]
-                cand = {'rows': _drop_totals(rows), 'total': total, 'header': ' '.join(head)[:200], 'page': pno + 1, 'n': n_const, 'score': score, 'caption': cap[:160], 'head_cells': head_cells, 'rows_all': rows + rows_nd, 'label_x': x_col, 'apfu': apfu, 'col_cells': col_cells, 'head_span': head_span, 'n_points': n_points}
+                cand = {'rows': _drop_totals(rows), 'total': total, 'total_other': total_other, 'o_eq': o_eq, 'header': ' '.join(head)[:200], 'page': pno + 1, 'n': n_const, 'score': score, 'caption': cap[:160], 'head_cells': head_cells, 'rows_all': rows + rows_nd, 'label_x': x_col, 'apfu': apfu, 'col_cells': col_cells, 'head_span': head_span, 'n_points': n_points}
                 key_rows = {(r_['constituent'], r_['mean']) for r_ in cand['rows']}
                 if any(c_['page'] == cand['page'] and abs((c_.get('label_x') or 0) - (x_col or 0)) <= 30 and key_rows <= {(r_['constituent'], r_['mean']) for r_ in c_['rows']} for c_ in cands):
                     i = j; continue                                          # the same block read again from its second row (a side-by-side rescan): not another table
@@ -3238,6 +3301,9 @@ def _check_formula(ex, text, fcand):
     if len(wt) < 3:
         doubt('only %d constituents were read' % len(wt))
     tot = e.get('total') if (e.get('total') or 0) >= 50 else sum(wt.values())      # a Total of 8.00 is the apfu block's
+    if e.get('total') is None and 85 <= (e.get('total_other') or 0) <= 112 and tot < 85:
+        tot = e['total_other']                           # the Mean column prints no total, a Normalised one does, holding the rows the Mean
+                                                         # column lacks (an H2O* by structure): the analysis is whole, only split across columns
     if not (85.0 <= tot <= 112.0):                       # analyses do run 95–105; far outside that the table was misread
         doubt('the wt%% read add to %.1f' % tot, reading=tot > 112.0, strict=True)   # an excess (an H2O by structure the analysis does not hold) is a reading doubt; a short table stays hard
     # A constituent whose mean falls outside its OWN printed range is proof the column mapping is
@@ -3392,9 +3458,11 @@ def _check_formula(ex, text, fcand):
         # the sum of the rows AS PRINTED (an SO4 row the reduction converts to SO3 is still 14.58 in the paper's own total)
         S_ = sum(printed.values()); oeq = 0.4211 * printed.get('F', 0.0) + 0.2257 * printed.get('Cl', 0.0)
         two_valence = {el for el, n in Counter(EP.parse_constituent(c).element for c in wt if _parses(c) and EP.parse_constituent(c).kind != 'water').items() if n > 1}
-        if abs(S_ - T_) > 0.6 and abs(S_ - oeq - T_) > 0.6:
+        oeq_p = e.get('o_eq') or 0.0                      # the deduction the table prints on its own line (O ≡ S is no factor of F or Cl)
+        if abs(S_ - T_) > 0.6 and abs(S_ - oeq - T_) > 0.6 and not (oeq_p and abs(S_ - oeq_p - T_) <= 0.6):
             hits = {}
-            for d_ in {round(T_ - S_, 3), round(T_ - (S_ - oeq), 3)} if oeq else {round(T_ - S_, 3)}:
+            gaps_ = {round(T_ - S_, 3)} | ({round(T_ - (S_ - oeq), 3)} if oeq else set()) | ({round(T_ - (S_ - oeq_p), 3)} if oeq_p else set())
+            for d_ in gaps_:
                 for c_ in wt:
                     # only a row the reduction takes as printed, and never an element printed in two valences (FeO beside Fe2O3:
                     # the total-iron row is the one a reader mixes in, not a slip of the paper's)

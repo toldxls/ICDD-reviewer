@@ -2450,7 +2450,7 @@ def _tb_epma_source(key):
         if not tab or not tab.get('rows'):
             raise ValueError('no analytical table found in %s' % os.path.basename(path))
         where = ('page %d' % tab['page']) if tab.get('page') else (tab.get('caption') or 'a table')[:60]
-        read, agrees = PE.rows_add_up(tab['rows'], tab.get('total'))
+        read, agrees = PE.rows_add_up(tab['rows'], tab.get('total'), o_eq=tab.get('o_eq'))
         if agrees is False:                                                  # rows the reader missed (or took twice): never a silent partial table
             where += ' — the rows read sum to %.2f, the table prints a total of %.2f: check the table' % (read, tab['total'])
         ds = EP.dataset_from_table(tab['rows'], '%s: %s' % (os.path.basename(path), where))
