@@ -1779,7 +1779,10 @@ def parse_icdd_formula(text, has_sulfur=False):
                 elif k < len(toks) and re.match(r'^\d+(\.\d+)?$', toks[k]):
                     v = float(toks[k])
                     inner_syms = [x for x in toks[i + 1:j - 1] if re.match(r'^[A-Z][a-z]?$', x)]
-                    complex_anion = n_cat == 1 and 'O' in inner_syms and len(set(inner_syms)) == 2      # (SO4), (PO4), (UO2): a decimal after it is a multiplier
+                    n_num = sum(1 for x in toks[i + 1:j - 1] if re.match(r'^\d+(\.\d+)?$', x))
+                    complex_anion = n_cat == 1 and 'O' in inner_syms and len(set(inner_syms)) == 2 \
+                        and not (n_dec >= 2 and n_dec == n_num)                  # (SO4), (PO4), (UO2): a decimal after it is a multiplier — but '(S1.80O0.20)2.00',
+                                                                                 # every part a decimal, is an S/O site and the number its total (the Σ lost)
                     if '.' in toks[k] and not complex_anion and (n_cat >= 2 or n_dec >= 1) and abs(v - total) <= (0.035 if n_cat < 2 else max(0.06, 0.1 * total)):
                         stated = v; k += 1                                  # ']7.00' after O5.91 OH1.09 — a sum; '(AsO3OH)5.97' (no decimals inside) is a multiplier
                     elif '.' not in toks[k] and n_cat >= 2 and n_dec >= 2 and abs(v - cat_total) <= max(0.05, 0.03 * v):

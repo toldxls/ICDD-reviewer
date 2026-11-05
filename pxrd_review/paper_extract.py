@@ -399,8 +399,9 @@ def _constituent_ok(tok):
     a million times over forty papers, a dozen regex passes each — and a paper's vocabulary is a
     few hundred distinct tokens."""
     t = re.sub(r'\([^)]*\)$', '', tok.translate(_CYR))               # 'Fe2O3(tot)', 'H2O(calc)': a qualifier
-    t = re.sub(r'[*∗⁎†‡§¹²³#¶°]+$', '', t)                            # a footnote mark, in whichever glyph the font delivers the asterisk
+    t = re.sub(r'[*∗⁎†‡§¹²³#¶°]+[.,:;]?$', '', t)                     # a footnote mark, in whichever glyph the font delivers the asterisk ('H2O*.': and the period after it)
     t = re.sub(r'(?<=[O\d])(?:calc|calcd|meas|str|diff)\.?[a-d]?$', '', t, flags=re.I)   # 'H2Ocalc', 'CO2calc', 'H2Ocalcb' (a footnote letter after it): the qualifier welded onto the name — never 'tot': a total-iron row beside the FeO/Fe2O3 split is not a constituent
+    t = re.sub(r'^([CHO])(?:calc|calcd|diff)\.?[a-d]?$', r'\1', t)   # 'Ccalc', 'Hcalc', 'Ocalc': the C, H and O of an organic mineral from the stoichiometry, the subscript welded on — C, H, O only: a sulfosalt's 'Ncalc' is its homologue order, not nitrogen
     if re.fullmatch(r'(?:S|Se|Te|F|Cl|Br|I)2?[\-–−]', t):
         t = re.sub(r'\d?[\-–−]$', '', t)                           # 'S2–', 'Cl–': the anion
     if _TOTAL.match(t):
@@ -864,7 +865,7 @@ def epma_table(pdf, name=''):
             best = tr
         i = 0
         while i < len(lines):
-            block = []; j = i; x_col = None; gap = 0; last_row = i; merged_above = False
+            block = []; j = i; x_col = None; gap = 0; last_row = i; merged_above = False; merged_x = {}   # merged_x: block row -> x of the mean set above its label
             while j < len(lines):
                 ws = lines[j]['w']; toks = [w[4] for w in ws]
                 if not toks:
@@ -881,6 +882,7 @@ def epma_table(pdf, name=''):
                         if 1 <= len(ptoks) <= 2 and all(_NUM.match(t_.replace('−', '-')) for t_ in ptoks) and 0 < lines[j]['y'] - lines[j - 1]['y'] <= 8 \
                                 and first_x is not None and prev[0][0] < first_x - 15 and prev[0][0] > x0 + 20 and not _row_at(prev, x_col):
                             vals = [(kk, v) for kk, v in _numbers(ptoks)] + vals; ws_row = list(prev) + ws_row; merged_above = True   # the mean above the label; the range and the other columns beside it
+                            merged_x[len(block)] = (prev[0][0] + prev[0][2]) / 2
                     if j + 1 < len(lines) and kind == 'constituent':
                         nxt = lines[j + 1]['w']; ntoks = [w[4] for w in nxt]
                         n_numlike = sum(1 for t_ in ntoks if _NUM.match(t_.replace('−', '-')) or _RANGE1.match(t_.replace('−', '-')) or _NA.match(t_) or re.fullmatch(r'\(\d+\.\d+[-–]\d+\.\d+\)', t_))
@@ -1000,9 +1002,24 @@ def epma_table(pdf, name=''):
                 first_xs = [next(((w[0] + w[2]) / 2 for w in wr_ if _numlike(w[4])), None) for c_, k_, v_, wr_ in block if k_ == 'constituent']
                 first_xs = sorted(x_ for x_ in first_xs if x_ is not None)      # a constituent row with no number at all (77556, a sulfide table read across a caption) has no x
                 first_x_med = first_xs[len(first_xs) // 2] if len(first_xs) >= 3 else None
-                for c, kind, vals, ws_row in block:
+                # an element analysis prints its oxygen as a row (measured, or 'Ocalc' from the stoichiometry): there an 'O' row
+                # is a constituent; in an oxide table it is an 'O = F' remnant, as it is wherever '=' / '≡' or a minus follows
+                above = []
+                for c_, k_, v_, wr_ in block:                                     # the constituent rows above the Total
+                    if k_ == 'total':
+                        break
+                    if k_ == 'constituent' and c_ != 'O':
+                        above.append(c_)
+                element_table = len(above) >= 2 and sum(1 for c_ in above if bare(c_)) >= 0.75 * len(above)
+                mx_ = sorted(merged_x.values())
+                stagger_x = mx_[len(mx_) // 2] if len(mx_) >= 3 and mean_x is None else None   # the means' column, where they sit above their labels
+                for bi, (c, kind, vals, ws_row) in enumerate(block):
                     if c == 'O':
-                        continue                                                 # an 'O = F' remnant, never a constituent
+                        toks = [w[4] for w in ws_row][1:3]
+                        v_o = next((v for k_, v in vals if k_ == 'num'), None)
+                        remnant = any(t_[:1] in ('=', '≡', '≈') or re.match(r'^(F|Cl)\b', t_) for t_ in toks) or (v_o is not None and v_o <= 0)
+                        if remnant or not element_table or past_total:
+                            continue                                             # an 'O = F' remnant, never a constituent
                     v0 = next((v for k_, v in vals if k_ == 'num'), None)
                     if kind == 'constituent' and past_total and (in_apfu or c in _ION_ROWS):
                         if bare(c) and v0 is not None and 0 < v0 < 60:
@@ -1045,6 +1062,7 @@ def epma_table(pdf, name=''):
                     texts = [v for k, v in vals if k == 'text' and not re.fullmatch(r'[a-d*†‡§]+', v)] if has_std else []
                     if kind == 'total':
                         if (c.lower().startswith(('total', 'sum')) or c in ('Σ', 'Сумма', 'Итого')) and nums:
+                            was = total
                             total = nums[0]; past_total = True
                             if mean_x is not None:                      # the Total under the Mean column, as each constituent's mean is
                                 cand = [(abs((w[0] + w[2]) / 2 - mean_x), w[4]) for w in ws_row if _numlike(w[4])]
@@ -1052,6 +1070,13 @@ def epma_table(pdf, name=''):
                                     total = float(re.match(r'-?\d+\.?\d*', min(cand)[1].replace('−', '-').lstrip('(')).group(0))
                             elif total < 40 and any(40 <= v <= 120 for v in nums):
                                 total = next(v for v in nums if 40 <= v <= 120)   # 'Total 1.3 99.5': an s.d. or a range first, the total after it
+                            if total < 40:
+                                # under 40 is the formula block's sum ('Σ 2.01', 'Total 8.00' of the cations), not the analysis's:
+                                # it never replaces a wt% total read above it, and under rows that add like an analysis it is none
+                                if was is not None and was >= 40:
+                                    total = was
+                                elif sum((r_.get('mean') or 0.0) for r_ in rows) >= 80:
+                                    total = None
                         continue
                     if not nums:
                         continue
@@ -1065,6 +1090,11 @@ def epma_table(pdf, name=''):
                             mean = float(re.match(r'-?\d+\.?\d*', min(cand)[1].replace('−', '-').lstrip('(')).group(0))
                         elif cand and mean_hits >= max(2, n_const // 2):
                             continue                                             # every number of the row is under another column: no mean (kept in col_cells)
+                    elif stagger_x is not None and kind == 'constituent' and bi not in merged_x:
+                        x1 = next(((w[0] + w[2]) / 2 for w in ws_row if _numlike(w[4])), None)
+                        if x1 is not None and x1 > stagger_x + 30:
+                            continue                                             # the means are set above their labels (a comparison table's own column) and this row has none:
+                                                                                 # its numbers are the other analyses' (kept in col_cells) — avdeevite's TiO2 … MgO had been read from them
                     elif first_x_med is not None and len(nums) == 1 and kind == 'constituent':
                         x1 = next(((w[0] + w[2]) / 2 for w in ws_row if _numlike(w[4])), None)
                         if x1 is not None and x1 > first_x_med + 40:
@@ -3064,6 +3094,30 @@ def _check_formula(ex, text, fcand):
     converted = []; column_note = None
     need = set(counts) - {'H', 'O'} - set(EP.CALCULATED_ELEMENTS)
 
+    def _one_cell_off(wt_, e_):
+        """The mean column misses the total the table prints, and moving ONE of its cells by the gap makes it reproduce
+        the formula: a slip in that column (the total oracle below names the cell), not a reason to read another column —
+        a 10 % typo in a major oxide had been explained away by a column the typo never touched (seed_faults: a mean-only
+        typo caught 45 % at 5 %, 21 % at 10 %). A normalised column is untouched by this: there the mean column adds to
+        its own printed total."""
+        T_ = e_.get('total')
+        if not T_ or not 85 <= T_ <= 112:
+            return False
+        vals_ = {c: v for c, v in wt_.items() if v}
+        S_ = sum(vals_.values())
+        net = S_ - 0.4211 * vals_.get('F', 0.0) - 0.2257 * vals_.get('Cl', 0.0)
+        gap = min((S_ - T_, net - T_), key=abs)
+        if abs(gap) <= 0.6:
+            return False
+        for c, v in vals_.items():
+            if v - gap <= 0:
+                continue
+            wt2 = dict(wt_); wt2[c] = v - gap
+            r2 = _best(wt2)
+            if r2 is not None and not r2['diffs'] and r2['score'] <= 0.03 and not r2.get('factor'):
+                return True
+        return False
+
     def _resolve(wt0, e0):
         """One starting column through the whole chain: the best basis, another table of the paper
         that carries every element of the formula, the other columns, the oxide forms."""
@@ -3085,7 +3139,7 @@ def _check_formula(ex, text, fcand):
                         'composition given in the text' if (cand.get('header') or '').startswith('composition given in the text')
                         else ('table on page %d' % cand['page']) if cand.get('page') else 'other table of the manuscript'))
                     break
-        if r_ is None or r_['score'] > 0.03:
+        if (r_ is None or r_['score'] > 0.03) and not _one_cell_off(wt_, e_):
             for k_, alt in enumerate(table_alternatives(e_, wt_)):
                 r_alt = _best(alt)
                 if r_alt is not None and (r_ is None or r_alt['score'] < r_['score'] - 0.01):

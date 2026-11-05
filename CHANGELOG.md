@@ -61,6 +61,23 @@ package version in `pyproject.toml`.
   bonds the loops do list: median ratio to SHELXL's esd 1.02, half printed identically, 74 % within one unit of the last
   digit; the note says how they were derived.
 
+### Fixed — the analytical table read whole (`paper_extract.epma_table`), so its printed total can arbitrate
+Measured as the tables that add up to the total they print: 601 → 639 of 777 corpus tables (77 → 83 %), 114 → 136 of 154
+in a second set of papers (75 → 88 %); every reader-status change on the whole corpus A/B towards 'agrees' / 'ok', no new flag.
+- **An element analysis keeps its oxygen**: an `O` row had always been dropped as an 'O = F' remnant. It still is in an
+  oxide table and wherever '=', '≡' or a minus follows; in an element table it is the analysis's oxygen.
+- **`Ccalc`, `Hcalc`, `Ocalc`** (the C, H, O of an organic mineral from the stoichiometry, the subscript welded on) are C,
+  H and O — C, H, O only: a sulfosalt's `Ncalc` is its homologue order. **`H2O*.`**: a period after a footnote mark.
+- **A formula block's sum is not the analysis's total**: a later 'Total 2.01' (the cations) had replaced the wt% total
+  read above it; under rows that add like an analysis, a 'total' under 40 is none.
+- **Means set above their labels** (a comparison table whose first column is the paper's own): a row with no mean of its
+  own no longer takes another analysis's number.
+- **A site total after a group whose parts are all decimals** (`(S1.80O0.20)2.00`, the Σ lost) is a total, not a
+  multiplier: S had been read twice over.
+- **The composition check keeps the mean column when one of its cells is off the printed total**: another column of the
+  table that happened to reproduce the formula had explained a typo away. Seeded recall of a mean-only typo: 21 → 25 % at
+  10 %, 20 → 24 % at 20 %; a wt% slip 36 → 37 / 38 %; papers never caught 310 → 303.
+
 ### Fixed
 - Table 2's means are over every bond: a loop that writes a ×4 bond once had counted it once (rutile's `<Ti–O>` 1.964 for
   1.959).

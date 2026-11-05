@@ -331,6 +331,11 @@ class ICDDReplication(unittest.TestCase):
         self.assertEqual((ox['Fe'], round(c['Fe'], 2), round(c['H'], 2), round(c['O'], 2)), (3, 1.01, 1.09, 7.0)); self.assertEqual(fi, [])
         c, ox, fi = EP.parse_icdd_formula('Cu11.75 [ ( As1.44 Sb0.43 )S2.00 Te2.00 ] S13.11', has_sulfur=True)
         self.assertAlmostEqual(c['S'], 13.11)
+        # every part of the group a decimal and the number after it their sum: a site total with its Σ lost, not a multiplier
+        c, ox, fi = EP.parse_icdd_formula('Pb3(S1.80O0.20)2.00(SO4)')
+        self.assertEqual((round(c['S'], 2), round(c['O'], 2)), (2.80, 4.20))
+        self.assertAlmostEqual(EP.parse_icdd_formula('Ca(SO4)1.98')[0]['S'], 1.98)           # an oxyanion's number is still a multiplier
+        self.assertAlmostEqual(EP.parse_icdd_formula('Pb(S0.9O0.1)2.00Cl')[0]['S'], 1.8)     # parts summing to 1, not 2: a multiplier
         c, ox, fi = EP.parse_icdd_formula('( Zn0.32 Fe20.13 +2 )S3.00')
         self.assertTrue(any('group sums' in x for x in fi))                    # a garbled count is caught by the stated sum
 

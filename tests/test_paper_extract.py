@@ -2743,3 +2743,67 @@ class ContinuedTable(unittest.TestCase):
         p3 = [line(43, (275, 'HEAD')), line(80, (90, 'SiO2'), (165, '35.00')), line(94, (90, 'Total'), (165, '100.00'))]
         first = PE._continued_pages([p1, p2, p3])[0][1]
         self.assertEqual([ln['w'][0][4] for ln in first], ['Constituent', 'MgO', 'CaO', 'FeO', 'MnO', 'SiO2', 'Total'])
+
+
+class TableCompleteness(unittest.TestCase):
+    """The analytical table read whole — the rows add to the total the paper prints — so its total can arbitrate."""
+    def _pdf(self, path, rows, head=('Constituent', 'Mean', 'Range', 'S.D.'), xs=(40, 130, 200, 300), extra=()):
+        import pymupdf
+        doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
+        y = 60
+        for txt in ('Comptestite, a new mineral from Nowhere', 'Table 1. Chemical data (wt%) for comptestite.'):
+            page.insert_text((40, y), txt, fontsize=9); y += 16
+        for cells in (head,) + tuple(rows):
+            for x, c in zip(xs, cells):
+                if c:
+                    page.insert_text((x, y), c, fontsize=9)
+            y += 14
+        for x, yy, t in extra:
+            page.insert_text((x, yy), t, fontsize=9)
+        doc.save(path); doc.close()
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pe_tc_')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _read(self, name, rows, **kw):
+        p = os.path.join(self.tmp, name); self._pdf(p, rows, **kw)
+        e = PE.epma_table(p, 'comptestite')
+        return e, PE.rows_add_up(e['rows'], e['total'])
+
+    def test_welded_calc_and_an_element_tables_oxygen(self):
+        self.assertEqual([PE._constituent_ok(t)[0] for t in ('Ccalc', 'Hcalc', 'Ocalc', 'Ncalc', 'H2O*.', 'Cacalc')], ['C', 'H', 'O', None, 'H2O', None])
+        e, (read, ok) = self._read('org.pdf', [('Na', '20.75', '20.32-21.26', '0.49'), ('K', '0.57', '0.50-0.63', '0.07'), ('Ca', '0.36', '0.28-0.42', '0.05'),
+                                               ('Ccalc', '22.44'), ('Hcalc', '3.77'), ('Ocalc', '52.31'), ('Total', '100.20')])
+        self.assertEqual([r['constituent'] for r in e['rows']], ['Na', 'K', 'Ca', 'C', 'H', 'O'])
+        self.assertTrue(ok, (read, e['total']))
+        # in an oxide table an 'O' row is the O = F remnant still, never a constituent
+        e, _ = self._read('ox.pdf', [('SiO2', '45.10'), ('CaO', '30.20'), ('F', '2.00'), ('O', '-0.84'), ('H2O', '23.50'), ('Total', '99.96')])
+        self.assertNotIn('O', [r['constituent'] for r in e['rows']])
+
+    def test_a_formula_blocks_sum_is_not_the_total(self):
+        e, (read, ok) = self._read('apfu.pdf', [('SiO2', '50.00'), ('MgO', '30.00'), ('FeO', '19.50'), ('Total', '99.50'), ('Si', '1.00'), ('Mg', '0.99'), ('Total', '2.01')])
+        self.assertEqual(e['total'], 99.50)                                    # the apfu block's 'Total 2.01' does not replace it
+        e, _ = self._read('noTot.pdf', [('SiO2', '50.00'), ('MgO', '30.00'), ('FeO', '19.50'), ('Sum', '2.01')])
+        self.assertIsNone(e['total'])                                          # under rows that add like an analysis: none
+
+    def test_means_set_above_their_labels(self):
+        # a comparison table: column 1 (this paper) prints its means on the line above each label; a row with no mean of its
+        # own must not take another analysis's number
+        import pymupdf
+        p = os.path.join(self.tmp, 'stag.pdf')
+        doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
+        y = 60
+        for t in ('Comptestite, a new mineral from Nowhere', 'Table 1. Chemical composition of comptestite, wt %', '1 2 3'):
+            page.insert_text((40, y), t, fontsize=9); y += 16
+        for lab, own, other in (('SiO2', '61.06', '61.88'), ('Al2O3', '17.40', '17.10'), ('TiO2', None, '0.21'), ('Na2O', '19.10', '18.70'),
+                                ('CaO', None, '0.44'), ('K2O', '2.07', '2.11')):
+            if own:
+                page.insert_text((110, y), own, fontsize=9); y += 7
+            page.insert_text((40, y), lab, fontsize=9); page.insert_text((165, y), other, fontsize=9); y += 12
+        page.insert_text((40, y), 'Total', fontsize=9); page.insert_text((110, y), '99.63', fontsize=9); page.insert_text((165, y), '100.44', fontsize=9)
+        doc.save(p); doc.close()
+        e = PE.epma_table(p, 'comptestite')
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'SiO2': 61.06, 'Al2O3': 17.40, 'Na2O': 19.10, 'K2O': 2.07})
