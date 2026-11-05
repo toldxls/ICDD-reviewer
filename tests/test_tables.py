@@ -52,26 +52,41 @@ class Rutile(unittest.TestCase):
         self.assertIn('Ti1–O1', text)
         self.assertIn('1.9485(5)', text)                              # esds from the .cif loop
         self.assertIn('<Ti–O>', text)                                 # one Ti site: mean by element
-        self.assertIn('Symmetry codes: (1) −y+½, x+½, z+½', text)
+        self.assertIn('Symmetry codes: (3) −y+½, x+½, z+½', text)   # the .cif's operator number
         self.assertNotIn('no _geom_bond loop', bonds['note'])
 
     def test_symcode_legend(self):
         # the GUI's cheat sheet: n_klm = operator n, then k−5, l−5, m−5 cells along a, b, c; a pair the
         # table lists twice (Ti1–O1 at 1.9485 and 1.9800) is told apart by its distance
         leg = dict(self.tabs)['bonds']['symcodes']
-        self.assertEqual(leg, [{'n': 1, 'code': '3_555', 'op': '−y+½, x+½, z+½', 'used': ['Ti1–O1 (1.9800)'],
+        self.assertEqual(leg, [{'n': '3', 'code': '3_555', 'op': '−y+½, x+½, z+½', 'used': ['Ti1–O1 (1.9800)'],
                                 'base_n': 3, 'base': '−y+½, x+½, z+½', 'shift': [0, 0, 0]}])
         codes = T.SymCodes(self.st)
         codes.begin_table('bonds')
         self.assertIsNone(codes.index('.', 'Ti1–O1', '1.9485(5)'))
-        self.assertEqual(codes.index('3_466', 'Ti1–O1', '1.9800(2)'), 1)
+        self.assertEqual(codes.index('3_466', 'Ti1–O1', '1.9800(2)'), '3')
         (c,) = codes.legend()
         self.assertEqual((c['op'], c['shift'], c['used']), ('−y−½, x+3/2, z+3/2', [-1, 1, 1], ['Ti1–O1 (1.9800)']))
+
+    def test_symcode_labels_follow_the_cif_operators(self):
+        # the superscript is the .cif's operator number; the same operator with another translation takes a prime
+        codes = T.SymCodes(self.st)
+        codes.begin_table('bonds')
+        self.assertEqual([codes.index(c, 'Ti1–O%d' % i) for i, c in enumerate(['6_665', '4_565', '6_656', '1_555', '6_555'])],
+                         ['6', '4', '6′', None, '6″'])
+        self.assertEqual(codes.note(), 'Symmetry codes: (4) %s; (6) %s; (6′) %s; (6″) %s.'
+                         % tuple(codes.codes[c] for c in ('4_565', '6_665', '6_656', '6_555')))
+        self.assertEqual([c['n'] for c in codes.legend()], ['4', '6', '6′', '6″'])
+        self.assertEqual(T.plain(T.C('O5', T.R('6′', 'sup'))), 'O5⁶′')
+        # past three primes the CIF code itself (a P-1 table can need a dozen translations of one operator)
+        self.assertEqual([codes.index(c) for c in ('6_556', '6_545', '6_655')], ['6‴', '6_545', '6_655'])
+        self.assertTrue(codes.note().endswith('(6‴) %s; (6_545) %s; (6_655) %s.' % tuple(codes.codes[c] for c in ('6_556', '6_545', '6_655'))))
+        self.assertEqual(T.plain(T.C('O5', T.R('6_545', 'sup'))), 'O5^(6_545)')
 
     def test_symcode_legend_keeps_a_non_nklm_code_s_bonds(self):
         codes = T.SymCodes(self.st); codes.begin_table('bonds')
         codes.index('#1', 'Ti1–O1'); codes.index('3_555', 'Ti1–O2'); codes.index('#1', 'Ti1–O3')
-        self.assertEqual([(c['code'], c['used']) for c in codes.legend()], [('#1', ['Ti1–O1', 'Ti1–O3']), ('3_555', ['Ti1–O2'])])
+        self.assertEqual([(c['code'], c['used']) for c in codes.legend()], [('3_555', ['Ti1–O2']), ('#1', ['Ti1–O1', 'Ti1–O3'])])   # n_klm codes in operator order, others after
 
     def test_bvs_table(self):
         bvs = dict(self.tabs)['bvs']
@@ -86,7 +101,7 @@ class Rutile(unittest.TestCase):
 
     def test_render_and_word(self):
         h = T.render_html(self.tabs)
-        self.assertIn('<sup>1</sup>', h); self.assertIn('data-kind="bvs"', h)
+        self.assertIn('<sup>3</sup>', h); self.assertIn('data-kind="bvs"', h)
         self.assertNotIn('<script', h)
         out = os.path.join(self.tmp, 'out')
         st, tabs, text = T.run(self.cif, word=True, params='bo', out_dir=out, quiet=True)
@@ -172,3 +187,63 @@ class Computed(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 
+
+CAOS = """data_caos
+_chemical_name_mineral testite
+_cell_length_a 8
+_cell_length_b 8
+_cell_length_c 8
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_name_H-M_alt 'P 1'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+Ca1 Ca 0 1.0 0
+O1 O 0.3 1.0 0
+S1 S 0 0.65 0
+"""
+
+
+class BondTableFromTheBonds(unittest.TestCase):
+    """Table 2 lists exactly the bonds the bond-valence table counts: the loop's distances (with esds) where it lists
+    them, computed ones where it does not; a mean per anion; codes measured in the .cif's own frame."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='tbl2_')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_bond_the_loop_lacks_is_computed(self):
+        cif = _write(self.tmp, 'r.cif', RUTILE.replace('Ti1 O1 1.9800(5) 3_555\n', ''))   # the loop keeps the 1.9485 only
+        st, tabs = T.build(cif, params='bo')
+        b = dict(tabs)['bonds']; text = T.render_text([('bonds', b)])
+        self.assertIn('1.9485(5)', text)                                            # the loop's, with its esd, as the loop writes it (once)
+        self.assertEqual(re.findall(r'Ti1–O1(\S*)\s+1\.980\b', text), ['', '²'], text)   # the ×2 the loop lacked, one row per image, no esd:
+                                                                                     # O1 as listed (no code) and its 2_555 image
+        self.assertIn('without an esd are computed', b['note'])
+        self.assertEqual(T.coord('1.25'), '1¼'); self.assertEqual(T.coord('-1.5'), '-1½'); self.assertEqual(T.coord('0.75'), '¾')
+
+    def test_mean_per_anion_and_the_cif_frame(self):
+        cif = _write(self.tmp, 'caos.cif', CAOS)
+        st, tabs = T.build(cif)
+        text = T.render_text([('bonds', dict(tabs)['bonds'])])
+        self.assertIn('<Ca–O>', text); self.assertIn('<Ca–S>', text); self.assertNotIn('O/S', text)
+        self.assertIn('Ca1–O1  ', text)                       # O1 as listed (y = 1.0 like Ca1): no code — a wrapped Ca1 had given it one
+        self.assertNotIn('Symmetry codes', dict(tabs)['bonds']['note'])
+
+    def test_site_options_move_both_tables(self):
+        cif = _write(self.tmp, 'rutile.cif', RUTILE)
+        st, tabs = T.build(cif, params='bo', sites='Ti1 max=1.96; O1 comp=O0.9F0.1')
+        text = T.render_text([('bonds', dict(tabs)['bonds'])])
+        self.assertNotIn('1.9800', text)                                            # past Ti1's longest bond: out of both tables
+        bvs = dict(tabs)['bvs']
+        self.assertIn('O1 taken as O0.90F0.10', bvs['note']); self.assertIn('Bonds to Ti1 counted up to 1.96 Å', bvs['note'])
+        self.assertEqual([T.plain(c) for c in dict(tabs)['coords']['rows'][1]][1], 'O₁.₀₀')   # the coordinates stay the .cif's
+        meta = {m['label']: m for m in bvs['sites']}
+        self.assertEqual((meta['Ti1']['kind'], meta['Ti1']['max'], meta['O1']['species']), ('cation', 1.96, 'O0.90F0.10'))
+        self.assertEqual({(p['cation'], p['anion']) for p in meta['Ti1']['pairs']}, {('Ti', 'O'), ('Ti', 'F')})

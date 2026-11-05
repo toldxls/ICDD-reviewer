@@ -1122,3 +1122,82 @@ class DisorderGroups(unittest.TestCase):
             self.assertEqual(near('C1'), ['O1A', 'O2'])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class SiteOptions(unittest.TestCase):
+    """A site's own options (`--site`, the Tables tab's column / row panel): its parameter set, its R0 and b for one
+    anion, its longest bond, its composition — in the calculation, the note and the workbook alike."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='bvsite_')
+        cls.cif = _write(cls.tmp, 'rutile.cif', RUTILE)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _run(self, sites, params='bo'):
+        st = B.Structure(self.cif); P = B.Params(prefer=params)
+        notes = B.apply_sites(st, P, sites)
+        return st, P, notes, B.compute(st, P)
+
+    def test_parse(self):
+        o = B.parse_sites('Ti1 set=ba; Ti1 O=1.8/0.37/A. Author (2020)\nTi1 max=2.5; O1 comp=O0.9F0.1')
+        self.assertEqual(o['Ti1'], {'set': 'ba', 'pairs': {'O': (1.8, 0.37, 'A. Author (2020)')}, 'max': 2.5})
+        self.assertEqual(o['O1'], {'comp': 'O0.9F0.1'})
+        self.assertEqual(B.parse_sites(B.site_spec(o)), o)                          # the text round-trips
+        self.assertEqual(B.parse_sites('Ti1 O=1.8')['Ti1']['pairs']['O'], (1.8, 0.37, ''))   # b defaults to 0.37
+        self.assertEqual(B.parse_composition('Fe3+0.6Fe2+0.4'), [('Fe', 3, 0.6), ('Fe', 2, 0.4)])
+        self.assertEqual(B.parse_composition('O0.9'), [('O', None, 0.9)])
+        for bad in ('Ti1 set=zz', 'Ti1 max=9', 'Ti1 O=x/0.37', 'Ti1 foo=1', 'nonsense', 'O1 comp=O0.9F0.2', 'O1 comp=Qq1'):
+            with self.assertRaises(ValueError, msg=bad):
+                B.parse_sites(bad)
+
+    def test_site_r0_and_set(self):
+        st, P, notes, (result, *_r) = self._run('Ti1 O=1.8/0.37/A. Author (2020)')
+        b = min(result[0][1], key=lambda x: x.dist)
+        self.assertAlmostEqual(b.vals[0][1], math.exp((1.8 - b.dist) / 0.37), places=9)
+        self.assertIn('Ti1–O: R0 = 1.800 Å, b = 0.370, from A. Author (2020)', P.note())
+        self.assertNotIn("Brese", P.note())                                        # the only Ti–O is the site's own
+        st, P, notes, (result, *_r) = self._run('Ti1 set=ba', params='gh')
+        self.assertEqual(list(P.used_site), [('Ti1', 'Ti', 4, 'O')])
+        self.assertEqual(P.note(), 'Bond-valence parameters from Brown and Altermatt (1985)')   # every bond the site's: no other set to name
+
+    def test_composition_and_longest_bond(self):
+        _, _, _, (plain, *_r) = self._run(None)
+        st, P, notes, (mixed, an, cells, hb) = self._run('O1 comp=O0.9F0.1')
+        b0 = min(plain[0][1], key=lambda x: x.dist); b1 = min(mixed[0][1], key=lambda x: x.dist)
+        sF = P.valence('Ti', 4, 'F', -1, b1.dist)
+        self.assertAlmostEqual(b1.vals[0][1], 0.9 * b0.vals[0][1] + 0.1 * sF, places=9)   # weighted over the two species
+        self.assertIn('O1 taken as O0.90F0.10 (its bonds weighted over the species)', notes)
+        st, P, notes, (vac, *_r) = self._run('O1 comp=O0.9')
+        self.assertAlmostEqual(vac[0][2], 0.9 * plain[0][2], places=9)              # 10 % vacant: the cation sum scaled
+        st, P, notes, (short, *_r) = self._run('Ti1 max=1.96')
+        self.assertEqual(sum(b.count for b in short[0][1]), 4)                      # the 1.980 ×2 left out
+        self.assertIn('bonds to Ti1 counted up to 1.96 Å', notes)
+
+    def test_refused(self):
+        for bad, why in (('Q9 comp=O', 'no such site'), ('O1 set=ba', 'cation site'), ('O1 comp=Ti1', 'write its valence'), ('O1 comp=Ti4+1', 'would make an anion site a cation')):
+            st = B.Structure(self.cif)
+            with self.assertRaises(ValueError) as cm:
+                B.apply_sites(st, B.Params(), bad)
+            self.assertIn(why, str(cm.exception))
+
+    def test_workbook_follows_the_site_options(self):
+        from tests.xl_eval import Book
+        out = os.path.join(self.tmp, 'o')
+        sites = 'Ti1 O=1.8/0.37; O1 comp=O0.9F0.1'
+        st, result, anion_sum, cells, text = B.run(self.cif, params='bo', out_dir=out, quiet=True, xlsx=True, sites=sites)
+        b = Book(os.path.join(out, 'rutile_bv.xlsx'))
+        self.assertAlmostEqual(b.value('BV table', 'B3'), result[0][2], places=9)
+        self.assertAlmostEqual(b.value('BV table', 'C2'), anion_sum['O1'], places=9)
+        self.assertIn('site options: O1 taken as O0.90F0.10', text)
+        self.assertIn('Ti1: Ti+4–O', text)                                          # PARAMETERS USED names the site
+
+
+class MeanChecks(unittest.TestCase):
+    def test_rounded_mean_and_mean_by_anion(self):
+        st = B.Structure(_write(tempfile.mkdtemp(prefix='bvm_'), 'rutile.cif', RUTILE)); P = B.Params(prefer='bo')
+        result, *_r = B.compute(st, P)
+        rows = [['Ti1–O1 ×4', '1.949(1)'], ['Ti1–O1 ×2', '1.980(1)'], ['<Ti1–O>', '1.96']]   # 1.9593 printed to two decimals
+        self.assertFalse([x for x in B.check_bond_table(st, result, [rows]) if 'given as' in x])

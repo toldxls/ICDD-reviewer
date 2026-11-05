@@ -2006,7 +2006,7 @@ def _tb_load_opts():
 def _tb_save_opts(tab, opts):
     """Remember one tab's inputs (strings only, bounded) so tomorrow's session starts where this
     one stopped. Values are re-validated on every use — this is convenience, not trust."""
-    clean = {str(k)[:40]: str(v)[:400] for k, v in opts.items() if isinstance(v, (str, int, float, bool))}
+    clean = {str(k)[:40]: str(v)[:4000 if k == 'sites' else 400] for k, v in opts.items() if isinstance(v, (str, int, float, bool))}   # 'sites': every .cif's site options, as JSON
     with MS['lock']:
         MS['tb_opts'][tab] = dict(list(clean.items())[:40])
         if not MS.get('out_dir'):
@@ -2040,9 +2040,12 @@ def _tb_opts():
     pairs = re.sub(r'\s+', '', request.args.get('hbp') or '')[:300]
     if pairs and not re.fullmatch(r'%s>%s(,%s>%s)*' % (lab, lab, lab, lab), pairs):
         pairs = ''
+    # a site's own options (the Bond valence tab's column / row panel): parsed by bv_check.parse_sites inside the build, whose
+    # error message reaches the page; only bounded and stripped of control characters here
+    sites = re.sub(r'[\x00-\x09\x0b-\x1f]', '', request.args.get('sites') or '')[:2000].strip()
     return dict(params=params, ox=ox or None, cutoff=_qf('cutoff', 1.0, 6.0), include_h=request.args.get('noh') != '1',
                 journal_key=_tb_journal(), hbond=hb, hmax=_qf('hmax', 2.6, 4.0), donors=donors or None, hb=pairs or None,
-                u6='params' if request.args.get('u6set') == '1' else 'burns')
+                u6='params' if request.args.get('u6set') == '1' else 'burns', sites=sites or None)
 
 def _q(name, default='', n=300):
     v = request.args.get(name)
@@ -2228,11 +2231,12 @@ def api_tb_tables(key):
     except Exception as ex:
         return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
     symcodes = dict(tabs)['bonds'].get('symcodes', [])
+    bv_sites = dict(tabs)['bvs'].get('sites', []) if 'bvs' in dict(tabs) else []
     if keep:
         tabs = [(k, t) for k, t in tabs if k in keep]
     return jsonify({'ok': True, 'name': st.name, 'formula': st.formula, 'sg': st.sg,
                     'notes': st.notes, 'html': TB.render_html(tabs), 'text': TB.render_text(tabs),
-                    'symcodes': symcodes if 'bonds' in dict(tabs) else []})
+                    'symcodes': symcodes if 'bonds' in dict(tabs) else [], 'bv_sites': bv_sites, 'sites': opts.get('sites') or ''})
 
 @app.route('/api/tb/bvs/<key>/export', methods=['POST'])
 def api_tb_bvs_export(key):
@@ -2247,7 +2251,7 @@ def api_tb_bvs_export(key):
     run = lambda table: BV.run(MS['cifs'][key], table=table, params=opts['params'], ox=opts['ox'], cutoff=opts['cutoff'],
                                include_h=opts['include_h'], out_dir=MS['out_dir'], quiet=True, xlsx=True,
                                hbond=opts['hbond'], hmax=opts['hmax'], donors=opts['donors'], hb=opts['hb'], u6=opts['u6'],
-                               follow_table=False)       # the workbook is the pane's table: a paper left selected never moves it to another parameter set
+                               follow_table=False, sites=opts['sites'])       # the workbook is the pane's table: a paper left selected never moves it to another parameter set
     try:
         try:
             run(paper)

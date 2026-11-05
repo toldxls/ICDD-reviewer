@@ -544,6 +544,35 @@ class Structure:
                 return s
         return None
 
+    def set_composition(self, label, comp):
+        """Give a site another composition ('O0.9F0.1', as parse_composition reads it): its species replaced, its
+        place in the structure kept. A species' valence is the one written, else the site's own for that element,
+        else the usual one (an anion's charge for an anion site). The site stays a cation or an anion site."""
+        site = self.site(label)
+        if site is None:
+            raise ValueError('no site %s in the .cif' % label)
+        was_cation = self.is_cation(site)
+        own = {sp.element: sp.ox for sp in site.species if sp.ox is not None}
+        species = []
+        for el, ox, occ in parse_composition(comp):
+            if ox is None and (el in ANION_OX) == was_cation and el not in own and not (was_cation and el in ('S', 'Se', 'Te', 'N')):
+                raise ValueError('site %s: %s on a%s site — write its valence (%s%s%.2f)' % (site.label, el, ' cation' if was_cation else 'n anion', el,
+                                 '3+' if not was_cation else '2-', occ))
+            if ox is None:
+                ox = own.get(el)
+                if ox is None or (ox > 0) != was_cation:
+                    ox = (-abs(ANION_OX.get(el, 2))) if not was_cation else DEFAULT_OX.get(el)
+            if ox is None:
+                raise ValueError('site %s: no usual valence for %s — write it (%s3+%.2f)' % (site.label, el, el, occ))
+            if (ox > 0) != was_cation:
+                raise ValueError('site %s: %s%+d would make a%s site a%s' % (site.label, el, ox, ' cation' if was_cation else 'n anion', 'n anion' if was_cation else ' cation'))
+            species.append(Species(el, ox, occ))
+        new = site._replace(species=species, element=species[0].element, occ_total=sum(sp.occ for sp in species))
+        self.sites = [new if s is site else s for s in self.sites]
+        self.cations = [s for s in self.sites if self.is_cation(s)]
+        self.anions = [s for s in self.sites if not self.is_cation(s)]
+        return new
+
 # ----------------------------------------------------------------------------- parameters
 
 PARAM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'bvparm2020.cif')
@@ -632,11 +661,18 @@ class Params:
         self.prefer_key = prefer if prefer in PREFER else 'gh'
         self.u6 = u6
         self.used = OrderedDict()
+        # per cation SITE (the Tables tab's column options, `--site`): {label: {'set': 'gh'|'bo'|'ba', 'pairs': {anion
+        # element: (R0, b, reference text)}}}; what they gave is kept apart from the set's own use, for the note
+        self.site_sets = {}
+        self.used_site = OrderedDict()            # (site label, cation, valence, anion) -> (R0, b, ref id or 'given:<text>')
 
-    def short_ref(self, rid):
+    def short_ref(self, rid, prefer_key=None):
         """'Gagné and Hawthorne (2015)' for a reference id — the set's own name for a value the
-        chosen set reprints (Brese & O'Keeffe 1991 carries every Brown & Altermatt 1985 value)."""
-        if rid == 'a' and self.prefer_key == 'bo':
+        chosen set reprints (Brese & O'Keeffe 1991 carries every Brown & Altermatt 1985 value).
+        A value given by hand ('given:<text>') is cited by its text."""
+        if rid.startswith('given:'):
+            return rid[6:] or 'as given'
+        if rid == 'a' and (prefer_key or self.prefer_key) == 'bo':
             rid = 'b'
         if rid in SHORT_REF:
             return SHORT_REF[rid]
@@ -651,51 +687,89 @@ class Params:
             who = ' and '.join(authors)
         return '%s (%s)' % (who, m.group(2))
 
+    @staticmethod
+    def _ion(cat, cox):
+        return 'NH4+' if cat == 'NH' else cat + ('' if cox == 9 else ('%d+' % cox if cox > 1 else '+'))
+
     def note(self):
         """The journal-style attribution of every parameter used: 'Bond-valence parameters from
         Gagné and Hawthorne (2015); U6+–O from Burns et al. (1997); NH4+–O from García-Rodríguez
-        et al. (2000)' (hydrogen is cited with the hydrogen bonds)."""
-        by_ref = OrderedDict()
+        et al. (2000)' (hydrogen is cited with the hydrogen bonds). A site given its own set or
+        values is named by its label: 'Pb1–S from Brown and Altermatt (1985)'; values given by hand
+        are printed: 'Pb1–S: R0 = 2.541 Å, b = 0.370, from A. Author (2020)'."""
+        by_ref = OrderedDict(); given = []
         for (cat, cox, an), (r0, b, rid) in self.used.items():
             if cat == 'H':
                 continue
-            ion = 'NH4+' if cat == 'NH' else cat + ('' if cox == 9 else ('%d+' % cox if cox > 1 else '+'))
-            by_ref.setdefault(self.short_ref(rid), []).append('%s–%s' % (ion, an))
-        if not by_ref:
+            by_ref.setdefault(self.short_ref(rid), []).append('%s–%s' % (self._ion(cat, cox), an))
+        for (lab, cat, cox, an), (r0, b, rid) in self.used_site.items():
+            if rid.startswith('given:'):
+                given.append('%s–%s: R0 = %.3f Å, b = %.3f%s' % (lab, an, r0, b, ', from %s' % rid[6:] if rid[6:] else ' (as given)'))
+            else:
+                by_ref.setdefault(self.short_ref(rid, self.site_sets.get(lab, {}).get('set')), []).append('%s–%s' % (lab, an))
+        if not by_ref and not given:
             return ''
-        main = max(by_ref, key=lambda k: len(by_ref[k]))
-        parts = ['Bond-valence parameters from %s' % main]
-        for ref, pairs in by_ref.items():
-            if ref != main:
-                parts.append('%s from %s' % (_join(pairs), ref))
-        return '; '.join(parts)
+        parts = []
+        if by_ref:
+            main = max(by_ref, key=lambda k: len(by_ref[k]))
+            parts = ['Bond-valence parameters from %s' % main]
+            for ref, pairs in by_ref.items():
+                if ref != main:
+                    parts.append('%s from %s' % (_join(pairs), ref))
+        return '; '.join(parts + given)
 
-    def get(self, cat, cox, an, aox):
-        """(R0, b, ref_id) or None. The preferred reference first; then any; then the
-        oxidation-state-unspecified (9) entry."""
+    def used_items(self):
+        """[(pair, R0, b, reference)] — every parameter used, a site's own after the set's ('Pb1: Pb+2–S')."""
+        out = [('%s%+d–%s' % (cat, cox, an), r0, b, self.refs.get(rid, rid)) for (cat, cox, an), (r0, b, rid) in self.used.items()]
+        out += [('%s: %s%+d–%s' % (lab, cat, cox, an), r0, b, rid[6:] or 'as given' if rid.startswith('given:') else self.refs.get(rid, rid))
+                for (lab, cat, cox, an), (r0, b, rid) in self.used_site.items()]
+        return out
+
+    def _lookup(self, cat, cox, an, aox, prefer):
         for key in ((cat, cox, an, aox), (cat, 9, an, aox), (cat, cox, an, 9), (cat, 9, an, 9)):
             rows = self.table.get(key)
             if not rows:
                 continue
-            for ref in (PREFER_CATION.get((cat, cox), []) if self.u6 == 'burns' else []) + self.prefer:
+            for ref in (PREFER_CATION.get((cat, cox), []) if self.u6 == 'burns' else []) + prefer:
                 for r0, b, rid, det in rows:
                     if rid == ref and 'unchecked' not in det:
-                        self.used[(cat, cox, an)] = (r0, b, rid); return r0, b, rid
+                        return r0, b, rid
             r0, b, rid, det = rows[0]
-            self.used[(cat, cox, an)] = (r0, b, rid); return r0, b, rid
+            return r0, b, rid
         return None
 
-    def max_length(self, cat, cox, an, aox, min_s=MIN_S):
+    def get(self, cat, cox, an, aox, site=None):
+        """(R0, b, ref_id) or None. The preferred reference first; then any; then the
+        oxidation-state-unspecified (9) entry. `site`: the cation site's label — its own set or
+        values when it was given them (`site_sets`)."""
+        o = self.site_sets.get(site) if site else None
+        if o:
+            if an in o.get('pairs', {}):
+                r0, b, ref = o['pairs'][an]
+                p = (r0, b, 'given:' + (ref or ''))
+            elif o.get('set'):
+                p = self._lookup(cat, cox, an, aox, PREFER[o['set']])
+            else:
+                p = None
+            if p is not None:
+                self.used_site[(site, cat, cox, an)] = p
+                return p
+        p = self._lookup(cat, cox, an, aox, self.prefer)
+        if p is not None:
+            self.used[(cat, cox, an)] = p
+        return p
+
+    def max_length(self, cat, cox, an, aox, min_s=MIN_S, site=None):
         """The distance at which the valence drops to min_s (None without parameters)."""
-        p = self.get(cat, cox, an, aox)
+        p = self.get(cat, cox, an, aox, site)
         return None if p is None else p[0] - p[1] * math.log(min_s)
 
-    def valence(self, cat, cox, an, aox, R):
+    def valence(self, cat, cox, an, aox, R, site=None):
         if cat == 'H':
             for lim, r0, b in H_RANGES:
                 if R < lim:
                     self.used[('H', 1, an)] = (r0, b, 'bc'); return math.exp((r0 - R) / b)
-        p = self.get(cat, cox, an, aox)
+        p = self.get(cat, cox, an, aox, site)
         if p is None:
             return None
         return math.exp((p[0] - R) / p[1])
@@ -727,6 +801,10 @@ def compute(st, params, cutoff=None, hbond='oo', hmax=None, donors=None, force=N
         cut = cutoff or max(CUTOFF.get(sp.element, 3.2) for sp in c.species)
         if c.element == 'H':
             cut = cutoff or CUTOFF['H']
+        own_cut = (getattr(st, 'site_cutoff', None) or {}).get(c.label)
+        if own_cut and c.element != 'H':
+            cut = own_cut                          # this cation's own longest bond: everything within it, as --cutoff
+        explicit = cutoff is not None or bool(own_cut)
         bonds = []
         for other, d, n in st.neighbours(c, cut):
             if st.is_cation(other):
@@ -739,17 +817,17 @@ def compute(st, params, cutoff=None, hbond='oo', hmax=None, donors=None, force=N
                     continue
                 s = 0.0; missing = False
                 for a in an_species:                    # 'F1/OH1': occupancy-weighted over the anions
-                    v = params.valence(sp.element, sp.ox, a.element, a.ox, d)
+                    v = params.valence(sp.element, sp.ox, a.element, a.ox, d, site=c.label)
                     if v is None:
                         missing = True; continue
                     s += (a.occ / an_tot) * v
                 vals.append((sp, None if missing and s == 0.0 else s))
             if vals and any(s is not None for _, s in vals):
-                if c.element != 'H' and cutoff is None and max((s or 0.0) for _, s in vals) < MIN_S:
+                if c.element != 'H' and not explicit and max((s or 0.0) for _, s in vals) < MIN_S:
                     continue                        # too weak to be a bond in a published table (an
                                                     # explicit --cutoff means: everything within it)
                 bonds.append(Bond(c, other, d, n, vals))
-        if c.element != 'H' and cutoff is None:
+        if c.element != 'H' and not explicit:
             bonds = first_shell([(b.dist, b.count, max((s or 0.0) for _, s in b.vals), b) for b in bonds])
         if c.element == 'H' and bonds:
             # X-ray O–H distances are short and unreliable: take the acceptor valences from the
@@ -1196,8 +1274,8 @@ def report_text(st, params, result, anion_sum, cells, geom_check=None, hbonds=()
         L.append('  (Σan = cations + accepted hydrogen bonds, as the tables print it; O–H = the donor\'s own Σ(1 − s); Σall = both)')
     L.append('')
     L.append('PARAMETERS USED (R0, b, reference)')
-    for (cat, cox, an), (r0, bb, rid) in params.used.items():
-        L.append('  %-4s%+d – %-3s  R0 %.3f  b %.3f   %s' % (cat, cox, an, r0, bb, params.refs.get(rid, rid)))
+    for pair, r0, bb, ref in params.used_items():
+        L.append('  %-14s  R0 %.3f  b %.3f   %s' % (pair, r0, bb, ref))
     L.append('  table note: %s.' % params.note())
     if geom_check:
         L.append('')
@@ -1339,17 +1417,26 @@ def check_bond_table(st, result, tables):
                 def mean_of(vals):
                     return sum(v * n for v, n in vals) / sum(n for v, n in vals)
                 mean = mean_of(listed_vals)
-                if abs(mean - d) > 0.002:
+                # the printed rounding: a mean printed to two decimals (2.15 for 2.145) carries ±0.005
+                mtol = 0.0051 if abs(d * 100 - round(d * 100)) < 1e-6 else 0.002
+                if abs(mean - d) > mtol:
                     # a qualified mean ('<U–Oyl>', '<Ca–O/F>') may cover a leading or trailing subset
                     subsets = [listed_vals[:k] for k in range(1, len(listed_vals))] + \
                               [listed_vals[k:] for k in range(1, len(listed_vals))]
-                    if not any(abs(mean_of(sv) - d) <= 0.002 for sv in subsets):
+                    if not any(abs(mean_of(sv) - d) <= mtol for sv in subsets):
                         L.append('table %d row %d: <%s–%s> given as %.3f but the %d listed values average %.3f'
                                  % (ti + 1, ri + 1, cat, an, d, sum(n for v, n in listed_vals), mean))
-                cif_vals = [(v, n) for (cc, aa), lst in comp.items() if cc == _norm_label(cat) for v, n, _ in lst]
-                if cif_vals and abs(mean - d) <= 0.002:      # a plain mean over the whole listed set
+                # a mean named by its anion ('<Pb1–S>' beside '<Pb1–O>') is over that anion's bonds only
+                mine = [(aa, lst) for (cc, aa), lst in comp.items() if cc == _norm_label(cat)]
+                el_of = lambda aa: re.match(r'[A-Z][a-z]?', aa).group(0) if re.match(r'[A-Z][a-z]?', aa) else aa
+                want = set(re.findall(r'[A-Z][a-z]?', an or ''))
+                have = {el_of(aa) for aa, _ in mine}
+                if want and want <= have and want != have:
+                    mine = [(aa, lst) for aa, lst in mine if el_of(aa) in want]
+                cif_vals = [(v, n) for _, lst in mine for v, n, _ in lst]
+                if cif_vals and abs(mean - d) <= mtol:      # a plain mean over the whole listed set
                     cm = sum(v * n for v, n in cif_vals) / sum(n for v, n in cif_vals)
-                    if abs(cm - d) > 0.004:
+                    if abs(cm - d) > max(0.004, mtol):
                         L.append('table %d row %d: <%s–%s> %.3f vs %.3f from the .cif over %d bonds (different bond set?)'
                                  % (ti + 1, ri + 1, cat, an, d, cm, sum(n for v, n in cif_vals)))
             listed[(ti, ci)] = []
@@ -1630,14 +1717,28 @@ def _loop_codes(st, lab1, lab2):
                 out.add(s.strip())
     return {('1_555' if c in ('.', '') else c) for c in out}
 
-def _loop_note(st, site, pos, pair, frame=None):
-    """' (the .cif's 2_657)' when the fix is the code the .cif's own geometry loop gives for the pair
-    (only in the .cif's frame: a site the manuscript prints a cell over moves the translation)."""
+def _loop_hit(st, site, pos, pair, frame=None):
+    """(code, (rot, tr)) of the .cif's own geometry loop for the pair when that code carries `site` to
+    `pos`, else None. Any of the loop's codes counts: an atom on a special position is reached by more
+    than one operator, and the .cif's choice is the one to quote (only in the .cif's frame: a site the
+    manuscript prints a cell over moves the translation)."""
     if frame and any(frame.get(l) is not None and frame[l] != list(st.site(l).frac) for l in pair):
-        return ''
-    c = _code_of(st, site, pos)
-    c = '1_555' if c == '.' else c
-    return " (the .cif's %s)" % c if c in _loop_codes(st, *pair) else ''
+        return None
+    for c in sorted(_loop_codes(st, *pair)):
+        m = re.match(r'^(\d+)_(\d)(\d)(\d)$', c)
+        if not m or not 1 <= int(m.group(1)) <= len(st.ops):
+            continue
+        rot, tr = st.ops[int(m.group(1)) - 1]
+        op = (rot, [tr[i] + int(m.group(i + 2)) - 5 for i in range(3)])
+        q = _apply(op, site.frac)
+        if max(abs(q[i] - pos[i]) for i in range(3)) < 1e-3:
+            return c, op
+    return None
+
+def _loop_note(st, site, pos, pair, frame=None):
+    """' (the .cif's 2_657)' when the fix is the code the .cif's own geometry loop gives for the pair."""
+    h = _loop_hit(st, site, pos, pair, frame)
+    return " (the .cif's %s)" % h[0] if h else ''
 
 def _num_run(cells):
     """The numbers in the cells after a row label, up to the next label (a table printed in two
@@ -1727,7 +1828,8 @@ def check_symmetry_codes(st, tables, notes, paragraphs=()):
             return min(hits, key=rank)
         def miss(ri, cell_s, d_txt, code, mover, other_lab, got, hit, gives, pair, extra=''):
             """A row the printed code (or no code) does not reproduce, and the image that does."""
-            fix = _op_text(hit[1]); ln = _loop_note(st, mover, hit[0], pair, frame)
+            lh = _loop_hit(st, mover, hit[0], pair, frame)
+            fix = _op_text(lh[1] if lh else hit[1]); ln = " (the .cif's %s)" % lh[0] if lh else ''
             if code:
                 printed = codes[code][:2]
                 kind = 'translation' if _same_op(hit[1], printed) else 'operator'
@@ -2916,7 +3018,7 @@ def write_xlsx(st, params, result, anion_sum, cells, hbonds, path, tables=None, 
                 if sp.ox is None or sp.ox <= 0:
                     continue
                 for a in an_species:
-                    p = params.get(sp.element, sp.ox, a.element, a.ox) if sp.element != 'H' else None
+                    p = params.get(sp.element, sp.ox, a.element, a.ox, site.label) if sp.element != 'H' else None
                     if p is None and sp.element != 'H':
                         continue
                     if sp.element == 'H':
@@ -3007,8 +3109,8 @@ def write_xlsx(st, params, result, anion_sum, cells, hbonds, path, tables=None, 
         _write_bv_check(wb, st, result, anion_sum, cells, tables or [], site_tables or [], params_label, scores, where, source, compare_anions=(not hbonds) and anion_sums,
                         keep=keep, anion_sums=anion_sums, head=head)
     wp = wb.create_sheet('parameters'); wp.append(['pair', 'R0', 'b', 'reference']); wp.cell(1, 1).font = Font(bold=True)
-    for (cat, cox, an), (r0, bb, rid) in params.used.items():
-        wp.append(['%s%+d–%s' % (cat, cox, an), r0, bb, params.refs.get(rid, rid)])
+    for pair, r0, bb, ref in params.used_items():
+        wp.append([pair, r0, bb, ref])
     wp.append([]); wp.append(['table note', params.note()])
     wp.column_dimensions['A'].width = 14; wp.column_dimensions['D'].width = 70
     wb.save(path)
@@ -3191,6 +3293,123 @@ def _parse_ox(s):
             out[el.strip().capitalize() if len(el.strip()) > 1 else el.strip().upper()] = int(v)
     return out
 
+# ----------------------------------------------------------------------------- per-site options
+
+# One setting per entry, ';' or a new line between entries:
+#   Pb1 set=ba                          the cation site's bonds from another parameter set
+#   Pb1 S=2.541/0.370/Brown (1985)      the site's own R0 / b for one anion (the reference text is optional)
+#   Pb1 max=3.0                         the longest bond counted for the site (everything within it, as --cutoff)
+#   O1 comp=O0.9F0.1                    the site's composition: a mixed site's bonds are weighted over its species, an
+#                                       occupancy short of 1 scales them (O0.9 = 10 % vacant); a valence may be written
+#                                       (Fe3+0.6Fe2+0.4)
+_SITE_ENTRY = re.compile(r'^([A-Za-z][A-Za-z0-9/]{0,11})\s+([A-Za-z]{1,4})\s*=\s*(.+?)\s*$')
+_COMP_PART = re.compile(r'([A-Z][a-z]?)(?:(\d)([+-]))?(\d*\.\d+|\d+)?')
+
+def parse_composition(text):
+    """'O0.9F0.1' -> [('O', None, 0.9), ('F', None, 0.1)]; 'Fe3+0.6Fe2+0.4' -> [('Fe', 3, 0.6), ('Fe', 2, 0.4)]."""
+    t = re.sub(r'\s+', '', text or '')
+    out = []; pos = 0
+    while pos < len(t):
+        m = _COMP_PART.match(t, pos)
+        if not m or m.end() == pos or m.group(1) not in ELEMENTS:
+            raise ValueError("composition %r: cannot read it from %r (write it as O0.9F0.1, or Fe3+0.6Fe2+0.4)" % (text, t[pos:]))
+        ox = None if m.group(2) is None else int(m.group(2)) * (1 if m.group(3) == '+' else -1)
+        occ = float(m.group(4)) if m.group(4) else 1.0
+        out.append((m.group(1), ox, occ)); pos = m.end()
+    if not out:
+        raise ValueError('composition: empty')
+    if sum(o for _, _, o in out) > 1.0001:
+        raise ValueError('composition %r: the occupancies add to %.3f, more than one site' % (text, sum(o for _, _, o in out)))
+    return out
+
+def parse_sites(text):
+    """The per-site options -> {label: {'set', 'pairs': {anion: (R0, b, ref)}, 'max', 'comp'}}; ValueError on what
+    cannot be read (a GUI or CLI user is told, never silently ignored)."""
+    out = OrderedDict()
+    for entry in re.split(r'[;\n]', text or ''):
+        entry = entry.strip()
+        if not entry:
+            continue
+        m = _SITE_ENTRY.match(entry)
+        if not m:
+            raise ValueError("site option %r: write it as 'Pb1 set=ba', 'Pb1 S=2.541/0.37', 'Pb1 max=3.0' or 'O1 comp=O0.9F0.1'" % entry)
+        lab, key, val = m.groups()
+        o = out.setdefault(lab, {})
+        if key == 'set':
+            if val not in PREFER:
+                raise ValueError('site option %r: the set is gh, bo or ba' % entry)
+            o['set'] = val
+        elif key == 'max':
+            v = _num(val)
+            if v is None or not 1.0 <= v <= 6.0:
+                raise ValueError('site option %r: the longest bond is a distance between 1 and 6 Å' % entry)
+            o['max'] = v
+        elif key == 'comp':
+            parse_composition(val)
+            o['comp'] = val.strip()
+        elif key in ELEMENTS:
+            parts = val.split('/', 2)
+            r0 = _num(parts[0]) if parts else None
+            b = _num(parts[1]) if len(parts) > 1 else 0.37
+            if r0 is None or b is None or not 0.5 <= r0 <= 4.0 or not 0.1 <= b <= 1.0:
+                raise ValueError('site option %r: write R0/b (b defaults to 0.37), e.g. %s=2.541/0.37' % (entry, key))
+            o.setdefault('pairs', {})[key] = (r0, b, parts[2].strip() if len(parts) > 2 else '')
+        else:
+            raise ValueError("site option %r: %r is none of set, max, comp or an anion's element" % (entry, key))
+    return out
+
+def site_spec(opts):
+    """The inverse of parse_sites: the options as their text."""
+    out = []
+    for lab, o in opts.items():
+        if o.get('set'):
+            out.append('%s set=%s' % (lab, o['set']))
+        for an, (r0, b, ref) in o.get('pairs', {}).items():
+            out.append('%s %s=%s/%s%s' % (lab, an, r0, b, '/' + ref if ref else ''))
+        if o.get('max'):
+            out.append('%s max=%s' % (lab, o['max']))
+        if o.get('comp'):
+            out.append('%s comp=%s' % (lab, o['comp']))
+    return '; '.join(out)
+
+def apply_sites(st, params, opts):
+    """Apply per-site options (parse_sites, or its text) to a Structure and its Params, before compute(). Returns
+    the sentences the bond-valence table's note carries for them. A label the .cif does not have is an error."""
+    if isinstance(opts, str):
+        opts = parse_sites(opts)
+    notes = []; comps = OrderedDict(); maxes = OrderedDict()
+    st.site_cutoff = dict(getattr(st, 'site_cutoff', None) or {})
+    for lab, o in (opts or {}).items():
+        site = st.site(lab)
+        if site is None:
+            raise ValueError('site option for %s: no such site in the .cif' % lab)
+        if ('set' in o or 'pairs' in o or 'max' in o) and not st.is_cation(site):
+            raise ValueError('site option for %s: a parameter set or a longest bond is for a cation site (%s is an anion)' % (lab, site.label))
+        if o.get('comp'):
+            site = st.set_composition(site.label, o['comp'])
+            how = []
+            if len(site.species) > 1:
+                how.append('its bonds weighted over the species')
+            if site.occ_total < 0.9999:
+                how.append('scaled by its occupancy')
+            comps.setdefault((_comp_text(site.species), ', '.join(how)), []).append(site.label)
+        if o.get('set') or o.get('pairs'):
+            params.site_sets[site.label] = {'set': o.get('set'), 'pairs': dict(o.get('pairs', {}))}
+        if o.get('max'):
+            st.site_cutoff[site.label] = o['max']
+            maxes.setdefault(o['max'], []).append(site.label)
+    for (comp, how), labs in comps.items():
+        notes.append('%s taken as %s%s' % (_join(labs), comp, ' (%s)' % how if how else ''))
+    for d, labs in maxes.items():
+        notes.append('bonds to %s counted up to %.2f Å' % (_join(labs), d))
+    return notes
+
+def _comp_text(species):
+    """'O0.90F0.10'; a valence only where one element is there twice ('Fe3+0.60Fe2+0.40')."""
+    els = [sp.element for sp in species]
+    return ''.join('%s%s%.2f' % (sp.element, '%d%s' % (abs(sp.ox), '+' if sp.ox > 0 else '−') if els.count(sp.element) > 1 and sp.ox else '', sp.occ)
+                   for sp in species)
+
 PARAM_NAMES = {'gh': 'Gagné & Hawthorne 2015', 'bo': "Brese & O'Keeffe 1991", 'ba': 'Brown & Altermatt 1985'}
 
 def _parse_donors(s):
@@ -3247,13 +3466,14 @@ def _run_as_the_paper_check(cif, table, word, out_dir, quiet, xlsx):
     return st, result, anion_sum, cells, text
 
 def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word=False, out_dir=None, quiet=False,
-        auto_params=True, hbond='oo', hmax=None, donors=None, hb=None, u6='burns', xlsx=False, follow_table=True):
+        auto_params=True, hbond='oo', hmax=None, donors=None, hb=None, u6='burns', xlsx=False, follow_table=True, sites=None):
     """follow_table=False: the sets are still scored against the manuscript's table (the check sheet lists them) but the
-    report and the workbook stay on the set ASKED for — the GUI's export, whose pane shows that set."""
+    report and the workbook stay on the set ASKED for — the GUI's export, whose pane shows that set.
+    sites: per-site options (parse_sites' text or dict): a cation's own set / R0 and b / longest bond, a site's composition."""
     if table and not os.path.isfile(table):
         raise ValueError('--table: no such file: %s' % table)
     if table and table.lower().endswith('.pdf') and follow_table and auto_params and params == 'gh' and not ox and cutoff is None and include_h and hbond == 'oo' \
-            and not (hmax or donors or hb) and u6 == 'burns':
+            and not (hmax or donors or hb) and u6 == 'burns' and not sites:
         # A PAPER, and nothing asked for beyond the defaults: the paper check settles the structure (the paper's valences and
         # site names), the set and the verdict — and the report and the workbook here are THAT, never a second opinion formed
         # from the raw .cif (which read red on 52 corpus papers whose table the paper check finds in agreement)
@@ -3272,6 +3492,8 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
     except Exception as ex_:
         raise ValueError('--table: %s could not be read (%s)' % (os.path.basename(table), str(ex_)[:120]))
     P = Params(prefer=params, u6=u6)
+    for n_ in apply_sites(st, P, sites) if sites else []:
+        st.notes.append('site options: ' + n_)
     hb_args = dict(hbond=hbond, hmax=hmax, donors=_parse_donors(donors) if isinstance(donors, str) else donors,
                    force=_parse_hb(hb) if isinstance(hb, str) else hb)
     result, anion_sum, cells, hbonds = compute(st, P, cutoff, **hb_args)
@@ -3281,6 +3503,7 @@ def run(cif, table=None, params='gh', ox=None, cutoff=None, include_h=True, word
         # score every set and report with the one that agrees best (ties -> the requested set)
         for key in ('gh', 'bo', 'ba'):
             Pk = Params(prefer=key, u6=u6)
+            Pk.site_sets = P.site_sets                      # a site's own set / values hold under every set scored
             notes_before = list(st.notes)
             rk = compute(st, Pk, cutoff, **hb_args)
             st.notes[:] = notes_before                      # the trial runs repeat the same notes
@@ -3386,13 +3609,16 @@ def main(argv=None):
     ap.add_argument('--hb', help='hydrogen bonds to place as given, e.g. OW1>O2,OW1>O7 (donor>acceptor; the rest are still proposed)')
     ap.add_argument('--u6', default='burns', choices=['burns', 'params'],
                     help='U6+–O parameters: burns = Burns et al. (1997), the uranyl convention (default); params = the chosen set')
+    ap.add_argument('--site', action='append', default=[], metavar='OPTION',
+                    help="a site's own option, repeatable: 'Pb1 set=ba' (its bonds from another set), 'Pb1 S=2.541/0.37[/ref]' "
+                         "(its R0/b for one anion), 'Pb1 max=3.0' (its longest bond), 'O1 comp=O0.9F0.1' (its composition)")
     ap.add_argument('--word', action='store_true', help='also write the tables as a .docx')
     ap.add_argument('--xlsx', action='store_true', help='also write the calculation as a workbook with live formulas (review_out/<name>_bv.xlsx)')
     ap.add_argument('--out', help='output folder (default <cif dir>/review_out)')
     a = ap.parse_args(argv)
     try:
         run(a.cif, a.table, a.params, a.ox, a.cutoff, not a.no_h, a.word, a.out,
-            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6, xlsx=a.xlsx)
+            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6, xlsx=a.xlsx, sites='; '.join(a.site) or None)
     except ValueError as e:
         raise SystemExit('bv_check: %s' % e)
     return 0

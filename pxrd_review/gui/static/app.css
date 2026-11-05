@@ -648,6 +648,20 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 #ms-page-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, .72); display: flex; align-items: flex-start; justify-content: center; overflow: auto; padding: 36px 24px 24px; cursor: zoom-out; }
 #ms-page-overlay img { max-width: min(96vw, 1100px); height: auto; background: #fff; box-shadow: 0 8px 40px rgba(0, 0, 0, .5); }
 #ms-page-overlay .cap { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); color: #fff; font-size: 12px; background: rgba(0, 0, 0, .55); padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
+/* the Bond valence tab's site options: a column (cation) or row (anion) label opens its panel */
+.pubtable .tb-site-click { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.pubtable .tb-site-click:hover { color: var(--accent); }
+.pubtable .tb-site-on { color: var(--fix); }
+.tb-site-bar { margin: 0 0 10px; font-size: .85em; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tb-site-bar code { padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; }
+.tb-site-panel { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; max-width: 760px; font-size: .88em; }
+.tb-site-panel h4 { margin: 0 0 8px; font-size: 1em; }
+.tb-site-panel table { border-collapse: collapse; margin: 4px 0 8px; }
+.tb-site-panel td, .tb-site-panel th { padding: 2px 8px 2px 0; text-align: left; font-weight: normal; }
+.tb-site-panel input[type=text] { width: 90px; }
+.tb-site-panel input.w { width: 220px; }
+.tb-site-panel .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; }
+.tb-site-panel .err { color: var(--warn); }
 .tb-mscheck { margin-bottom: 12px; }
 .tb-mscheck pre { white-space: pre-wrap; }
 

@@ -64,6 +64,42 @@ package version in `pyproject.toml`.
 - A csv cell reading `NaN` / `inf` stays text: as a number it made the sheet panel's JSON unreadable.
 - `pxrd epma --block 0` is an error, not the default block.
 
+### Added — a site's own options in the bond-valence calculation
+- The Tables tab's **Bond valence** table: a click on a cation's column opens its options — a parameter set for its
+  bonds, its own R0 and b for one anion (with the reference the note cites), the longest bond counted for it — and a click
+  on an anion's row (or the cation's panel) its composition: `O0.9F0.1` weights each bond over the two species, `O0.9`
+  scales it by the occupancy (10 % vacant), `Fe3+0.6Fe2+0.4` writes the valences. Kept per .cif in the folder's
+  `review_out/tables_opts.json`; a bar above the table lists them, with `clear all`.
+- The same options from the command line: `pxrd tables --site …` and `pxrd bv --site …`, repeatable (`'Pb1 set=ba'`,
+  `'Pb1 S=2.541/0.37/A. Author (2020)'`, `'Pb1 max=3.0'`, `'O1 comp=O0.9F0.1'`). They reach the tables, the table's note
+  (the site named: 'Pb1–S from …', 'O1 and O2 taken as O0.90F0.10'), the report's parameter list, the Word copy and the
+  live-formula workbook, whose sums stay the tool's. A label the .cif lacks, a set for an anion, or an element that cannot
+  sit on the site is refused with a message, never ignored.
+
+### Changed — Table 2 lists the bonds the bond-valence table counts
+- `pxrd tables` / the Tables tab's bond table had listed the .cif's `_geom_bond` loop only, so a bond SHELXL's CONN default
+  leaves out (a long contact) was missing from it but counted in the bond-valence table beside it. It now lists every bond the
+  bond-valence table counts: the loop's distance with its esd where the loop lists the bond (in the loop's own granularity),
+  otherwise computed from the coordinates (no esd, said in the note), one row per image with its own code.
+- A cation bonded to two kinds of anion gets a mean for each (`<Pb1–O>`, `<Pb1–S>`; it had been one `<Pb1–O/S>`), rows
+  grouped by anion and in order of distance.
+- Codes are measured from the site's own .cif position: a cation outside the cell (y = 1.02) had been measured from its
+  wrapped copy, so every computed code was a cell out. Of two operators reaching one image, the lower number keeps it, and
+  the atom as listed needs no code (`10_555` had sorted before `1_555`).
+- A coordinate one cell out prints as a fraction like the others (`1¼`, it had read `1.250000`).
+
+### Changed — symmetry codes numbered as the .cif numbers its operators
+- The Tables tab and `pxrd tables`: a bond's superscript is now the operator's own number in the .cif's
+  `_space_group_symop_operation_xyz` list, printed with its translation (`3_655` → (3) −y+3/2, x+½, z+½ in P4₂/mnm), so a reader can
+  go from the table to the .cif. They had been numbered 1, 2, 3 … in the order the table met them. The same operator with
+  a second translation takes a prime (6, 6′, 6″, 6‴), and past three primes the superscript is the CIF code itself (6_656 — a
+  P-1 table can need a dozen translations of one operator); the footnote lists the codes in operator order.
+- `pxrd bv --table`: the image a code-less or miscoded bond needs is quoted as the .cif's own code when the .cif's loop
+  reaches it. An atom on a special position is reached by two operators, and the hint had named the other one.
+- `pxrd bv --table`: a mean printed to two decimals has its rounding allowed (2.15 for 2.145 had been called a
+  mismatch); a mean named by its anion (`<Pb1–S>` beside `<Pb1–O>`) is compared with that anion's bonds in the .cif,
+  not the whole polyhedron.
+
 ### Fixed — a second review of 0.19.0 and 0.20.0 (four reviewers, every defect reproduced first)
 **The probe-workbook reader** (old vs new over 137 working workbooks: no plausible read lost, 21 default blocks changed —
 each read by hand, every one the fix intended or a larger plausible block winning on size):

@@ -153,8 +153,10 @@ def plain(cell):
     SUB = str.maketrans('0123456789.', '₀₁₂₃₄₅₆₇₈₉.')
     out = []
     for t, st in cell:
-        if 'sup' in st and re.fullmatch(r'[\d+\-−]+', t):
+        if 'sup' in st and re.fullmatch(r'[\d+\-−′″‴]+', t):            # primes: a symmetry code '6′'
             out.append(t.translate(SUP))
+        elif 'sup' in st and re.fullmatch(r'\d+_\d{3}', t):               # a CIF code as the superscript: no Unicode form
+            out.append('^(%s)' % t)
         elif 'sub' in st and re.fullmatch(r'[\d.]+', t):
             out.append(t.translate(SUB))
         else:
@@ -186,9 +188,10 @@ def coord(s):
         return s
     if abs(v) < 1e-6:
         return '0'
+    whole = int(abs(v) + 1e-9); part = abs(v) - whole              # a site a cell out (y = 1.25) as 1¼
     for f, sym in FRACTIONS:
-        if abs(abs(v) - f) < 2e-4:
-            return ('-' if v < 0 else '') + sym
+        if abs(part - f) < 2e-4:
+            return ('-' if v < 0 else '') + (str(whole) if whole else '') + sym
     if abs(v - round(v)) < 1e-6:
         return str(int(round(v)))
     return s
@@ -234,63 +237,97 @@ def symop_string(rot, tr):
         parts.append(s or '0')
     return ', '.join(parts)
 
+_NKLM = re.compile(r'^(\d+)(?:_(\d)(\d)(\d))?$')
+PRIMES = ('', '′', '″', '‴')
+
 class SymCodes:
-    """Superscript numbering of symmetry codes, shared by the bond and hydrogen-bond tables:
-    a CIF code '17_544' (operator 17, translation 0,−1,−1) -> (n, 'x−y, x, −z−1')."""
-    def __init__(self, st):
+    """Superscripts for symmetry codes, shared by the bond and hydrogen-bond tables. A superscript is
+    the operator's own number in the .cif (CIF code '3_655' -> 3, printed with its translation:
+    '−y+3/2, x+½, z+½' in P4₂/mnm), so a reader can go from the table to the .cif's operator list. The same
+    operator with another translation takes a prime: 6′, 6″, 6‴ (in the order the tables meet them); a fifth and later
+    translation is written as the CIF code itself (6_656) — a P-1 table can need a dozen. A code not in n_klm form is
+    printed as the .cif gives it.
+    `known`: codes to number first, in order."""
+    def __init__(self, st, known=()):
         self.st = st; self.codes = OrderedDict(); self.used = set()
         self.parts = {}; self.uses = OrderedDict(); self.pairs = {}; self.table = ''
+        self.labels = {}; self._by_op = OrderedDict(); self.seen = set()
+        for c in known:
+            self._register(c)
+    def _norm(self, code):
+        return (code or '.').strip()
+    def _register(self, code):
+        """The operator string, the .cif operator + shift, and the label of one code."""
+        code = self._norm(code)
+        if code in ('.', '', '?', '1_555') or code in self.codes:
+            return
+        m = _NKLM.match(code)
+        n = int(m.group(1)) if m else 0
+        t = [int(m.group(k)) - 5 for k in (2, 3, 4)] if m and m.group(2) else [0, 0, 0]
+        if m and 1 <= n <= len(self.st.ops):
+            rot, tr = self.st.ops[n - 1]
+            self.codes[code] = symop_string(rot, [tr[i] + t[i] for i in range(3)])
+            self.parts[code] = (n, symop_string(rot, tr), t)
+            same = self._by_op.setdefault(n, [])
+            same.append(code)
+            k = len(same) - 1                        # a second translation of operator n is n′, then n″, n‴; past three
+            self.labels[code] = str(n) + PRIMES[k] if k < len(PRIMES) else code   # primes the CIF code itself (2_656)
+        else:
+            self.codes[code] = code
+            self.labels[code] = code
     def begin_table(self, name=''):
         self.used = set(); self.table = name
+    def label(self, code):
+        return self.labels.get(self._norm(code))
     def index(self, code, pair=None, d=None):
-        """pair / d: the bond the code is used for (the cheat sheet's 'used for'); every bond of the
+        """The superscript for `code` (None when the bond is to the atom as listed).
+        pair / d: the bond the code is used for (the cheat sheet's 'used for'); every bond of the
         table is counted, so a pair that occurs twice is told apart by its distance."""
-        code = (code or '.').strip()
+        code = self._norm(code)
         if pair:
             self.pairs[(self.table, pair)] = self.pairs.get((self.table, pair), 0) + 1
         if code in ('.', '', '?', '1_555'):
             return None
-        self.used.add(code)
-        if code not in self.codes:
-            m = re.match(r'^(\d+)(?:_(\d)(\d)(\d))?$', code)
-            n = int(m.group(1)) if m else 0                         # a code not in n_klm form is written as the .cif gives it
-            t = [int(m.group(k)) - 5 for k in (2, 3, 4)] if m and m.group(2) else [0, 0, 0]
-            if m and 1 <= n <= len(self.st.ops):
-                rot, tr = self.st.ops[n - 1]
-                self.codes[code] = symop_string(rot, [tr[i] + t[i] for i in range(3)])
-                self.parts[code] = (n, symop_string(rot, tr), t)
-            else:
-                self.codes[code] = code
+        self.used.add(code); self.seen.add(code)
+        self._register(code)
         if pair:
             self.uses.setdefault(code, []).append((self.table, pair, d))
-        return list(self.codes).index(code) + 1
+        return self.labels[code]
+    def _order(self):
+        """The codes in reading order of their superscripts: operator number, then primes; codes not
+        in n_klm form last, as met."""
+        idx = {c: i for i, c in enumerate(self.codes)}
+        return sorted(self.codes, key=lambda c: (0, self.parts[c][0], idx[c]) if c in self.parts else (1, 0, idx[c]))
     def note(self, phrase='Symmetry codes:'):
-        """The codes THIS table used (numbering shared across tables)."""
-        items = [(i + 1, s) for i, (c, s) in enumerate(self.codes.items()) if c in self.used]
+        """The codes THIS table used (labels shared across tables)."""
+        items = [(self.labels[c], self.codes[c]) for c in self._order() if c in self.used]
         if not items:
             return ''
-        return phrase + ' ' + '; '.join('(%d) %s' % (i, s) for i, s in items) + '.'
+        return phrase + ' ' + '; '.join('(%s) %s' % (n, s) for n, s in items) + '.'
     def legend(self):
-        """Every code numbered, for the cheat sheet: n, the CIF code, the operator with its
+        """Every code, for the cheat sheet: its superscript, the CIF code, the operator with its
         translation, the .cif operator it starts from and the shift along a, b, c, and the bonds
-        that use it ('Cd1–OH2 (2.246)' when the pair occurs more than once in its table)."""
+        that use it ('Cd1–OH2 (2.246)' when the pair occurs more than once in its table). Only codes a
+        table used (`known` may hold more)."""
         out = []
-        for i, (c, s) in enumerate(self.codes.items()):
+        for c in self._order():
+            if c not in self.seen:
+                continue
+            s = self.codes[c]
             base = self.parts.get(c)
             used = []
             for table, pair, d in self.uses.get(c, []):
                 lab = pair + (' (%s)' % re.sub(r'\(\d+\)$', '', d) if d and self.pairs.get((table, pair), 0) > 1 else '')
                 used.append(lab if table != 'hbonds' else lab + ' (H bond)')
-            out.append({'n': i + 1, 'code': c, 'op': s, 'used': used,
+            out.append({'n': self.labels[c], 'code': c, 'op': s, 'used': used,
                         'base_n': base[0] if base else None, 'base': base[1] if base else None,
                         'shift': base[2] if base else None})
         return out
+def _label_cell(label, code_lab):
+    return C(label, R(str(code_lab), 'sup') if code_lab else None)
 
-def _label_cell(label, code_idx):
-    return C(label, R(str(code_idx), 'sup') if code_idx else None)
-
-def _bond_cell(cat, an, code_idx):
-    return C(cat, '–', an, R(str(code_idx), 'sup') if code_idx else None)
+def _bond_cell(cat, an, code_lab):
+    return C(cat, '–', an, R(str(code_lab), 'sup') if code_lab else None)
 
 # ----------------------------------------------------------------------------- the tables
 
@@ -342,9 +379,9 @@ def coordinates_table(st, J=None):
                     row[5] = C(T_plain(row[5]), '*')
     return {'caption': _title(J, J['coords_caption'].format(name=st.name)), 'head': head, 'rows': out, 'note': note}
 
-def _bond_source(st, P):
-    """[(cation label, anion label, distance string, code)] from the _geom_bond loop (esds) or
-    computed (no esd), cation–anion pairs only, H excluded."""
+def _loop_bonds(st):
+    """The .cif's _geom_bond loop as [(cation site label, anion site label, distance string, code)], cation–anion
+    pairs only, H excluded, the code always on the anion (merged labels: 'F1/OH1')."""
     cat = {lab: s for s in st.cations if s.element != 'H' for lab in s.label.split('/')}
     an = {lab: s for s in st.anions for lab in s.label.split('/')}
     an.update({s.label: s for s in st.anions})
@@ -355,46 +392,66 @@ def _bond_source(st, P):
         dd = B._col(tags, rows, '_geom_bond_distance'); sy = B._col(tags, rows, '_geom_bond_site_symmetry_2', '.')
         for a, b_, d, s in zip(l1, l2, dd, sy):
             if a in cat and b_ in an:
-                out.append((a, an[b_].label, d.strip(), s.strip()))          # merged label: 'F1/OH1'
+                out.append((cat[a].label, an[b_].label, d.strip(), s.strip()))
             elif b_ in cat and a in an:
                 # the loop lists the anion first, so its symmetry code moves the CATION; the table
                 # puts the code on the anion, which needs the inverse operator
-                out.append((b_, an[a].label, d.strip(), _inverse_code(st, s.strip())))
-        # only bonds a paper would list: within the cutoff AND worth >= MIN_S vu (SHELXL's BOND
-        # list can reach further)
-        keep = []
-        for a, b_, d, s in out:
-            site = cat[a]; cut = max(B.CUTOFF.get(sp.element, 3.2) for sp in site.species)
-            dv = B._num(d) or 0
-            if dv > cut + 1e-6:
-                continue
-            asite = an[b_] if b_ in an else next(x for x in st.anions if x.label == b_)
-            lim = [P.max_length(sp.element, sp.ox, asite.element, B.ANION_OX.get(asite.element, -2))
-                   for sp in site.species if sp.ox and sp.ox > 0]
-            lim = [x for x in lim if x is not None]
-            if lim and dv > max(lim) + 1e-6:
-                continue
-            keep.append((a, b_, d, s))
-        return keep, True
-    # computed: keep every symmetry-equivalent bond with its own code
-    for site in st.cations:
-        if site.element == 'H':
+                out.append((cat[b_].label, an[a].label, d.strip(), _inverse_code(st, s.strip())))
+    return out, bool(rows)
+
+def _code_pos(st, site, code):
+    """Where a symmetry code puts a site (fractional, the .cif's frame); None for a code not in n_klm form."""
+    code = (code or '.').strip()
+    if code in ('.', '', '?', '1_555'):
+        return list(site.frac)
+    m = _NKLM.match(code)
+    if not m or not 1 <= int(m.group(1)) <= len(st.ops):
+        return None
+    t = [int(m.group(k)) - 5 for k in (2, 3, 4)] if m.group(2) else [0, 0, 0]
+    q = B._apply(st.ops[int(m.group(1)) - 1], site.frac)
+    return [q[k] + t[k] for k in range(3)]
+
+def _bond_source(st, P, result):
+    """[(cation label, anion label, distance string, code)] — exactly the bonds the bond-valence table counts
+    (compute's result, so a site's own longest bond or parameter set moves both tables), one row per
+    symmetry-equivalent bond. A bond the .cif's _geom_bond loop lists takes the loop's distance with its esd and
+    the loop's code, and the loop's own granularity (a loop that writes a ×4 bond once keeps one row); a bond the loop
+    lacks altogether (SHELXL's CONN default stops short of a long contact) is computed, one row per image: no esd, the
+    code of its image. Returns (rows, has_loop, n_computed)."""
+    loop, has_loop = _loop_bonds(st)
+    out = []; n_comp = 0
+    for c, bonds, *_r in result:
+        if c.element == 'H' or not bonds:
             continue
-        cut = max(B.CUTOFF.get(sp.element, 3.2) for sp in site.species)
-        rows = []
-        for other, d, code in _neighbours_with_codes(st, site, cut):
-            if st.is_cation(other):
-                continue
-            lim = [P.max_length(sp.element, sp.ox, other.element, B.ANION_OX.get(other.element, -2))
-                   for sp in site.species if sp.ox and sp.ox > 0]
-            lim = [x for x in lim if x is not None]
-            if lim and d > max(lim) + 1e-6:
-                continue
-            s = max([P.valence(sp.element, sp.ox, other.element, B.ANION_OX.get(other.element, -2), d) or 0.0
-                     for sp in site.species if sp.ox and sp.ox > 0] or [1.0])
-            rows.append((d, 1, s, (site.label, other.label, '%.3f' % d, code)))
-        out.extend(B.first_shell(rows))       # the report's shell: no contact past the first-shell gap
-    return out, False
+        mine = [(an, d, code, B._num(d)) for cat, an, d, code in loop if cat == c.label and B._num(d) is not None]
+        taken = set(); used_pos = []
+        imgs = None
+        for b in sorted(bonds, key=lambda x: x.dist):
+            need = b.count
+            cand = sorted((k for k, (an, d, code, dv) in enumerate(mine) if k not in taken and an == b.anion.label and abs(dv - b.dist) < 0.006),
+                          key=lambda k: abs(mine[k][3] - b.dist))
+            for k in cand[:need]:
+                taken.add(k); an, d, code, dv = mine[k]
+                out.append((c.label, an, d, code))
+                pos = _code_pos(st, b.anion, code)
+                if pos is not None and abs(st.dist(c.frac, pos) - dv) < 0.01:     # a loop code that puts the atom elsewhere claims no image
+                    used_pos.append(pos)
+            if cand:
+                continue                                  # the loop lists this bond: its own granularity (one row for a ×4, or all four)
+            if imgs is None:
+                imgs = [(o, d, code) for o, d, code in _neighbours_with_codes(st, c, max(x.dist for x in bonds) + 0.01) if not st.is_cation(o)]
+            for o, d, code in imgs:
+                if need <= 0:
+                    break
+                if o.label != b.anion.label or abs(d - b.dist) > 0.0015:
+                    continue
+                pos = _code_pos(st, o, code)
+                if pos is not None and any(max(abs(pos[k] - u[k]) for k in range(3)) < 1e-3 for u in used_pos):
+                    continue                              # the image a loop row already is
+                out.append((c.label, o.label, '%.3f' % d, code)); n_comp += 1; need -= 1
+                if pos is not None:
+                    used_pos.append(pos)
+    return out, has_loop, n_comp
 
 def _inverse_code(st, code):
     """The symmetry code that moves the OTHER atom of a bond: for a code 'n_abc' (operator n, lattice
@@ -432,8 +489,9 @@ def _inverse_code(st, code):
 
 def _neighbours_with_codes(st, site, cutoff):
     """[(other site, distance, code)] — every neighbour with the symmetry code (op_translation)
-    that generates it from the other site's first equivalent."""
-    p0 = site.positions[0]
+    that generates it from the other site's .cif coordinates. Measured from the site's own .cif position
+    (not its wrapped equivalent: a site at y = 1.02 wraps to 0.02, and every code would be a cell out)."""
+    p0 = list(site.frac)
     rng = [int(math.ceil(cutoff / w)) + 1 for w in st.widths]
     found = []
     for other in st.sites:
@@ -450,57 +508,70 @@ def _neighbours_with_codes(st, site, cutoff):
                             tt = [int(round(qq[m] - (B._apply(op, other.frac)[m]))) for m in range(3)]
                             code = '%d_%d%d%d' % (n + 1, 5 + tt[0], 5 + tt[1], 5 + tt[2])
                             found.append((other, d, code, tuple(round(v, 4) for v in qq)))
-    # dedupe identical positions reached by different operators (special positions)
+    # dedupe identical positions reached by different operators (special positions): the lowest operator number, then the
+    # least shift, keeps it — the atom as listed (1_555) before any image ('10_555' sorted as text had come first)
+    def _rank(code):
+        n, t = code.split('_')
+        return (int(n), sum(abs(int(ch) - 5) for ch in t))
     seen = set(); out = []
-    for other, d, code, pos in sorted(found, key=lambda x: (x[0].label, x[1], x[2])):
+    for other, d, code, pos in sorted(found, key=lambda x: (x[0].label, round(x[1], 4), _rank(x[2]))):
         key = (other.label, pos)
         if key in seen:
             continue
-        seen.add(key); out.append((other, d, code))
+        seen.add(key); out.append((other, d, '.' if code == '1_555' else code))
     return out
 
-def bond_table(st, codes, P, J=None):
+def bond_table(st, codes, P, J=None, result=None):
     J = J or journal(None)
     codes.begin_table('bonds')
-    src, from_loop = _bond_source(st, P)
+    if result is None:
+        result = B.compute(st, P, None, 'none')[0]
+    src, has_loop, n_comp = _bond_source(st, P, result)
+    for _c, _a, d, code in src:                          # the .cif's own codes first: a bond its loop lacks takes the prime
+        if '(' in d:
+            codes._register(code)
+    order = {s_.label: k for k, s_ in enumerate(st.anions)}
     blocks = []
     for site in st.cations:
         if site.element == 'H':
             continue
-        mine = [x for x in src if x[0] == site.label or x[0] in site.label.split('/')]
+        mine = [x for x in src if x[0] == site.label]
         if not mine:
             continue
-        rows = []; seen = set()
+        el_of = lambda an: (st.site(an).element if st.site(an) else re.sub(r'\d.*$', '', an))
+        rank = lambda e: (e != 'O', e)
+        mine.sort(key=lambda x: (rank(el_of(x[1])), B._num(x[2]) or 0, order.get(x[1], 0)))
+        el_sites = [s_ for s_ in st.cations if s_.element == site.element and s_.element != 'H']
+        catlab = site.label if len(el_sites) > 1 or '/' in site.label else re.sub(r'\d+$', '', site.label)
+        groups = OrderedDict()
+        seen = set()
         for cat, an, d, code in mine:
             key = (an, d, code)                  # a mixed site (Ca1/Na1) lists each bond once, not per species
             if key in seen:
                 continue
             seen.add(key)
-            rows.append((_bond_cell(site.label, an, codes.index(code, '%s–%s' % (site.label, an), d)), C(d), B._num(d), an))
-        # means: uranyl gets <U–Oyl> (the two shortest) and <U–Oeq>
-        anion_elems = sorted({st.sites[[s.label for s in st.sites].index(an)].element if an in [s.label for s in st.sites]
-                              else re.sub(r'\d.*$', '', an) for _, _, _, an in rows}, key=lambda e: (e != 'O', e))
-        xlab = '/'.join(anion_elems) if anion_elems else 'X'
-        means = []
-        vals = [v for _, _, v, _ in rows if v is not None]
-        # '<Ca–O>' when Ca has one site, '<Ca1–O>' when it has several
-        el_sites = [s for s in st.cations if s.element == site.element and s.element != 'H']
-        catlab = site.label if len(el_sites) > 1 or '/' in site.label else re.sub(r'\d+$', '', site.label)
-        if site.element == 'U' and any(sp.ox == 6 for sp in site.species) and len(vals) >= 4:
-            sv = sorted(vals)
-            yl, eq = sv[:2], sv[2:]
-            means.append((C('<', R(catlab + '–O', 'i'), R('yl', 'i', 'sub'), '>'), C('%.3f' % (sum(yl) / len(yl)))))
-            means.append((C('<', R(catlab + '–O', 'i'), R('eq', 'i', 'sub'), '>'), C('%.3f' % (sum(eq) / len(eq)))))
-        elif vals:
-            means.append((C('<', R('%s–%s' % (catlab, xlab), 'i'), '>'), C('%.3f' % (sum(vals) / len(vals)))))
-        blocks.append({'cation': site.label, 'rows': [(a, b_) for a, b_, _, _ in rows], 'means': means})
+            groups.setdefault(el_of(an), []).append((_bond_cell(site.label, an, codes.index(code, '%s–%s' % (site.label, an), d)), C(d), B._num(d), an))
+        lines = []
+        for el, rows in groups.items():
+            lines += [(a, b_) for a, b_, _, _ in rows]
+            vals = [v for _, _, v, _ in rows if v is not None]
+            if not vals:
+                continue
+            # a mean per anion when the cation has two kinds ('<Pb1–O>' and '<Pb1–S>'); uranyl gets <U–Oyl> and <U–Oeq>
+            if site.element == 'U' and el == 'O' and any(sp.ox == 6 for sp in site.species) and len(vals) >= 4:
+                sv = sorted(vals); yl, eq = sv[:2], sv[2:]
+                lines.append((C('<', R(catlab + '–O', 'i'), R('yl', 'i', 'sub'), '>'), C('%.3f' % (sum(yl) / len(yl)))))
+                lines.append((C('<', R(catlab + '–O', 'i'), R('eq', 'i', 'sub'), '>'), C('%.3f' % (sum(eq) / len(eq)))))
+            else:
+                lines.append((C('<', R('%s–%s' % (catlab, el), 'i'), '>'), C('%.3f' % (sum(vals) / len(vals)))))
+        blocks.append({'cation': site.label, 'rows': lines})
     # lay the blocks out in three columns: each block goes to the shortest column, in order
     cols = [[], [], []]
     for blk in blocks:
         col = min(range(3), key=lambda k: len(cols[k]))
         if cols[col]:
             cols[col].append(None)                       # a blank row between blocks
-        cols[col].extend(blk['rows'] + blk['means'])
+        cols[col].extend(blk['rows'])
     n = max((len(c) for c in cols), default=0)
     rows = []
     for i in range(n):
@@ -509,9 +580,14 @@ def bond_table(st, codes, P, J=None):
             cell = c[i] if i < len(c) else None
             row += [cell[0], cell[1]] if cell else [C(''), C('')]
         rows.append(row)
+    if not has_loop:
+        how = ' Distances computed from the .cif coordinates (no esds: the .cif has no _geom_bond loop).'
+    elif n_comp:
+        how = ' Distances without an esd are computed from the .cif coordinates (bonds its _geom_bond loop does not list).'
+    else:
+        how = ''
     return {'caption': _title(J, J['bonds_caption'].format(name=st.name)), 'head': None, 'rows': rows,
-            'note': (codes.note(J['symcodes']) + ('' if from_loop else ' Distances computed from the .cif coordinates (no esds: the .cif has no _geom_bond loop).')).strip(),
-            'blocks': blocks}
+            'note': (codes.note(J['symcodes']) + how).strip(), 'blocks': blocks}
 
 def hbond_table(st, codes, J=None, hbonds=(), hmax=None):
     """The hydrogen-bond geometry (loop, else from the H positions); without H atoms, the D⋯A
@@ -543,7 +619,7 @@ def hbond_table(st, codes, J=None, hbonds=(), hmax=None):
             % (hmax or B.HB_MAX))
     return {'caption': _title(J, 'Hydrogen-bond contacts proposed for {name} (Å, vu)'.format(name=st.name)), 'head': head, 'rows': out, 'note': note}
 
-def bvs_table(st, params, result, anion_sum, cells, J=None, hbonds=()):
+def bvs_table(st, params, result, anion_sum, cells, J=None, hbonds=(), site_notes=()):
     J = J or journal(None)
     cats = [r[0] for r in result if r[0].element != 'H']
     bvs_of = {r[0].label: r[2] for r in result}
@@ -590,6 +666,8 @@ def bvs_table(st, params, result, anion_sum, cells, J=None, hbonds=()):
     last.append(C(''))
     rows.append(last)
     note = 'Multiplicity is indicated by ×→↓. ' + params.note() + '.'
+    for n_ in site_notes:
+        note += ' ' + n_[0].upper() + n_[1:] + '.'
     if has_h:
         via = {hb.via for hb in hbonds}
         if via <= {'H···A'}:
@@ -598,25 +676,55 @@ def bvs_table(st, params, result, anion_sum, cells, J=None, hbonds=()):
             note += ' Hydrogen-bond strengths based on O–O bond lengths from Ferraris and Ivaldi (1988); donated hydrogen-bond valences are not deducted from the OH and H2O sums.'
             if 'OO' in via:
                 note += ' H atoms were not located: the hydrogen bonds are proposed from the O–O geometry (see the hydrogen-bond table).'
-    return {'caption': _title(J, J['bvs_caption'].format(name=st.name)), 'head': head, 'rows': rows, 'note': note}
+    return {'caption': _title(J, J['bvs_caption'].format(name=st.name)), 'head': head, 'rows': rows, 'note': note,
+            'sites': site_meta(st, params, result)}
+
+def site_meta(st, params, result):
+    """What the Bond valence tab's site options show for each column and row: a cation's species, the anions it
+    bonds to with the R0 / b in use and where they come from, its longest bond; an anion's species."""
+    out = []
+    for c, bonds, bvs, expected, mean_d in result:
+        if c.element == 'H':
+            continue
+        pairs = OrderedDict()
+        for b in bonds:
+            for a in b.anion.species or [B.Species(b.anion.element, B.ANION_OX.get(b.anion.element, -2), 1.0)]:
+                for sp in c.species:
+                    if not sp.ox or sp.ox <= 0 or (sp.element, a.element) in pairs:
+                        continue
+                    p_ = params.get(sp.element, sp.ox, a.element, a.ox, c.label)
+                    if p_:
+                        pairs[(sp.element, a.element)] = {'cation': sp.element, 'ox': sp.ox, 'anion': a.element, 'r0': p_[0], 'b': p_[1],
+                                                          'ref': params.short_ref(p_[2], params.site_sets.get(c.label, {}).get('set'))}
+        out.append({'label': c.label, 'kind': 'cation', 'species': B._comp_text(c.species), 'pairs': list(pairs.values()),
+                    'longest': round(max((b.dist for b in bonds), default=0.0), 3), 'max': (getattr(st, 'site_cutoff', None) or {}).get(c.label)})
+    for a in st.anions:
+        if a.element != 'H':
+            out.append({'label': a.label, 'kind': 'anion', 'species': B._comp_text(a.species)})
+    return out
 
 # ----------------------------------------------------------------------------- build + render
 
-def build(cif, params='gh', ox=None, cutoff=None, include_h=True, journal_key=None, hbond='oo', hmax=None, donors=None, hb=None, u6='burns'):
+def build(cif, params='gh', ox=None, cutoff=None, include_h=True, journal_key=None, hbond='oo', hmax=None, donors=None, hb=None, u6='burns',
+          sites=None):
     """The tables of one .cif. include_h=False leaves hydrogen out of everything (no H sites, no
-    hydrogen bonds); hbond/hmax/donors/hb/u6 as in bv_check.run."""
+    hydrogen bonds); hbond/hmax/donors/hb/u6 as in bv_check.run; sites = per-site options (bv_check.parse_sites:
+    a cation's own set / R0 and b / longest bond, a site's composition) — for the bonds and the bond valences; the
+    coordinates table stays the .cif's refinement."""
     st = B.Structure(cif, B._parse_ox(ox), include_h=include_h)
     P = B.Params(prefer=params, u6=u6)
     J = journal(journal_key)
+    coords = coordinates_table(st, J)
+    site_notes = B.apply_sites(st, P, sites) if sites else []
     result, anion_sum, cells, hbonds = B.compute(st, P, cutoff, hbond if include_h else 'none', hmax,
                                                  B._parse_donors(donors) if isinstance(donors, str) else donors,
                                                  B._parse_hb(hb) if isinstance(hb, str) else hb)
     codes = SymCodes(st)
-    tabs = [('coords', coordinates_table(st, J)), ('bonds', bond_table(st, codes, P, J))]
+    tabs = [('coords', coords), ('bonds', bond_table(st, codes, P, J, result))]
     hbt = hbond_table(st, codes, J, hbonds, hmax) if include_h else None
     if hbt:
         tabs.append(('hbonds', hbt))
-    tabs.append(('bvs', bvs_table(st, P, result, anion_sum, cells, J, hbonds)))
+    tabs.append(('bvs', bvs_table(st, P, result, anion_sum, cells, J, hbonds, site_notes)))
     tabs[1][1]['symcodes'] = codes.legend()          # the GUI's cheat sheet: every code, after the H-bond table numbered its own
     for i, (k, t) in enumerate(tabs, 1):
         t['n'] = i
@@ -708,8 +816,8 @@ def write_word(st, tabs, path):
     _save_docx(doc, path)
 
 def run(cif, word=False, params='gh', ox=None, cutoff=None, include_h=True, out_dir=None, quiet=False, journal_key=None,
-        hbond='oo', hmax=None, donors=None, hb=None, u6='burns'):
-    st, tabs = build(cif, params, ox, cutoff, include_h, journal_key, hbond, hmax, donors, hb, u6)
+        hbond='oo', hmax=None, donors=None, hb=None, u6='burns', sites=None):
+    st, tabs = build(cif, params, ox, cutoff, include_h, journal_key, hbond, hmax, donors, hb, u6, sites)
     text = render_text(tabs)
     if not quiet:
         print(text)
@@ -738,10 +846,12 @@ def main(argv=None):
     ap.add_argument('--donors', help='hydrogen count per O site when the labels do not say, e.g. OW1=2,O5=1')
     ap.add_argument('--hb', help='hydrogen bonds to place as given, e.g. OW1>O2,OW1>O7')
     ap.add_argument('--u6', default='burns', choices=['burns', 'params'], help='U6+–O parameters: burns = Burns et al. (1997) (default), params = the chosen set')
+    ap.add_argument('--site', action='append', default=[], metavar='OPTION',
+                    help="a site's own option, repeatable: 'Pb1 set=ba', 'Pb1 S=2.541/0.37[/ref]', 'Pb1 max=3.0', 'O1 comp=O0.9F0.1' (see pxrd bv --help)")
     a = ap.parse_args(argv)
     try:
         run(a.cif, a.word, a.params, a.ox, a.cutoff, not a.no_h, a.out, journal_key=a.journal,
-            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6)
+            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6, sites='; '.join(a.site) or None)
     except ValueError as e:
         raise SystemExit('tables: %s' % e)
     return 0

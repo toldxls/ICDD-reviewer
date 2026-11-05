@@ -66,6 +66,30 @@ try {
   E("TBS.saveTimers = {}; tbSaveOpts('epma'); tbSaveOpts('gd')");
   check('per_tab_save_timers', E("Object.keys(TBS.saveTimers).sort().join(',')") === 'epma,gd', { timers: E("Object.keys(TBS.saveTimers).join(',')") });
 
+  // 8. the Bond valence tab: a cation's column opens its options; an R0 typed there reaches the table's note and is kept
+  //    per .cif; an anion's row sets its composition; 'clear all' drops them
+  E("TBS.key = 'rutile'; tbSetTab('bvs')"); await E('tbRender()'); await sleep(100);
+  const th = () => [...w.document.querySelectorAll('#tb-body .pubtable[data-kind="bvs"] thead th')].find(x => x.textContent.trim() === 'Ti1');
+  const hooked = !!(th() && th().classList.contains('tb-site-click'));
+  th() && th().click(); await sleep(50);
+  const r0 = w.document.querySelector('.tb-site-panel input[data-an="O"][data-f="r0"]');
+  if (r0) r0.value = '1.800';
+  const applyBtn = () => [...w.document.querySelectorAll('.tb-site-panel button')].find(b => b.textContent === 'Apply');
+  applyBtn() && applyBtn().click(); await sleep(600);
+  const note = (w.document.querySelector('#tb-body .pubtable[data-kind="bvs"] .pubnote') || {}).textContent || '';
+  check('bv_column_click_sets_site_params', hooked && E("tbSitesFor('rutile')") === 'Ti1 O=1.800/0.37' && note.includes('Ti1–O: R0 = 1.800 Å'),
+        { hooked, spec: E("tbSitesFor('rutile')"), note });
+  const td = [...w.document.querySelectorAll('#tb-body .pubtable[data-kind="bvs"] tbody td:first-child')].find(x => x.textContent.trim() === 'O1');
+  td && td.click(); await sleep(50);
+  const comp = w.document.querySelector('.tb-site-panel input[data-k="comp"]');
+  if (comp) comp.value = 'O0.9F0.1';
+  applyBtn() && applyBtn().click(); await sleep(600);
+  const note2 = (w.document.querySelector('#tb-body .pubtable[data-kind="bvs"] .pubnote') || {}).textContent || '';
+  check('bv_row_click_sets_composition', E("tbSitesFor('rutile')") === 'Ti1 O=1.800/0.37; O1 comp=O0.9F0.1' && note2.includes('O1 taken as O0.90F0.10'),
+        { spec: E("tbSitesFor('rutile')"), note: note2 });
+  const clr = [...w.document.querySelectorAll('.tb-site-bar button')].find(b => b.textContent === 'clear all');
+  clr && clr.click(); await sleep(600);
+  check('bv_site_options_clear', E("tbSitesFor('rutile')") === '' && E("tbOpt('bvs', 'sites')") === '', { spec: E("tbSitesFor('rutile')"), raw: E("tbOpt('bvs', 'sites')") });
 } catch (ex) {
   out._error = { ok: false, detail: String(ex && ex.stack || ex) };
 }

@@ -203,6 +203,7 @@ function tbQuery(tab) {
     const b = tbCollect('bvs');
     q.set('params', b.params || 'gh');
     for (const k of ['ox', 'cutoff', 'hb', 'hmax', 'donors', 'hbp', 'u6set']) if (b[k]) q.set(k, b[k]);
+    const sites = tbSitesFor(TBS.key); if (sites) q.set('sites', sites);
     if (o.noh) q.set('noh', '1');
     q.set('part', tab);
   }
@@ -250,7 +251,13 @@ async function tbRender() {
   let r;
   try { r = await fetch(url).then(x => x.json()); } catch (ex) { r = { ok: false, error: String(ex) }; }
   if (seq !== TBS.seq || tab !== TBS.tab) return;
-  if (!r.ok) { tbRenderBody('<div class="empty muted">⚠ ' + esc(r.error || 'failed') + '</div>'); if (tab === 'epma') tbEpmaBlocks({}); return; }
+  if (!r.ok) {
+    tbRenderBody('<div class="empty muted">⚠ ' + esc(r.error || 'failed') + '</div>'); if (tab === 'epma') tbEpmaBlocks({});
+    if ((tab === 'coords' || tab === 'bvs') && tbSitesFor(TBS.key))        // a site option the build refused: the table is gone, so the way out is here
+      $('#tb-body').append(el('p', {}, el('button', { class: 'ghost mini', onclick: () => { tbSitesSet(TBS.key, ''); tbRender(); } }, 'clear the site options of this .cif'),
+                               ' ', el('code', {}, tbSitesFor(TBS.key))));
+    return;
+  }
   let status = '';
   if (tab === 'coords' || tab === 'bvs') status = [r.name, r.formula, r.sg].filter(Boolean).join(' · ') + ((r.notes || []).length ? ' — ' + r.notes.join(' · ') : '');
   else if (tab === 'gd') status = (r.summary || []).map(s => s[0] + ' D ' + s[1].toFixed(3) + ': 1 − KP/KC = ' + (s[3] >= 0 ? '+' : '') + s[3].toFixed(3) + ' (' + s[4] + ')').join(' · ') || ('K_C = ' + r.KC.toFixed(4) + ' — give a density for the compatibility');
@@ -261,8 +268,100 @@ async function tbRender() {
   const html = r.html + (r.text && tab !== 'coords' && tab !== 'bvs' ? '<details class="tb-text"><summary class="muted">reduction / working (as pxrd prints it)</summary><pre>' + esc(r.text) + '</pre></details>' : '')
              + (tab === 'coords' ? tbSymCodes(r.symcodes || []) : '');
   tbRenderBody(html);
+  if (tab === 'bvs') tbSiteHooks(r);
   if (tab === 'bvs' && TBS.mscheck && (TBS.mscheck.fromPaper || TBS.mscheck.key === TBS.key)) tbShowCheck(TBS.mscheck);
   if (tab === 'epma' && TBS.papercheck) tbShowCheck(TBS.papercheck, 'what the paper says, checked against itself');
+}
+
+// ---- the Bond valence tab's site options: click a cation's column (its own parameter set, its own R0 and b per anion, its
+// longest bond) or an anion's row (its composition — a cation's too, from its column). Kept per .cif in the hidden 'sites'
+// input as JSON {cif key: 'Pb1 set=ba; O1 comp=O0.9F0.1'}, the text bv_check.parse_sites reads (`pxrd tables --site`).
+function tbSitesMap() { try { const m = JSON.parse(tbOpt('bvs', 'sites') || '{}'); return m && typeof m === 'object' ? m : {}; } catch (_) { return {}; } }
+function tbSitesFor(key) { return key ? (tbSitesMap()[key] || '') : ''; }
+function tbSitesSet(key, spec) {
+  if (!key) return;
+  const m = tbSitesMap();
+  if (spec) m[key] = spec; else delete m[key];
+  tbSetOpt('bvs', 'sites', Object.keys(m).length ? JSON.stringify(m) : '');
+}
+// 'Pb1 set=ba; Pb1 S=2.541/0.37' -> [{label, key, value}] (the server validates; this only splits)
+function tbSiteEntries(spec) {
+  return (spec || '').split(/[;\n]/).map(x => x.trim()).filter(Boolean).map(x => {
+    const m = x.match(/^(\S+)\s+(\S+?)\s*=\s*(.+)$/); return m ? { label: m[1], key: m[2], value: m[3].trim() } : null;
+  }).filter(Boolean);
+}
+function tbSiteHooks(r) {
+  const body = $('#tb-body'), tbl = body.querySelector('.pubtable[data-kind="bvs"] table');
+  const meta = {}; for (const m of r.bv_sites || []) meta[m.label] = m;
+  const spec = tbSitesFor(TBS.key), on = new Set(tbSiteEntries(spec).map(e => e.label));
+  if (!tbl) return;
+  const hook = (cell, m) => {
+    cell.classList.add('tb-site-click'); if (on.has(m.label)) cell.classList.add('tb-site-on');
+    cell.title = m.kind === 'cation' ? m.label + ': its own parameter set, R0 and b, longest bond, composition' : m.label + ': its composition (a mixed or partly vacant site)';
+    cell.addEventListener('click', () => tbSitePanel(m));
+  };
+  tbl.querySelectorAll('thead th').forEach(th => { const m = meta[th.textContent.trim()]; if (m && m.kind === 'cation') hook(th, m); });
+  tbl.querySelectorAll('tbody tr').forEach(tr => { const td = tr.firstElementChild, m = td && meta[td.textContent.trim()]; if (m && m.kind === 'anion') hook(td, m); });
+  const bar = el('div', { class: 'tb-site-bar muted' });
+  if (spec) {
+    bar.append('site options:');
+    for (const e of tbSiteEntries(spec)) bar.append(el('code', {}, e.label + ' ' + e.key + '=' + e.value));
+    bar.append(el('button', { class: 'ghost mini', onclick: () => { tbSitesSet(TBS.key, ''); tbRender(); } }, 'clear all'));
+  } else bar.append('click a cation column or an anion row for its own options (a parameter set, R0 and b, longest bond, composition)');
+  body.prepend(bar);
+}
+function tbSitePanel(m) {
+  const body = $('#tb-body'); body.querySelector('.tb-site-panel')?.remove();
+  const mine = tbSiteEntries(tbSitesFor(TBS.key)).filter(e => e.label === m.label);
+  const val = k => (mine.find(e => e.key === k) || {}).value || '';
+  const inp = (k, ph, cls) => el('input', { type: 'text', 'data-k': k, value: val(k), placeholder: ph || '', class: cls || '', spellcheck: 'false', autocomplete: 'off' });
+  const panel = el('div', { class: 'tb-site-panel' });
+  panel.append(el('h4', {}, m.label + ' — ' + (m.kind === 'cation' ? 'cation site' : 'anion site') + ' (' + m.species + ')'));
+  if (m.kind === 'cation') {
+    const set = el('select', { 'data-k': 'set' }, el('option', { value: '' }, 'the pane\'s set'), el('option', { value: 'gh' }, 'GH2015'),
+                   el('option', { value: 'bo' }, 'BO91'), el('option', { value: 'ba' }, 'BA85'));
+    set.value = val('set');
+    panel.append(el('div', { class: 'row' }, el('span', { class: 'muted' }, 'parameter set for its bonds'), set));
+    const t = el('table', {}, el('tr', {}, el('th', { class: 'muted' }, 'pair'), el('th', { class: 'muted' }, 'R0 (Å)'), el('th', { class: 'muted' }, 'b'),
+                                 el('th', { class: 'muted' }, 'reference (for the note)'), el('th', { class: 'muted' }, 'in use')));
+    const anions = [...new Set((m.pairs || []).map(p => p.anion))];
+    for (const an of anions) {
+      const p = m.pairs.find(x => x.anion === an), given = (val(an) || '').split('/');
+      const r0 = el('input', { type: 'text', 'data-an': an, 'data-f': 'r0', value: given[0] || '', placeholder: p.r0.toFixed(3) });
+      const b = el('input', { type: 'text', 'data-an': an, 'data-f': 'b', value: given[1] || '', placeholder: p.b.toFixed(3) });
+      const ref = el('input', { type: 'text', class: 'w', 'data-an': an, 'data-f': 'ref', value: given.slice(2).join('/'), placeholder: 'e.g. Brown (2009)' });
+      t.append(el('tr', {}, el('td', {}, p.cation + (p.ox > 1 ? p.ox : '') + '+–' + an), el('td', {}, r0), el('td', {}, b), el('td', {}, ref),
+                   el('td', { class: 'muted' }, p.r0.toFixed(3) + ', ' + p.b.toFixed(3) + ' — ' + p.ref)));
+    }
+    panel.append(el('div', { class: 'muted' }, 'R0 and b typed here replace the set\'s for that pair on this site only; blank = the set\'s.'), t);
+    panel.append(el('div', { class: 'row' }, el('span', { class: 'muted' }, 'longest bond counted (Å)'), inp('max', m.max ? '' : 'auto (' + m.longest + ')'),
+                    el('span', { class: 'muted' }, 'everything within it is a bond, as the cutoff does for every site')));
+  }
+  panel.append(el('div', { class: 'row' }, el('span', { class: 'muted' }, 'composition'), inp('comp', m.species, 'w'),
+                  el('span', { class: 'muted' }, m.kind === 'anion' ? 'O0.9F0.1 = a mixed site (bonds weighted over both); O0.9 = 10 % vacant' : 'Fe0.6Mg0.4, or Fe3+0.6Fe2+0.4')));
+  const err = el('div', { class: 'err' });
+  const apply = () => {
+    const out = tbSiteEntries(tbSitesFor(TBS.key)).filter(e => e.label !== m.label);
+    const add = (k, v) => { v = (v || '').trim(); if (v) out.push({ label: m.label, key: k, value: v }); };
+    const sel = panel.querySelector('[data-k="set"]'); if (sel) add('set', sel.value);
+    const ans = [...new Set([...panel.querySelectorAll('[data-an]')].map(i => i.dataset.an))];
+    for (const an of ans) {
+      const f = k => (panel.querySelector('[data-an="' + an + '"][data-f="' + k + '"]').value || '').trim();
+      if (!f('r0') && !f('b')) continue;
+      if (!f('r0')) { err.textContent = m.label + '–' + an + ': give R0 (b alone is not a parameter pair)'; return; }
+      add(an, f('r0') + '/' + (f('b') || '0.37') + (f('ref') ? '/' + f('ref').replace(/[;\n]/g, ',') : ''));
+    }
+    const mx = panel.querySelector('[data-k="max"]'); if (mx) add('max', mx.value);
+    add('comp', panel.querySelector('[data-k="comp"]').value.replace(/\s+/g, ''));
+    tbSitesSet(TBS.key, out.map(e => e.label + ' ' + e.key + '=' + e.value).join('; '));
+    tbRender();
+  };
+  panel.append(err, el('div', { class: 'row' }, el('button', { onclick: apply }, 'Apply'),
+    el('button', { class: 'ghost', onclick: () => { tbSitesSet(TBS.key, tbSiteEntries(tbSitesFor(TBS.key)).filter(e => e.label !== m.label).map(e => e.label + ' ' + e.key + '=' + e.value).join('; ')); tbRender(); } }, 'reset ' + m.label),
+    el('button', { class: 'ghost', onclick: () => panel.remove() }, 'close ✕')));
+  panel.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') apply(); });
+  const bar = body.querySelector('.tb-site-bar'); if (bar) bar.after(panel); else body.prepend(panel);
+  panel.querySelector('input, select')?.focus();
 }
 
 // ---- EPMA: the blocks of analyses a messy workbook holds — the one reduced is chosen here (stored in the hidden data-opt input)

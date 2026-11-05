@@ -5,7 +5,8 @@
 
 Skipped where node or jsdom is missing. Each flow is a state bug a review found in the browser code, which the Flask
 test client cannot reach: picks of one probe file carried to the next, the sheet panel left on the last file, a typed
-sheet keeping a block number, a folder switch keeping the hidden picks, one save timer for every tab.
+sheet keeping a block number, a folder switch keeping the hidden picks, one save timer for every tab; the Bond valence tab's
+site options (a column's own R0, a row's composition) reaching the table and its note.
 """
 import json, os, shutil, subprocess, tempfile, threading, unittest
 
@@ -30,6 +31,9 @@ class TablesFlows(unittest.TestCase):
         for name in ('probe.csv', 'probe2.csv'):
             with open(os.path.join(cls.tmp, name), 'w', encoding='utf-8') as f:
                 f.write(PROBE)
+        from tests.test_tables import RUTILE
+        with open(os.path.join(cls.tmp, 'rutile.cif'), 'w', encoding='utf-8') as f:
+            f.write(RUTILE)
         assert G.ms_set_folder(cls.tmp)
         if G.MS['athread']:
             G.MS['athread'].join(30)
@@ -51,7 +55,8 @@ class TablesFlows(unittest.TestCase):
     def test_flows(self):
         self.assertNotIn('_error', self.res, self.res.get('_error'))
         want = ('sidebar_file_change_clears_picks', 'same_file_keeps_picks', 'typed_sheet_clears_block_and_range', 'sheet_panel_follows_the_file',
-                'late_sheet_reply_ignored', 'folder_switch_clears_hidden_picks', 'per_tab_save_timers')
+                'late_sheet_reply_ignored', 'folder_switch_clears_hidden_picks', 'per_tab_save_timers',
+                'bv_column_click_sets_site_params', 'bv_row_click_sets_composition', 'bv_site_options_clear')
         for name in want:
             with self.subTest(flow=name):
                 self.assertIn(name, self.res, (self.res, self.err))
