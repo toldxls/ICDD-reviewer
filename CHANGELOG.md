@@ -108,6 +108,15 @@ one to two papers at every size; the statements gauntlet's contradictions still 
 - **A second analysis block run on below the Total** (the same constituents again, then a wt% Total of their own) keeps the
   first Total, and its rows are no longer taken for the paper's apfu column.
 
+### Fixed — the analytical table, fourth round: OCR and glyph forms
+657 → 667 of 760 corpus tables add up (87 → 88 %), 140 → 142 of 150 in the second set (93 → 95 %); seeded recall up at
+every size (formula faults caught at 10 %: 483 → 488 papers; never caught 158 → 154); two new composition flags, both
+read by hand against the papers.
+- `T1` / `TI` (OCR's Tl), a value glued to its unit (`21.83wt.%`), a lone dash a column away from its numbers (an empty
+  cell, not a range sign: `11.45 - 10.09` had been the range 11.45–10.09), `H2O, calc. (12.49)`, a leading mark
+  (`*Mn2O3`, `***H2Ocalc`), the font's `þ` for `+` (`H2Oþ`).
+- A table whose first row is the last line of a page, under its header, is joined to the rest on the next page.
+
 ### Fixed
 - Table 2's means are over every bond: a loop that writes a ×4 bond once had counted it once (rutile's `<Ti–O>` 1.964 for
   1.959).

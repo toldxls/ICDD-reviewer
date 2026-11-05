@@ -402,6 +402,8 @@ def _constituent_ok(tok):
     a million times over forty papers, a dozen regex passes each — and a paper's vocabulary is a
     few hundred distinct tokens."""
     t = tok.translate(_CYR)
+    t = re.sub(r'^[*∗⁎†‡§]+(?=[A-Z(])', '', t)                         # '*Mn2O3', '***H2Ocalc': the footnote mark before the name
+    t = re.sub(r'(?<=[O\d])þ$', '+', t)                               # 'H2Oþ': the font that prints '+' as 'þ' (its 'Mn2þ' is Mn2+)
     m_p = re.fullmatch(r'\(((?!H)[A-Z][a-z]?\d*O\d*)\)[a-d*∗†‡§]?', t)   # never '(H2O)': a pfu block's row label
     if m_p:
         t = m_p.group(1)                                              # '(Fe2O3)a', '(FeO)a': the split of a total-iron row, set in parentheses with its footnote
@@ -486,6 +488,13 @@ def _row_at(ws, x_col):
         else:
             merged.append(w); k += 1
     ws = merged
+    # OCR's 'T1' / 'TI' for Tl when numbers follow; a value glued to its unit ('21.83wt.%')
+    ws = [(w[:4] + ('Tl',) + tuple(w[5:])) if w[4] in ('T1', 'TI') and k_ + 1 < len(ws) and re.fullmatch(r'\d+\.\d+', ws[k_ + 1][4]) else w for k_, w in enumerate(ws)]
+    ws = [(w[:4] + (re.sub(r'(?<=\d)(?:wt\.?\s?%|%)$', '', w[4]),) + tuple(w[5:])) for w in ws]
+    # a lone dash between two numbers is a range sign only when it sits beside them; a column away it is that column's empty
+    # cell ('Fe2O3 11.45 - 10.09 -' had been the range 11.45–10.09)
+    ws = [(w[:4] + ('n.d.',) + tuple(w[5:])) if w[4] in ('-', '–', '—', '−') and 0 < k_ < len(ws) - 1
+          and (w[0] - ws[k_ - 1][2] > 20 or ws[k_ + 1][0] - w[2] > 20) else w for k_, w in enumerate(ws)]
     toks = [w[4] for w in ws]
     for k, w in enumerate(ws):
         # the oxygen equivalent of the halogens / sulfide, deducted on a line of its own: 'O = S –1.82', 'O¼S 2.87', '−O ≡F −0.19',
@@ -505,6 +514,8 @@ def _row_at(ws, x_col):
                 return 'O=' + re.sub(r'^[−–-]?O\s*[=≡¼”"]?\s*', '', ' '.join(toks[k:k_oe])).replace(' ', '').lstrip('=≡¼”"'), 'total', \
                     [(kk, v) for kk, v in vals_oe if kk in ('num', 'range', 'na')][:12], w[0]
         c, kind = _constituent_ok(toks[k])
+        if c is None and toks[k].endswith(',') and k + 1 < len(toks) and (_numlike(toks[k + 1]) or re.fullmatch(r'\(?(?:calc|calcd|calculated|meas|diff)\.?\)?', toks[k + 1], re.I)):
+            c, kind = _constituent_ok(toks[k][:-1])                   # 'H2O, calc. (12.49)': the comma after the name (a list of names in prose has no number next)
         if c is None and toks[k] in ('O', '-O', '–O', '−O') and k + 2 < len(toks) and toks[k + 1] in ('=', '≡'):
             c, kind = 'O=' + toks[k + 2], 'total'; rest = ws[k + 3:]
         elif c is not None:
@@ -856,6 +867,8 @@ def _continued_pages(pages):
         if q < 1:
             continue
         last = _row_at(prev[q]['w'], None); above = _row_at(prev[q - 1]['w'], None)
+        if not above and re.search(r'\b(constituents?|oxides?|elements?|mean|wt\.?\s*%|range|s\.d\.)', ' '.join(w[4] for w in prev[q - 1]['w']), re.I):
+            above = True                                              # one row only before the break, under the column header (SiO2 on the page, MnO … after it)
         if not last or not above or last[1] != 'constituent':
             continue
         r = 0

@@ -2875,3 +2875,23 @@ class TableCompleteness(unittest.TestCase):
                  ('SiO2', '48.00'), ('MgO', '28.00'), ('FeO', '22.00'), ('Total', '98.00')]
         e, _ = self._read('two.pdf', rows3)
         self.assertEqual(e['total'], 99.50); self.assertEqual(e['apfu'], {})
+
+    def test_ocr_and_glyph_forms_of_a_row(self):
+        ws = lambda s_, g=57: [(41 + g * i, 0, 41 + g * i + 30, 10, w) for i, w in enumerate(s_.split())]
+        self.assertEqual(PE._row_at(ws('T1 23.90 23.76'), None)[:2], ('Tl', 'constituent'))          # OCR's T1 / TI for Tl
+        self.assertEqual(PE._row_at(ws('TI 24.06'), None)[:2], ('Tl', 'constituent'))
+        self.assertEqual(PE._row_at(ws('Ag 21.83wt.%'), None)[2], [('num', 21.83)])                  # the unit glued on
+        self.assertEqual(PE._row_at(ws('Fe2O3 11.45 - 10.09 -'), None)[2], [('num', 11.45), ('na', None), ('num', 10.09), ('na', None)])   # a dash a column away
+        self.assertEqual(PE._row_at(ws('SiO2 41.2 - 42.0', 12), None)[2], [('range', (41.2, 42.0))])                                     # a dash beside its numbers
+        self.assertEqual(PE._row_at(ws('H2O, calc. (12.49)'), None)[:3], ('H2O', 'constituent', [('num', 12.49)]))
+        self.assertEqual([PE._constituent_ok(t)[0] for t in ('*Mn2O3', '***H2Ocalc', 'H2Oþ')], ['Mn2O3', 'H2O', 'H2O+'])
+
+    def test_a_table_whose_first_row_ends_a_page(self):
+        # one row under the column header before the page break, the rest after the next page's running head
+        mk = lambda y, *cells: {'y': y, 'w': [(x, y - 8, x + 30, y, t) for x, t in cells]}
+        p1 = [mk(720, (70, 'Table'), (103, '1.'), (115, 'Chemical'), (164, 'data')), mk(735, (74, 'Constituent'), (170, 'Mean'), (265, 'Range')),
+              mk(750, (96, 'SiO2'), (171, '33.12'), (251, '32.48-33.59')), mk(802, (518, '2'))]
+        p2 = [mk(43, (271, 'RUNNING')), mk(57, (253, 'HEAD')), mk(85, (95, 'MnO'), (171, '47.48'), (251, '46.33-48.26')),
+              mk(99, (95, 'MgO'), (171, '16.21'), (251, '15.68-17.20')), mk(113, (95, 'Total'), (171, '96.81'))]
+        first = PE._continued_pages([p1, p2])[0][1]
+        self.assertEqual([ln['w'][0][4] for ln in first][-3:], ['MnO', 'MgO', 'Total'])
