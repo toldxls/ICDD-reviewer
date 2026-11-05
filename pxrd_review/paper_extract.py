@@ -379,7 +379,7 @@ _TOTAL = re.compile(r'^(Total:?|Sum:?|Σ|Сумма|Итого|[-–−]?O\s*[=�
 _NUM = re.compile(r'^[-–−]?\d+\.\d+$|^\d+$')
 _NUM_ESD = re.compile(r'^(\d+(?:\.\d+)?)\((\d+(?:\.\d+)?)\)$')
 _RANGE1 = re.compile(r'^(\d+\.\d+)\s*[-–—]\s*(\d+\.\d+)$')
-_NA = re.compile(r'^(n\.?d\.?|b\.?d\.?l?\.?|[-–—]|bdl|nd|n/a)$', re.I)
+_NA = re.compile(r'^(n\.?d\.?|b\.?d\.?l?\.?|[-–—]|bdl|nd|n/a|n\.a\.?|<\s?\d*\.?\d+|<\s?d\.?l\.?)$', re.I)   # '<0.2': below detection; 'n.a.': not analysed (never 'Na')
 
 _CYR = str.maketrans('ОСНРКВАЕМТаеорсух', 'OCHPKBAEMTaeopcyx')       # Cyrillic lookalikes in a Russian-typeset 'Na2О'
 _DASHES = str.maketrans('−–—‒‐', '-----')      # minus, en, em, figure, non-breaking hyphen -> ASCII
@@ -894,7 +894,7 @@ def epma_table(pdf, name=''):
             best = tr
         i = 0
         while i < len(lines):
-            block = []; j = i; x_col = None; gap = 0; last_row = i; merged_above = False; merged_x = {}   # merged_x: id(block row) -> x of the mean set above its label
+            block = []; j = i; x_col = None; gap = 0; last_row = i; merged_above = False; merged_x = {}; apfu_line = None   # merged_x: id(block row) -> x of the mean set above its label
             while j < len(lines):
                 ws = lines[j]['w']; toks = [w[4] for w in ws]
                 if not toks:
@@ -925,10 +925,13 @@ def epma_table(pdf, name=''):
                     if x_above is not None:
                         merged_x[id(block[-1])] = x_above                      # keyed by the row itself: the block is filtered below ('Ba 201'), so a position would shift
                 elif block and gap < 3:
+                    if any(b_[1] == 'total' for b_ in block) and re.search(r'\b(formulae?|apfu|atoms? per|basis of|calculated on|normali[sz]ed to|ions)\b', ' '.join(toks), re.I):
+                        apfu_line = len(block)                   # 'Formulas based on 4 ions' under the Total: the rows from here on are the apfu block
                     gap += 1; j += 1                         # the other page column's lines, a wrapped name
                 else:
                     break
             j = last_row
+            apfu_row = id(block[apfu_line]) if apfu_line is not None and apfu_line < len(block) else None
             block = [b for b in block if not (b[1] == 'constituent' and re.fullmatch(r'[A-Z][a-z]?', b[0]) and next((v for kk, v in b[2] if kk == 'num'), 0) > 110)]
             n_const = sum(1 for c, k, v, _ in block if k == 'constituent')                     # 'Ba 201': ppm, not wt%
             if n_const >= 3 and i >= 1 and block and block[0][1] == 'constituent':
@@ -1006,7 +1009,7 @@ def epma_table(pdf, name=''):
                         nums_m = [v for kk, v in major[2] if kk == 'num']
                         if nums_m:
                             keep_cols = [q for q, v in enumerate(nums_m) if abs(v - nums_m[0]) <= 0.15 * nums_m[0]]
-                past_total = False; first_val = {}; rows_nd = []; apfu = {}   # apfu: the paper's own atoms per formula unit, read off the block it prints them in
+                past_total = False; first_val = {}; rows_nd = []; apfu = {}; repeats_after_total = 0; second_block = False   # apfu: the paper's own atoms per formula unit, read off the block it prints them in
                 sd_x = next(((w[0] + w[2]) / 2 for w in head_ws if re.match(r'^\(?(s\.?d\.?|σ|1σ|sigma|e\.?s\.?d\.?|st\.?\s?dev\.?|stdev|sd)\)?$', w[4], re.I)), None) if head_ws else None
                 if sd_x is None and head_ws:                                    # 'St. Dev.' / 'Std dev' as two header words: the column sits between them
                     for w1, w2 in zip(head_ws, head_ws[1:]):
@@ -1059,6 +1062,24 @@ def epma_table(pdf, name=''):
                 own_xs = sorted(x_ for x_ in (next(((w[0] + w[2]) / 2 for w in wr_ if _numlike(w[4]) and w[0] > x_col), None)
                                                for c_, k_, v_, wr_ in block if k_ == 'constituent') if x_ is not None)
                 own_x_med = own_xs[len(own_xs) // 2] if len(own_xs) >= 3 else None
+                # several analyses side by side with no Mean header: where column 1 sits and how far apart the columns are, from the
+                # rows that fill every column — a row whose first number is a column or more to the right has no value in column 1
+                # (a blank cell: its first number is the next analysis's)
+                col1_x = col_gap = None
+                xs_rows = []
+                for c_, k_, v_, wr_ in block:                                     # the analysis's rows: those above the first Total (a block may run on into the next table)
+                    if k_ == 'total' and c_.lower().startswith(('total', 'sum')):
+                        break
+                    if k_ == 'constituent':
+                        xs_rows.append([(w[0] + w[2]) / 2 for w in wr_ if (_numlike(w[4]) or re.match(r'^[−–-]?\d', w[4]) or _NA.match(w[4])) and w[0] > x_col])
+                n_full = max((len(x_) for x_ in xs_rows), default=0)
+                full_ = [x_ for x_ in xs_rows if len(x_) == n_full]
+                if n_full >= 3 and len(full_) >= 3 and mean_x is None:
+                    f1 = sorted(x_[0] for x_ in full_); col1_x = f1[len(f1) // 2]
+                    gaps_ = sorted(b2 - a2 for x_ in full_ for a2, b2 in zip(x_, x_[1:]))
+                    col_gap = gaps_[len(gaps_) // 2] if gaps_ else None
+                    if not col_gap or col_gap < 15 or any(abs(x_[0] - col1_x) > 0.35 * col_gap for x_ in full_):
+                        col1_x = col_gap = None                                  # the full rows do not agree on where column 1 is
                 mx_ = sorted(merged_x[id(b_)] for b_ in block if id(b_) in merged_x)    # the rows the block still holds
                 stagger_x = mx_[len(mx_) // 2] if len(mx_) >= 3 and mean_x is None else None   # the means' column, where they sit above their labels
                 for b_row in block:
@@ -1070,6 +1091,10 @@ def epma_table(pdf, name=''):
                         if remnant or not element_table or past_total:
                             continue                                             # an 'O = F' remnant, never a constituent
                     v0 = next((v for k_, v in vals if k_ == 'num'), None)
+                    if kind == 'constituent' and past_total and c in first_val:
+                        repeats_after_total += 1                                 # the analysis's constituents again below its Total: apfu, or a second analysis
+                    if apfu_row is not None and id(b_row) == apfu_row and past_total:
+                        in_apfu = True                                           # the first row after a 'Formulas based on …' line under the Total
                     if kind == 'constituent' and past_total and (in_apfu or c in _ION_ROWS):
                         if bare(c) and v0 is not None and 0 < v0 < 60:
                             apfu.setdefault(c, v0)
@@ -1121,6 +1146,9 @@ def epma_table(pdf, name=''):
                             continue
                         if (c.lower().startswith(('total', 'sum')) or c in ('Σ', 'Сумма', 'Итого')) and nums:
                             was = total
+                            if was is not None and was >= 40 and repeats_after_total >= 2 and nums[0] >= 40:
+                                second_block = True                      # a second analysis block ran on below the first Total (the same constituents again, then a
+                                continue                                 # wt% Total of their own): its Total is not this table's, and its rows were never apfu
                             total = nums[0]; past_total = True
                             if mean_x is not None:                      # the Total under the Mean column, as each constituent's mean is
                                 cand = [(abs((w[0] + w[2]) / 2 - mean_x), w[4]) for w in ws_row if _numlike(w[4])]
@@ -1161,6 +1189,10 @@ def epma_table(pdf, name=''):
                         if x1 is not None and x1 > stagger_x + 30:
                             continue                                             # the means are set above their labels (a comparison table's own column) and this row has none:
                                                                                  # its numbers are the other analyses' (kept in col_cells) — avdeevite's TiO2 … MgO had been read from them
+                    elif col1_x is not None and kind == 'constituent' and not point_cols and not nd_first:
+                        x1 = next(((w[0] + w[2]) / 2 for w in ws_row if (_numlike(w[4]) or re.match(r'^[−–-]?\d', w[4])) and w[0] > x_col), None)
+                        if x1 is not None and x1 > col1_x + 0.6 * col_gap and not past_total:
+                            continue                                             # column 1's cell is blank: the row's first number is another analysis's (kept in col_cells)
                     elif first_x_med is not None and len(nums) == 1 and kind == 'constituent':
                         x1 = next(((w[0] + w[2]) / 2 for w in ws_row if _numlike(w[4])), None)
                         if x1 is not None and x1 > first_x_med + 40:
@@ -1206,6 +1238,8 @@ def epma_table(pdf, name=''):
                             break                                                # the caption: the header ends here
                         if len(in_span) <= 8:
                             head_span += [(w[4], (w[0] + w[2]) / 2) for w in in_span]
+                if second_block:
+                    apfu = {}                                                    # what followed the Total was another analysis (its wt%), not atoms per formula unit
                 cand = {'rows': _drop_totals(rows), 'total': total, 'total_other': total_other, 'o_eq': o_eq, 'header': ' '.join(head)[:200], 'page': pno + 1, 'n': n_const, 'score': score, 'caption': cap[:160], 'head_cells': head_cells, 'rows_all': rows + rows_nd, 'label_x': x_col, 'apfu': apfu, 'col_cells': col_cells, 'head_span': head_span, 'n_points': n_points}
                 key_rows = {(r_['constituent'], r_['mean']) for r_ in cand['rows']}
                 if any(c_['page'] == cand['page'] and abs((c_.get('label_x') or 0) - (x_col or 0)) <= 30 and key_rows <= {(r_['constituent'], r_['mean']) for r_ in c_['rows']} for c_ in cands):

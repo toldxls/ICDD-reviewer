@@ -98,6 +98,16 @@ one to two papers at every size; the statements gauntlet's contradictions still 
 - **Staggered tables**: the rows whose mean sits above their label were marked by position in a block that is filtered
   afterwards (a ppm row dropped), so a dropped row shifted the marks onto their neighbours.
 
+### Fixed — the analytical table, third round: several analyses side by side
+652 → 657 of 759 corpus tables add up (86 → 87 %), 139 → 140 of 150 in the second set; whole-corpus A/B: one paper to
+'agrees', three greys where a lucky misreading had vouched; 7 more EPMA sheets clean, contradictions 0.
+- **A blank or below-detection cell in column 1** (`<0.2`, `n.a.`, or nothing at all) is no value: the row's first number
+  had been the next analysis's. Column 1's position and the column spacing come from the rows that fill every column,
+  above the Total only.
+- **The apfu block after a 'Formulas based on …' line** under the Total is no longer read as more wt% rows.
+- **A second analysis block run on below the Total** (the same constituents again, then a wt% Total of their own) keeps the
+  first Total, and its rows are no longer taken for the paper's apfu column.
+
 ### Fixed
 - Table 2's means are over every bond: a loop that writes a ×4 bond once had counted it once (rutile's `<Ti–O>` 1.964 for
   1.959).

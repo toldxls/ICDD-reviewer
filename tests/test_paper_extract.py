@@ -2855,3 +2855,23 @@ class TableCompleteness(unittest.TestCase):
         for line, c in (('O = S –1.82 –1.38', 'O=S'), ('O¼S 2.87', 'O=S'), ('−O ≡F −0.19', 'O=F'), ('O”F,Cl 0.92', 'O=F,Cl')):
             self.assertEqual(PE._row_at(ws(line), None)[:2], (c, 'total'), line)
         self.assertEqual(PE._row_at(ws('O 45.10 44.2-46.0'), None)[:2], ('O', 'constituent'))
+
+    def test_several_analyses_side_by_side(self):
+        # no Mean header, one analysis per column: a '<0.2' or a blank cell in column 1 is no value there (the row's first
+        # number is the next analysis's), the apfu block after 'Formulas based on …' is not more wt%, and a second analysis
+        # block run on below the Total keeps the first Total
+        self.assertEqual([k for k, _ in PE._numbers(['<0.2', 'n.a.', 'Na', '<d.l.', '0.5'])], ['na', 'na', 'text', 'na', 'num'])
+        rows = [('Ni', '61.10', '60.50', '59.95', '60.40'), ('Fe', '<0.2', '<0.2', '4.10', '3.90'), ('Co', '', '0.07', '0.05', '0.06'),
+                ('Cu', '1.00', '1.00', '1.00', '1.00'), ('P', '37.88', '38.44', '34.96', '34.70'), ('Total', '99.98', '100.01', '100.06', '100.06')]
+        e, (read, ok) = self._read('cols.pdf', rows, head=('', 'Holotype', 'Cotype', 'Basin', 'Pallasite'), xs=(40, 120, 180, 240, 300))
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'Ni': 61.10, 'Cu': 1.00, 'P': 37.88})
+        self.assertTrue(ok, (read, e['total']))
+        rows2 = [('Cu', '32.97', '33.10', '32.80'), ('Cr', '27.65', '27.70', '27.40'), ('Fe', '3.69', '3.60', '3.80'), ('S', '35.71', '35.60', '35.90'),
+                 ('Total', '100.02', '100.00', '99.90')]
+        e, _ = self._read('apfu.pdf', rows2, head=('', 'Holotype', 'Cotype', 'Basin'), xs=(40, 120, 180, 240),
+                          extra=((40, 60 + 32 + 14 * 6 + 4, 'Formulas based on 4 ions'), (40, 60 + 32 + 14 * 7 + 4, 'Na'), (120, 60 + 32 + 14 * 7 + 4, '0.38')))
+        self.assertNotIn('Na', [r['constituent'] for r in e['rows']])
+        rows3 = [('SiO2', '50.00', '49.0-51.0', '0.5'), ('MgO', '30.00', '29.5-30.5', '0.2'), ('FeO', '19.50', '19.0-20.0', '0.2'), ('Total', '99.50'),
+                 ('SiO2', '48.00'), ('MgO', '28.00'), ('FeO', '22.00'), ('Total', '98.00')]
+        e, _ = self._read('two.pdf', rows3)
+        self.assertEqual(e['total'], 99.50); self.assertEqual(e['apfu'], {})
