@@ -30,9 +30,12 @@ class FolderGuard(unittest.TestCase):
     def test_update_relaunches_on_the_open_folder(self):
         # issue #13: a GUI started on the chooser (no folder) or on a broad folder, then pointed at a batch, comes back on THAT batch
         G = self.G
-        saved = (G.STATE.get('folder'), G.MS.get('folder'))
+        saved = (G.STATE.get('folder'), G.STATE.get('order'), G.MS.get('folder'))
         try:
-            G.STATE['folder'] = self.batch; G.MS['folder'] = None
+            # the review side counts as open only with entries: a papers folder sets STATE['folder'] too, with none
+            G.STATE['folder'] = self.batch; G.STATE['order'] = []; G.MS['folder'] = None
+            self.assertEqual(G._relaunch_argv(['--port', '8123']), ['--port', '8123'])
+            G.STATE['order'] = ['entry1']
             self.assertEqual(G._relaunch_argv(['--port', '8123', '--no-auto-exit']), [self.batch, '--open-anyway', '--port', '8123', '--no-auto-exit'])
             self.assertEqual(G._relaunch_argv([self.root, '--out', '/x', '--import-triage', 'r.txt']), [self.batch, '--open-anyway'])   # --out was the root's
             self.assertEqual(G._relaunch_argv([self.batch, '--out', '/x']), [self.batch, '--open-anyway', '--out', '/x'])
@@ -41,7 +44,7 @@ class FolderGuard(unittest.TestCase):
             G.MS['folder'] = None
             self.assertEqual(G._relaunch_argv(['--port', '8123']), ['--port', '8123'])        # nothing open: as launched
         finally:
-            G.STATE['folder'], G.MS['folder'] = saved
+            G.STATE['folder'], G.STATE['order'], G.MS['folder'] = saved
 
     def test_survey(self):
         G = self.G

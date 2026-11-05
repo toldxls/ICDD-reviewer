@@ -236,7 +236,7 @@ def write_xlsx(res, path, name='', paper=None):
         ws.append(['D calculated', '=B%d*B%d/(B%d*B%d)' % (row + 1, row, row + 2, row + 3), 'Z · FW / (V · 0.602214)'])
         ws.append(['K_P (calculated D)', '=(B%d-1)/B%d' % (r_n, row + 4), '(n − 1) / D'])
         ws.append(['compatibility', '=IF(D%d=0,"no K_C: no constituent of this analysis has a constant",1-B%d/D%d)' % (r_kc, row + 5, r_kc), '1 − K_P/K_C', cat('B%d' % (row + 6))])
-        A['calc'] = {'D': 'B%d' % (row + 4), 'KP': 'B%d' % (row + 5), 'CI': 'B%d' % (row + 6)}; row += 7
+        A['calc'] = {'D': 'B%d' % (row + 4), 'KP': 'B%d' % (row + 5), 'CI': 'B%d' % (row + 6), 'FW': 'B%d' % row, 'Z': 'B%d' % (row + 1), 'V': 'B%d' % (row + 2)}; row += 7
     if apfu:
         from pxrd_review import epma as EP
         assert row + 1 == d0, (row, d0)
@@ -325,7 +325,10 @@ def _write_gd_check(wb, res, paper, A, cat):
         wc.cell(row, 1, 'D calculated = Z·FW/(V·0.602214)'); wc.cell(row, 2, '=' + g(A['calc']['D'])); wc.cell(row, 3, paper['D_calc']); wc.cell(row, 4, '=B%d-C%d' % (row, row))
         # amber: the paper's density is from its EMPIRICAL formula and the one here is whatever was typed; every corpus red of
         # the paper check's D_calc line dissolved on inspection and it was retired to a note (owner, 2026-09-06)
-        wc.cell(row, 5, '=IF(ABS(D%d)<=0.01*C%d,"ok — the paper\'s calculated density follows from Z, the formula weight and V","note — Z·FW/(V·0.602214) for the values HERE differs from the paper\'s by "&TEXT(100*D%d/C%d,"+0.0;-0.0")&" %%: the formula typed (ideal against the paper\'s empirical one, its water above all), Z or the cell")' % (row, row, row, row))
+        # each side's formula weight said: the one typed here, and the one the paper's density implies on this Z and V
+        # (D·V·0.602214/Z) — the paper's is usually its EMPIRICAL formula's, the one here whatever formula was typed
+        fw_here, fw_paper = g(A['calc']['FW']), '%s*%s*0.602214/%s' % ('C%d' % row, g(A['calc']['V']), g(A['calc']['Z']))
+        wc.cell(row, 5, '=IF(ABS(D%d)<=0.01*C%d,"ok — the paper\'s calculated density follows from Z, the formula weight and V","note — Z·FW/(V·0.602214) for the values HERE differs from the paper\'s by "&TEXT(100*D%d/C%d,"+0.0;-0.0")&" %%: the formula weight here is "&TEXT(%s,"0.00")&", the paper\'s density implies "&TEXT(%s,"0.00")&" on the same Z and V — the formula typed (ideal against the paper\'s empirical one, its water above all), Z or the cell")' % (row, row, row, row, fw_here, fw_paper))
         wc.cell(row, 2).number_format = wc.cell(row, 4).number_format = '0.000'
     row += 1
     wc.cell(row, 1, 'Σ wt% of the analysis'); wc.cell(row, 2, '=' + g(A['sum']))

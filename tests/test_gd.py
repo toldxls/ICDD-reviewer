@@ -85,6 +85,13 @@ class GD(unittest.TestCase):
             self.assertEqual(val('compatibility', 'D', 0), G.category(res['CI_meas']))
             for key, w, k, c_, src in res['rows']:
                 self.assertAlmostEqual(val(key), w, places=9, msg=key)            # wt% from the formula, the O=F correction in the weight
+            # the check sheet's D_calc line names each side's formula weight: the one here, and the one the paper's density implies
+            b = Book(G.write_xlsx(res, os.path.join(tmp, 'c.xlsx'), paper={'D_calc': round(res['D_calc'] * 1.05, 3)})); wc = b.wb['check']
+            r_d = next(c.row for c in wc['A'] if c.value == 'D calculated = Z·FW/(V·0.602214)')
+            line = b.value('check', 'E%d' % r_d)
+            self.assertTrue(line.startswith('note'), line)
+            self.assertIn('the formula weight here is %.2f' % res['fw'], line)
+            self.assertIn('implies %.2f' % (res['fw'] * 1.05), line)
             res = G.evaluate(SPANOITE, 2.062, density=6.69, k_override=OWNER_UO3)   # the wt% route: values in, the rest live
             b = Book(G.write_xlsx(res, os.path.join(tmp, 'w.xlsx')))
             r_kc = next(c.row for c in b.wb['GD']['A'] if c.value == 'K_C')
