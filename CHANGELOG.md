@@ -6,6 +6,7 @@ package version in `pyproject.toml`.
 
 | version | | one line |
 |---|---|---|
+| [0.21.0](#0210--2026-11-05) | 5 Nov | Symmetry codes numbered as the .cif numbers its operators (primes for another translation); a site's own bond-valence options — parameter set, R0 and b, longest bond, composition — from a click on the Bond valence table or `--site`, through to the note and the workbook; Table 2 lists the bonds the bond-valence table counts, with a mean per anion; the second review of 0.19.0–0.20.0; the analysis table's printed total names one mistyped cell; the paper's band assignments checked against themselves; issues #19, #14, #16, #13 |
 | [0.20.0](#0200--2026-10-30) | 30 Oct | The EPMA tab reads worked-up sheets (oxides down a column) and messy workbooks — every block of analyses listed, the plausible one by default, the sheet opened to pick a block or a range; an exporter's element columns no longer counted twice; an ideal formula lays out the empirical one (a live formula in the .xlsx); a paper's analytical table read in place; the Tables sidebar sorts by name or date and lists the papers; the Manuscript panes fold; a symmetry-code cheat sheet under the bond tables |
 | [0.19.0](#0190--2026-10-28) | 28 Oct | The paper checks' false alarms hunted down class by class, each corpus-gated: the ideal-formula wt% check (379 red lines on 139 papers → 8, four of them real slips), tables continued over a page break, bonds across disorder groups, split pairs by multiplicity, an inversion twin is not twinning, the powder radiation and Icalc convention the column itself follows, barred indices, the printed cells found, the reference splitter (orphans 163 → 115 on the fixtures); the spectrum window: overlays that toggle, a movable Chem search box, figure tracing that keeps to its frame, axis marks centred on ticks and the scale fitted through every tick |
 | [0.18.0](#0180--2026-10-10) | 10 Oct | The fuller RRUFF collection put to work: RRUFF's bands beside the paper's own and beside the species the paper compares with (an information line; the species read from the paper, measured first), `compare with RRUFF` and a composite spectrum per group in the window, the O–H region and the infrared modes measured for the first time, the activity column checked, an evidence report for the check-tagged rows, the library gate and the fit gauntlet shipped as tools, orientation statistics; the uranyl windows restored |
@@ -47,6 +48,13 @@ package version in `pyproject.toml`.
 | [0.2.0–0.2.9](#early-releases--2026-07-08-to-07-13) | 8–13 Jul | First packaged release; the docx write path made safe; the early checks |
 
 ## [Unreleased]
+
+## [0.21.0] — 2026-11-05
+**The Tables tab's bond tables follow the .cif, and a site can be given its own bond-valence terms.** A symmetry code's
+superscript is the .cif's own operator number; Table 2 lists every bond the bond-valence table counts; a cation's column
+takes its own parameter set, R0 and b or longest bond, and any site its composition. With them: two reviews' fixes, the
+analysis table's printed total as an oracle, the paper's band assignments checked against themselves, four open issues.
+
 ### Fixed — the bug check of 0.20.0
 - **A probe file picked in the Tables sidebar kept the last file's block, range and sheet** (only the dropdown cleared
   them): the next file was read with the previous one's block number — a block other than its default, silently — or with
@@ -213,7 +221,9 @@ assigns 2,859 bands (2,699 before), no stated-distance verdict and no paper-read
 - **`pxrd gd` formula weights (#19)**: a sulfide given its anion as the element (`--oxide S=S`, no O) keeps its cations as
   elements (ZnS 97.44, it had been ZnO + S, 113.44) and says Mandarino's constants are for oxides; the O ≡ F,Cl deduction
   never takes more O than the oxides carry (NaCl with `--oxide Na=Na` 58.44, it had been 50.44; NH4Cl 53.49), in the
-  workbook's live formula too; `--cif` with `--wt` says why there is no D_calc; a key given twice is an error.
+  workbook's live formula too; `--cif` with `--wt` says why there is no D_calc; a key given twice is an error; the check
+  sheet's calculated-density line names each side's formula weight (the one typed here, and the one the paper's density
+  implies on the same Z and V).
 - **The .pdf pane on rotated pages (#14)**: word boxes and search hits are mapped into the frame the page is drawn in — on
   a /Rotate 90 or 270 page (a landscape table: 162 pages in 57 corpus papers) every box had missed its word.
 - **The measured-cation basis line (#16)** names what it leaves out as the paper has it: '(calculated, as the paper says)'
