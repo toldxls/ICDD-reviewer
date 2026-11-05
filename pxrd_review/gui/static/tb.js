@@ -271,14 +271,16 @@ async function tbRender() {
   if (tab === 'bvs') tbSiteHooks(r);
   // with site options, the paper's tables are checked under them (Fill ▸'s check is the default reading): the chosen paper
   const paperKey = tab === 'bvs' && tbSitesFor(TBS.key) && $('#tb-paper') ? $('#tb-paper').value : '';
+  let shown = false;
   if (paperKey) {
     let c;
     try { c = await fetch('/api/tb/bvcheck/' + enc(TBS.key) + '?' + tbQuery('bvs') + '&paper=' + enc(paperKey)).then(x => x.json()); } catch (ex) { c = { ok: false, error: String(ex) }; }
     if (seq !== TBS.seq || tab !== TBS.tab) return;
-    if (c.ok && c.text) tbShowCheck({ name: c.name, text: c.text }, 'manuscript table check with the site options (' + c.sites + ')');
-    else if (!c.ok) tbShowCheck({ name: paperKey, text: '⚠ ' + (c.error || 'failed') }, 'manuscript table check with the site options');
+    if (c.ok && c.text) { tbShowCheck({ name: c.name, text: c.text }, 'manuscript table check with the site options (' + c.sites + ')'); shown = true; }
+    else if (!c.ok) { tbShowCheck({ name: paperKey, text: '⚠ ' + (c.error || 'failed') }, 'manuscript table check with the site options'); shown = true; }
   }
-  else if (tab === 'bvs' && TBS.mscheck && (TBS.mscheck.fromPaper || TBS.mscheck.key === TBS.key)) tbShowCheck(TBS.mscheck);
+  // no recheck (no site options, no paper chosen, or no bond table found in it): Fill ▸'s default reading, as before
+  if (!shown && tab === 'bvs' && TBS.mscheck && (TBS.mscheck.fromPaper || TBS.mscheck.key === TBS.key)) tbShowCheck(TBS.mscheck);
   if (tab === 'epma' && TBS.papercheck) tbShowCheck(TBS.papercheck, 'what the paper says, checked against itself');
 }
 

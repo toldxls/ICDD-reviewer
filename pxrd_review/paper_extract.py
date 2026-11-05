@@ -865,7 +865,7 @@ def epma_table(pdf, name=''):
             best = tr
         i = 0
         while i < len(lines):
-            block = []; j = i; x_col = None; gap = 0; last_row = i; merged_above = False; merged_x = {}   # merged_x: block row -> x of the mean set above its label
+            block = []; j = i; x_col = None; gap = 0; last_row = i; merged_above = False; merged_x = {}   # merged_x: id(block row) -> x of the mean set above its label
             while j < len(lines):
                 ws = lines[j]['w']; toks = [w[4] for w in ws]
                 if not toks:
@@ -875,14 +875,14 @@ def epma_table(pdf, name=''):
                     c, kind, vals, x0 = row
                     if x_col is None:
                         x_col = x0
-                    ws_row = list(ws)
+                    ws_row = list(ws); x_above = None
                     if j >= 1 and kind == 'constituent' and vals:
                         prev = lines[j - 1]['w']; ptoks = [w[4] for w in prev]
                         first_x = next((w[0] for w in ws if _NUM.match(w[4].replace('−', '-')) or _NUM_ESD.match(w[4])), None)
                         if 1 <= len(ptoks) <= 2 and all(_NUM.match(t_.replace('−', '-')) for t_ in ptoks) and 0 < lines[j]['y'] - lines[j - 1]['y'] <= 8 \
                                 and first_x is not None and prev[0][0] < first_x - 15 and prev[0][0] > x0 + 20 and not _row_at(prev, x_col):
                             vals = [(kk, v) for kk, v in _numbers(ptoks)] + vals; ws_row = list(prev) + ws_row; merged_above = True   # the mean above the label; the range and the other columns beside it
-                            merged_x[len(block)] = (prev[0][0] + prev[0][2]) / 2
+                            x_above = (prev[0][0] + prev[0][2]) / 2
                     if j + 1 < len(lines) and kind == 'constituent':
                         nxt = lines[j + 1]['w']; ntoks = [w[4] for w in nxt]
                         n_numlike = sum(1 for t_ in ntoks if _NUM.match(t_.replace('−', '-')) or _RANGE1.match(t_.replace('−', '-')) or _NA.match(t_) or re.fullmatch(r'\(\d+\.\d+[-–]\d+\.\d+\)', t_))
@@ -893,6 +893,8 @@ def epma_table(pdf, name=''):
                             vals = vals + [(kk, v) for kk, v in more if kk in ('num', 'range', 'na')]
                             ws_row = ws_row + list(nxt); j += 1
                     block.append((c, kind, vals, ws_row)); j += 1; gap = 0; last_row = j
+                    if x_above is not None:
+                        merged_x[id(block[-1])] = x_above                      # keyed by the row itself: the block is filtered below ('Ba 201'), so a position would shift
                 elif block and gap < 3:
                     gap += 1; j += 1                         # the other page column's lines, a wrapped name
                 else:
@@ -1011,9 +1013,10 @@ def epma_table(pdf, name=''):
                     if k_ == 'constituent' and c_ != 'O':
                         above.append(c_)
                 element_table = len(above) >= 2 and sum(1 for c_ in above if bare(c_)) >= 0.75 * len(above)
-                mx_ = sorted(merged_x.values())
+                mx_ = sorted(merged_x[id(b_)] for b_ in block if id(b_) in merged_x)    # the rows the block still holds
                 stagger_x = mx_[len(mx_) // 2] if len(mx_) >= 3 and mean_x is None else None   # the means' column, where they sit above their labels
-                for bi, (c, kind, vals, ws_row) in enumerate(block):
+                for b_row in block:
+                    c, kind, vals, ws_row = b_row
                     if c == 'O':
                         toks = [w[4] for w in ws_row][1:3]
                         v_o = next((v for k_, v in vals if k_ == 'num'), None)
@@ -1090,7 +1093,7 @@ def epma_table(pdf, name=''):
                             mean = float(re.match(r'-?\d+\.?\d*', min(cand)[1].replace('−', '-').lstrip('(')).group(0))
                         elif cand and mean_hits >= max(2, n_const // 2):
                             continue                                             # every number of the row is under another column: no mean (kept in col_cells)
-                    elif stagger_x is not None and kind == 'constituent' and bi not in merged_x:
+                    elif stagger_x is not None and kind == 'constituent' and id(b_row) not in merged_x:
                         x1 = next(((w[0] + w[2]) / 2 for w in ws_row if _numlike(w[4])), None)
                         if x1 is not None and x1 > stagger_x + 30:
                             continue                                             # the means are set above their labels (a comparison table's own column) and this row has none:

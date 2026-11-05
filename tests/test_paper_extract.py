@@ -2790,19 +2790,28 @@ class TableCompleteness(unittest.TestCase):
         self.assertIsNone(e['total'])                                          # under rows that add like an analysis: none
 
     def test_means_set_above_their_labels(self):
+        for third in (False, True):
+            self._staggered((), third)
+            # a ppm row the block drops ('Ba 201') among them: the marks on the rows after it must not shift onto their neighbours
+            self._staggered((('Ba', None, '201'),), third)
+
+    def _staggered(self, ppm, third):
         # a comparison table: column 1 (this paper) prints its means on the line above each label; a row with no mean of its
         # own must not take another analysis's number
         import pymupdf
-        p = os.path.join(self.tmp, 'stag.pdf')
+        p = os.path.join(self.tmp, 'stag%d%d.pdf' % (len(ppm), third))
         doc = pymupdf.open(); page = doc.new_page(width=595, height=842)
         y = 60
         for t in ('Comptestite, a new mineral from Nowhere', 'Table 1. Chemical composition of comptestite, wt %', '1 2 3'):
             page.insert_text((40, y), t, fontsize=9); y += 16
-        for lab, own, other in (('SiO2', '61.06', '61.88'), ('Al2O3', '17.40', '17.10'), ('TiO2', None, '0.21'), ('Na2O', '19.10', '18.70'),
+        for lab, own, other in (('SiO2', '61.06', '61.88'), ('Al2O3', '17.40', '17.10')) + tuple(ppm) + (('TiO2', None, '0.21'), ('Na2O', '19.10', '18.70'),
                                 ('CaO', None, '0.44'), ('K2O', '2.07', '2.11')):
             if own:
                 page.insert_text((110, y), own, fontsize=9); y += 7
-            page.insert_text((40, y), lab, fontsize=9); page.insert_text((165, y), other, fontsize=9); y += 12
+            page.insert_text((40, y), lab, fontsize=9); page.insert_text((165, y), other, fontsize=9)
+            if third:
+                page.insert_text((220, y), other, fontsize=9)                  # a third analysis: a row then carries two numbers not its own
+            y += 12
         page.insert_text((40, y), 'Total', fontsize=9); page.insert_text((110, y), '99.63', fontsize=9); page.insert_text((165, y), '100.44', fontsize=9)
         doc.save(p); doc.close()
         e = PE.epma_table(p, 'comptestite')
