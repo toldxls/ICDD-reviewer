@@ -196,7 +196,7 @@ async function runUpdate() {
       btn.disabled = false; btn.textContent = UPD && UPD.checkout ? 'Pull now' : 'Update now'; return;
     }
     // restarting: the server relaunches itself with this tab's token and port — wait for it, then reload
-    log.textContent = 'installed — the tool is restarting; this page reloads by itself…\n' + (s.log || '');
+    log.textContent = 'installed — the tool is restarting; this page reloads by itself…\n' + (r.note ? r.note + '\n' : '') + (s.log || '');
     let tries = 0;
     const back = async () => {
       tries += 1;
@@ -248,14 +248,18 @@ function startOnChooser(c) {
     rec.classList.remove('hidden');
   }
   browseFolder(c.folder || '');
-  if (c.broad && c.folder) askBeforeOpening({ folder: c.folder, error: 'Open this folder anyway, or pick a batch?' });   // the banner above already says why
+  if (c.broad && c.folder) askBeforeOpening({ folder: c.folder, error: c.manuscript ? 'Open these papers in Manuscript mode, or pick a folder?' : 'Open this folder anyway, or pick a batch?',
+                                              manuscript: !!c.manuscript });   // the banner above already says why
 }
 // A folder that is clearly not a batch: open it all on purpose, or pick a batch — never by accident.
 function askBeforeOpening(r) {
   $('#folder-hint').textContent = '';
   $('#folder-ask-msg').textContent = (r.error || 'This folder is not a batch. Open it all, or pick a batch?') + '  [' + r.folder + ']';   // the question names ITS folder
   $('#folder-ask').classList.remove('hidden');
-  $('#folder-ask-all').onclick = () => { $('#folder-ask').classList.add('hidden'); openFolder(r.folder, true); };
+  // a folder of papers (no entries): 'Open it all' opens it where it can be read — Manuscript mode — not as a batch of entries
+  $('#folder-ask-all').onclick = () => { $('#folder-ask').classList.add('hidden');
+    if (r.manuscript) { if (window.MODE === 'entries') setMode('manuscript', { quiet: true }); msOpenFolder(r.folder, true); }   // Tables mode stays Tables
+    else openFolder(r.folder, true); };
   $('#folder-ask-pick').onclick = () => { $('#folder-ask').classList.add('hidden'); pickFolderNative(); };
 }
 async function browseFolder(path) {
@@ -2124,9 +2128,9 @@ function applySizes() {
   rootVar('--w-side', CFG.wSide + 'px'); rootVar('--h-docx', CFG.hDocx + 'px');
 }
 function updateSplitterStates() {
-  const find = document.querySelector('.splitter[data-resize="find"]');
+  const find = document.querySelector('#app .splitter[data-resize="find"]');   // the entries' own: #ms-app's comes first in the page
   if (find) find.classList.toggle('disabled', CFG.collapsed.findings);
-  const dr = document.querySelector('.splitter[data-resize="docrow"]');
+  const dr = document.querySelector('#app .splitter[data-resize="docrow"]');
   if (dr) dr.classList.toggle('disabled', CFG.collapsed.docx || CFG.collapsed.mindat);
   const mf = document.querySelector('#ms-app .splitter[data-resize="find"]'), ms = document.querySelector('#ms-app .splitter[data-resize="side"]');
   if (mf) mf.classList.toggle('disabled', !!CFG.collapsed['ms-findings']);

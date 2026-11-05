@@ -93,6 +93,33 @@ class GD(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class FormulaWeightEdges(unittest.TestCase):
+    """Issue #19: the sulfide route, O ≡ halogen with no oxide to take it from, --cif with --wt, a repeated key."""
+    def test_sulfide_keeps_its_cations_as_elements(self):
+        wt, fw = G.formula_to_wt({'Zn': 1, 'S': 1}, {'S': 'S'})
+        self.assertAlmostEqual(fw, 65.38 + 32.06, places=2); self.assertEqual(list(wt), ['Zn', 'S'])
+        res = G.prepare('Zn=1,S=1', oxide='S=S', n='2.37', density='4.09')
+        self.assertIn("constants are for oxides", G.report_text(res))
+        self.assertEqual(list(G.formula_to_wt({'Zn': 1, 'S': 1, 'O': 4})[0]), ['ZnO', 'SO3'])   # a sulfate is still oxides
+
+    def test_halogen_deduction_capped_at_the_oxides_oxygen(self):
+        for apfu, ox in (({'Na': 1, 'Cl': 1}, None), ({'Na': 1, 'Cl': 1}, {'Na': 'Na'})):
+            self.assertAlmostEqual(G.formula_to_wt(apfu, ox)[1], 58.44, places=1)
+        self.assertAlmostEqual(G.formula_to_wt({'NH4': 1, 'Cl': 1})[1], 53.49, places=1)
+        self.assertAlmostEqual(G.formula_to_wt({'Ca': 5, 'P': 3, 'F': 1})[1], 504.30, places=1)   # fluorapatite: the deduction stands
+
+    def test_repeated_key_and_cif_with_wt(self):
+        with self.assertRaises(ValueError):
+            G.prepare('FeO=1,FeO=2', n='2', density='5')
+        tmp = tempfile.mkdtemp()
+        try:
+            cif = _write(tmp, 'rutile.cif', RUTILE.replace('_chemical_name_mineral rutile', '_chemical_name_mineral rutile\n_cell_formula_units_Z 2'))
+            res = G.prepare(wt='TiO2=100', n='2.7', cif=cif)
+            self.assertNotIn('D_calc', res); self.assertIn('needs a formula weight', G.report_text(res))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class CheckSheet(unittest.TestCase):
     """The workbook's check sheet: the paper's stated index against the tool's, and what would explain a difference."""
     WT = {'MgO': 30.0, 'SiO2': 42.0, 'FeO': 12.0, 'H2O': 8.0}                       # 92.0 %: short of 100

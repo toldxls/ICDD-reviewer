@@ -26,6 +26,13 @@ async function tbLoad() {
   $('#folder').textContent = r.folder ? ((parts.length > 2 ? '…/' : '') + parts.slice(-2).join('/')) : '(no folder — click to choose)';
   $('#folder-ctl').title = (r.folder || '') + '  — click to change folder';
   $('#folder').dataset.path = r.folder || '';
+  if (TBS.folder !== undefined && TBS.folder !== r.folder) {
+    // another folder: a block number, a range and a sheet name picked in the last one mean nothing here (its tables_opts.json
+    // restores this folder's own, if it has them) — set without saving, and the sheet panel closed
+    for (const k of ['block', 'region', 'sheet']) { const i = tbPane('epma').querySelector('[data-opt="' + k + '"]'); if (i) i.value = ''; }
+    tbSheetClose(); TBSH.data = null;
+  }
+  TBS.folder = r.folder;
   TBS.cifs = r.cifs || []; TBS.data = r.data || []; TBS.outputs = r.outputs || []; TBS.pdfs = r.pdfs || []; TBS.subfolders = r.subfolders || [];
   if (r.journals && r.journals.length && !TBS.journals.length) {
     TBS.journals = r.journals; TBS.journal = r.default_journal || TBS.journal;
@@ -104,7 +111,11 @@ function tbCarryPaper(key) { window.TB_CARRY = key ? key.replace(/^paper:/, '').
 function tbEpmaFileSet(key) {
   const changed = key !== tbOpt('epma', 'file');
   tbSetOpt('epma', 'file', key);
-  if (changed) { tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', ''); tbSetOpt('epma', 'sheet', ''); }
+  if (changed) {
+    tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', ''); tbSetOpt('epma', 'sheet', '');
+    TBSH.data = null; TBSH.a = TBSH.b = null;
+    if (!$('#tb-sheet').classList.contains('hidden')) tbSheetOpen();   // its blocks were the last file's: clicking one read that number from this file
+  }
 }
 function tbPickData(key, kind) {
   if (kind === 'paper' || key.startsWith('paper:')) {                // a paper's analytical table: the EPMA tab's input
@@ -155,8 +166,9 @@ function tbApplyOpts(saved) {
   if (saved.gd && saved.gd.cif && !TBS.key && TBS.cifs.some(c => c.key === saved.gd.cif)) TBS.key = saved.gd.cif;
 }
 function tbSaveOpts(tab) {
-  clearTimeout(TBS.saveTimer);
-  TBS.saveTimer = setTimeout(() => {
+  TBS.saveTimers = TBS.saveTimers || {};                           // one timer per tab: Fill ▸ sets four tabs in one loop, and a
+  clearTimeout(TBS.saveTimers[tab]);                                // shared timer saved only the last of them
+  TBS.saveTimers[tab] = setTimeout(() => {
     fetch('/api/tb/opts/' + tab, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tbCollect(tab)) }).catch(() => {});
   }, 400);
 }
@@ -264,6 +276,7 @@ function tbEpmaBlocks(r) {
 $('#tb-epma-block').addEventListener('change', e => { tbSetOpt('epma', 'block', e.target.value); tbRender(); });
 $('#tb-epma-file').addEventListener('change', e => {                      // another file: its own default block, no region (runs before the pane's re-render)
   tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', ''); tbSetOpt('epma', 'sheet', '');
+  TBSH.data = null; TBSH.a = TBSH.b = null;
   if (e.target.value.startsWith('paper:')) tbCarryPaper(e.target.value);
   if (!$('#tb-sheet').classList.contains('hidden')) tbSheetOpen();
 });
@@ -277,9 +290,11 @@ async function tbSheetOpen(sheet) {
   const key = tbOpt('epma', 'file'), panel = $('#tb-sheet');
   panel.classList.remove('hidden');
   if (!key || key.startsWith('paper:')) { panel.innerHTML = '<div class="tb-sheet-bar muted">' + (key ? 'a paper has no sheet: its analytical table is read from the text' : 'choose a probe file first') + ' <span class="spacer"></span><button class="ghost mini" data-x>close ✕</button></div>'; panel.querySelector('[data-x]').onclick = tbSheetClose; return; }
-  const sh = sheet || (tbOpt('epma', 'region') && tbOpt('epma', 'sheet')) || '';
+  const sh = sheet || tbOpt('epma', 'sheet') || '';
+  const seq = TBSH.seq = (TBSH.seq || 0) + 1;
   let r;
   try { r = await fetch('/api/tb/epma/' + enc(key) + '/grid' + (sh ? '?sheet=' + enc(sh) : '')).then(x => x.json()); } catch (ex) { r = { ok: false, error: String(ex) }; }
+  if (seq !== TBSH.seq || key !== tbOpt('epma', 'file')) return;      // another sheet or file was asked for meanwhile
   if (!r.ok) { panel.innerHTML = '<div class="tb-sheet-bar">⚠ ' + esc(r.error || 'failed') + '</div>'; return; }
   TBSH.data = r; TBSH.a = TBSH.b = null;
   tbSheetDraw();
@@ -361,6 +376,7 @@ function tbSheetDraw() {
   const first = grid.querySelector('td.cur');
   if (first) first.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
+document.addEventListener('mouseup', () => { TBSH.drag = false; });       // a drag released outside the grid: it ends there
 $('#tb-epma-sheet').addEventListener('click', () => $('#tb-sheet').classList.contains('hidden') ? tbSheetOpen() : tbSheetClose());
 
 // ---- the symmetry-code cheat sheet under the bond tables: each superscript, the CIF code it came from, the
@@ -434,7 +450,7 @@ async function tbFillFromPaper(pdfKey) {
     if (tab.startsWith('_')) continue;
     for (const [k, v] of Object.entries(r.fill[tab])) {
       if (tab === 'bvs' && k === 'params') document.querySelectorAll('#tb-params button').forEach(b => b.classList.toggle('on', b.dataset.params === v));
-      tbSetOpt(tab, k, v);
+      if (tab === 'epma' && k === 'file') tbEpmaFileSet(v); else tbSetOpt(tab, k, v);
       tbMark(tab, k, ((r.status || {})[tab] || {})[k]);
     }
   }
@@ -475,6 +491,11 @@ document.querySelectorAll('#tb-gd-mode button').forEach(b => b.addEventListener(
 document.querySelectorAll('.tb-pane').forEach(p => {
   p.addEventListener('change', e => {
     if (!e.target.dataset.opt) return;
+    if (p.dataset.pane === 'epma' && e.target.dataset.opt === 'sheet') {
+      // the blocks are numbered within the sheet named (or over the file): a block picked on the other list, or a range
+      // on another sheet, would read something else without saying so
+      tbSetOpt('epma', 'block', ''); tbSetOpt('epma', 'region', '');
+    }
     tbSaveOpts(p.dataset.pane);
     if (p.dataset.pane === 'gd' && e.target.dataset.opt === 'cif' && e.target.value) TBS.key = e.target.value;
     tbRenderLists(); tbRender();
@@ -489,8 +510,8 @@ function tbOutputName(tab) {
   let cands = [];
   if (tab === 'coords' || tab === 'bvs') cands = TBS.key ? [TBS.key + '_tables.docx'] : [];
   else if (tab === 'epma') {
-    const f = tbOpt('epma', 'file'), pp = TBS.pdfs.find(p => 'paper:' + p.key === f);    // a paper's table writes <stem>_docx / _paper, as the server names it
-    const st = pp ? pp.name.replace(/\.[^.]+$/, '') + (/\.docx$/i.test(pp.name) ? '_docx' : '_paper') : (f || '').replace(/\.[^.]+$/, '');
+    const f = tbOpt('epma', 'file'), pp = TBS.pdfs.find(p => 'paper:' + p.key === f);    // a paper's table writes <stem>_docx_table / _paper_table, as the server names it
+    const st = pp ? pp.name.replace(/\.[^.]+$/, '') + (/\.docx$/i.test(pp.name) ? '_docx_table' : '_paper_table') : (f || '').replace(/\.[^.]+$/, '');
     if (f) cands = [st + '_epma.docx', st + '_epma.xlsx'];
   }
   else if (tab === 'gd') { const st = stem(tbOpt('gd', 'name')) || 'gd'; cands = [st + '_gd.docx', st + '_gd.xlsx']; }

@@ -58,6 +58,14 @@ def make_carbonate_pdf(path):
     doc.save(path); doc.close()
 
 
+def make_text_pdf(path, lines):
+    import pymupdf
+    doc = pymupdf.open(); page = doc.new_page(width=595, height=842); y = 60
+    for txt in lines:
+        page.insert_text((40, y), txt, fontsize=9); y += 16
+    doc.save(path); doc.close()
+
+
 class Extract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -345,7 +353,107 @@ class WorkbookBasisLine(unittest.TestCase):
         self.assertFalse(any('every coefficient follows' in n for n in none))
 
 
+class TotalOracle(unittest.TestCase):
+    """One mistyped cell: the rows no longer add to the printed total, and moving that one cell by the gap makes the formula follow."""
+    def _comp(self, mgo, total='99.99'):
+        import tempfile, shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            pdf = os.path.join(tmp, 'o.pdf')
+            make_text_pdf(pdf, ['Olivitestite, a new mineral from Nowhere',
+                                'The empirical formula, calculated on the basis of 4 O apfu, is (Mg1.80Fe0.20)Si1.00O4.',
+                                'Table 1. Chemical data (wt%) for olivitestite.', 'Constituent   Mean     Range        S.D.   Standard',
+                                'MgO  %s  48.95-49.75  0.20  forsterite' % mgo, 'FeO  9.77  9.50-10.00  0.10  fayalite',   # a typo: the range stands as measured
+                                'SiO2  40.87  40.60-41.10  0.15  quartz', 'Total  %s' % total])
+            return PE.check_paper(pdf, None, None)['composition']
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_the_slip_and_the_control(self):
+        c = self._comp('44.35')                                  # 49.35 mistyped: the rows add to 94.99 under a total of 99.99
+        self.assertTrue(c['slip'] and c['slip'][0] == 'MgO', c['lines']); self.assertFalse(c['ok'])
+        line = next(l for l in c['lines'] if 'is the slip' in l)
+        self.assertIn('MgO 44.35 wt% in the table vs 49.35', line)
+        c = self._comp('49.35')                                  # printed right: nothing to say
+        self.assertIsNone(c['slip']); self.assertTrue(c['ok'], c['lines'])
+
+    def test_no_slip_where_the_gap_fits_no_cell(self):
+        c = self._comp('49.35', total='104.99')                  # a total that nothing in the table explains: no cell is named
+        self.assertIsNone(c['slip'])
+
+    def _table(self, rows, total, formula, extra=''):
+        import tempfile, shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            pdf = os.path.join(tmp, 'o.pdf')
+            make_text_pdf(pdf, ['Olivitestite, a new mineral from Nowhere',
+                                'The empirical formula, calculated on the basis of 4 O apfu, is %s.%s' % (formula, extra),
+                                'Table 1. Chemical data (wt%) for olivitestite.', 'Constituent   Mean     Range        S.D.   Standard']
+                           + rows + ['Total  %s' % total])
+            return PE.check_paper(pdf, None, None)['composition']
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_formula_already_inside_its_rounding_names_no_cell(self):
+        # an unread row (LOI, REE2O3) or a misprinted total: the formula is the one these cells give — no cell is the slip
+        base = ['MgO  49.35  48.95-50.75  0.20  forsterite', 'FeO  9.77  9.50-10.00  0.10  fayalite', 'SiO2  40.87  40.60-41.10  0.15  quartz']
+        # (the formula the authors would print from these cells is Mg1.80 / Si1.00 — inside its rounding, so a 1 wt% gap in the
+        # total says nothing about a cell; a formula printed 0.02 off that the gap closes exactly is evidence, and is named)
+        for rows in (base + ['LOI  1.00'], base + ['REE2O3  1.00'], base):
+            c = self._table(rows, '100.99', '(Mg1.80Fe0.20)Si1.00O4')
+            self.assertIsNone(c['slip'], (rows, c['lines']))
+
+    def test_a_zero_row_or_an_element_the_formula_lacks_is_no_candidate(self):
+        rows = ['MgO  49.35  48.95-50.75  0.20  forsterite', 'FeO  9.77  9.50-10.00  0.10  fayalite', 'SiO2  40.87  40.60-41.10  0.15  quartz', 'Cr2O3  0.00']
+        c = self._table(rows, '100.99', '(Mg1.79Fe0.19)Si1.01O4')
+        self.assertFalse(c['slip'] and c['slip'][0] == 'Cr2O3', c['lines'])
+
+    def test_records_name_the_cell_not_the_formula(self):
+        import tempfile, shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            pdf = os.path.join(tmp, 'o.pdf')
+            make_text_pdf(pdf, ['Olivitestite, a new mineral from Nowhere',
+                                'The empirical formula, calculated on the basis of 4 O apfu, is (Mg1.80Fe0.20)Si1.00O4.',
+                                'Table 1. Chemical data (wt%) for olivitestite.', 'Constituent   Mean     Range        S.D.   Standard',
+                                'MgO  44.35  48.95-49.75  0.20  forsterite', 'FeO  9.77  9.50-10.00  0.10  fayalite',
+                                'SiO2  40.87  40.60-41.10  0.15  quartz', 'Total  99.99'])
+            f = PE.check_paper(pdf, None, None)['fields']
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(f['formula']['status'], 'agrees', f['formula']); self.assertEqual(f['epma']['status'], 'disagrees', f['epma'])
+        self.assertIn('one cell is the slip', f['epma']['detail']); self.assertIn('slipped cell', f['basis']['detail'])
+
+
 class MeasuredCationBasis(unittest.TestCase):
+    def test_what_is_left_out_is_said_as_the_paper_says_it(self):
+        # issue #16: 'calculated' only when the method sentence says so; an SO3 row tried counted as a cation (Na6(CO3)(SO4)2 on
+        # 8 cations = Na + S) and the S named when it is left out
+        import tempfile, shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            base = ['Dolotestite, a new mineral from Nowhere',
+                    'The empirical formula, calculated on the basis of 2 cations, excluding H+, is Ca1.00Mg1.00(CO3)2.00.',
+                    'Table 1. Chemical data (wt%) for dolotestite.', 'Constituent   Mean     Range        S.D.   Standard',
+                    'CaO  30.41  30.10-30.70  0.21  calcite', 'MgO  21.86  21.60-22.10  0.30  dolomite', 'CO2  47.73', 'Total  100.00']
+            for said, want in ((True, 'C (calculated, as the paper says)'), (False, 'C (not counted in the stated 2)')):
+                pdf = os.path.join(tmp, 'd%d.pdf' % said)
+                make_text_pdf(pdf, base[:2] + (['CO2 was calculated from the stoichiometry.'] if said else []) + base[2:])
+                c = PE.check_paper(pdf, None, None)['composition']
+                line = next(l for l in c['lines'] if 'the cations the probe measures' in l)
+                self.assertIn(want, line); self.assertTrue(c['ok'], c['lines'])
+            pdf = os.path.join(tmp, 'na.pdf')
+            make_text_pdf(pdf, ['Natestite, a new mineral from Nowhere',
+                                'The empirical formula, calculated on the basis of 8 cations, is Na6.00(CO3)1.00(SO4)2.00.',
+                                'CO2 was calculated from the stoichiometry.',
+                                'Table 1. Chemical data (wt%) for natestite.', 'Constituent   Mean     Range        S.D.   Standard',
+                                'Na2O  47.67  47.40-47.90  0.20  albite', 'SO3  41.05  40.80-41.30  0.20  baryte', 'CO2  11.28', 'Total  100.00'])
+            c = PE.check_paper(pdf, None, None)['composition']
+            self.assertEqual(tuple(c['basis']), ('element', 'Na+S', 8.0), c['lines'])   # the stated basis, not a group sum read off the formula
+            self.assertTrue(any('the cations the probe measures' in l and 'C (calculated, as the paper says)' in l for l in c['lines']), c['lines'])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_cation_basis_leaves_out_the_calculated_carbon(self):
         import tempfile, shutil
         tmp = tempfile.mkdtemp()

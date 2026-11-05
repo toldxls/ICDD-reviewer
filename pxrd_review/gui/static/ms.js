@@ -34,6 +34,7 @@ function setMode(mode, opts) {
   const chip = $('#mindat-chip'); if (chip) { if (ms) chip.classList.add('hidden'); else if (chip.textContent) chip.classList.remove('hidden'); }
   document.querySelectorAll('.ms-only').forEach(e => e.classList.toggle('hidden', mode !== 'manuscript'));
   try { localStorage.setItem('pxrd-mode', mode); } catch (_) {}
+  if (!ms) CHOOSER_SHOWN = false;                     // into review mode on purpose: its chooser may show again (the latch only stops the poll nagging)
   if (tb) tbLoad(); else if (ms) msLoad(); else loadEntries();
   if (!(opts && opts.quiet)) { $('#folderpanel').classList.add('hidden'); }
 }
@@ -133,7 +134,7 @@ async function msOpenFolder(path, confirm) {
       body: JSON.stringify({ folder: path, confirm: !!confirm }) }).then(x => x.json());
   } catch (_) { r = { ok: false, error: 'request failed' }; }
   btns.forEach(b => b.disabled = false);
-  if (r.broad) { askBeforeOpening(r); return; }
+  if (r.broad) { askBeforeOpening(Object.assign({}, r, { manuscript: true })); return; }   // its 'Open it all' confirms HERE (it had opened the folder as entries)
   if (!r.ok) { $('#folder-hint').textContent = '⚠ ' + (r.error || 'could not open'); return; }
   $('#folderpanel').classList.add('hidden'); $('#folder-why').classList.add('hidden'); $('#folder-recent').classList.add('hidden');
   MSS.key = null; MSS.a = null; MSS.docxHtml = {};

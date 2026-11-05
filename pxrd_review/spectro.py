@@ -100,6 +100,7 @@ _GROUPS = (r'UO2|SO4|PO4|AsO4|VO4|CO3|SiO4|BO3|BO4|MoO4|WO4|SeO3|SeO4|TeO3|TeO6|
            r'Si2O7|V2O7|P2O7|SbO3|AsO3|IO3|GeO4')
 _NU_NUM = re.compile(r'(?<![A-Za-z0-9])[υnvm]\s?([1-4])(?=\s*(?:\(\s*[δd]\s*\))?\s*(?:of\s+(?:the\s+)?)?(?:[\(\[]\s*)?(?:' + _GROUPS + r'|uranyl|sym|anti|asym|stretch|bend|doubly|triply|\())')
 _NU_OH = re.compile(r'(?<![A-Za-z0-9])[υnvm]\s?(?=\(?\s*O\s?-?\s?H\b)')
+_NU_AFTER = re.compile(r'(?<![A-Za-z0-9])((?:' + _GROUPS + r')\s)[υnvm]\s?([1-4])(?![\d.])')   # after its group: 'the PO4 n3 occurs at 1159'
 _ABBR = re.compile(r'\b(Figs?|Tabs?|al|ca|cf|e\.g|i\.e|vs|approx|Nos?|Eqs?|Refs?|resp|et|sp|var|incl|min|max)\.')
 
 
@@ -110,6 +111,7 @@ def normalise(text):
     t = _CM.sub(' cm-1', t)
     t = _CM_BARE.sub(' cm-1', t)
     t = _NU_NUM.sub(lambda m: 'ν' + m.group(1), t)
+    t = _NU_AFTER.sub(lambda m: m.group(1) + 'ν' + m.group(2), t)
     t = _NU_OH.sub('ν ', t)
     t = re.sub(r'ν\s+(?=[1-4]\b)', 'ν', t)
     return re.sub(r'[ \t]+', ' ', t)
@@ -160,43 +162,52 @@ _SHAPE = re.compile(r'\b(very strong|very weak|strong|weak|medium|broad|sharp|sh
 
 _FAMILY = [                                                    # (family, how the text names it: formulas as written, words in any case)
     ('UO2', r'\(?\s?UO2\s?\)?(?:\s?2?\s?\+\s?2?)?|(?i:uranyl)'),
-    ('SO4', r'\(?\s?SO4\s?\)?(?:\s?2?\s?-)?|(?i:sulfate|sulphate)'),
-    ('PO4', r'\(?\s?PO4\s?\)?(?:\s?3?\s?-)?|(?i:phosphate)'),
-    ('AsO4', r'\(?\s?AsO4\s?\)?(?:\s?3?\s?-)?|(?i:arsenate)'),
-    ('VO4', r'\(?\s?VO4\s?\)?(?:\s?3?\s?-)?|(?i:vanadate)'),
-    ('CO3', r'\(?\s?CO3\s?\)?(?:\s?2?\s?-)?|(?i:carbonate)'),
-    ('SiO4', r'\(?\s?SiO4\s?\)?(?:\s?4?\s?-)?|(?i:\\bsilicate)'),
+    ('SO4', r'\(?\s?SO4\s?\)?(?:\s?2?\s?-)?|(?i:sulfate|sulphate)|\s?\bSO\s?[2-4]?\s?-\s?4\b'),
+    ('PO4', r'\(?\s?PO4\s?\)?(?:\s?3?\s?-)?|(?i:phosphate)|\s?\bPO\s?[2-4]?\s?-\s?4\b'),
+    ('AsO4', r'\(?\s?AsO4\s?\)?(?:\s?3?\s?-)?|(?i:arsenate)|\s?\bAsO\s?[2-4]?\s?-\s?4\b'),
+    ('VO4', r'\(?\s?VO4\s?\)?(?:\s?3?\s?-)?|(?i:vanadate)|\s?\bVO\s?[2-4]?\s?-\s?4\b'),
+    ('CO3', r'\(?\s?CO3\s?\)?(?:\s?2?\s?-)?|(?i:carbonate)|\s?\bCO\s?[2-4]?\s?-\s?3\b'),
+    ('SiO4', r'\(?\s?Si\d?O(?:4|3|7|10|11)\s?\)?(?:\s?\d?\s?-)?|(?i:\bsilicate)'),   # SiO3, Si2O7, Si4O10: silicate units (their ranges differ: the library's matter)
     ('BO3', r'\(?\s?BO3\s?\)?(?:\s?3?\s?-)?'),
     ('BO4', r'\(?\s?BO4\s?\)?(?:\s?5?\s?-)?'),
-    ('MoO4', r'\(?\s?MoO4\s?\)?(?:\s?2?\s?-)?|(?i:molybdate)'),
-    ('WO4', r'\(?\s?WO4\s?\)?(?:\s?2?\s?-)?|(?i:tungstate)'),
-    ('CrO4', r'\(?\s?CrO4\s?\)?(?:\s?2?\s?-)?|(?i:chromate)'),
-    ('SeO3', r'\(?\s?SeO3\s?\)?(?:\s?2?\s?-)?|(?i:selenite)'),
-    ('SeO4', r'\(?\s?SeO4\s?\)?(?:\s?2?\s?-)?|(?i:selenate)'),
+    ('MoO4', r'\(?\s?MoO4\s?\)?(?:\s?2?\s?-)?|(?i:molybdate)|\s?\bMoO\s?[2-4]?\s?-\s?4\b'),
+    ('WO4', r'\(?\s?WO4\s?\)?(?:\s?2?\s?-)?|(?i:tungstate)|\s?\bWO\s?[2-4]?\s?-\s?4\b'),
+    ('CrO4', r'\(?\s?CrO4\s?\)?(?:\s?2?\s?-)?|(?i:chromate)|\s?\bCrO\s?[2-4]?\s?-\s?4\b'),
+    ('SeO3', r'\(?\s?SeO3\s?\)?(?:\s?2?\s?-)?|(?i:selenite)|\s?\bSeO\s?[2-4]?\s?-\s?3\b'),
+    ('SeO4', r'\(?\s?SeO4\s?\)?(?:\s?2?\s?-)?|(?i:selenate)|\s?\bSeO\s?[2-4]?\s?-\s?4\b'),
     ('TeO3', r'\(?\s?TeO3\s?\)?(?:\s?2?\s?-)?|(?i:tellurite)'),
-    ('NO3', r'\(?\s?NO3\s?\)?(?:\s?-)?|(?i:nitrate)'),
+    ('NO3', r'\(?\s?NO3\s?\)?(?:\s?-)?|(?i:nitrate)|\s?\bNO\s?[2-4]?\s?-\s?3\b'),
     ('NH4', r'\(?\s?NH4\s?\)?(?:\s?\+)?|(?i:ammonium)|\bN-H\b'),
     ('H2O', r'\bH-O-H\b|H2O|(?i:\bwater\b)'),
     ('CH', r'\bC-H\b|(?i:\borganic)'),
     # a bond named by its atoms — 'Fe-O stretching', 'δ U-OH', 'As-O-H', 'O-P-O bending', 'Si-O-Si': an assignment of its
     # own, and what keeps its bands from the O-H or the group named next to it
-    ('M-O', r'\b(?:O\s?-\s?)?[A-Z][a-z]?\d?\+?\s?-\s?O(?:H|eq|ligand|yl|Ur)?(?:\s?-\s?[A-Z][a-z]?)?\b|\bU-?OH\b'),
+    ('M-O', r'\b(?:O\s?-\s?)?[A-Z][a-z]?\d?\+?\s?-\s?(?:\(\s?O\s?,\s?OH\s?\)|O(?:\s?[,/]\s?OH\b)?(?:H|eq|ligand|yl|Ur)?)(?:\s?-\s?[A-Z][a-z]?)?\b|\bU-?OH\b'),   # 'M-O,OH', 'M-(O,OH)': one bond
     ('OH', r'(?<![A-Za-z\d-])O-H\b|\(OH\)|(?<![A-Za-z\d-])OH\b|(?i:hydroxyl)'),
+    # an oxyanion or polyhedron the list does not name (VO5, WO6, TiO6, CO2 …): a group of its own, so that its mode is never
+    # handed to the group named before it ('the uranyl ν1 … the band at 723 belongs to ν2 of VO5' had read as uranyl ν2);
+    # the library holds no range for it, so nothing is judged on it
+    ('other', r'\(?\s?\b[A-Z][a-z]?O[2-7]\b\s?\)?(?:\s?\d?\s?[-+])?(?:\s?(?:polyhedr|octahedr|tetrahedr|pyramid|group|unit|molecule)\w*)?'),
     ('lattice', r'(?i:lattice|external (?:mode|vibration)|phonon|translation|rotational)'),
     ('overtone', r'(?i:overtones?|combination (?:band|mode|tone)s?)'),
 ]
 _BOND_KINDS = ('M-O', 'CH', 'lattice', 'overtone')            # not polyatomic groups: a numbered mode ν1–ν4 is never theirs
 _FIXED_MODE = {'lattice': 'lattice', 'overtone': 'overtone'}
-_FOREIGN = re.compile(r'\bfree\b|\b(?:have|has|had|were|was) been reported\b|\breported (?:for|by|in)\b|literature|theoretical|\bDFT\b|\bcomput|replicated|\bsimulat', re.I)
+_FOREIGN = re.compile(r'\bin T\s?d symmetry|\bexhibits? (?:four|the) fundamental(?=[^.]*\b(?:free|T\s?d|isolated|undistorted)\b)|\bfundamental (?:vibrational )?modes\b(?! of (?:the )?(?:mineral|sample|studied))|\bfree\b|\b(?:have|has|had|were|was) been reported\b|\breported (?:for|by|in)\b|literature|theoretical|\bDFT\b|\bcomput|replicated|\bsimulat', re.I)
 _FAM_RE = re.compile('|'.join('(?P<f%d>%s)' % (k, pat) for k, (_f, pat) in enumerate(_FAMILY)))
 _MODE_NUM = re.compile(r'ν([1-4])')
 _ANTI = re.compile(r'anti-?\s?symmetric|asymmetric', re.I)
+_Q_WORD = r'(?:(?<![a-z-])symmetric|anti-?\s?symmetric|asymmetric)'
+_JOINT_Q = _Q_WORD + r'\s?(?:,\s?)?(?:and|or|/)\s?(?:the\s)?' + _Q_WORD
 _SYM = re.compile(r'(?<![a-z-])symmetric', re.I)
 
 
 def _technique(s):
     r = bool(re.search(r'\bRaman\b', s)); i = bool(re.search(r'\binfrared\b|\bFTIR\b|\bIR\b|\bFT-IR\b|\babsorption band', s, re.I))
     return 'raman' if r and not i else 'ir' if i and not r else None
+
+
+_MODE_WORD = re.compile(r'(librat)|(stretch)|(bend|deform|scissor|wag|rock|twist)', re.I)
 
 
 def _family_hits(clause):
@@ -206,22 +217,29 @@ def _family_hits(clause):
         fam = _FAMILY[int(m.lastgroup[1:])][0]
         if not m.group(0).strip():
             continue
-        if out and out[-1][2] == fam and m.start() - out[-1][1] < 30:
+        if out and out[-1][2] == fam and m.start() - out[-1][1] < 30 and not _MODE_WORD.search(clause[out[-1][1]: m.start()]) \
+                and not re.search(r'\band\b|,', clause[out[-1][1]: m.start()]):
             out[-1] = (out[-1][0], m.end(), fam); continue
         out.append((m.start(), m.end(), fam))
     return out
 
 
-_MODE_WORD = re.compile(r'(librat)|(stretch)|(bend|deform|scissor|wag|rock)', re.I)
-
-
-def _word_mode(sent, s0, e0, lo, hi):
+def _word_mode(sent, s0, e0, lo, hi, water=False):
     """The mode the words beside a group name: the nearest of 'stretching' / 'bending' / 'libration' within the
     text up to the neighbouring groups (lo … hi), 'X stretching vibrations of GROUP' or 'GROUP stretching'."""
     best = None
+    inside = _MODE_WORD.search(sent, s0, e0)
+    if inside:
+        best = (0, inside)
     for m in _MODE_WORD.finditer(sent, max(lo, s0 - 60), s0):
+        if best and best[0] == 0:
+            break
+        if ';' in sent[m.end(): s0] or re.search(r'\d{3}|cm-1', sent[m.end(): s0]):
+            continue                                             # never across a ';' or a band — '… H2O stretching vibrations; 1385 cm-1 to CO2 Fermi resonance'
         best = (s0 - m.end(), m)
     for m in _MODE_WORD.finditer(sent, e0, min(hi, e0 + 55)):
+        if re.search(r'\bor\b|;|\d{3}|cm-1', sent[e0: m.start()]):
+            break                                                # 'libration of H2O or WO5 bending': the bending is the other's; nor across a band
         if best is None or m.start() - e0 < best[0]:
             best = (m.start() - e0, m)
         break
@@ -231,8 +249,14 @@ def _word_mode(sent, s0, e0, lo, hi):
     if m.group(1):
         return 'lib'
     if m.group(3):
+        if water and re.match(r'rock|wag|twist', m.group(3), re.I):
+            return 'lib'                                         # a water molecule's rocking / wagging / twisting is a libration
         return 'bend'
     pre = sent[max(lo, m.start() - 22): m.start()]
+    # 'the symmetric and antisymmetric stretching modes', 'antisymmetric and symmetric SO4 stretching', 'symmetric and
+    # antisymmetric (SO4) stretching': both, neither number
+    if re.search(_JOINT_Q + r'\s?(?:\(?\s?[A-Z][A-Za-z\d]{0,8}\s?[\d+−-]*\s?\)?\s?)?$', sent[max(0, m.start() - 60): m.start()], re.I):
+        return 'stretch'
     return 3 if _ANTI.search(pre) else 1 if _SYM.search(pre) else 'stretch'
 
 
@@ -261,7 +285,7 @@ def _assignments(sent):
             out.append((s0, e0, fam, _FIXED_MODE[fam])); continue
         lo = fams[n - 1][1] if n else 0
         hi = fams[n + 1][0] if n + 1 < len(fams) else len(sent)
-        mode = _word_mode(sent, s0, e0, lo, hi)
+        mode = _word_mode(sent, s0, e0, lo, hi, water=fam in ('H2O', 'OH'))
         if fam == 'M-O':
             # a bond is an assignment only with its mode right beside it ('Fe-O stretching', 'stretching vibrations of
             # Si-O', 'ν(Mo-O)', 'δ U-OH') — 'U-O bond lengths' names a distance
@@ -272,10 +296,55 @@ def _assignments(sent):
             mode = mode or ('bend' if re.search(r'δ\s?\(?\s?$', sent[max(0, s0 - 4): s0]) else 'stretch')
         if fam in ('OH', 'H2O', 'NH4', 'CH', 'M-O') and mode in (1, 3):
             mode = 'stretch'
+        if not mode and n and fams[n - 1][2] not in _BOND_KINDS and fam not in _BOND_KINDS and \
+                re.fullmatch(r'\s?(?:,|and|,\s?and|or)\s?', sent[fams[n - 1][1]: s0]) and out and out[-1][:2] == fams[n - 1][:2]:
+            mode = out[-1][3]                                    # 'the symmetric stretching modes of PO43- and CO32-': both stretch
         if mode and re.search(r'overtone|combination', sent[max(lo, s0 - 45): s0], re.I):
             fam, mode = 'overtone', 'overtone'                   # 'the overtone of H-O-H bending vibrations'
         if mode:
             out.append((s0, e0, fam, mode))
+    # two modes of one group named in a row, 'respectively' after them: two assignments, in that order — one had stood for
+    # both bands ('3552 and 1631 cm-1 … the stretching vibration and bending vibration of H2O, respectively' read both as bends)
+    if re.search(r'respectively', sent):
+        pair = re.compile(r'\b((?:anti-?\s?symmetric|asymmetric|symmetric)\s)?(stretching|bending)(?: vibrations?| modes?)?\s?(?:,\s?)?and\s(?:the\s)?'
+                          r'((?:anti-?\s?symmetric|asymmetric|symmetric)\s)?(stretching|bending)(?: vibrations?| modes?)?', re.I)
+        for pm in pair.finditer(sent):
+            after_ = [f for f in fams if 0 <= f[0] - pm.end() <= 70 and f[2] not in _BOND_KINDS]
+            before_ = [f for f in fams if 0 <= pm.start() - f[1] <= 25 and f[2] not in _BOND_KINDS]
+            grp = (after_[0] if after_ else before_[-1] if before_ else None)
+            if grp is None:
+                continue
+            def md(qual, word):
+                if word.lower().startswith('bend'):
+                    return 'bend'
+                if grp[2] in ('OH', 'H2O', 'NH4', 'CH') or not qual:
+                    return 'stretch'
+                return 3 if _ANTI.search(qual) else 1
+            a1 = (pm.start(), pm.start(4) - 1, grp[2], md(pm.group(1), pm.group(2)))
+            a2 = (pm.start(4) - (len(pm.group(3)) if pm.group(3) else 0), max(pm.end(), grp[1]), grp[2], md(pm.group(3), pm.group(4)))
+            if a1[3] == a2[3]:
+                continue
+            out = [a for a in out if not (a[2] == grp[2] and a[0] <= grp[1] and a[1] >= pm.start())] + [a1, a2]
+        # the qualifiers coordinated: 'the symmetric and antisymmetric stretching modes, respectively, within the SeO4 groups'
+        for pm in re.finditer(r'\b(symmetric|anti-?\s?symmetric|asymmetric)\s(?:,\s?)?and\s(?:the\s)?(symmetric|anti-?\s?symmetric|asymmetric)\s'
+                              r'(?:\(?\s?[A-Z][A-Za-z\d]{0,8}\s?[\d+−-]*\s?\)?\s)?(stretching|stretch)\b', sent, re.I) if re.search(r'respectively', sent) else ():
+            after_ = [f for f in fams if 0 <= f[0] - pm.end() <= 70 and f[2] not in _BOND_KINDS]
+            before_ = [f for f in fams if 0 <= pm.start() - f[1] <= 25 and f[2] not in _BOND_KINDS]
+            grp = (after_[0] if after_ else before_[-1] if before_ else None)
+            if grp is None or grp[2] in ('OH', 'H2O', 'NH4', 'CH'):
+                continue
+            m1 = 3 if _ANTI.search(pm.group(1)) else 1; m2 = 3 if _ANTI.search(pm.group(2)) else 1
+            if m1 == m2:
+                continue
+            a1 = (pm.start(1), pm.end(1), grp[2], m1); a2 = (pm.start(2), max(pm.end(), grp[1]), grp[2], m2)
+            out = [a for a in out if not (a[2] == grp[2] and a[0] <= grp[1] and a[1] >= pm.start())] + [a1, a2]
+    # 'As5+-O stretching vibrations of AsO43- groups': the bond of a polyanion's own central atom IS that polyanion's mode
+    for n in range(len(out) - 1, 0, -1):
+        a, b = out[n - 1], out[n]
+        if a[2] == 'M-O' and b[2] in GROUP_ELEMENT and b[0] - a[1] < 50 and re.search(r'\bof\b', sent[a[1]: b[0]]):
+            atom = re.match(r'\s?(?:O\s?-\s?)?([A-Z][a-z]?)', sent[a[0]: a[1]])
+            if atom and atom.group(1) == GROUP_ELEMENT[b[2]]:
+                out[n - 1] = (a[0], b[1], b[2], b[3] if b[3] not in (None, 'stretch', 'bend') or a[3] is None else a[3]); del out[n]
     # 'ν O-H stretching vibrations of the H2O molecules': the water named after an O-H stretch is that stretch's
     for n in range(len(out) - 1, 0, -1):
         a, b = out[n - 1], out[n]
@@ -283,9 +352,16 @@ def _assignments(sent):
             out[n - 1] = (a[0], b[1], 'OH', 'stretch'); del out[n]
     out.sort()
     uniq = []
+    same_kind = lambda m1, m2: {m1, m2} <= {2, 4, 'bend'} or {m1, m2} <= {1, 3, 'stretch'}
     for a in out:                                                # 'O–H stretching vibrations of hydroxyl groups' names one thing twice
-        if uniq and uniq[-1][2:] == a[2:] and a[0] - uniq[-1][1] < 80:
-            uniq[-1] = (uniq[-1][0], max(uniq[-1][1], a[1])) + a[2:]
+        if uniq and uniq[-1][2:] == a[2:] and a[0] - uniq[-1][1] < 80 and not re.search(r'\d{3}|cm-1', sent[uniq[-1][1]: a[0]]):
+            uniq[-1] = (uniq[-1][0], max(uniq[-1][1], a[1])) + a[2:]   # never across a band: two of them, each its own
+            continue
+        if uniq and uniq[-1][2] == a[2] and a[0] - uniq[-1][1] < 60 and isinstance(uniq[-1][3], int) != isinstance(a[3], int) \
+                and same_kind(uniq[-1][3], a[3]) and not re.search(r'\d{3}|cm-1', sent[min(uniq[-1][1], a[0]): max(uniq[-1][1], a[0])]) \
+                and not re.search(r'\d{3}|cm-1', sent[uniq[-1][0]: a[0]]):
+            num = uniq[-1][3] if isinstance(uniq[-1][3], int) else a[3]   # 'the ν2 H-O-H bending vibration of water': one assignment, the numbered one
+            uniq[-1] = (uniq[-1][0], max(uniq[-1][1], a[1]), a[2], num)
             continue
         uniq.append(a)
     return uniq
@@ -335,6 +411,14 @@ def _band_groups(s):
         if items and not re.match(r'\s?(?:-|to\b)', s[m.end(1): m.end(1) + 4]):
             out.append((m.start(1), m.end(1), items, False))
     out.sort()
+    k = 0
+    while k < len(out) - 1:
+        a, b = out[k], out[k + 1]
+        if len(a[2]) == 1 and len(b[2]) == 1 and re.fullmatch(r'\s?(?:-|to)\s?[~∼≈]?\s?', s[a[1]: b[0]]):
+            # '1200 cm-1 - 600 cm-1': ONE range of two ends, as '1200-600 cm-1' is (band_ranges / absent_bands read a range as
+            # a group of two; two one-band ranges were read by nothing)
+            out[k] = (a[0], b[1], [a[2][0], b[2][0]], True); del out[k + 1]
+        k += 1
     return out
 
 
@@ -369,8 +453,14 @@ def _pair(sent, groups, asg):
                 arun = prv
         if arun is None and nxt and runs[i + 1][0] == 'A':
             between = sent[items[-1][2]: nxt[0][1]]
-            if len(between) < 170 and (_VERB.search(between) or len(between.strip()) < 25) and not re.search(r'[.;]\s', between):
-                arun = nxt; taken.add(i + 1)
+            own_band = any(h[0] >= nxt[0][1] and h[0] <= nxt[-1][2] + 40 and h is not groups[items[-1][3]] and
+                           re.search(r'\b(?:at|near|around)\s?[~∼≈]?\s?$', sent[nxt[0][1]: h[0]]) and
+                           not re.search(r'[.;)]|,\s', sent[min(nxt[-1][2], h[0]): h[0]]) and          # '… mode), a band at 441': closed before it
+                           not re.search(r'\bof (?:the |a )?(?:bands?|peaks?|lines?)\b', sent[nxt[0][1]: h[0]])   # 'an overtone of the band at 294': a reference
+                           for h in groups)
+            if len(between) < 170 and (_VERB.search(between) or (len(between.strip()) < 25 and not own_band)) and not re.search(r'[.;]\s', between):
+                arun = nxt                                       # taken only once it is USED (below): a run that cannot use it leaves it to the next
+                # (an assignment followed by its own band — 'PO4 ν1 stretching mode at 988' — is that band's, not the one before it)
         if arun is None and prv and runs[i - 1][0] == 'A' and (i - 1) not in taken:
             between = sent[prv[-1][2]: items[0][1]]
             if len(between) < 130 and _LOC.search(between) and not re.search(r';\s', between):
@@ -380,12 +470,24 @@ def _pair(sent, groups, asg):
         A = [asg[a[3]] for a in arun]
         if arun is prv:
             A = A[used_front.get(i - 1, 0):]                     # what the run of bands before it has not taken
+        def _gap(x, y):                                          # the words between two assignments; 'ν1 and ν3 modes of SO4': both spans
+            if x[1] <= y[0]:                                     # run on to the SO4, so the text between their starts, less the mode token
+                return sent[x[1]: y[0]]
+            return re.sub(r'^\s?ν\s?[1-4]', '', sent[x[0]: y[0]])
+        if len(A) > 1 and not re.search(r'respectively', sent) and any(
+                re.fullmatch(r'\s?(?:,|and|,\s?and|or|&)\s?', _gap(x, y)) for x, y in zip(A, A[1:])):
+            continue                                             # 'the stretching modes of both H2O and NH4+ … maxima at 3020 and 3540': jointly, not one each
+        if len(A) > 1 and len(items) > 1:
+            rp = next((m.start() for m in re.finditer(r'respectively', sent) if m.start() > items[0][2]), None)
+            if rp is not None and any(g[2] <= rp for g in items) and any(g[1] > rp for g in items):
+                items = [g for g in items if g[2] <= rp]
         if arun is nxt and len(A) == len(items) + 1 and i + 2 < len(runs):
             # '… band at 808 is attributed to ν1 of UO2, overlapping the stretching vibrations of SiO4 at 750': the last
             # assignment of the run belongs to the band that follows it
             between = sent[arun[-1][2]: runs[i + 2][1][0][1]]
             if runs[i + 2][0] == 'G' and len(between) < 60 and re.search(r'\bat\b|near|around', between) and not re.search(r'[.;]\s', between):
                 A = A[:-1]; taken.discard(i + 1); used_front[i + 1] = len(A)
+        done = True
         if len(A) == 1:
             for g in items:
                 out[g[3]] = [A[0]] * len(groups[g[3]][2])
@@ -394,6 +496,73 @@ def _pair(sent, groups, asg):
                 out[g[3]] = [a] * len(groups[g[3]][2])
         elif len(items) == 1 and len(groups[items[0][3]][2]) == len(A) and re.search(r'respectively', sent):
             out[items[0][3]] = list(A)
+        elif len(items) > len(A) and re.search(r'respectively', sent):
+            # '… ~3200 cm-1 and a sharp peak at 1638 cm-1 (with a shoulder at 1610 cm-1) are due to H2O stretches and H-O-H
+            # bends, respectively': a band in parentheses is the shoulder of the band before it, and shares its assignment
+            heads = [g for g in items if not re.search(r'\((?:[^()]{0,30})$', sent[max(0, g[1] - 200): g[1]])]
+            if len(heads) == len(A):
+                cur = None; hi = iter(A)
+                for g in items:
+                    if g in heads:
+                        cur = next(hi)
+                    if cur is not None:
+                        out[g[3]] = [cur] * len(groups[g[3]][2])
+            else:
+                done = False
+        else:
+            done = False
+        if done and arun is nxt and (i + 1) not in used_front:   # a run whose last assignment was left to the band after it stays open
+            taken.add(i + 1)
+    # a band in parentheses belongs to the assignment its words stand in, whatever the runs said: inside the assignment's own
+    # words ('H-O-H bending (at 1675 cm-1) vibrations of H2O and C-O stretching …' had gone to the carbonate), a numbered
+    # mode inside the same parentheses ('(at 964 cm-1, non-degenerate A1(ν1) mode …)'), or right after the assignment it
+    # completes ('ν2 CO32- out-of-plane bending (about 880 cm-1) and ν4 …' had gone to ν4)
+    resp = {}                                                    # '… ν3, ν1 and ν4 modes of PO43- (at 1072 and 1001 cm-1 and in the range of 500-600 cm-1, respectively)'
+    for m in re.finditer(r'\(([^()]*(?:\([^()]*\)[^()]*)*)\)', sent):
+        if not re.search(r'respectively\s?$', m.group(1)):
+            continue
+        inner = [k for k, g in enumerate(groups) if m.start() < g[0] and g[1] <= m.end()]
+        lead = [a for a in asg if a[1] <= m.start()]
+        chain = []
+        for a in reversed(lead):                                 # the list of assignments the parenthesis completes
+            if chain and not (chain[0][0] - a[0] < 90 and re.search(r',|\band\b', sent[a[0]: chain[0][0]]) and ';' not in sent[a[0]: chain[0][0]]):
+                break                                            # spans of numbered modes overlap (each runs on to its group): by their starts
+            if not chain and not re.fullmatch(r'[\w\s\-]{0,40}', sent[a[1]: m.start()]):
+                break
+            chain.insert(0, a)
+        slots = [(k, n) for k in inner for n in range(1 if groups[k][3] else len(groups[k][2]))]
+        if len(chain) > 1 and len(slots) == len(chain):
+            for (k, n), a in zip(slots, chain):
+                resp.setdefault(k, []).append(a)
+    for k, v in resp.items():
+        if not groups[k][3]:
+            out[k] = v
+    for k, g in enumerate(groups):
+        if g[3] or k in resp:
+            continue
+        a_ = None
+        op = sent.rfind('(', 0, g[0])
+        in_paren = op >= 0 and ')' not in sent[op: g[0]]
+        # inside an assignment's own words — and in parentheses there ('H-O-H bending (at 1675 cm-1) vibrations of H2O'): a
+        # numbered mode's span runs on to the group after it, and a band in that stretch of prose is not in its words
+        inside = [a for a in asg if a[0] <= op and g[1] <= a[1]] if in_paren else []
+        if inside:
+            a_ = min(inside, key=lambda a: a[1] - a[0])
+        if a_ is None and in_paren:
+            cl = sent.find(')', g[1])
+            cl = len(sent) if cl < 0 else cl
+            numbered = [a for a in asg if g[1] < a[0] < cl and isinstance(a[3], int)
+                        and not any(a[0] < h[0] < cl for h in groups)]   # '(ν1 ≈980 cm-1, ν2 ≈450 …)': a mode with its own band after it is that band's
+            if numbered:
+                a_ = numbered[0]
+            else:
+                before = [a for a in asg if a[1] <= op and re.fullmatch(r'[\w ,\-]{0,30}', sent[a[1]: op])]
+                lead = sent[op + 1: g[0]]                        # '(at ', '(about ', '(a broad band centred on '
+                if before and len(lead) <= 40 and not re.search(r'\d', lead) and not _FAM_RE.search(lead) and not _VERB.search(lead) \
+                        and re.fullmatch(r"[\w\s\-]*?(?:\b(?:at|on|about|ca\.?|near|around))?\s?[~∼≈]?\s?", lead):
+                    a_ = before[-1]
+        if a_ is not None:
+            out[k] = [a_] * len(g[2])
     return out
 
 
@@ -423,14 +592,25 @@ _NEG_AFTER = re.compile(r'^[^;]{0,70}?\b(?:(?:is|are|was|were|being)\s+(?:comple
                         r'(?:is|are|was|were)\s+absent|not\s+(?:observed|detected|present))\b', re.I)
 
 
-def _negated(sent, g):
-    """A run of bands the sentence says the spectrum does NOT show."""
+def _negated(sent, g, groups=()):
+    """A run of bands the sentence says the spectrum does NOT show — also when the negation follows the LAST run of a
+    list in the same clause ('bands of ν2 (about 880 cm-1) and ν4 (about 680 cm-1) were not observed')."""
     lo = 0
     for m in _CLAUSE.finditer(sent, 0, g[0]):
         lo = m.end()
     m = _CLAUSE.search(sent, g[1])
     hi = m.start() if m else len(sent)
-    return bool(_NEG_BEFORE.search(sent[lo: g[0]]) or _NEG_AFTER.search(sent[g[1]: hi]))
+    if _NEG_BEFORE.search(sent[lo: g[0]]) or _NEG_AFTER.search(sent[g[1]: hi]):
+        return True
+    later = [h for h in groups if g[1] <= h[0] < hi and not h[3]]
+    if not later:
+        return False
+    # a LIST negated: a plural verb right after its last band ('… (about 680 cm-1) vibrations were not observed'), never a
+    # relative clause on that band alone ('… a shoulder at 843 cm-1 which is not present in …')
+    tail = sent[later[-1][1]: hi]
+    m = re.match(r'[^;,]{0,30}?\b(?:were|are)\s+(?:not\s+(?:observed|present|detected|seen|found|visible|recorded|apparent)|absent|missing)\b', tail, re.I)
+    return bool(m and not re.search(r'\b(?:which|that|where)\b', tail[:m.end()]) and
+                not re.search(r'\b(?:is|are|was|were|occurs?|appears?|observed at)\b|,\s?with\b', sent[g[1]: later[-1][0]]))
 
 
 def _sentence_bands(sent, tech=None):
@@ -444,12 +624,18 @@ def _sentence_bands(sent, tech=None):
     own = not _FOREIGN.search(sent)
     out = []
     for k, g in enumerate(groups):
-        if g[3] or _negated(sent, g):
+        if g[3] or _negated(sent, g, groups):
             continue
         gt = _tech_for(sent, g) or tech
         near = _shape_near(sent, g[0])
         for n, (p, sh) in enumerate(g[2]):
             a = pairs[k][n] if k in pairs else None
+            if sh not in _SHAPE_CODE and not (sh and _SHAPE.fullmatch(sh)):
+                # the number's own parentheses name what it is (read in the sentence: the item's copy is lower-cased)
+                pm = re.search(r'(?<![\d.])%s(?:\s?cm-1)?\s?\(\s?([A-Za-z][^()]{0,30})\)' % re.escape(('%g' % p)), sent[g[0]: g[1] + 40])
+                own_a = _assignments(pm.group(1)) if pm else []
+                if len(own_a) == 1:
+                    a = own_a[0]
             out.append(Band(p, gt, sh if sh in _SHAPE_CODE else near, a[2] if a else None, a[3] if a else None, sent, own))
     return out
 
@@ -718,7 +904,8 @@ def check_claims(text, _split=None):
         c = r['claim']
         if r['status'] == 'off' and r['grade'] == 'info' and c.paired == 'band' and c.relation[:3] in proved and r['calc'] is not None and abs(r['calc'] - c.dist) >= MIN_DIFF:
             r['grade'] = 'flag'
-            r['line'] = r['line'].replace(' — stated ', ' vs ').replace(' (information)', '')
+            # the information form '… stated for the band at N cm⁻¹; <relation> gives D Å for it (information)' as a finding
+            r['line'] = re.sub(r'; (.+?) gives (\S+ Å) for it \(information\)$', r' vs \2 by \1', r['line'])
     return out
 
 
@@ -745,8 +932,8 @@ def _judge_bc(cs, sents, k):
                                     % (c.text, c.band, mode, BC, _fmt(own, c.decimals), c.text, 3 if mode == 1 else 1))
                 else:
                     rec.update(status='off', calc=own, grade='info',
-                               line='U–O %s Å at %g cm⁻¹ — stated %s Å by %s%s (information)'
-                                    % (c.text, c.band, _fmt(own, c.decimals), BC, ' (ν%d)' % mode if mode else ''))
+                               line='U–O %s Å stated for the band at %g cm⁻¹; %s%s gives %s Å for it (information)'
+                                    % (c.text, c.band, BC, ' (ν%d)' % mode if mode else '', _fmt(own, c.decimals)))
             else:
                 own, sibv = (d1, d3) if c.mode == 1 else (d3, d1)
                 if abs(own - c.dist) <= tol:
@@ -757,7 +944,7 @@ def _judge_bc(cs, sents, k):
                                     % (c.text, c.mode, c.band, _fmt(own, c.decimals), c.mode, BC, c.text, 3 if c.mode == 1 else 1))
                 else:
                     rec.update(status='off', calc=own, grade='info',
-                               line='U–O %s Å at %g cm⁻¹ — stated %s Å by %s (ν%d) (information)' % (c.text, c.band, _fmt(own, c.decimals), BC, c.mode))
+                               line='U–O %s Å stated for the band at %g cm⁻¹; %s (ν%d) gives %s Å for it (information)' % (c.text, c.band, BC, c.mode, _fmt(own, c.decimals)))
         elif c.paired == 'mode':
             fn, sib = (bc_nu1, bc_nu3) if c.mode == 1 else (bc_nu3, bc_nu1)
             cand = [b for b, _o in ctx if b.mode == c.mode]
@@ -834,9 +1021,14 @@ def _judge_lib(cs, sents, k):
         if r['status'] != 'off':
             continue
         if r['calc'] is None:
+            nu = inv(c.dist)
+            # a band PREDICTED from a distance ('predicts bands at about 3600 … for O···O = 3.153 Å'), rounded: the relation's own
+            # band for the distance is the comparison
+            if nu is not None and abs(nu - c.band) <= 25 and re.search(r'\babout\b|~|∼|\bca\.|approximately|predict', c.sentence, re.I):
+                r['status'] = 'reproduced'; continue
             r['grade'] = 'info'
-            r['line'] = ('%s %s Å for the band at %g cm⁻¹: the curve of %s ends at %g cm⁻¹ and has no distance for a band above it (information)'
-                         % (what, c.text, c.band, LIB, LIB_FREE_HO if ho else LIB_FREE_OO))
+            r['line'] = ('%s %s Å for the band at %g cm⁻¹: the curve of %s ends at %g cm⁻¹, below that band; %s Å gives %s cm⁻¹ (information)'
+                         % (what, c.text, c.band, LIB, LIB_FREE_HO if ho else LIB_FREE_OO, c.text, '%.0f' % nu if nu is not None else 'no band'))
             continue
         if abs(r['calc'] - c.dist) < (CTX_DIFF if c.paired == 'ctx' else MIN_DIFF):
             r['status'] = 'reproduced'; continue
@@ -846,7 +1038,7 @@ def _judge_lib(cs, sents, k):
                          % (what, c.text, c.band, _fmt(r['calc'], c.decimals), LIB, len(ok), c.text, inv(c.dist)))
         elif c.paired in ('band', 'single', 'list'):
             r['grade'] = 'info'
-            r['line'] = '%s %s Å at %g cm⁻¹ — stated %s Å by %s (information)' % (what, c.text, c.band, _fmt(r['calc'], c.decimals), LIB)
+            r['line'] = '%s %s Å stated for the band at %g cm⁻¹; %s gives %s Å for it (information)' % (what, c.text, c.band, LIB, _fmt(r['calc'], c.decimals))
         else:                                                  # bands of the sentence before, paired by count alone: a word, never a finding
             r['grade'] = 'info'
             r['line'] = ('%s %s Å: the bands stated just before (%s cm⁻¹) give %s Å by %s — %s Å has no band among them (information)'
@@ -925,6 +1117,10 @@ def check_lines(text, ex=None, cif=None, path=None, structure=None):
     except Exception:
         pass
     try:
+        about += assignment_lines(own)
+    except Exception:
+        pass
+    try:
         about += rruff_lines(own, name, comparison_species(text, name, sp))
     except Exception:
         pass
@@ -939,8 +1135,9 @@ def check_lines(text, ex=None, cif=None, path=None, structure=None):
             len(res), '' if len(res) == 1 else 's', ' and '.join(x for x in ((BC if n_bc else ''), (LIB if n_lib else '')) if x), n_ok,
             ', %d with no single band to recompute from' % n_open if n_open else '')
     else:
-        head = 'spectroscopy: the stated bands beside the %s' % ' and the '.join(x for x in (('structure' if beside else ''), ('formula' if any(not ln.startswith(('table:', 'rruff:')) for ln in about) else ''),
+        head = 'spectroscopy: the stated bands beside the %s' % ' and the '.join(x for x in (('structure' if beside else ''), ('formula' if any(not ln.startswith(('table:', 'rruff:', 'mode')) for ln in about) else ''),
                                                                                               ('assignment table' if any(ln.startswith('table:') for ln in about) else ''),
+                                                                                              ('band library' if any(ln.startswith('mode') for ln in about) else ''),
                                                                                               ('RRUFF spectra' if any(ln.startswith('rruff:') for ln in about) else '')) if x)
     return [head] + lines
 
@@ -1409,6 +1606,108 @@ def _other_species_column(header, stem):
         if how in ('exact', 'spelling') and len(norms) == 1:
             return True
     return False
+
+
+# ----------------------------------------------------------------------------- the paper's assignments against themselves
+#
+# What a reviewer of a new mineral meets (the owner, 2026-11-01): a band given the wrong mode number, a ν1 and a ν3 swapped.
+# Only the paper against itself is a finding: ν1 above every ν3 of the same group, in its stretching region (the symmetric
+# stretch lies below the antisymmetric one in SO4, PO4, SiO4, CO3 and UO2; AsO4 and VO4 overlap and are left alone). A band
+# outside its mode's range where another mode of the group holds it is information, and only where its sentence makes ONE
+# assignment — on the corpus the out-of-range positions from longer sentences were the reader's pairing, not the paper's.
+ORDERED = ('SO4', 'PO4', 'CO3', 'UO2')      # SiO4 left out: Si–O–Si of a polymerised silicate is not the tetrahedron's ν1 / ν3
+RANGE_GROUPS_OUT = ('SiO4',)                # ranges by polymerisation are not in the library yet (orthosilicate values misjudge a sheet's)
+LIB_MEASURED = 8                            # a range is used only if verified (no 'check' tag) or measured on this many papers
+RANGE_SLACK = 25.0          # cm⁻¹ beyond the library's range (literature range ∪ measured 5–95 % window)
+_SKIP_FAM = ('M-O', 'lattice', 'overtone', 'other', 'CH')
+
+
+def _lib_range(fam, modes, technique=None, trusted=False):
+    from pxrd_review import bands as BL
+    rows = [r for r in BL.expected(groups=[fam], technique=technique) if r['mode'] in modes] or \
+        [r for r in BL.expected(groups=[fam]) if r['mode'] in modes]
+    if trusted:                                 # verified, or measured on enough papers: a range entered from memory judges nothing
+        rows = [r for r in rows if not r.get('check') or ((r.get('published') or {}).get('papers') or 0) >= LIB_MEASURED]
+    if not rows:
+        return None
+    lo = min(min(r['lo'], (r.get('published') or {}).get('p5') or r['lo']) for r in rows)
+    hi = max(max(r['hi'], (r.get('published') or {}).get('p95') or r['hi']) for r in rows)
+    return lo, hi
+
+
+def _lib_modes(mode):
+    return {'ν%d' % mode} if isinstance(mode, int) else {'stretch': {'ν1', 'ν3', 'stretch'}, 'bend': {'ν2', 'ν4', 'bend'}}.get(mode, {mode})
+
+
+def _near_copy(a, b):
+    """Two sentences that are one (a caption repeated in the text): most of their words shared."""
+    wa, wb = set(re.findall(r'[a-z]{3,}', a.lower())), set(re.findall(r'[a-z]{3,}', b.lower()))
+    return bool(wa and wb) and len(wa & wb) >= 0.9 * max(len(wa), len(wb)) and set(re.findall(r'\d{3,4}', a)) == set(re.findall(r'\d{3,4}', b))
+
+
+def assignment_lines(own):
+    """Lines on the paper's own band assignments set against each other and against the mode's range (see above)."""
+    own = [b for b in own if b.own and b.family and b.mode and b.family not in _SKIP_FAM]
+    lines = []
+    for fam in ORDERED:
+        n1 = sorted({b.pos for b in own if b.family == fam and b.mode == 1})
+        n3 = sorted({b.pos for b in own if b.family == fam and b.mode == 3})
+        reg = _lib_range(fam, {'ν1', 'ν3'})
+        if not (n1 and n3 and reg):
+            continue
+        inside = lambda p: reg[0] - 60 <= p <= reg[1] + 60
+        if all(inside(p) for p in n1 + n3) and max(n3) < min(n1):
+            b1 = next(b for b in own if b.family == fam and b.mode == 1)
+            lines.append('mode order: ν1 of %s at %s cm⁻¹ vs ν3 at %s cm⁻¹ — the symmetric stretch stands above every antisymmetric one, '
+                         'where in %s it lies below: the two labels look swapped ‘%s’' % (fam, ', '.join('%g' % p for p in n1), ', '.join('%g' % p for p in n3), fam,
+                                                                                        _short(b1.sentence, '%g' % b1.pos, 80)))
+    said = set()
+    for b in own:
+        if (b.pos, b.family, b.mode) in said or b.family in RANGE_GROUPS_OUT:
+            continue
+        asg = _assignments(b.sentence)
+        if len(asg) != 1:
+            continue
+        a0 = asg[0]
+        # a second mode word with no group of its own ('… correspond to symmetric stretching, whereas … antisymmetric
+        # stretching of SO4'), or an exception / a negation in the sentence: the pairing is not the paper's to be judged on
+        if any(not (a0[0] - 30 <= m.start() <= a0[1] + 30) for m in _MODE_WORD.finditer(b.sentence)) or \
+                re.search(r'\bexception\b|\bexcept\b|\bno bands?\b|\bnot\b|\bwithout\b|\babsen', b.sentence, re.I):
+            continue
+        rg = _lib_range(b.family, _lib_modes(b.mode), b.technique, trusted=True)
+        if not rg or rg[0] - RANGE_SLACK <= b.pos <= rg[1] + RANGE_SLACK:
+            continue
+        alt = []
+        for m_ in ('ν1', 'ν2', 'ν3', 'ν4', 'stretch', 'bend', 'lib'):
+            if m_ in _lib_modes(b.mode):
+                continue
+            g = _lib_range(b.family, {m_}, b.technique, trusted=True)
+            if g and g[0] - 10 <= b.pos <= g[1] + 10:
+                alt.append('%s (%g–%g cm⁻¹)' % (m_, g[0], g[1]))
+        if not alt:
+            continue
+        said.add((b.pos, b.family, b.mode))
+        lines.append("mode: the band at %g cm⁻¹ is assigned to %s, whose range in minerals is %g–%g cm⁻¹; %s of the same group holds it (information) ‘%s’"
+                     % (b.pos, _mode_name(b.family, b.mode).strip(), rg[0], rg[1], ' or '.join(alt), _short(b.sentence, '%g' % b.pos, 80)))
+    seen = {}
+    for b in own:
+        seen.setdefault(b.pos, []).append(b)
+    for pos, bs in sorted(seen.items()):
+        kinds = {}
+        for b in bs:
+            kinds.setdefault((b.family, b.mode), b)
+        kinds = {k: v for k, v in kinds.items() if isinstance(k[1], int)}
+        sents = [b.sentence for b in kinds.values()]
+        # two NUMBERED modes of ONE group, in two sentences that are not copies of each other ('ν4 … 435 and 428' in one,
+        # 'ν2 … 435 and 428' in the next); a plain 'stretch' beside a ν3 says the same thing; two groups are the reader's
+        # business more often than the paper's (overlapping bands of two groups, a second mineral)
+        if len(kinds) < 2 or len({f for f, _m in kinds}) != 1 or len(set(sents)) < 2 or any(x.startswith('table row') for x in sents) \
+                or _near_copy(sents[0], sents[1]):
+            continue
+        (a, b1), (c, b2) = list(kinds.items())[:2]
+        lines.append("mode: the band at %g cm⁻¹ is assigned to %s in one place and to %s in another (information) ‘%s’ ‘%s’"
+                     % (pos, _mode_name(*a).strip(), _mode_name(*c).strip(), _short(b1.sentence, '%g' % pos, 60), _short(b2.sentence, '%g' % pos, 60)))
+    return lines
 
 
 def _mode_name(fam, mode):

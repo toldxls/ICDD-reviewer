@@ -2092,8 +2092,70 @@ def api_update():
     st = UPD.status(); res = st.get('result') or {}
     if not st.get('checkout') and not res.get('newer'):
         return jsonify({'ok': False, 'error': 'nothing newer on GitHub'}), 409
-    r = UPD.gui_update(_GUI_ARGV, {'PXRD_GUI_TOKEN': _AUTH_TOKEN or '', 'PXRD_GUI_PORT': str(_GUI_PORT or '')})
-    return jsonify(dict(r, ok=True))
+    r = UPD.gui_update(_relaunch_argv(), {'PXRD_GUI_TOKEN': _AUTH_TOKEN or '', 'PXRD_GUI_PORT': str(_GUI_PORT or '')})
+    dropped = _relaunch_drops()
+    return jsonify(dict(r, ok=True, **({'note': 'the Manuscript folder %s is not reopened after the update: open it again from the folder panel' % dropped} if dropped else {})))
+
+def _relaunch_argv(argv=None):
+    """The arguments the updated server restarts with: the folder that is OPEN now (issue #13: the launch argv brought a
+    GUI that had started on the chooser, or on a broad folder the reviewer then confirmed, back to the chooser, and the
+    reconnecting tab lost its batch). The review folder, else the Manuscript folder; --open-anyway, as it was opened on
+    purpose; the port and the display flags kept; --out / --pdf-root only while the folder is the one they were given for;
+    a one-off --import-triage never repeated."""
+    argv = list(_GUI_ARGV if argv is None else argv)
+    # argparse takes a unique prefix ('--pdf' for --pdf-root): read every flag by its full name, or a value is taken for the folder
+    longs = [o for o in _arg_parser()._option_string_actions if o.startswith('--')]
+    def full(a):
+        if not a.startswith('--'):
+            return a
+        name, eq, val = a.partition('=')
+        hits = [o for o in longs if o == name] or [o for o in longs if o.startswith(name)]
+        return (hits[0] + eq + val) if len(hits) == 1 else a
+    argv = [full(a) for a in argv]
+    launched_ms = '--manuscript' in argv
+    keep, launch_folder, i = [], None, 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ('--port', '--out', '--pdf-root', '--import-triage'):
+            if a != '--import-triage':
+                keep += [a, argv[i + 1]] if i + 1 < len(argv) else [a]
+            i += 2; continue
+        if a.startswith(('--port=', '--out=', '--pdf-root=')):
+            keep.append(a)
+        elif a.startswith('--import-triage='):
+            pass
+        elif a in ('--open-anyway', '--manuscript'):
+            pass                                                   # set below from what is open
+        elif a.startswith('-'):
+            keep.append(a)
+        elif launch_folder is None:
+            launch_folder = a
+        i += 1
+    # the review side is open only with entries: a papers folder sets STATE['folder'] too, with none
+    review = STATE.get('folder') if STATE.get('order') else None
+    manuscript = MS.get('folder')
+    folder = review or manuscript
+    if not folder:
+        return argv                                                # nothing open: as launched (the chooser again)
+    same = lambda a, b: bool(a and b) and os.path.abspath(a) == os.path.abspath(b)
+    # one folder per launch: a Manuscript folder other than the review one is not restored (the update status says so)
+    ms_too = not review or launched_ms and same(manuscript, review)
+    if not launch_folder or os.path.abspath(launch_folder) != os.path.abspath(folder):
+        out = []; j = 0                                            # --out / --pdf-root were the launch folder's
+        while j < len(keep):
+            if keep[j] in ('--out', '--pdf-root'):
+                j += 2; continue
+            if not keep[j].startswith(('--out=', '--pdf-root=')):
+                out.append(keep[j])
+            j += 1
+        keep = out
+    return [folder, '--open-anyway'] + (['--manuscript'] if ms_too else []) + keep
+
+def _relaunch_drops():
+    """The Manuscript folder the relaunch cannot bring back (one folder per launch, the review one first), else None."""
+    review = STATE.get('folder') if STATE.get('order') else None
+    ms = MS.get('folder')
+    return ms if review and ms and os.path.abspath(ms) != os.path.abspath(review) else None
 
 @app.route('/api/update/status')
 def api_update_status():
@@ -2329,8 +2391,8 @@ def _tb_epma_args():
                 anions=_qf('anions', 0.1, 500), raw_anions=a.get('raw') == '1',
                 adds=split(_q('add', '', 400)), converts=split(_q('convert', '', 200)), drop=split(_q('drop', '', 200)),
                 points=_q('points', '', 60), standards=_q('standards', '', 400), ideal=_q('ideal', '', 400),
-                name=_q('name', '', 80), sheet=_q('sheet', '', 80) or None, method=_q('method', '', 1400),
-                block=int(a['block']) if (a.get('block') or '').isdigit() and int(a['block']) < 1000 else None,
+                name=_q('name', '', 80), sheet=_q('sheet', '', 260) or None, method=_q('method', '', 1400),
+                block=int(a['block']) if re.fullmatch(r'[0-9]{1,3}', a.get('block') or '') else None,
                 region=_q('region', '', 20) or None)
 
 _TB_PAPER_TABLE = {}                                   # path -> (mtime, epma_table): a paper is read once, not on every option typed
@@ -2360,11 +2422,13 @@ def _tb_epma_source(key):
         if not tab or not tab.get('rows'):
             raise ValueError('no analytical table found in %s' % os.path.basename(path))
         where = ('page %d' % tab['page']) if tab.get('page') else (tab.get('caption') or 'a table')[:60]
-        read = sum(r_['mean'] for r_ in tab['rows'] if r_.get('mean') is not None)
-        if tab.get('total') and abs(read - tab['total']) > 0.6:              # rows the reader missed (or took twice): never a silent partial table
+        read, agrees = PE.rows_add_up(tab['rows'], tab.get('total'))
+        if agrees is False:                                                  # rows the reader missed (or took twice): never a silent partial table
             where += ' — the rows read sum to %.2f, the table prints a total of %.2f: check the table' % (read, tab['total'])
         ds = EP.dataset_from_table(tab['rows'], '%s: %s' % (os.path.basename(path), where))
-        stem = os.path.splitext(os.path.basename(path))[0] + ('_docx' if path.lower().endswith('.docx') else '_paper')
+        # '<stem>_paper_table': Fill ▸ writes '<stem>_paper_epma.xlsx' (the reduction on the stated basis + its check sheet),
+        # and an export of the same paper must not replace it
+        stem = os.path.splitext(os.path.basename(path))[0] + ('_docx_table' if path.lower().endswith('.docx') else '_paper_table')
         return path, ds, stem, {r_['constituent']: r_['standard'] for r_ in tab['rows'] if r_.get('standard')}
     return MS['data'][key], MS['data'][key], os.path.splitext(key)[0], {}
 
@@ -2419,11 +2483,12 @@ def api_tb_epma(key):
     if err:
         return jsonify({'ok': False, 'error': err[0]}), err[1]
     ds, red, table, text = res
+    fin = lambda v: v if isinstance(v, (int, float)) and math.isfinite(v) else None      # NaN is no JSON: the page could not read the reply
     return jsonify({'ok': True, 'html': TB.render_html(EP.to_tabs(table, _tb_journal())), 'text': text,
-                    'formula': red.formula(), 'factor': red.factor, 'charge': red.charge, 'total': red.total,
+                    'formula': red.formula(), 'factor': fin(red.factor), 'charge': fin(red.charge), 'total': fin(red.total),
                     'formula_ideal': EP.laid_out_text(red.layout) if red.layout else '', 'layout_notes': red.layout_notes,
                     'blocks': red.blocks, 'block': red.block,
-                    'wt': [[k, round(r.wt, 3)] for k, r in red.rows.items()],
+                    'wt': [[k, fin(round(r.wt, 3))] for k, r in red.rows.items()],
                     'constituents': [c.formula for c in ds.constituents], 'n_points': len(ds.points), 'source': ds.source})
 
 @app.route('/api/tb/epma/<key>/export', methods=['POST'])
@@ -3060,7 +3125,12 @@ def api_ms_folder():
         return jsonify({'ok': False, 'broad': True, 'folder': folder, 'error': _ms_crowd(folder)}), 409
     if not ms_set_folder(folder):
         return jsonify({'ok': False, 'error': 'no .docx in %s (manuscripts are looked for in the folder itself, not its subfolders)' % folder}), 400
-    STATE['choose'] = None
+    if STATE.get('folder'):
+        STATE['choose'] = None
+    elif STATE.get('choose'):
+        # review mode still has nothing open (issue #13): it keeps its chooser, with a reason that says so — clearing it had
+        # left an empty list and disabled buttons, and no way back to the picker
+        STATE['choose'] = dict(STATE['choose'], reason='Manuscript mode has %s open; review mode has no entries folder yet — choose one.' % os.path.basename(folder.rstrip(os.sep)), broad=False)
     return jsonify({'ok': True, 'folder': MS['folder'], 'count': len(MS['order'])})
 
 @app.route('/api/ms/doc/<key>')
@@ -4330,6 +4400,10 @@ def _pick_port(pref, tries=25):
     return pref
 
 def main():
+    ap = _arg_parser()
+    return _main(ap, ap.parse_args())
+
+def _arg_parser():
     ap = argparse.ArgumentParser(description='Local review-mode GUI for the PXRD review tool.')
     ap.add_argument('folder', nargs='?', help='the entries folder (same one passed to annotate_review.py); without one the GUI opens on its folder chooser')
     ap.add_argument('--open-anyway', action='store_true', help='index the folder even when it is clearly not a batch (a home folder, a corpus root of hundreds of documents) instead of asking first')
@@ -4346,7 +4420,9 @@ def main():
     ap.add_argument('--import-triage', metavar='REPORT',
                     help="merge another reviewer's triage_report.txt (e.g. the one ICDD returns) into this "
                          "folder's triage before serving: their verdict and note land on each finding")
-    args = ap.parse_args()
+    return ap
+
+def _main(ap, args):
 
     # Nothing to open, or a folder that is clearly not a batch: the GUI comes up AT ONCE on its folder chooser. It used to
     # exit on the first, and on the second index and analyse every document under a home folder or a corpus root —
@@ -4378,7 +4454,8 @@ def main():
                      ('; not in this folder: ' + ', '.join(summ['unknown_entries'])) if summ['unknown_entries'] else ''))
         if (args.manuscript or not STATE['order']) and _ms_crowd(args.folder) and not args.open_anyway:
             # no 'broad': the page's 'Open it all' opens ENTRIES, which this folder has none of — Manuscript mode's own open asks, and takes the yes
-            STATE['choose'] = {'reason': _ms_crowd(args.folder) + ' (Manuscript mode opens it.)', 'folder': os.path.abspath(args.folder)}
+            STATE['choose'] = {'reason': _ms_crowd(args.folder) + ' (Manuscript mode opens it.)', 'folder': os.path.abspath(args.folder),
+                               'broad': True, 'manuscript': True}     # the page's 'Open it all' opens it in Manuscript mode (issue #13)
             STATE['folder'] = STATE['out_dir'] = None
             print('[review_gui] %s' % STATE['choose']['reason'])
         elif args.manuscript or not STATE['order']:

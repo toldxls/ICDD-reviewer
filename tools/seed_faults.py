@@ -45,9 +45,11 @@ F_SIZES = (0.02, 0.05, 0.10, 0.20)                 # relative, on one coefficien
 
 # ----------------------------------------------------------------------------- the four faults
 
-def _seed_wt(ex, frac):
+def _seed_wt(ex, frac, typo=False):
     """Scale the largest constituent by (1 + frac), in every column it appears in — a wt% that is
-    simply wrong, which the column-by-fit fallback cannot rescue. -> (ex, what was changed)."""
+    simply wrong, which the column-by-fit fallback cannot rescue. -> (ex, what was changed).
+    typo: the MEAN alone is mistyped — its range, s.d. and the printed total stay as the paper printed them (the
+    slip a reviewer actually finds; the table's own total then says one cell is off)."""
     ex = copy.deepcopy(ex)
     rows = (ex.get('epma') or {}).get('rows') or []
     if not rows:
@@ -57,6 +59,8 @@ def _seed_wt(ex, frac):
     was = r['mean']
     k = 1 + frac
     r['mean'] = round(was * k, 4)
+    if typo:
+        return ex, '%s %g -> %g (mean only)' % (r['constituent'], was, r['mean'])
     if r.get('all'):
         r['all'] = [round(v * k, 4) if v else v for v in r['all']]
     # the row's own range and s.d. move with it: a paper whose printed mean fell outside its own
@@ -187,6 +191,16 @@ def _run_one(job):
             except Exception as e:
                 v = 'error: %s' % e
             rows.append(('wt%', frac, v, what, has_apfu))
+        seeded.add('typo')
+        for frac in WT_SIZES:                                   # the same slip in the mean alone (range and total as printed)
+            hurt, what = _seed_wt(ex, frac, typo=True)
+            if hurt is None:
+                seeded.discard('typo'); break
+            try:
+                v = _verdict_comp(PE.check_composition(hurt, text))
+            except Exception as e:
+                v = 'error: %s' % e
+            rows.append(('typo', frac, v, what, has_apfu))
         if ex.get('basis'):
             seeded.add('basis')
             for kind in BASIS_FAULTS:
@@ -300,6 +314,7 @@ def main(pdf_dirs, out_dir, tag='', limit=None, only=None, subset=None, n_jobs=1
              'Papers seeded: formula %d, wt%% %d, basis %d, d %d' % (nseed('formula'), nseed('wt%'), nseed('basis'), nseed('d'))]
     lines += _ladder(rows, 'formula', F_SIZES, lambda s: '%g %%' % (100 * s))
     lines += _ladder(rows, 'wt%', WT_SIZES, lambda s: '%g %%' % (100 * s))
+    lines += _ladder(rows, 'typo', WT_SIZES, lambda s: '%g %% (mean only)' % (100 * s))
     lines += _ladder(rows, 'd', D_SIZES, lambda s: '%g %%' % (100 * s))
     lines += _ladder(rows, 'basis', BASIS_FAULTS, lambda s: s)
     # the apfu column was added as an oracle on 2026-09-07: where a paper prints one, a wt% the

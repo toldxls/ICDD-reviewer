@@ -1,0 +1,7 @@
+{
+  "name": "pxrd-review-gui-js-tests",
+  "private": true,
+  "description": "Dev-only: drives the GUI's page scripts in jsdom against a live test server (tests/test_gui_js.py). Never shipped.",
+  "type": "module",
+  "devDependencies": { "jsdom": "^26.0.0" }
+}

@@ -44,18 +44,25 @@ def formula_to_wt(apfu, oxides=None, apfu_by_key=False):
     """{'Pb':1,'U':3,'Se':2,'H2O':5} (O implied) -> {constituent: wt%} and the formula weight.
     Elements map to their usual oxide unless `oxides` says otherwise (e.g. {'Fe': 'Fe2O3', 'S': 'S'})."""
     oxides = oxides or {}
-    mass = OrderedDict(); fw = 0.0; by_key = OrderedDict()
+    mass = OrderedDict(); fw = 0.0; by_key = OrderedDict(); o_mass = 0.0
+    # a sulfide / selenide / telluride: its anion given as the element (--oxide S=S) and no O in the formula — the
+    # cations stay elements too (ZnS is Zn + S, 97.47; the oxide route had made it ZnO + S, 113.44). Gladstone–Dale then
+    # has no constant for them, and says so (kc's MISSING rows), rather than an index from oxides the mineral lacks.
+    no_oxygen = not apfu.get('O') and any(oxides.get(a) == a for a in ('S', 'Se', 'Te') if a in apfu)
     for el, n in apfu.items():
         if el == 'O':
             continue
         # an element maps to its usual oxide (S -> SO3; pass --oxide S=S for a sulfide); a constituent
         # written as such (H2O, F, Cl, CO2, Fe2O3) is kept
-        key = oxides.get(el) or (el if el in ('H2O', 'F', 'Cl', 'Br', 'CO2', 'NH3') or re.search(r'\d|O', el) else USUAL_OXIDE.get(el, el))
+        key = oxides.get(el) or (el if el in ('H2O', 'F', 'Cl', 'Br', 'CO2', 'NH3') or re.search(r'\d|O', el) or no_oxygen else USUAL_OXIDE.get(el, el))
         c = EP.parse_constituent(key)
         if el == 'H' and c.kind == 'water':
             n = n / 2.0                                          # H atoms, two to a water: 'Mg=1,H=2' is brucite (58.32), not Mg(OH)2·H2O (76.33)
-        m = n * c.mw / (c.n_cat if c.kind != 'water' else 1)     # mass of this constituent per formula unit
+        mol = n / (c.n_cat if c.kind != 'water' else 1)          # formula units of this constituent per formula unit
+        m = mol * c.mw                                           # its mass per formula unit
         mass[key] = mass.get(key, 0.0) + m
+        if c.kind in ('oxide', 'other'):
+            o_mass += mol * (getattr(c, 'n_o', 0) or 0) * EP.ATOMIC_WEIGHTS['O']   # the oxygen the oxides carry
         by_key[key] = by_key.get(key, 0.0) + n
     if apfu_by_key:
         return by_key                                          # the apfu each constituent stands for (Fe and Fe2O3 given together add up)
@@ -64,6 +71,7 @@ def formula_to_wt(apfu, oxides=None, apfu_by_key=False):
     hal = sum(mass[k] for k in mass if k in ('F', 'Cl', 'Br'))
     # O=F correction to the formula weight: the oxides double count the oxygen a halogen replaces
     corr = sum(apfu.get(h, 0) * EP.ATOMIC_WEIGHTS['O'] / 2 for h in ('F', 'Cl', 'Br') if h in apfu)
+    corr = min(corr, o_mass)                                     # never more O than the oxides carry: NaCl with --oxide Na=Na (58.44, not 50.44), NH4Cl
     fw -= corr
     wt = OrderedDict((k, m / fw * 100) for k, m in mass.items())
     if corr:
@@ -121,7 +129,13 @@ def report_text(res, name=''):
                      % (res['n'], lab, D, res['KP_' + key], res['KC'], res['CI_' + key], category(res['CI_' + key])))
     missing = [r[0] for r in res['rows'] if r[2] is None]
     if missing:
-        L.append('  no constant for: %s — add it to data/gd_constants.json or pass --k' % ', '.join(missing))
+        elements = [m for m in missing if re.fullmatch(r'[A-Z][a-z]?', m)]
+        if elements and len(elements) == len(missing):
+            L.append('  no constant for: %s — Mandarino\'s constants are for oxides: a sulfide / selenide has none, and its index '
+                     'is not a Gladstone–Dale check (or pass --k for each)' % ', '.join(missing))
+        else:
+            L.append('  no constant for: %s — add it to data/gd_constants.json or pass --k' % ', '.join(missing))
+    L += ['  ' + n for n in res.get('notes', [])]
     return '\n'.join(L)
 
 def summary(res):
@@ -168,6 +182,8 @@ def prepare(formula=None, wt=None, oxide=None, n=None, density=None, cif=None, z
     if not wt_:
         raise ValueError('nothing parsed from the composition — use X=value,X=value')
     res = evaluate(wt_, float(n), float(density) if density else None, cif, float(z) if z else None, _parse_pairs(k) if k else None, fw)
+    if cif and not fw:
+        res['notes'] = res.get('notes', []) + ['no D_calc: the density from the .cif needs a formula weight, and wt% alone give none — give the formula (apfu) instead']
     res['o_corr'] = sum(v for k_, v in wt_.items() if k_.startswith('O='))     # the O ≡ F,Cl deduction: no constant, but part of the total
     if formula and formula.strip():
         res['apfu'] = True; res['apfu_by_key'] = by_key; res['wt_keys'] = [k_ for k_ in wt_ if not k_.startswith('O=')]   # what the workbook derives the wt% from
@@ -230,7 +246,10 @@ def write_xlsx(res, path, name='', paper=None):
             r = d0 + 1 + j; c = EP.parse_constituent(key)
             ws.append([key, res['apfu_by_key'][key], EP._mw_formula(c), '=B%d*C%d/F%d' % (r, r, r), '=100*D%d/$D$%d' % (r, r_fw), c.n_cat if c.kind != 'water' else 1])
         hal = [d0 + 1 + j for j, key in enumerate(keys) if key in ('F', 'Cl', 'Br')]
-        ws.append(['O ≡ F,Cl', '', '', ('=-(%s)*%s/2' % ('+'.join('B%d' % h for h in hal), EP.ATOMIC_WEIGHTS['O'])) if hal else 0,
+        # never more O than the oxides carry (formula_to_wt's cap): Σ apfu/cations × O of each oxide row, live
+        ox_o = ['B%d/F%d*%d' % (d0 + 1 + j, d0 + 1 + j, EP.parse_constituent(key).n_o) for j, key in enumerate(keys)
+                if EP.parse_constituent(key).kind in ('oxide', 'other') and EP.parse_constituent(key).n_o]
+        ws.append(['O ≡ F,Cl', '', '', ('=-MIN((%s)*%s/2,(%s)*%s)' % ('+'.join('B%d' % h for h in hal), EP.ATOMIC_WEIGHTS['O'], '+'.join(ox_o) or '0', EP.ATOMIC_WEIGHTS['O'])) if hal else 0,
                    ('=100*D%d/$D$%d' % (r_corr, r_fw)) if hal else 0, 'half an O per F, Cl: the oxides count an oxygen the halogen replaces'])
         ws.append(['formula weight', '', '', '=SUM(D%d:D%d)' % (d0 + 1, r_corr)])
     for col, w in zip('ABCDEF', (22, 12, 22, 22, 12, 60)):
@@ -370,6 +389,8 @@ def _parse_pairs(s):
     for tok in (s or '').split(','):
         if '=' in tok:
             k, v = tok.rsplit('=', 1) if tok.strip().startswith('O=') else tok.split('=', 1)   # 'O=F=-1.47': the deduction a table prints
+            if k.strip() in out:
+                raise ValueError('%s is given twice (%s): the second would replace the first' % (k.strip(), s))
             out[k.strip()] = float(v)
     return out
 

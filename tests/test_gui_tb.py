@@ -3,7 +3,7 @@
     python3 -m unittest tests.test_gui_tb -v
 
 A rutile .cif, a small probe .csv and an obs / calc peak-list pair in a temp folder; no browser."""
-import json, os, shutil, tempfile, unittest
+import json, os, shutil, tempfile, unittest, urllib.parse
 
 from tests.test_tables import RUTILE
 from tests.test_pxrd_table import OBS, CALC
@@ -113,6 +113,22 @@ class TablesMode(unittest.TestCase):
         self.assertEqual((r['blocks'] and len(r['blocks']), r['block']), (1, 0))       # one block: the chooser stays hidden
         self.assertEqual(self._get('/api/tb/epma/probe.csv?basis=O%3D8&block=0')['block'], 0)
         self.assertEqual(self.c.get('/api/tb/epma/probe.csv?basis=O%3D8&block=5').status_code, 400)
+        self.assertEqual(self._get('/api/tb/epma/probe.csv?basis=O%3D8&block=%C2%B2')['block'], 0)   # '²' is no block number: ignored
+        # a column 'n.d.' on every point: valid JSON (a NaN had made the page fail to read the reply)
+        nd = os.path.join(self.tmp, 'nd_probe.csv')
+        with open(nd, 'w') as f:
+            f.write('pt,CaO,SiO2,MnO\n1,40.0,59.0,n.d.\n2,41.0,58.0,n.d.\n')
+        try:
+            self.G.MS['data']['nd_probe.csv'] = nd
+            raw = self.c.get('/api/tb/epma/nd_probe.csv?basis=O%3D3').data
+            json.loads(raw, parse_constant=lambda c: self.fail('a %s in the reply' % c))
+            # a csv's 'sheet' is its file name, however long: a range on it is read
+            longname = 'probe_' + 'x' * 90 + '.csv'; lp = os.path.join(self.tmp, longname)
+            shutil.copy(nd, lp); self.G.MS['data'][longname] = lp
+            q = urllib.parse.quote(longname)
+            self.assertEqual(self.c.get('/api/tb/epma/%s?basis=O%%3D3&sheet=%s&region=A1:C3' % (q, q)).status_code, 200)
+        finally:
+            self.G.MS['data'].pop('nd_probe.csv', None); self.G.MS['data'].pop(longname, None)
         g = self._get('/api/tb/epma/probe.csv/grid')                                  # the sheet picker: cells, sheets, blocks with their boxes
         self.assertEqual((g['sheets'], g['default'], g['blocks'][0]['box']), (['probe.csv'], 0, [0, 1, 3, 4]))   # B1:E4
         self.assertEqual(g['rows'][0][:2], ['point', 'CaO'])
@@ -323,8 +339,11 @@ class DocxPaper(unittest.TestCase):
         e = json.loads(self.c.get('/api/tb/epma/paper:Rutile%20manuscript?basis=O%3D2&ideal=TiO2').data)
         self.assertTrue(e['ok'], e); self.assertEqual(e['n_points'], 1); self.assertIn('Rutile manuscript.docx', e['source'])
         self.assertTrue(e['formula_ideal'].startswith('Ti0.99O2'), e['formula_ideal']); self.assertTrue(any('Fe' in n for n in e['layout_notes']))
+        check_wb = os.path.join(self.tmp, 'review_out', 'Rutile manuscript_docx_epma.xlsx')   # Fill ▸'s reduction + check sheet
+        before = os.path.getmtime(check_wb) if os.path.exists(check_wb) else None
         x = json.loads(self.c.post('/api/tb/epma/paper:Rutile%20manuscript/export?fmt=xlsx&basis=O%3D2').data)
-        self.assertEqual(x['file'], 'Rutile manuscript_docx_epma.xlsx')
+        self.assertEqual(x['file'], 'Rutile manuscript_docx_table_epma.xlsx')            # its own name: Fill ▸'s workbook is not replaced
+        self.assertEqual(os.path.getmtime(check_wb) if os.path.exists(check_wb) else None, before)
         self.assertEqual(self.c.get('/api/tb/epma/paper:nope?basis=O%3D2').status_code, 404)
         self.assertEqual(self.c.get('/api/ms/pdf/nope.pdf/page/1.png').status_code, 404)   # a page only of the folder's own papers
 

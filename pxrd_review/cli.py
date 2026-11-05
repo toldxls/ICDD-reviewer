@@ -152,15 +152,55 @@ def _is_temp(folder):
     t = os.path.realpath(tempfile.gettempdir()); f = os.path.realpath(folder)
     return f == t or f.startswith(t + os.sep)
 
+import threading, contextlib
+_MEM_LOCK = threading.Lock()                 # the GUI's request threads share the launcher memory
+
+@contextlib.contextmanager
+def _mem_locked():
+    """The launcher memory's read-modify-write held against other THREADS (the lock) and other PROCESSES (an OS lock on a
+    sidecar file: the launcher and a GUI write the same file; a threading lock alone lost half the keys of two processes)."""
+    with _MEM_LOCK:
+        fh = None
+        try:
+            fh = open(MEM + '.lock', 'a+b')
+            if os.name == 'nt':
+                import msvcrt
+                fh.seek(0); msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)   # retries for ~10 s, then raises: written unlocked then
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except Exception:
+            pass                                 # a lock that cannot be taken (a read-only share): write as before
+        try:
+            yield
+        finally:
+            if fh:
+                try:
+                    if os.name == 'nt':
+                        import msvcrt
+                        fh.seek(0); msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except Exception:
+                    pass
+                fh.close()                       # closing releases a flock
+
 def _save(sub, folder):
     if is_broad_path(folder) or _is_temp(folder):
         return                                  # reopening a home folder or a drive by itself next time helps nobody; a temp folder (a test's) is gone by then
-    d = _load(); d[sub] = os.path.abspath(folder)
-    d['recent'] = ([d[sub]] + [f for f in (d.get('recent') or []) if f != d[sub]])[:8]
     try:
         os.makedirs(os.path.dirname(MEM), exist_ok=True)
-        with open(MEM, 'w', encoding='utf-8') as f:
-            json.dump(d, f, indent=1)
+        # written whole and swapped in (issue #13): two GUI folder switches close together, or the launcher and the GUI
+        # at once, could leave a half-written file — or one writer's key lost. Load–modify–write under a lock, atomic replace.
+        with _mem_locked():
+            d = _load(); d[sub] = os.path.abspath(folder)
+            d['recent'] = ([d[sub]] + [f for f in (d.get('recent') or []) if f != d[sub]])[:8]
+            tmp = '%s.%d.tmp' % (MEM, os.getpid())
+            try:
+                with open(tmp, 'w', encoding='utf-8') as f:
+                    json.dump(d, f, indent=1)
+                os.replace(tmp, MEM)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)               # a replace refused (Windows: the file held open) leaves no stray .tmp
     except Exception:
         pass
 

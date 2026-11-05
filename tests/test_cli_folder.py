@@ -35,6 +35,18 @@ class FolderMemory(unittest.TestCase):
         self._tmp = cli._is_temp; cli._is_temp = lambda f: False                # these batches live in a temp dir
         self.addCleanup(lambda: setattr(cli, '_is_temp', self._tmp))
 
+    def test_memory_written_whole_by_concurrent_writers(self):
+        # issue #13: load–modify–write under a lock with an atomic replace — no key lost, no half-written file
+        import threading
+        batches = []
+        for k in range(8):
+            b = os.path.join(self.t.name, 'batch %d' % k); os.makedirs(b); batches.append(b)
+        ts = [threading.Thread(target=cli._save, args=('sub%d' % k, b)) for k, b in enumerate(batches)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        d = cli._load()
+        self.assertEqual({k for k in d if k.startswith('sub')}, {'sub%d' % k for k in range(8)})
+        self.assertFalse([f for f in os.listdir(self.t.name) if f.endswith('.tmp')])
+
     def test_a_home_folder_or_a_drive_is_never_remembered(self):
         self.assertTrue(cli.is_broad_path(os.path.expanduser('~')))
         self.assertTrue(cli.is_broad_path(os.path.abspath(os.sep)))

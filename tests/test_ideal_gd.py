@@ -120,6 +120,21 @@ class BasisSensitivity(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class PolyanionValences(unittest.TestCase):
+    def test_the_oh_written_apart(self):
+        # the hydrogen-arsenate / -sulfate / -selenate / -tellurate group with its OH written apart is the higher valence
+        for f, want in (('Mg(AsO3(OH))·4H2O', {'As': 5}), ('MgAsO3OH·4H2O', {'As': 5}), ('Pb3(AsO3)2', {'As': 3}),
+                        ('Li(UO2)(SO4)5(SO3OH)(H2O)', {'U': 6, 'S': 6}), ('CaSeO3(OH)', {'Se': 6}), ('CaSeO3·H2O', {'Se': 4}),
+                        ('K(TeO3(OH))', {'Te': 6}), ('PbTeO3', {'Te': 4})):
+            self.assertEqual(PE.formula_valences(f), want, f)
+        L = PE.ideal_wt_check('The ideal formula is Mg(AsO3(OH))·4H2O, which requires MgO 17.06, As2O5 48.63, H2O 34.91, total 100.60 wt%.', {})
+        self.assertIn('As2O5 48.63', L[0]); self.assertIn('H2O 34.91 in the text vs 34.31 from the ideal formula', L)
+
+    def test_a_list_mostly_off_keeps_its_own_arithmetic(self):
+        L = PE.ideal_wt_check('The ideal formula is CuZn(SO4)2 which requires CuO 25.38, ZnO 26.35, SO3 49.87, total 100.00 wt.%.', {})
+        self.assertIn('(information)', L[1]); self.assertEqual(L[2], 'the ideal wt% listed in the text add to 101.60 vs the total printed, 100.00')
+
+
 class ChargeBalance(unittest.TestCase):
     EX = {'name': None, 'epma': {'rows': [{'constituent': 'MgO', 'mean': 17.7}, {'constituent': 'As2O5', 'mean': 45.9}, {'constituent': 'H2O', 'mean': 36.0}]}}
 

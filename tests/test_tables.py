@@ -68,6 +68,11 @@ class Rutile(unittest.TestCase):
         (c,) = codes.legend()
         self.assertEqual((c['op'], c['shift'], c['used']), ('−y−½, x+3/2, z+3/2', [-1, 1, 1], ['Ti1–O1 (1.9800)']))
 
+    def test_symcode_legend_keeps_a_non_nklm_code_s_bonds(self):
+        codes = T.SymCodes(self.st); codes.begin_table('bonds')
+        codes.index('#1', 'Ti1–O1'); codes.index('3_555', 'Ti1–O2'); codes.index('#1', 'Ti1–O3')
+        self.assertEqual([(c['code'], c['used']) for c in codes.legend()], [('#1', ['Ti1–O1', 'Ti1–O3']), ('3_555', ['Ti1–O2'])])
+
     def test_bvs_table(self):
         bvs = dict(self.tabs)['bvs']
         rows = [[T.plain(c) for c in r] for r in bvs['rows']]
@@ -166,3 +171,4 @@ class Computed(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

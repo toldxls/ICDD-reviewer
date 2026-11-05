@@ -342,18 +342,23 @@ def _fmt_cell(cell, system):
     return s
 
 
-_KA = re.compile(r'\b(Cu|Mo|Co|Cr|Fe|Ag)\s*K\s*[αa]', re.I)
-_POWDER_WORDS = re.compile(r'powder|PXRD|XRPD|Gandolfi|Debye|Guinier|diffractometer with a curved|image[- ]plate', re.I)
+_KA = re.compile(r'\b(Cu|Mo|Co|Cr|Fe|Ag)[\s-]*K\s*[αa]', re.I)                  # 'Cu Kα', 'CuKα', 'Cu-Kα'
+_POWDER_WORDS = re.compile(r'powder|PXRD|XRPD|Gandolfi|Debye|Guinier|diffractometer with a curved|image[- ]plate|imaging[- ]plate|curved|microdiffractometer', re.I)
 _OTHER_WORDS = re.compile(r'microprobe|\bWDS\b|\bEDS\b|analy[sz]ing crystal|emission|X-ray line|flank|single[- ]crystal|SCXRD|structure (?:refinement|solution)', re.I)
 
 def powder_radiation(text):
     """The anode of the POWDER data: the 'X Kα' a sentence about the powder pattern names. The first Kα of the text had
     been taken — a microprobe's 'ninth-order Fe Kα line' and a single-crystal 'Mo Kα tube' put the powder pattern at the
-    wrong wavelength. Each mention is scored on the 250 characters before it and 80 after: powder words for it, microprobe
-    and single-crystal words against; the best, the earliest among equals. -> 'Cu' | 'Mo' | … or None."""
+    wrong wavelength. Each mention is scored on the 250 characters before it and the rest of its own sentence: powder
+    words for it, microprobe and single-crystal words against; the best, the earliest among equals. -> 'Cu' | 'Mo' | … or None.
+    Scored against the anode the ICDD entries record for 408 corpus papers (2026-11-01): 372 right before, 377 with the
+    sentence end, 'Cu-Kα' and the imaging-plate words; a longer single-crystal word list, a penalty for a calculated
+    pattern and refusing a negative score each cost papers, and were left out."""
     best = None
     for m in _KA.finditer(text or ''):
-        ctx = text[max(0, m.start() - 250): m.end() + 80]
+        # never into the next sentence: 'Mo Kα radiation for the structure refinement. Powder data were …' credited the Mo
+        stop = re.search(r'[.!?](?:\s|$)', text[m.end():m.end() + 80])
+        ctx = text[max(0, m.start() - 250): m.end() + (stop.start() if stop else 80)]
         sc = 2 * len(_POWDER_WORDS.findall(ctx)) - len(_OTHER_WORDS.findall(ctx))
         if best is None or sc > best[0]:
             best = (sc, m.group(1).capitalize())

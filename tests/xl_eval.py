@@ -50,7 +50,9 @@ def _countifs(pairs, vals=None):
 def _text(v, f):
     f0 = f.split(';')[0]
     d = f0.split('.')[1] if '.' in f0 else ''
-    out = '%.*f' % (len(d), v)
+    from decimal import Decimal, ROUND_HALF_UP                        # Excel rounds half away from zero on the shortest decimal
+    q = Decimal(repr(float(v))).quantize(Decimal(1).scaleb(-len(d)), rounding=ROUND_HALF_UP)
+    out = '%.*f' % (len(d), q) if q else '%.*f' % (len(d), 0.0)
     if '#' in d:
         out = out.rstrip('0').rstrip('.')
     return ('+' if f0.startswith('+') and v >= 0 else '') + out

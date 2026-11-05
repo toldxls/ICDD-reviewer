@@ -147,6 +147,12 @@ class PowderRadiation(unittest.TestCase):
         self.assertEqual(PA.powder_radiation(t), 'Co')
         self.assertEqual(PA.powder_radiation('Data were collected with Cu Kα radiation.'), 'Cu')
         self.assertIsNone(PA.powder_radiation('no radiation named'))
+        # the next sentence does not vouch for a mention: its powder words belong to its own Kα
+        self.assertEqual(PA.powder_radiation('The single-crystal study used Mo Kα radiation for the structure refinement. '
+                                             'Powder data were collected with Cu Kα radiation (λ = 1.5406 Å).'), 'Cu')
+        self.assertEqual(PA.powder_radiation('Powder data were collected with Cu-Kα radiation. The single-crystal study used MoKα.'), 'Cu')
+        self.assertEqual(PA.powder_radiation('Powder X-ray diffraction data were obtained with a Rigaku R-Axis Rapid II. '
+                                             'Data were collected with MoKα radiation (λ = 0.71075 Å).'), 'Mo')
 
     def test_a_barred_index(self):
         from pxrd_review import paper_extract as PE

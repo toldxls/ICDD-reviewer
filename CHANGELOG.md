@@ -64,6 +64,138 @@ package version in `pyproject.toml`.
 - A csv cell reading `NaN` / `inf` stays text: as a number it made the sheet panel's JSON unreadable.
 - `pxrd epma --block 0` is an error, not the default block.
 
+### Fixed — a second review of 0.19.0 and 0.20.0 (four reviewers, every defect reproduced first)
+**The probe-workbook reader** (old vs new over 137 working workbooks: no plausible read lost, 21 default blocks changed —
+each read by hand, every one the fix intended or a larger plausible block winning on size):
+- An oxide with a suffix is read whole — `Fe2O3t`, `FeOtot`, `SiO2wt%`, `CO2calc` had been read as Fe2O, SiO, CO (wrong
+  valence) or dropped (`FeOt`: the block had no Fe). Words in capitals (`CORE`, `NOTE`, `SOURCE`), another quantity's
+  column (`Si %ERR`, a detection limit, a k-ratio), `H2O−` and a stage-coordinate `Y` are no constituents.
+- Average / Std Dev / StdErr / Minimum / Maximum rows — and the unlabelled rows under an Average — are no analysis points
+  (one export had read 11 points for 7, another 18 for 8).
+- A header row is cut where the element wt% turn into the oxide wt% (an export that prints both had lost its SiO2 to the
+  element run and read a counting-error column as Si), and at a Total or a label heading between two tables side by
+  side; a column with names under its header (a block down a column beside it) is left out. Of two plausible blocks,
+  one in oxides before one in elements.
+- Down a column: the wt% column is looked for among the block's own columns only (another block's Wt% column had been
+  read as the analysis), a named column with blanks still counts, a column of molecular or atomic weights is never an
+  analysis, an 'ideal' heading over the value or MW column marks a composition, several `wt%` columns are points (the
+  mean alone beside a mean column), and a range picked without its header stops at the MW column.
+- Numbers stored as text in an .xlsx are read; a `;` csv with decimal commas and a whitespace .txt are read; a column
+  `n.d.` on every point is 0 (a NaN had turned every apfu into NaN and the GUI's reply into invalid JSON); an unreadable
+  workbook is an error message, not a traceback.
+
+**The ideal formula's layout (`--ideal`):**
+- A bare element beside a written valence takes only the other valence's rows: `(Mg,Fe)Fe3+2O4` wrote 4.25 Fe where 2.25
+  were analysed. The Ideal column follows the valences (magnetite FeO 31.03 / Fe2O3 68.97, it had given FeO 100).
+- A site holding an analysed member that cannot be placed is written as typed, and its other members are said to be in
+  it (they had vanished, the vacancy taking their share); a valence with no row of its own is said, also for an element
+  analysis (a sulfide's Cu, Fe).
+- `.` and `*` as the hydrate dot (`CaSO4.2H2O` had read 2.2 as a count); `·nH2O` and `·(10-12)H2O` said in a note;
+  mismatched brackets refused; `(OH-)` read as (OH).
+- The Ideal column deducts O ≡ F, Cl as the analysis does (apatite's CaO 55.60, F 3.77, O=F −1.59); an ammonium group's H
+  stays on the (NH4)2O row (it had gone to H2O).
+- A value is rounded half away from zero, as Excel's TEXT() does: 0.125 had read 0.12 in the text and 0.13 in the cell.
+
+**Tables mode:**
+- Exporting a paper's analytical table writes `<paper>_paper_table_epma.xlsx`: it had overwritten Fill ▸'s
+  stated-basis workbook and its check sheet.
+- Fill ▸ (and the Manuscript mode's Tables ▸) start the new probe file from its own default block, as every other
+  change of file does; an open sheet panel is redrawn for the new file (its stale blocks had read their numbers from it);
+  typing a sheet name drops a block number picked on the whole-file list; another folder clears the hidden block, range
+  and sheet; every tab's options are saved (one timer had saved only the last tab Fill ▸ set); a drag released outside
+  the grid ends; a late sheet reply never draws over a newer one.
+- A csv's long name works as the range's sheet; a block number in another script's digits is ignored.
+- The symmetry-code cheat sheet keeps the first bond of a code not in n_klm form; the entries' findings splitter is
+  disabled again when its pane folds (the Manuscript mode's had been found first).
+
+**Paper checks:**
+- `AsO3(OH)`, `SO3OH`, `SeO3(OH)`, `TeO3(OH)` are the hydrogen-arsenate … groups, As5+ / S6+ / Se6+ / Te6+ (read as
+  arsenite, sulfite …, the ideal-wt% check had compared the wrong oxides and hidden a real slip).
+- The powder anode: a Kα mention's score no longer reaches into the next sentence (a 'Powder data …' sentence had vouched
+  for the single-crystal Mo Kα before it); 'Cu-Kα' is read; an imaging-plate / curved / microdiffractometer sentence counts
+  as a powder one. Against the anode the ICDD entries record for 408 corpus papers: 372 right → 377, none lost (a longer
+  single-crystal word list, a penalty for calculated patterns and refusing a negative score were measured too, and cost).
+- When most of an ideal-wt% list disagrees, the line on the list's own total is kept.
+
+### Added — the analysis table's own total as an oracle (`paper_extract._check_formula`)
+- **One mistyped cell, named.** When the rows of the analytical table do not add to the Total it prints, and moving exactly
+  ONE constituent by that gap makes every coefficient of the paper's formula follow on the same basis (clearly better than
+  the table as printed, and than any other cell), that cell is the slip: 'Ag 63.46 wt% in the table vs 64.38 that both the
+  printed total (100.99) and the formula call for — the rows add to 100.07'. It runs also when the formula passes: a 20 %
+  slip in the largest oxide moves its cation by ~5 % after the normalisation, inside the comparison's tolerance, and only the
+  table's sum says something is off. Guards, each from a corpus false alarm: the sum is of the rows as printed (an SO4 row
+  the reduction converts is still 14.58 in the paper's total); never an element printed in two valences (a total-iron row
+  beside the FeO/Fe2O3 split); the corrected mean must lie inside the row's own printed range, and a mean equal to an end of
+  its range is the reader's; the moved cell must improve the fit (a calculated C or B fits any gap); never on a basis read
+  off the formula's own sum. Over 1,316 local papers and proposals: one line, a real slip in a proposal's table; no paper
+  reader status moved (1,144 papers). Seeded faults (`tools/seed_faults.py`, which gains a 'typo' fault: the MEAN alone
+  mistyped, its range and the printed total as the paper has them): a typo of 2 % caught 0 → 37 %, of 5 % 7 → 44 %; a value
+  wrong everywhere (its range scaled too) of 2 % 0 → 21 %, of 5 % 7 → 21 %; above 10 % unchanged — there the formula itself
+  cannot tell which cell (a calculated CO2, a cation-sum basis diluting the dominant cation). Measured and NOT built: a line
+  for every table whose rows miss the total while the formula fits — 90 real papers, nearly all rows the reader dropped.
+- The Total of an analytical table is read under the Mean column, as each constituent is ('Total 1.3 99.5' had given 1.3);
+  `rows_add_up` (net of an O ≡ F, Cl the table deducts on its own line) decides the EPMA tab's 'the rows read miss the
+  printed total' warning — a fluorine-bearing table had been warned about wrongly. Tables whose rows add to their total:
+  524 → 596 of 771 corpus, 98 → 105 of 142 proposals.
+
+### Added — the paper's band assignments checked against themselves (`spectro.assignment_lines`, the spectroscopy section)
+- **Mode order** (a finding): a ν1 of SO4, PO4, CO3 or UO2 standing above every ν3 of the same group, both in its stretching
+  region — the labels look swapped. None on the corpus (rare by nature); pinned by tests.
+- **Wrong mode number** (information): a band outside its mode's range in minerals where another mode of the same group holds
+  it — only from a sentence making one assignment, with no second mode word, exception or negation, and only on ranges
+  verified or measured on ≥ 8 papers (silicates left out until ranges by polymerisation are sourced). Corpus + proposals:
+  6 lines on 5 papers, each the paper's own assignment (a sulfate ν1 at 1100 cm⁻¹, carbonate ν1 shoulders at 993 / 901 …).
+- **One band, two assignments** (information): two numbered modes of one group in two sentences (2 lines on the corpus).
+- Stated distances: an information line now gives the paper's value first and the relation's second ('O···O 2.78 Å stated
+  for the band at 3330 cm⁻¹; Libowitzky (1999) gives 2.76 Å for it' — it had read 'stated 2.76 Å by Libowitzky'); a band
+  PREDICTED from a distance and rounded ('predicts bands at about 3600 … for O···O = 3.153 Å') is compared with the relation's
+  own band for that distance (3579 cm⁻¹: reproduced) instead of being told the curve ends at 3592. Measured on the proposals:
+  27 cite a relation, 106 claims read, 63 reproduced; no proposal with a relation-and-distance sentence goes unread.
+- Measured, not built: a proposal's band list repeated with the same numbers in another document — 12 of 64 proposals,
+  every one the same mineral's own published paper or a reviewer's copy; none from a different mineral.
+- Reader: two modes of one group named in a row with 'respectively'; 'symmetric and antisymmetric stretching' named jointly
+  is a plain stretch; a textbook description of the free ion is not the mineral's; a water molecule's rocking is a libration.
+
+### Fixed — how the band reader pairs a band with its assignment (`spectro.bands`)
+Measured on the band assignments of 111 proposals against the band library: of the assignments outside their mode's
+range, 18 of 28 had been the reader's pairing, not the paper's; now none of the 10 left is. Across the corpus the reader
+assigns 2,859 bands (2,699 before), no stated-distance verdict and no paper-reader status moved.
+- A band in parentheses goes with the assignment whose words it stands in ('H–O–H bending (at 1675 cm⁻¹) vibrations of
+  H2O and C–O stretching …' had given it to the carbonate), with a numbered mode in the same parentheses ('(at 964 cm⁻¹,
+  A1(ν1) mode)'), or with the assignment just before; a parenthesis ending 'respectively' pairs its bands in order with the
+  modes listed before it (ν3, ν1, ν4 of PO4 at 1072, 1001 and 500–600 cm⁻¹).
+- 'Of PO4 and CO3, respectively' pairs each; groups named jointly without it ('the stretching modes of both H2O and NH4+')
+  claim no band; a run of bands takes the assignments after it only if it uses them.
+- An oxyanion or polyhedron the reader does not list (VO5, WO6, TiO6, CO2) is a group of its own — its mode was handed to
+  the uranyl or the group before it; 'M–O,OH' is one bond; 'As5+–O stretching of AsO4' is the arsenate's mode; Si2O7, SiO3
+  and the word 'silicate' are silicate (the word had never matched); 'CO2- 3' as pdf text writes CO3²⁻; 'PO4 n3' is ν3.
+- Mode words and merged names never reach across a ';', an 'or' or another band; '… were not observed' after a list
+  negates the list (and a 'which is not present' on its last band does not); '1200 cm⁻¹ – 600 cm⁻¹' is a range;
+  '607 (O–Si–O stretch)' takes its own parentheses.
+
+### Fixed — open issues #19, #14, #16, #13
+- **`pxrd gd` formula weights (#19)**: a sulfide given its anion as the element (`--oxide S=S`, no O) keeps its cations as
+  elements (ZnS 97.44, it had been ZnO + S, 113.44) and says Mandarino's constants are for oxides; the O ≡ F,Cl deduction
+  never takes more O than the oxides carry (NaCl with `--oxide Na=Na` 58.44, it had been 50.44; NH4Cl 53.49), in the
+  workbook's live formula too; `--cif` with `--wt` says why there is no D_calc; a key given twice is an error.
+- **The .pdf pane on rotated pages (#14)**: word boxes and search hits are mapped into the frame the page is drawn in — on
+  a /Rotate 90 or 270 page (a landscape table: 162 pages in 57 corpus papers) every box had missed its word.
+- **The measured-cation basis line (#16)** names what it leaves out as the paper has it: '(calculated, as the paper says)'
+  only where the method sentence says so — 'not counted in the stated N' otherwise (three corpus papers say their CO2 was
+  not analysed, and had been told it was calculated) — and an SO3 row is tried counted as a cation too (Na6(CO3)(SO4)2 on
+  8 cations reproduces on Na + S). 130 corpus papers state a cation basis: no verdict changed.
+- **GUI folder follow-ups (#13)**: 'Update now' relaunches on the folder that is open (it had come back on the chooser);
+  the launcher memory is written under a lock and swapped in whole; review mode keeps its chooser after a folder is opened
+  in Manuscript mode; a start-up folder of papers opens in Manuscript mode from the chooser's 'Open it all', and
+  confirming a crowded folder in Manuscript mode no longer opens it as entries.
+
+### Added — the page scripts under test (`tests/test_gui_js.py`, `tests/js/`)
+- The GUI's browser code had no test: the Flask test client cannot run it. `tests/test_gui_js.py` starts the real server
+  on a scratch folder, loads the page in jsdom (a dev-only dependency: `cd tests/js && npm install`; the test skips
+  itself without node or jsdom) and drives the Tables ▸ EPMA flows where the review's state bugs were: another probe file
+  from the sidebar, the same file again, a typed sheet, the sheet panel following the file, a late sheet reply, a change
+  of folder, the per-tab save timers. Run against the tb.js before the review's fixes, five of the seven fail.
+
 ## [0.20.0] — 2026-10-30
 **The EPMA tab takes the sheets people actually keep.** A worked-up spreadsheet lists the oxides down a column with their wt%
 beside it; a probe export prints the analysis twice (oxide and element wt%); a working file holds several blocks — raw

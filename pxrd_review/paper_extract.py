@@ -20,7 +20,7 @@ reviewer can see why. Nothing here decides — the EPMA / GD / PXRD tools take t
 """
 import os, re, sys, json, math, argparse, functools, gzip, pickle, hashlib, inspect
 from collections import namedtuple
-from collections import OrderedDict
+from collections import OrderedDict, Counter
 
 from pxrd_review import epma as EP
 
@@ -839,6 +839,18 @@ def _continued_pages(pages):
         out[k - 1] = (k - 1, list(prev[:q + 1]) + moved)
     return out
 
+def rows_add_up(rows, total, slack=0.6):
+    """(sum of the rows' means, whether it is the printed total) — net of the O ≡ F, Cl a table deducts on its own line, which
+    the reader does not take as a row (a fluorine-bearing table's rows add to the total PLUS 0.42 × F + 0.23 × Cl)."""
+    read = sum(r['mean'] for r in rows if r.get('mean') is not None)
+    if not total:
+        return read, None
+    f = sum(r['mean'] for r in rows if r.get('constituent') == 'F' and r.get('mean') is not None)
+    cl = sum(r['mean'] for r in rows if r.get('constituent') == 'Cl' and r.get('mean') is not None)
+    net = read - 0.4211 * f - 0.2257 * cl
+    return read, abs(read - total) <= slack or abs(net - total) <= slack
+
+
 def epma_table(pdf, name=''):
     """The analytical table with the most constituent rows: {'rows': [{'constituent', 'mean',
     'range', 'sd', 'standard'}], 'total', 'header', 'page'}; None when no table is found.
@@ -1034,6 +1046,12 @@ def epma_table(pdf, name=''):
                     if kind == 'total':
                         if (c.lower().startswith(('total', 'sum')) or c in ('Σ', 'Сумма', 'Итого')) and nums:
                             total = nums[0]; past_total = True
+                            if mean_x is not None:                      # the Total under the Mean column, as each constituent's mean is
+                                cand = [(abs((w[0] + w[2]) / 2 - mean_x), w[4]) for w in ws_row if _numlike(w[4])]
+                                if cand and min(cand)[0] < 22:
+                                    total = float(re.match(r'-?\d+\.?\d*', min(cand)[1].replace('−', '-').lstrip('(')).group(0))
+                            elif total < 40 and any(40 <= v <= 120 for v in nums):
+                                total = next(v for v in nums if 40 <= v <= 120)   # 'Total 1.3 99.5': an s.d. or a range first, the total after it
                         continue
                     if not nums:
                         continue
@@ -2989,18 +3007,31 @@ def _check_formula(ex, text, fcand):
         # measured cations are normalised — so the count the paper states leaves them out whether or not it
         # says so ('6 cations, excluding H+' with (CO3)5.88 beside it: counting C halves every coefficient)
         excl_ = set(re.findall(r'[A-Z][a-z]?', m_ex.group(2))) if m_ex else set()
-        els_ = {EP.parse_constituent(c).element for c in wt if _parses(c) and EP.parse_constituent(c).kind != 'water'} - {'O', 'F', 'Cl', 'Br', 'I', 'S', 'Se', 'Te', 'H'} - excl_
+        all_ = {EP.parse_constituent(c).element for c in wt if _parses(c) and EP.parse_constituent(c).kind != 'water'}
+        els_ = all_ - {'O', 'F', 'Cl', 'Br', 'I', 'S', 'Se', 'Te', 'H'} - excl_
         calc_ = sorted(els_ & (set(EP.CALCULATED_ELEMENTS) - {'H'}))
+        # S / Se / Te as an oxide row (SO3): left out of the count here, and tried counted below — and named either way
+        anion_ = sorted(e for e in ('S', 'Se', 'Te') if e in all_ - excl_
+                        and any(_parses(c) and EP.parse_constituent(c).element == e and EP.parse_constituent(c).kind == 'oxide' for c in wt))
+        said_ = {EP.parse_constituent(c).element for c in (ex.get('method') or {}).get('calculated') or [] if _parses(c)}
+        n_ = '%g' % float(stated[1])
+        def left_out(calc, anions):
+            # 'calculated' only where the paper's method sentence says so (issue #16): a Li2O measured by LA-ICP-MS is
+            # not calculated — it is simply not in the count the paper states
+            bits = ['%s (calculated, as the paper says)' % e if e in said_ else '%s (not counted in the stated %s)' % (e, n_) for e in calc]
+            bits += ['%s (not counted in the stated %s)' % (e, n_) for e in anions]
+            return ', '.join(bits)
         if calc_ and els_ - set(calc_):
-            try:
-                b_ = EP._parse_basis('%s=%s' % ('+'.join(sorted(els_ - set(calc_))), ('%g' % float(stated[1]))))
-                if b_ not in equiv:
-                    if b_ not in bases:
-                        bases.insert(1, b_)
-                    equiv[b_] = 'the stated %s counted over the cations the probe measures — %s, calculated from the stoichiometry, left out: %s' % (
-                        EP._basis_label(stated), ', '.join(calc_), EP._basis_label(b_))
-            except Exception:
-                pass
+            for keep in ([], anion_) if anion_ else ([],):
+                try:
+                    b_ = EP._parse_basis('%s=%s' % ('+'.join(sorted((els_ - set(calc_)) | set(keep))), n_))
+                    if b_ not in equiv:
+                        if b_ not in bases:
+                            bases.insert(1 if not keep else 2, b_)
+                        equiv[b_] = 'the stated %s counted over the cations the probe measures — left out: %s: %s' % (
+                            EP._basis_label(stated), left_out(calc_, [a for a in anion_ if a not in keep]), EP._basis_label(b_))
+                except Exception:
+                    pass
     def _rep(wt_, bs):
         return EP.replicate_formula(wt_, counts_cmp, bs, ex.get('name') or 'paper', tol_abs=0.03, tol_rel=0.05) if bs else None
     def _best(wt_):
@@ -3236,10 +3267,12 @@ def _check_formula(ex, text, fcand):
     # A merely awkward table (a column picked by fit, several samples) is not that: measured
     # 2026-09-07, blanket deference cost recall, catching 6 % of seeded wt% faults where a paper
     # prints an apfu column against 17 % where it does not.
+    vouched_hard = []
     hard_doubts = [d for d in doubts if d not in reading_doubts or d in strict_doubts]   # a strict reading doubt says the wt% read is suspect: the apfu column may still vouch
     if apfu_vouches and r['diffs'] and hard_doubts:
         apfu_note = ("the wt%% read miss the formula (rms %.1f %%), but the paper's own apfu column reproduces it (%s) — the reading of the wt%% table is "
                      "the tool's shortfall, the formula is the paper's" % (100 * r['score'], ', '.join(apfu_shared[:8])))   # worded to stay a note in the GUI, not a red line
+        vouched_hard = list(hard_doubts)                                     # the column vouches for the formula, not for the table's cells
         doubts = []; r['diffs'] = []; r['unanalysed'] = []
     elif apfu_vouches and r['diffs']:
         apfu_note = "the paper's own apfu column agrees with its formula (%s): the wt%% and the apfu column disagree with each other on %s" % (', '.join(apfu_shared[:8]), ', '.join(d[0] for d in r['diffs'][:4]))
@@ -3273,7 +3306,83 @@ def _check_formula(ex, text, fcand):
                       'reading do not carry to it — check the one cell' % outlier) if r['diffs'] else
                      'every coefficient of the formula follows from the table read, so the doubts about that reading do not carry')
         doubts = []
+    # THE TOTAL AS AN ORACLE (2026-11-01). A slip in one cell of the table moves the formula AND breaks the table's own sum: a
+    # major oxide 20 % off is, through the normalisation, the common-factor shape of a basis question (missed on half the
+    # papers by seeded faults), but its rows no longer add to the printed total. Two independent pieces of evidence: the
+    # printed total says by how much one cell is off, the formula says which — when moving exactly ONE constituent by the
+    # total's gap makes every coefficient follow on the same basis, that cell is the slip, and the reading has proved itself.
+    slip = None; slip_doubts = vouched_hard
+    T_ = e.get('total')
+    printed = {x['constituent']: x['mean'] for x in (e.get('rows') or []) if x.get('mean') is not None}
+    # it runs also when the formula PASSES: a 20 % slip in the largest oxide moves its cation by ~5 % after the normalisation —
+    # inside the comparison's tolerance — so the formula 'follows' and only the table's own sum says something is off
+    # never on a basis read off the formula's own sum (an inferred 'Ge+S = 0.99' normalises those cations by construction)
+    circular = bool(r.get('basis')) and r['basis'][0] in ('cations', 'element') and not ex.get('basis') and abs(r['basis'][-1] - round(r['basis'][-1])) > 0.005
+    # nor where the paper left an element out of its formula: its rows are gone from the reduction, still in the printed total
+    # nor when the formula as read already follows the table TO ITS PRINTED ROUNDING (every coefficient within half a unit of its
+    # last decimal): then the formula is the one these cells give, and a gap in the total is an unread row (LOI, REE2O3) or a
+    # misprinted total — no cell to name. A slip of a cell moves its element past its rounding; a residual inside it is noise
+    def _to_rounding(apfu):
+        for el, v in counts.items():
+            if el in ('H', 'O') or (v or 0) < 0.05:
+                continue
+            unit = 0.0005 if abs(v * 100 - round(v * 100)) > 1e-6 else 0.005
+            if abs((apfu or {}).get(el, 0.0) - v) > unit + 0.002:
+                return False
+        return True
+    if T_ and T_ >= 50 and len(wt) >= 3 and r.get('basis') and not r.get('factor') and printed and not circular and not excluded \
+            and (r['diffs'] or not _to_rounding(r.get('apfu'))):   # not on the formula's own Σ
+        # the sum of the rows AS PRINTED (an SO4 row the reduction converts to SO3 is still 14.58 in the paper's own total)
+        S_ = sum(printed.values()); oeq = 0.4211 * printed.get('F', 0.0) + 0.2257 * printed.get('Cl', 0.0)
+        two_valence = {el for el, n in Counter(EP.parse_constituent(c).element for c in wt if _parses(c) and EP.parse_constituent(c).kind != 'water').items() if n > 1}
+        if abs(S_ - T_) > 0.6 and abs(S_ - oeq - T_) > 0.6:
+            hits = {}
+            for d_ in {round(T_ - S_, 3), round(T_ - (S_ - oeq), 3)} if oeq else {round(T_ - S_, 3)}:
+                for c_ in wt:
+                    # only a row the reduction takes as printed, and never an element printed in two valences (FeO beside Fe2O3:
+                    # the total-iron row is the one a reader mixes in, not a slip of the paper's)
+                    if printed.get(c_) != wt[c_] or (_parses(c_) and EP.parse_constituent(c_).element in two_valence):
+                        continue
+                    # a 0.00 (n.d.) row, or an element the formula does not carry: moving it shifts only the normalisation's O
+                    if wt[c_] <= 0 or not _parses(c_) or EP.parse_constituent(c_).element not in counts:
+                        continue
+                    v2 = wt[c_] + d_
+                    if v2 <= 0.05:
+                        continue
+                    rng_ = next((x.get('range') for x in (e.get('rows') or []) if x.get('constituent') == c_), None)
+                    if rng_ and len(rng_) == 2 and not (min(rng_) - 0.01 <= v2 <= max(rng_) + 0.01):
+                        continue                                 # a mean outside its own printed range is no correction
+                    if rng_ and len(rng_) == 2 and min(rng_) < max(rng_) and any(abs(wt[c_] - x) < 0.005 for x in rng_):
+                        continue                                 # a mean equal to an end of its range: the reader took the range's number
+                    wt2 = dict(wt); wt2[c_] = v2
+                    r2 = _rep(wt2, [r['basis']])
+                    if not r2 or r2['diffs'] or r2.get('factor'):
+                        continue
+                    if c_ not in hits or r2['score'] < hits[c_][3]:
+                        hits[c_] = (wt[c_], v2, d_, r2['score'])
+            # which cell: the only one the gap can move without the formula failing (a −17 wt% gap fits only the one
+            # constituent above 17), else the one that fits the formula clearly best — better than the table as read and
+            # than the runner-up by a margin (one cell, not a choice between several)
+            ranked = sorted(hits.items(), key=lambda kv: kv[1][3])
+            pick = None
+            # the moved cell must MATTER to the formula: a constituent the comparison barely sees (C and B calculated, a trace)
+            # fits the gap without improving anything, and that proves nothing
+            better = lambda sc: sc <= 0.8 * r['score'] and r['score'] - sc >= 0.001
+            # a lone candidate (the gap fits no other cell within its own range) need only improve the fit at all — on an O basis
+            # a dominant oxide's slip barely moves it; what fits ANY gap leaves the fit exactly as it was (a calculated C, B)
+            if len(ranked) == 1 and (r['diffs'] or ranked[0][1][3] < r['score'] - 1e-5):
+                pick = ranked[0]
+            elif len(ranked) >= 2 and better(ranked[0][1][3]) and ranked[0][1][3] <= 0.6 * ranked[1][1][3]:
+                pick = ranked[0]
+            if pick:
+                c_, (v0, v2, d_, sc2) = pick
+                slip = (c_, v0, v2, S_, T_, r['score'], sc2)
+                # the reading is proved by the two agreeing: its doubts, and the total's own, do not carry to the cell
+                doubts = [d for d in doubts if d not in reading_doubts and not d.startswith('the wt% read add to')]
+                if apfu_note and 'shortfall' in apfu_note:
+                    apfu_note = None                                 # the total names the cell: it is the paper's slip, not the tool's reading
     verified = not doubts
+    slip_verified = verified and not [d for d in slip_doubts if d not in reading_doubts]   # a hard doubt the apfu column cleared still holds for a cell
     lines = []
     b = r['basis']
     lines.append('composition: %d constituents re-reduced on %s%s → rms deviation of the cations %.1f%%' % (
@@ -3287,6 +3396,10 @@ def _check_formula(ex, text, fcand):
     if column_note:
         lines.append('  ' + column_note)
     lines += species_lines(species, set(EP.parse_constituent(c).element for c in wt if _parses(c)), set(counts), ox_paper)
+    if slip:
+        lines.append('  %s %.2f wt%% in the table vs %.2f that both the printed total (%.2f) and the formula call for — the rows add to %.2f; with '
+                     '%s = %.2f every coefficient of the formula follows (rms %.1f %% → %.1f %%): that one cell is the slip%s'
+                     % (slip[0], slip[1], slip[2], slip[4], slip[3], slip[0], slip[2], 100 * slip[5], 100 * slip[6], '' if slip_verified else ' [unverified]'))
     for el, v, t, note in r['diffs']:
         lines.append('  %s: paper %.3f, from the paper\'s own wt%% %s (%s)%s%s' % (el, v, ('%.3f' % t) if t is not None else '—', note, _other_form(e, wt, el, v, t), '' if verified else ' [unverified]'))
     if calc_els:
@@ -3299,7 +3412,7 @@ def _check_formula(ex, text, fcand):
         lines.append('  not verifiable: ' + d)
     if apfu_note:
         lines.append('  ' + apfu_note)
-    ok = not r['diffs'] and (not f_issues or apfu_vouches)
+    ok = not r['diffs'] and (not f_issues or apfu_vouches) and not slip     # a slip the total proves is a finding, whatever the tolerance let pass
     if ok and not (apfu_vouches and apfu_note and 'shortfall' in apfu_note):
         lines.append('  every coefficient of the published formula follows from the published wt%')
     basis_flag = False
@@ -3313,7 +3426,7 @@ def _check_formula(ex, text, fcand):
         lines.append('  the paper states its formula is calculated on %s, but every coefficient follows from %s — the stated basis does not reproduce the formula; one of the two is a slip'
                      % (EP._basis_label(ex['basis']), EP._basis_label(b)))
     return {'ok': ok, 'verified': verified, 'lines': lines, 'formula': ftxt, 'basis': b, 'result': r, 'doubts': doubts, 'wt': wt, 'counts': counts, 'basis_flag': basis_flag, 'basis_equiv': basis_equiv,
-            'apfu': apfu_note, 'apfu_vouches': apfu_vouches, 'ox_paper': ox_paper}
+            'apfu': apfu_note, 'apfu_vouches': apfu_vouches, 'ox_paper': ox_paper, 'slip': slip, 'slip_verified': slip_verified if slip else None}
 
 def _basis_comparable(stated, found, wt, counts, r_stated, basis_sentence=''):
     """Whether a stated basis that fails can be held against the paper — the cases the corpus
@@ -4364,7 +4477,15 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None, coords=None):
     if comp:
         s = 'agrees' if comp.get('verified') and comp.get('ok') else 'disagrees' if comp.get('verified') else 'unverified'
         det = '; '.join(comp.get('doubts') or []) or ('the formula follows from the table' if s == 'agrees' else 'the formula deviates from the table')
-        _set(f, 'epma', s, 'composition', det); _set(f, 'formula', s, 'composition', det, value=comp.get('formula') or None)
+        sl = comp.get('slip')
+        if sl and comp.get('verified'):
+            # the table's own total names one cell: the TABLE disagrees, the formula is the one the corrected cell gives
+            sv = 'disagrees' if comp.get('slip_verified') else 'unverified'
+            _set(f, 'epma', sv, 'composition', '%s %.2f in the table vs %.2f that the printed total and the formula call for: one cell is the slip' % sl[:3])
+            _set(f, 'formula', 'agrees' if comp.get('slip_verified') else 'unverified', 'composition',
+                 'every coefficient follows once %s is %.2f, as the printed total says' % (sl[0], sl[2]), value=comp.get('formula') or None)
+        else:
+            _set(f, 'epma', s, 'composition', det); _set(f, 'formula', s, 'composition', det, value=comp.get('formula') or None)
         b = comp.get('basis')
         if comp.get('verified') and b:
             if not ex.get('basis'):
@@ -4372,7 +4493,7 @@ def verify(ex, text, cif=None, comp=None, bv=None, powder=None, coords=None):
                 # the formula vouches for it (owner: verified); a basis that reproduces with residuals is a doubt
                 _set(f, 'basis', 'agrees' if comp.get('ok') else 'unverified', 'composition', 'inferred — the paper states no basis; %s reproduces the formula' % basis_string(b), value=b)
             elif _same_basis(b, ex.get('basis')) or comp.get('basis_equiv'):
-                _set(f, 'basis', 'agrees' if comp.get('verified') else 'unverified', 'composition', ('the reduction on this basis reproduces the formula' if comp.get('ok') else 'the reduction on this basis is the one the formula rests on; a coefficient is off, not the basis') + (' (the stated basis, written the tool\'s way)' if comp.get('basis_equiv') else ''))
+                _set(f, 'basis', 'agrees' if comp.get('verified') else 'unverified', 'composition', ('the reduction on this basis reproduces the formula' if comp.get('ok') else 'the reduction on this basis reproduces the formula once the table\'s slipped cell is corrected' if comp.get('slip') else 'the reduction on this basis is the one the formula rests on; a coefficient is off, not the basis') + (' (the stated basis, written the tool\'s way)' if comp.get('basis_equiv') else ''))
             elif comp.get('basis_flag'):
                 _set(f, 'basis', 'disagrees', 'composition', 'the paper states %s, but every coefficient follows from %s' % (basis_string(ex['basis']), basis_string(b)), value=b)
             else:
@@ -5126,7 +5247,9 @@ def ideal_wt_check(text, ex):
     compared = len({(c, w) for c, _v, w in stated if c != 'total' and any(norm(k) == c for k in shown)})
     off = [x for x in L[1:] if ' from the ideal formula' in x]
     if len(off) >= 2 and len(off) > compared / 2:
-        return [L[0], 'the ideal wt%% listed: %d of %d disagree with %s — most likely the list of another formula than the one read (information)' % (len(off), compared, ftxt)]
+        # the list's own arithmetic (its values vs the total it prints) does not depend on which formula was read: kept
+        return [L[0], 'the ideal wt%% listed: %d of %d disagree with %s — most likely the list of another formula than the one read (information)' % (len(off), compared, ftxt)] \
+            + [x for x in L[1:] if x.startswith('the ideal wt% listed in the text add to')]
     return L if len(L) > 1 else []
 
 # elements whose valence the formula, the analysis or the species must state before a charge is summed
@@ -5134,8 +5257,12 @@ _VARIABLE = {'Fe', 'Mn', 'Cr', 'V', 'Co', 'Ni', 'Cu', 'Ce', 'Eu', 'U', 'Sb', 'As
              'Au', 'Pt', 'Pd', 'Ir', 'Os', 'Ru', 'Bi', 'Hg', 'Ag', 'N', 'Re'}       # Ti, C, P, Zr, the lanthanides but Ce/Eu: one valence in a mineral formula
 _FIXED_ANION = {'O': -2, 'F': -1, 'Cl': -1, 'Br': -1}
 # the valence a polyanion written in the formula fixes for its central element
-_POLY = [(r'\(?\bUO2\b', 'U', 6), (r'S2O3', 'S', 2), (r'\(SO4\)|SO4', 'S', 6), (r'\(SO3\)|\(SO3OH\)|(?<!2)SO3(?![.\d])', 'S', 4), (r'SeO4', 'Se', 6), (r'SeO3', 'Se', 4),
-         (r'TeO6|TeO4', 'Te', 6), (r'TeO3', 'Te', 4), (r'AsO4|AsO3OH|AsO2\(OH\)', 'As', 5), (r'AsO3\b', 'As', 3), (r'PO4|PO3OH|PO2\(OH\)', 'P', 5),
+# (SO3OH), AsO3(OH), SeO3(OH), TeO3(OH): the hydrogen-sulfate / -arsenate … group, its OH written apart — the higher valence; the
+# lower one's SO3 / AsO3 / SeO3 / TeO3 is a group with no OH after it
+_POLY = [(r'\(?\bUO2\b', 'U', 6), (r'S2O3', 'S', 2), (r'\(SO4\)|SO4|SO3\(?OH\)?', 'S', 6), (r'\(SO3\)(?!\(?OH)|(?<!2)SO3(?![.\d]|\(?OH)', 'S', 4),
+         (r'SeO4|SeO3\(?OH\)?', 'Se', 6), (r'SeO3(?!\(?OH)', 'Se', 4),
+         (r'TeO6|TeO4|TeO3\(?OH\)?', 'Te', 6), (r'TeO3(?!\(?OH)', 'Te', 4), (r'AsO4|AsO3\(?OH\)?|AsO2\(OH\)', 'As', 5), (r'AsO3\b(?!\(?OH)', 'As', 3),
+         (r'PO4|PO3\(?OH\)?|PO2\(OH\)', 'P', 5),
          (r'C2O4', 'C', 3), (r'CO3', 'C', 4), (r'NO3', 'N', 5), (r'NH3', 'N', -3), (r'IO3', 'I', 5), (r'SbO4|SbO6|Sb\(OH\)6', 'Sb', 5), (r'VO4|V2O7', 'V', 5), (r'MoO4', 'Mo', 6),
          (r'WO4', 'W', 6), (r'CrO4', 'Cr', 6), (r'SiO4|Si2O7|SiO3', 'Si', 4), (r'BO3|BO4', 'B', 3), (r'NH4', 'N', -3)]
 _MISREAD = 2.0             # more than two O out of balance: the formula was not read whole, not a finding
@@ -7829,6 +7956,10 @@ def write_reduction_xlsx(ex, comp, out_dir, stem=None):
         hold = ("the paper's own apfu column reproduces it — the reading of the wt% table is the tool's shortfall" if comp.get('apfu_vouches') else
                 'the coefficients are these by one constant factor (÷ %.3f): another count of the same formula' % r['factor'] if r.get('factor') else
                 'every coefficient is within the check’s tolerance (0.03 apfu or 5 %)')
+    elif comp.get('slip') and comp.get('verified'):
+        sl = comp['slip']
+        notes.insert(1, 'PROBLEM: one cell of the table is the slip, not the formula — %s %.2f as printed; the printed total (%.2f) and the formula both call for %.2f (the composition check’s line below)%s'
+                     % (sl[0], sl[1], sl[4], sl[2], '' if comp.get('slip_verified') else ' [unverified]'))
     elif comp.get('verified') and not comp.get('ok') and not comp.get('basis_flag'):
         notes.insert(1, 'PROBLEM: the composition check FLAGS this formula — its lines are below (a second formula in the paper, or a coefficient the table does not give)')
     EP.write_xlsx(red, None, os.path.join(out_dir, name), published=comp.get('counts') or None, notes=notes, single=True, decimals=decimals, not_judged=not_judged, hold=hold, table_total=e.get('total') if e.get('total') and 85 <= e['total'] <= 112 else None)   # an apfu sum read as the total is not one

@@ -253,10 +253,9 @@ class SymCodes:
         self.used.add(code)
         if code not in self.codes:
             m = re.match(r'^(\d+)(?:_(\d)(\d)(\d))?$', code)
-            if not m:
-                self.codes[code] = code; return len(self.codes)
-            n = int(m.group(1)); t = [int(m.group(k)) - 5 for k in (2, 3, 4)] if m.group(2) else [0, 0, 0]
-            if 1 <= n <= len(self.st.ops):
+            n = int(m.group(1)) if m else 0                         # a code not in n_klm form is written as the .cif gives it
+            t = [int(m.group(k)) - 5 for k in (2, 3, 4)] if m and m.group(2) else [0, 0, 0]
+            if m and 1 <= n <= len(self.st.ops):
                 rot, tr = self.st.ops[n - 1]
                 self.codes[code] = symop_string(rot, [tr[i] + t[i] for i in range(3)])
                 self.parts[code] = (n, symop_string(rot, tr), t)

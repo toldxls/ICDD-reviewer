@@ -98,10 +98,14 @@ def words(pdf, n):
         if not (0 <= n < doc.page_count):
             return None
         page = _upright(doc[n])
-        r = page.rect
-        return {'w': r.width, 'h': r.height,
-                'words': [[round(w[0], 1), round(w[1], 1), round(w[2], 1), round(w[3], 1), w[4]]
-                          for w in page.get_text('words')]}
+        r = page.rect; M = page.rotation_matrix
+        # get_text gives the boxes in the UNROTATED frame and page.rect is the rotated one: on a /Rotate 90 or 270 page (a
+        # landscape table) every box missed its word — mapped into the frame the page is drawn in (issue #14)
+        out = []
+        for w in page.get_text('words'):
+            b = pymupdf.Rect(w[:4]) * M
+            out.append([round(b.x0, 1), round(b.y0, 1), round(b.x1, 1), round(b.y1, 1), w[4]])
+        return {'w': r.width, 'h': r.height, 'words': out}
 
 
 def page_png(pdf, n, terms):
@@ -127,8 +131,8 @@ def region_png(pdf, n, terms):
         page = _upright(doc[n])
         rects = []
         for t in (terms or []):
-            rects += list(page.search_for(t))
-        pr = page.rect
+            rects += [q * page.rotation_matrix for q in page.search_for(t)]     # the crop is framed in the rotated page; the
+        pr = page.rect                                                             # highlight annotations below stay unrotated, as PyMuPDF wants them
         fw, fh = pr.width * 0.52, pr.height * 0.26
         if rects:
             x0 = min(r.x0 for r in rects); y0 = min(r.y0 for r in rects)
@@ -206,7 +210,7 @@ def search(pdf, q):
     with pymupdf.open(pdf) as doc:
         for i in range(doc.page_count):
             pg = _upright(doc[i])                # the same frame the page is rendered in
-            rects = pg.search_for(q)
+            rects = [b * pg.rotation_matrix for b in pg.search_for(q)]     # the frame the page is drawn in (issue #14)
             if rects:
                 pages.append({'page': i, 'count': len(rects)})
                 r = pg.rect

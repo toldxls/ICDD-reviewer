@@ -31,7 +31,7 @@ conversions with --convert. The published table lists constituent, mean, range, 
 normalised and ideal wt%, F=O, total; the xlsx has the raw points, the reduction with live
 formulas, and the table.
 """
-import os, re, sys, math, argparse, statistics
+import os, re, sys, math, argparse, statistics, threading
 from collections import OrderedDict, namedtuple
 
 # IUPAC 2013 standard atomic weights (abridged), enough for mineral analyses
@@ -96,32 +96,58 @@ Dataset = namedtuple('Dataset', 'constituents points labels standards source red
 _OX_HEAD = re.compile(r'^\s*([A-Z][a-z]?\d*O\d*|H2O|F|Cl|Br|S|Se|Te|[A-Z][a-z]?)\b')
 
 _GRIDS = OrderedDict()                       # (path, mtime, size) -> the sheets read: every option typed in the GUI re-reads the file
+_GRIDS_LOCK = threading.Lock()               # the GUI serves requests on threads: one thread's eviction must not pop another's entry
 
 def _cells_from_file(path):
     """[(sheet title, rows of cell values)] — read once per file version (the last four kept). Callers must not modify them."""
     st = os.stat(path)
     key = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
-    if key not in _GRIDS:
-        _GRIDS[key] = _read_cells(path)
+    with _GRIDS_LOCK:
+        hit = _GRIDS.get(key)
+    if hit is not None:
+        return hit
+    cells = _read_cells(path)
+    with _GRIDS_LOCK:
+        _GRIDS[key] = cells
         while len(_GRIDS) > 4:
             _GRIDS.popitem(last=False)
-    return _GRIDS[key]
+    return cells
 
 def _read_cells(path):
     ext = os.path.splitext(path)[1].lower()
     rows = []
     if ext in ('.xlsx', '.xlsm'):
-        import openpyxl
-        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-        for ws in wb.worksheets:
-            sheet = [list(r) for r in ws.iter_rows(values_only=True)]
-            rows.append((ws.title, sheet))
+        import openpyxl, zipfile
+        try:
+            wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        except (zipfile.BadZipFile, KeyError, OSError) as ex:
+            raise ValueError('%s is not a readable workbook (%s)' % (os.path.basename(path), ex.__class__.__name__))
+        try:
+            for ws in wb.worksheets:
+                # a number stored as text ('50.1', a pasted column) is a number: the csv path had always read it so
+                sheet = [[_num_or_str(v) if isinstance(v, str) else v for v in r] for r in ws.iter_rows(values_only=True)]
+                rows.append((ws.title, sheet))
+        finally:
+            wb.close()
     else:
         import csv
         with open(path, encoding='utf-8-sig', errors='replace') as f:
             text = f.read()
-        dialect = 'excel-tab' if text.count('\t') > text.count(',') else 'excel'
-        sheet = [[(_num_or_str(c)) for c in r] for r in csv.reader(text.splitlines(), dialect=dialect)]
+        lines = text.splitlines()
+        def split(delim):
+            if delim is None:                                              # a whitespace / fixed-width .txt or .prn
+                return [[_num_or_str(c) for c in ln.split()] for ln in lines]
+            comma_dec = delim == ';'                                       # 'CaO;12,5': a semicolon file writes a decimal comma
+            return [[_num_or_str(c.replace(',', '.') if comma_dec and re.fullmatch(r'\s*-?\d+,\d+\s*', c) else c) for c in r]
+                    for r in csv.reader(lines, delimiter=delim)]
+        # the delimiter that cuts the most lines into rows of numbers — not the commonest character: one comma in a heading
+        # ('Sample: grain 3, rim') over a space-separated table had sent it down the comma path, which read nothing
+        def score(sheet):
+            return sum(1 for r in sheet if len(r) >= 3 and sum(_is_num(v) for v in r) >= 2)
+        cands = [d for d in ('\t', ',', ';') if d in text] + [None]
+        sheets = {d: split(d) for d in cands}
+        delim = max(cands, key=lambda d: (score(sheets[d]), d is not None))  # a tie goes to a real delimiter
+        sheet = sheets[delim]
         rows.append((os.path.basename(path), sheet))
     return rows
 
@@ -143,8 +169,20 @@ def _constituent_label(cell):
     if re.search(r'formula|total|line|number|point|sample|comment', s, re.I):
         return None
     s = s.replace('(NH4)2O', 'N2H8O')                                  # ammonium as its 'oxide'
-    m = re.match(r'^(N2H8O|[A-Z][a-z]?\d*O\d*|H2O|CO2|F|Cl|Br|S|Se|Te|[A-Z][a-z]?)(?![a-z])', s)
+    if _ADSORBED.match(s):
+        return None                                                    # H2O−, adsorbed water: not part of the mineral's formula
+    # an oxide with a suffix: 'FeOt', 'Fe2O3tot', 'SiO2wt%', 'CO2calc' — the oxide whole (the old match backtracked into its
+    # last digit: 'Fe2O3t' read as Fe2O, 'SiO2wt%' as SiO)
+    m = re.match(r'^([A-Z][a-z]?\d*O\d*)(?i:t|tot|wt|calc\w*|meas\w*)(?![A-Za-z])', s)
+    if not m:
+        m = re.match(r'^(N2H8O|[A-Z][a-z]?\d*O\d*|H2O|CO2|F|Cl|Br|S|Se|Te|[A-Z][a-z]?)(?![a-z\d])', s)
     rest = s[m.end():] if m else ''
+    if m and re.match(r'[A-Z]', rest) and not re.match(r'(?i)(wt|mass)', rest):
+        return None                                                    # a word in capitals: 'CORE', 'COUNT', 'NOTE', 'SOURCE', 'HOLE', 'POSITION'
+    if m and _QUANTITY_HEAD.search(rest):
+        return None                                                    # 'Si %ERR', 'Fe det. lim.', 'Ca k-ratio': another quantity of the element, not its wt%
+    if m and m.group(1) == 'H2O' and rest.lstrip().startswith('+'):
+        rest = rest.lstrip()[1:]                                       # H2O+: the structural water
     if re.match(r'\d*[A-Z][a-z]?(\d|\()', rest):
         return None                                                    # 'Na2Ca8(UO2)4…': a whole formula written as a heading, not a constituent
     if m and re.fullmatch(r'[A-Z][a-z]?', m.group(1)) and not re.match(r'\s*($|[(*%]|(wt|mass|elem))', rest, re.I):
@@ -156,33 +194,79 @@ def _constituent_label(cell):
             pass
     return None
 
-# the columns of a worked-up sheet that are derived from the wt%, not analyses: never read as wt%
-_DERIVED_HEAD = re.compile(r'\bM\.?W\b|mol|apfu|a\.?p\.?f\.?u|cation|anion|atom|oxygen|\bO\b|norm|ratio|prop|factor|charge|ideal|calc|formula|s\.?d|std|stdev|σ|range|min|max|detect|standard', re.I)
+# the columns of a worked-up sheet that are derived from the wt%, not analyses: never read as wt% ('calc' and 'min' as words:
+# a 'Calcio…' heading and 'Mineral 1' are not derived)
+_DERIVED_HEAD = re.compile(r'\bM\.?W\b|mol|apfu|a\.?p\.?f\.?u|cation|anion|atom|oxygen|\bO\b|norm|ratio|prop|factor|charge|ideal|\bcalc(?:\.|d|ulated)?\b|formula|'
+                           r'\bs\.?d\b|\bstd|stdev|σ|range|\bmin(?:\.|imum)?\b|\bmax(?:\.|imum)?\b|detect|standard', re.I)
 _WT_HEAD = re.compile(r'wt|mass|mean|average|avg|oxide\s*%', re.I)
-_IDEAL_HEAD = re.compile(r'ideal|theor|calc|end.?member', re.I)
+# H2O−, adsorbed water — the minus alone (or with a note in brackets); 'H2O-calc', 'H2O - TGA', 'H2O–diff.' are the mineral's water
+_ADSORBED = re.compile(r'H2O\s*[-−–]\s*(?:$|\()')
+_MEAN_HEAD = re.compile(r'mean|average|avg', re.I)
+_IDEAL_HEAD = re.compile(r'ideal|theor|\bcalc(?:\.|d|ulated)?\b|end.?member', re.I)
+# what follows an element's name in a column that is not its wt%: a counting error, a detection limit, counts, a k-ratio
+_QUANTITY_HEAD = re.compile(r'%\s*err|\berr\b|\berror|\bdet\b|\bdet\.|detect|\blld\b|\bdl\b|limit|k[- ]?ratio|\bcps\b|count|\bnet\b|bkg|backgr|peak|\bzaf\b|σ|sigma|'
+                            r'\bat\.?\s*%|atomic|apfu|\bmol', re.I)
+# a row that is a statistic of the points above it, not a point: Average, Std Dev, min, max …
+_STATS_ROW = re.compile(r'\b(average|avg|mean|median|std\.?\s*dev|stddev|stdev|std\.?\s*err|stderr|st\.?\s*dev|s\.\s?d\.?|sd|sigma|σ|min|minimum|max|maximum|range|detection|lld|mdl)\b', re.I)
+# the WHOLE label is the statistic ('Average', 'Std Dev:', 'Mean (n = 5)', 'average of 12'): a point named 'SD-1' or 'Max 2', or a
+# comment 'average of 3 spots' on a real point, is a point
+_STATS_LABEL = re.compile(r'(?:detection\s+limits?|det\.?\s*lim\w*\.?|%s)[\s.:]*(?:\(.*\)|(?:of|n\s*=)\s*\d+)?[\s.:]*' % _STATS_ROW.pattern[3:-3], re.I)
+
+# a long statistic word opening the label is one too ('average white', 'Mean of rim points'): the short words (SD, min, max,
+# range) open point names ('SD-1', 'Max 2') and are taken only as the whole label
+_STATS_OPEN = re.compile(r'(?:average|mean|median|std\.?\s*dev\w*|standard\s+deviation|minimum|maximum)\b', re.I)
+
+_STATS_CLOSE = re.compile(r'\s(?:average|avg|mean|median|std\.?\s*dev\.?|s\.\s?d\.)\.?$', re.I)        # 'core avg', 'rim mean'
+
+def _is_stats_cell(v):
+    return isinstance(v, str) and bool(_STATS_LABEL.fullmatch(v.strip()) or _STATS_OPEN.match(v.strip()) or _STATS_CLOSE.search(v.strip()))
+
 _LABEL_HEAD = re.compile(r'\b(point|sample|line|number|no\.|comment|descr|label|name|analys|spot|id)', re.I)
 _STOP_ROW = re.compile(r'^\s*(Σ|sum\b|total|O\s*[=≡])', re.I)
 
+def _is_weights(names, vals):
+    """A column of the constituents' molecular weights (or their element's atomic weight): the MW column of a worked-up block,
+    or a table of atomic weights under it — numbers that can sum to an analysis total ('F 19.00, Cl 35.45, H2O 1.01')."""
+    hits = 0
+    for name, v in zip(names, vals):
+        if not _is_num(v):
+            continue
+        try:
+            c = parse_constituent(name)
+        except ValueError:
+            return False
+        ws = [c.mw] + [ATOMIC_WEIGHTS[e] for e in (c.element, 'H') if e in ATOMIC_WEIGHTS]
+        if not any(abs(v - w) <= 0.01 * w for w in ws):
+            return False
+        hits += 1
+    return hits >= 2
+
 def _down_column(grid, title, path, gaps=False):
-    """A worked-up sheet: the constituents DOWN a column (CuO, ZnO, SO3, H2O …), the wt% beside them. The wt% column is the
-    one whose header says so (wt%, mean, average); else the columns right of the names up to the first derived one (MW,
-    moles, apfu … by its header, or by values that do not sum to an analysis total) are the analysis points, one column
-    each. Rows stop at a Σ / total / O=F row; a block headed 'ideal' / 'calc' is a composition, not an analysis.
+    """A worked-up sheet: the constituents DOWN a column (CuO, ZnO, SO3, H2O …), the wt% beside them. The wt% columns are
+    the ones whose header says so (wt%, mean, average — the mean alone when there is one); else the columns right of the
+    names up to the first derived one (MW, moles, apfu … by its header, by values that are the molecular weights, or by
+    values that do not sum to an analysis total) are the analysis points, one column each. Only the block's own columns are
+    looked at: the search stops at the next column of constituent names (another block beside it). Rows stop at a Σ /
+    total / O=F row (an H2O− row is stepped over); a block or a column headed 'ideal' / 'calc' is a composition, not an analysis.
     -> [(constituents, points, labels, (row, col) of the first name, (row0, col0, row1, col1) of the block, the columns read)] —
-    every block, in the order found. gaps: a range picked by hand — empty columns are stepped over and no total is asked."""
+    every block, in the order found. gaps: a range picked by hand — empty columns are stepped over and no total is asked,
+    but a column whose total is unlike the first one's (MW, moles, apfu beside the wt%) ends the points."""
     found = []
     ncols = max((len(r) for r in grid), default=0)
+    cell_at = lambda r, c: grid[r][c] if 0 <= r < len(grid) and 0 <= c < len(grid[r]) else None
     for ci in range(ncols):
         ri = 0
         while ri < len(grid):
-            lab = _constituent_label(grid[ri][ci] if ci < len(grid[ri]) else None)
+            lab = _constituent_label(cell_at(ri, ci))
             if not lab:
                 ri += 1; continue
             rows = []; r2 = ri
             while r2 < len(grid):
-                cell = grid[r2][ci] if ci < len(grid[r2]) else None
+                cell = cell_at(r2, ci)
                 if isinstance(cell, str) and _STOP_ROW.match(cell):
                     break
+                if isinstance(cell, str) and _ADSORBED.match(cell.strip()):
+                    r2 += 1; continue                              # H2O−: adsorbed water, stepped over
                 lab2 = _constituent_label(cell)
                 if not lab2:
                     break
@@ -190,35 +274,59 @@ def _down_column(grid, title, path, gaps=False):
             ri = r2 + 1
             if len(rows) < 2 or len({l for _, l in rows}) < len(rows):
                 continue
+            names = [l for _, l in rows]
             hr = rows[0][0] - 1                                    # the header row above the names, when there is one
-            head = lambda cj: (grid[hr][cj] if hr >= 0 and cj < len(grid[hr]) else None)
-            above = [grid[r][ci] for r in range(hr, max(-1, hr - 5), -1) if ci < len(grid[r]) and grid[r][ci] not in (None, '')][:2]   # the two headings over the names
-            if any(isinstance(v, str) and _IDEAL_HEAD.search(v) for v in above):
+            head = lambda cj: cell_at(hr, cj) if hr >= 0 else None
+            headings = lambda cj, k: [cell_at(r, cj) for r in range(hr, max(-1, hr - 5), -1) if cell_at(r, cj) not in (None, '')][:k]
+            title = headings(ci, 3)
+            if not any(_is_num(cell_at(r, ci + 1)) and 40 <= sum(x for x in [cell_at(r_, ci + 1) for r_, _ in rows] if _is_num(x)) <= 120
+                       and not _is_weights(names, [cell_at(r_, ci + 1) for r_, _ in rows]) for r, _ in rows[:1]):
+                title += headings(ci + 1, 1)                       # a heading over the MW column beside the names titles the block ('Ideal formula')
+            if any(isinstance(v, str) and _IDEAL_HEAD.search(v) for v in title):
                 continue                                           # an 'ideal' block beside the empirical one ('ideal', 'IDEALLY should be' over its formula): a composition, not an analysis
-            def numeric(cj):
-                # a wt% column: numbers on most rows, none negative, summing to an analysis total — the MW (Σ ~ 600) and
-                # mole (Σ ~ 1) columns of a worked-up block often carry no header of their own
-                v = [grid[r][cj] for r, _ in rows if cj < len(grid[r]) and _is_num(grid[r][cj])]
-                return len(v) >= max(2, len(rows) // 2) and min(v) >= 0 and (gaps or 40 <= sum(v) <= 120)   # a picked range: the total is the user's affair
-            right = list(range(ci + 1, ncols))
-            named = [cj for cj in right if isinstance(head(cj), str) and _WT_HEAD.search(head(cj)) and not _DERIVED_HEAD.search(head(cj)) and numeric(cj)]
+            # the block's own columns: up to the next column that holds constituent names on these rows (another block)
+            right = []
+            for cj in range(ci + 1, ncols):
+                if sum(1 for r, _ in rows if _constituent_label(cell_at(r, cj))) >= 2:
+                    break
+                right.append(cj)
+            def colvals(cj):
+                return [cell_at(r, cj) for r, _ in rows]
+            def numeric(cj, named=False):
+                # a wt% column: numbers on most rows (a named one: on two — blanks are constituents not analysed), none
+                # negative, not the molecular weights, summing to an analysis total — the MW (Σ ~ 600) and mole (Σ ~ 1)
+                # columns of a worked-up block often carry no header of their own
+                vs = colvals(cj); v = [x for x in vs if _is_num(x)]
+                if len(v) < (2 if named else max(2, len(rows) // 2)) or min(v) < 0 or _is_weights(names, vs):
+                    return False
+                return gaps or 40 <= sum(v) <= 120                 # a picked range: the total is the user's affair
+            def ideal_col(cj):
+                return any(isinstance(v, str) and _IDEAL_HEAD.search(v) for v in headings(cj, 3))
+            named = [cj for cj in right if isinstance(head(cj), str) and _WT_HEAD.search(head(cj)) and not _DERIVED_HEAD.search(head(cj))
+                     and not ideal_col(cj) and numeric(cj, named=True)]
             if named:
-                cols = named[:1]
+                means = [cj for cj in named if _MEAN_HEAD.search(head(cj))]
+                cols = means[:1] or named                          # 'wt% 1, wt% 2, wt% 3' are points; beside a 'mean' column they are its points
             else:
-                cols = []
+                cols = []; first_tot = None
                 for cj in right:
                     h = head(cj)
-                    if (isinstance(h, str) and _DERIVED_HEAD.search(h)) or not numeric(cj):
-                        if cols and not (gaps and all(grid[r][cj] in (None, '') if cj < len(grid[r]) else True for r, _ in rows)):
+                    if (isinstance(h, str) and _DERIVED_HEAD.search(h)) or ideal_col(cj) or not numeric(cj):
+                        if cols and not (gaps and all(v in (None, '') for v in colvals(cj))):
                             break                                  # in a range picked by hand an EMPTY column (a rejected point) is skipped
                         continue
+                    tot = sum(x for x in colvals(cj) if _is_num(x))
+                    if first_tot is None:
+                        first_tot = tot
+                    elif not 0.5 * first_tot <= tot <= 2 * first_tot:
+                        break                                      # another quantity's column (a range picked without its header)
                     cols.append(cj)
             if not cols:
                 continue
-            pts = [[float(grid[r][cj]) if cj < len(grid[r]) and _is_num(grid[r][cj]) else float('nan') for r, _ in rows] for cj in cols]
+            pts = [[float(v) if _is_num(v) else float('nan') for v in colvals(cj)] for cj in cols]
             own = str(head(ci)).strip() if isinstance(head(ci), str) and head(ci).strip() and len(cols) == 1 else None   # 'empirical' above the names
             labels = [('%g' % head(cj) if _is_num(head(cj)) else str(head(cj)).strip()) if head(cj) is not None else (own or str(k + 1)) for k, cj in enumerate(cols)]
-            found.append(([l for _, l in rows], pts, labels, (rows[0][0], ci), (rows[0][0], ci, rows[-1][0], max(cols)), [ci] + cols))
+            found.append((names, pts, labels, (rows[0][0], ci), (rows[0][0], ci, rows[-1][0], max(cols)), [ci] + cols))
     return found
 
 def _cell_name(r, c):
@@ -260,6 +368,7 @@ def probe_blocks(path, sheet=None, region=None):
                     'sheet': title, 'box': box, 'cols': cols, 'order': (sheet_i, at[0], at[1]),                                          # reading order: sheet, row, column
                     'plausible': len(heads) >= 2 and len(set(heads)) == len(heads) and 40 <= tot <= 120,   # analyses: constituents once each, an analysis total
                     'reducible': any(parse_constituent(h).kind != 'element' for h in heads),   # an oxide, water or an anion: metals alone have no anion to normalise on
+                    'oxides': any(parse_constituent(h).kind in ('oxide', 'other', 'water') for h in heads),
                     'label': '%s %s: %s — %s, Σ %.1f' % (title, _cell_name(*at), ', '.join(heads[:8]) + (' …' if len(heads) > 8 else ''), say, tot)})
     if region and not sheet:
         raise ValueError('a region needs its sheet')
@@ -276,30 +385,51 @@ def probe_blocks(path, sheet=None, region=None):
                 lab = _constituent_label(cell)
                 if lab:
                     heads[ci] = lab
-            for run in _header_runs(heads):
+            words = {str(c).strip().upper() for c in row if isinstance(c, str)}
+            if 'X' in words or 'Z' in words:                    # stage coordinates X, Y, Z: the Y is not yttrium
+                heads = {ci: h for ci, h in heads.items() if h != 'Y'}
+            nxt = grid[ri + 1] if ri + 1 < len(grid) else []
+            for run in _header_runs(heads, row):
+                # a column with a constituent name right under its header is a column of names (a block down a column beside
+                # the header row), not one of this header's constituents
+                below = [ci for ci in run if ci < len(nxt) and _constituent_label(nxt[ci])]
+                if below and len(below) < len(run):
+                    run = OrderedDict((ci, h) for ci, h in run.items() if ci not in below)
                 # numeric rows below, until a blank / non-numeric run
                 pts, labels = [], []; gap = 0
                 first_col = min(run)
                 # the point labels: the column just left of the run — unless that column is headed as another quantity (the
                 # first run's Total or its last constituent, when a header row holds two runs): then the nearest column left of
-                # it headed as labels ('Point', 'Line Numbers'), if there is one
+                # it headed as labels ('Point', 'Line Numbers'), else the column left of the whole header when it is not
+                # another quantity's, else the points are numbered
                 lab_col = first_col - 1; searched = False
                 left = row[lab_col] if 0 <= lab_col < len(row) else None
                 if isinstance(left, str) and left.strip() and not _LABEL_HEAD.search(left):
-                    lab_col = next((c for c in range(first_col - 2, -1, -1) if c < len(row) and isinstance(row[c], str) and _LABEL_HEAD.search(row[c])), lab_col)
-                    searched = lab_col != first_col - 1
-                last = ri
+                    found_col = next((c for c in range(first_col - 2, -1, -1) if c < len(row) and isinstance(row[c], str) and _LABEL_HEAD.search(row[c])), None)
+                    if found_col is None:
+                        c0 = min(heads) - 1
+                        h0 = row[c0] if 0 <= c0 < len(row) else None
+                        found_col = c0 if c0 < first_col - 1 and (h0 in (None, '') or isinstance(h0, str) and (not h0.strip() or _LABEL_HEAD.search(h0))) else -1
+                    lab_col = found_col; searched = True
+                last = ri; in_stats = False; had_labels = False
                 for k2, r2 in enumerate(grid[ri + 1:]):
                     vals = [r2[ci] if ci < len(r2) else None for ci in run]
                     if any(_constituent_label(v) for v in vals):
                         break                                   # a name under the header: a column of names (before any number) or the next block ('n.d.' is a value)
+                    # a statistic of the points (Average, Std Dev, min, max): its word stands left of the numbers
+                    if any(_is_stats_cell(v) for v in r2[:first_col]):
+                        in_stats = True; continue
+                    lab = r2[lab_col] if lab_col >= 0 and len(r2) > lab_col and r2[lab_col] not in (None, '') else None
                     if sum(_is_num(v) for v in vals) >= max(1, len(run) // 2):
+                        if in_stats and had_labels and lab is None:
+                            continue                            # the unlabelled rows under an 'Average' row: its s.d., min, max
+                        in_stats = False; had_labels = had_labels or lab is not None
                         pts.append([float(v) if _is_num(v) else float('nan') for v in vals]); gap = 0; last = ri + 1 + k2
-                        lab = r2[lab_col] if lab_col >= 0 and len(r2) > lab_col and r2[lab_col] is not None else len(pts)
+                        lab = lab if lab is not None else len(pts)
                         labels.append(str(lab).strip() if isinstance(lab, str) else ('%g' % lab if _is_num(lab) else str(lab)))
                     elif pts:
                         gap += 1                                # a comment / blank line inside the block
-                        if gap > 6 or any(isinstance(v, str) and re.search(r'average|mean|std|s\.d', v, re.I) for v in vals):
+                        if gap > 6 or any(isinstance(v, str) and _STATS_ROW.search(v) for v in vals):
                             break
                 if searched and len(labels) > 1 and len(set(labels)) == 1:
                     labels = [str(k + 1) for k in range(len(labels))]          # a sample name on every row ('Finchite'): number the points
@@ -308,16 +438,47 @@ def probe_blocks(path, sheet=None, region=None):
                         ([lab_col] if lab_col >= 0 else []) + list(run))
     return out
 
-def _header_runs(heads):
-    """A header row's constituents {col: name} as the blocks it holds: a name met again starts the next block (a probe export
-    prints the wt% and then the same names for detection limits or another quantity), and inside a block an ELEMENT column
+def _header_runs(heads, row=None):
+    """A header row's constituents {col: name} as the blocks it holds. A block ends: at a Total / Σ or a label heading ('Point',
+    'Sample') standing between constituents when oxides follow it (two tables side by side); where two element columns follow
+    oxides, or two oxides follow elements (the export prints the oxide wt% and the element wt% — F, Cl, S, Se, Te go with
+    either); at a name met again (the same names for detection limits or another quantity). Inside a block an ELEMENT column
     whose oxide is there too is left out — the JEOL / Cameca export prints the analysis twice, 'CaO … MoO3' then 'Ca … Mo'
     as element wt%, and reading both counts every cation twice."""
-    runs, cur = [], OrderedDict()
-    for ci in sorted(heads):
-        if heads[ci] in cur.values():
-            runs.append(cur); cur = OrderedDict()
+    def kind(h):
+        k = parse_constituent(h).kind
+        return 'el' if k == 'element' else 'ox' if k in ('oxide', 'other', 'water') else None
+    cols = sorted(heads)
+    runs, cur, cur_kind = [], OrderedDict(), None
+    for i, ci in enumerate(cols):
+        cut = False
+        if cur:
+            if row is not None:
+                between = [row[c] for c in range(cols[i - 1] + 1, ci) if c < len(row) and isinstance(row[c], str) and row[c].strip()]
+                after = [heads[c] for c in cols[i:]]
+                # a label heading between: a second table. A Total between: a second table only when real oxides follow it —
+                # CO2 / H2O (by stoichiometry) after the measured total, or one more oxide, belong to the analysis
+                metal_ox = [h for h in after if parse_constituent(h).kind == 'oxide' and parse_constituent(h).element not in ('C', 'H')]
+                if any(_LABEL_HEAD.search(b) for b in between) and len(after) >= 2 and any(parse_constituent(h).kind in ('oxide', 'other') for h in after) \
+                        or any(re.match(r'\s*(Σ|sum\b)', b, re.I) or re.search(r'total', b, re.I) for b in between) and len(metal_ox) >= 2:
+                    cut = True                                      # not at an 'O=F' cell, nor for an H2O after the Total
+            k = kind(heads[ci])
+            if k and cur_kind and k != cur_kind and next((kind(heads[c]) for c in cols[i + 1:] if kind(heads[c])), None) == k:
+                # element wt% after oxide wt% (or the other way): the export printing the analysis twice — only when the new
+                # columns name the elements already read; 'PbO CuO As Sb SO3 H2O' (traces as elements) and 'Cu Zn S H2O' are one analysis
+                new_el = set()
+                for c in cols[i:]:
+                    if kind(heads[c]) not in (k, None):
+                        break
+                    if kind(heads[c]) == k:
+                        new_el.add(parse_constituent(heads[c]).element)
+                cut = cut or bool(new_el & {parse_constituent(h).element for h in cur.values()} - {'H', 'C'})
+            if heads[ci] in cur.values():
+                cut = True
+        if cut:
+            runs.append(cur); cur = OrderedDict(); cur_kind = None
         cur[ci] = heads[ci]
+        cur_kind = cur_kind or kind(heads[ci])
     if cur:
         runs.append(cur)
     out = []
@@ -332,11 +493,13 @@ def default_block(blocks):
     """The index load_probe takes when none is asked for: the biggest block that looks like analyses (two constituents or
     more, each once, the points' median total 40–120 wt%) and that the reduction can use (an oxide, water or an anion — a
     block of metals as element wt% is another quantity of the same analysis), else the biggest. Size
-    alone took an ICP sheet's count columns or a BV table's labels over the probe data beside them. Of equals, the first in
-    reading order (sheet, row, column)."""
+    alone took an ICP sheet's count columns or a BV table's labels over the probe data beside them. Of two plausible blocks,
+    one in oxides before one in elements. Of equals, the first in reading order (sheet, row, column)."""
     if not blocks:
         return None
-    best = lambda i: (blocks[i]['plausible'] and blocks[i]['reducible'], blocks[i]['plausible'], blocks[i]['size'])
+    # of two plausible blocks the one in oxides first: an export prints the element wt% (Na, K, U, S …) beside the oxide wt%,
+    # and an S makes the element block reducible too — a sulfide workbook has no oxide block, so its element block still wins
+    best = lambda i: (blocks[i]['plausible'] and blocks[i]['reducible'], blocks[i]['plausible'], blocks[i].get('oxides', False), blocks[i]['size'])
     top = max(best(i) for i in range(len(blocks)))
     return min((i for i in range(len(blocks)) if best(i) == top), key=lambda i: blocks[i]['order'])
 
@@ -406,6 +569,8 @@ def reduce(ds, basis=('O', 21), adds=(), converts=(), drop=(), points=None, idea
             continue
         vals = [ds.points[i][j] for i in sel]
         mean, sd, lo, hi, n = _stats(vals)
+        if not n:                                                   # 'n.d.' on every point: not detected, 0 — a NaN mean made every apfu NaN
+            mean, sd, lo, hi = 0.0, 0.0, 0.0, 0.0
         table[c.formula] = {'c': c, 'mean': mean, 'sd': sd, 'lo': lo, 'hi': hi, 'n': n, 'source': 'measured'}
     # conversions (UO2 -> UO3: wt% scales by MW ratio per cation)
     for a, b in converts:
@@ -431,10 +596,12 @@ def reduce(ds, basis=('O', 21), adds=(), converts=(), drop=(), points=None, idea
     def anion_correction():
         # F=O, Cl=O: the oxygen already counted in the oxides that the halogen replaces
         corr = 0.0
+        if not any(x['c'].kind == 'oxide' for x in table.values()):
+            return corr                                             # a halide analysed as elements (PbCl2): no oxide O for a halogen to replace
         for k, r in table.items():
             if r['c'].kind == 'element-anion' and r['c'].element in ('F', 'Cl', 'Br', 'I'):
                 corr += r['mean'] * ATOMIC_WEIGHTS['O'] / ATOMIC_WEIGHTS[r['c'].element] * 0.5
-            if r['c'].kind == 'element-anion' and r['c'].element in ('S', 'Se', 'Te') and any(x['c'].kind == 'oxide' for x in table.values()):
+            if r['c'].kind == 'element-anion' and r['c'].element in ('S', 'Se', 'Te'):
                 corr += r['mean'] * ATOMIC_WEIGHTS['O'] / ATOMIC_WEIGHTS[r['c'].element]   # one O per S, Se, Te — as the mole count below has it
         return corr
     # iterate: structure-based additions depend on the normalisation, which depends on the total
@@ -621,8 +788,12 @@ def published_table(red, standards=None, ideal_wt=None, name=''):
         if ideal_wt:
             row.append(_fmt(ideal_wt.get(k, 0.0)))
         rows.append(row)
+    ideal_corr = (ideal_wt or {}).get('O=F,Cl')                     # the Ideal column's own O ≡ F, Cl deduction
     if red.corr:
-        rows.append(['O=F,Cl' if any(r.c.element in ('F', 'Cl') for r in red.rows.values()) else 'O=S', _fmt(-red.corr), '', '', '', _fmt(-red.corr / norm_total * 100) if norm_total else ''] + ([''] if ideal_wt else []))
+        rows.append(['O=F,Cl' if any(r.c.element in ('F', 'Cl') for r in red.rows.values()) else 'O=S', _fmt(-red.corr), '', '', '', _fmt(-red.corr / norm_total * 100) if norm_total else '']
+                    + ([_fmt(ideal_corr) if ideal_corr else ''] if ideal_wt else []))
+    elif ideal_corr:
+        rows.append(['O=F,Cl', '', '', '', '', '', _fmt(ideal_corr)])
     rows.append(['Total', _fmt(red.total), '', '', '', '100.00'] + ([_fmt(sum(ideal_wt.values()))] if ideal_wt else []))
     notes = []
     for k, r in red.rows.items():
@@ -634,10 +805,23 @@ def published_table(red, standards=None, ideal_wt=None, name=''):
 def ideal_wt_percent(ideal_apfu):
     """{constituent: apfu} of the ideal formula -> {constituent: wt%} (each constituent's mass per
     formula unit, normalised to 100)."""
-    mass = OrderedDict()
+    mass = OrderedDict(); corr = 0.0
     for k, n in ideal_apfu.items():
         c = parse_constituent(k)
         mass[k] = n / c.n_cat * c.mw if c.kind != 'water' else n * c.mw
+        if c.kind == 'element-anion' and c.element in ('F', 'Cl', 'Br', 'I'):
+            corr += n * ATOMIC_WEIGHTS['O'] / 2                     # O ≡ F, Cl: each halogen stands for half an O of the oxides
+    # never more O than the oxides carry (gd.formula_to_wt's cap): a halide analysed as elements (PbCl2, NaCl) has no oxide O
+    # for its halogen to stand in for, and deducting it anyway made the column 79 % Pb for PbCl2
+    corr = min(corr, sum(n / c.n_cat * c.n_o for k, n in ideal_apfu.items()
+                         for c in [parse_constituent(k)] if c.kind in ('oxide', 'other') and c.n_o) * ATOMIC_WEIGHTS['O'])
+    if corr:
+        # the oxides' wt% carry the O a halogen replaces: the Ideal column deducts it as the analysis does (O=F,Cl), and the
+        # column adds to 100 with it
+        tot = sum(mass.values()) - corr
+        out = OrderedDict((k, m / tot * 100) for k, m in mass.items())
+        out['O=F,Cl'] = -corr / tot * 100
+        return out
     tot = sum(mass.values())
     return OrderedDict((k, m / tot * 100) for k, m in mass.items())
 
@@ -652,17 +836,27 @@ _TPL_N = re.compile(r'\d+(?:\.\d+)?')
 def parse_template(s):
     """An ideal formula as typed -> its node list. ValueError when it does not parse (an unknown element, unbalanced brackets)."""
     s = re.sub(r'\s+', '', s or '').replace('•', '·').replace('⋅', '·')
+    # '.' / '*' typed as the hydrate dot ('CaSO4.2H2O', '(PO4)2.10H2O'): a decimal point before a water count is not one
+    s = re.sub(r'[.*](?=(?:\d+(?:\.\d+)?|[nx]|\(\d+(?:\.\d+)?[-–]\d+(?:\.\d+)?\))?\(?H2O)', '·', s)
+    s = re.sub(r'(?<=[A-Za-z\d])[1-3]?[-−](?=[)\]},])', '', s)          # an anion's charge inside its brackets: '(OH-)6', '(O2-,OH)'
     def seq(i, close):
         out = []
         while i < len(s):
             ch = s[i]
             if ch == close:
                 return out, i + 1
+            if ch in _CLOSE.values():
+                raise ValueError('mismatched brackets in %r' % s)
             if ch in _CLOSE:
-                j = i + 1; depth = 1
-                while j < len(s) and depth:
-                    depth += (s[j] in _CLOSE) - (s[j] in _CLOSE.values()); j += 1
-                if depth:
+                j = i + 1; stack = [_CLOSE[ch]]
+                while j < len(s) and stack:
+                    if s[j] in _CLOSE:
+                        stack.append(_CLOSE[s[j]])
+                    elif s[j] in _CLOSE.values():
+                        if s[j] != stack.pop():
+                            raise ValueError('mismatched brackets in %r' % s)
+                    j += 1
+                if stack:
                     raise ValueError('unbalanced brackets in %r' % s)
                 inner = s[i + 1:j - 1]
                 m = _TPL_N.match(s, j); count = m.group(0) if m else ''
@@ -674,18 +868,21 @@ def parse_template(s):
                 i = j + len(count); continue
             if ch == '·':
                 m = _TPL_N.match(s, i + 1); count = m.group(0) if m else ''
-                j = i + 1 + len(count)
+                j = i + 1 + len(count); var = ''
+                mv = re.match(r'[nx](?=\(?H)|\(\d+(?:\.\d+)?[-–]\d+(?:\.\d+)?\)', s[j:]) if not count else None
+                if mv:                                                              # '·nH2O', '·(10-12)H2O': a count that is no number
+                    var = mv.group(0); j += len(var)
                 if j < len(s) and s[j] in _CLOSE:                                   # '·5(H2O)': the bracketed group is the hydrate
                     kids, end = seq(j + 1, _CLOSE[s[j]])
                     m2 = _TPL_N.match(s, end)
                     if m2 and not count:                                            # '·(H2O)5'
                         count = m2.group(0); end += len(count)
-                    out.append(('lit', '·')); out.append(('grp', '', '', kids, count, (s[j], _CLOSE[s[j]]))); i = end; continue
+                    out.append(('lit', '·')); out.append(('grp', '', '', kids, count, (s[j], _CLOSE[s[j]]), var)); i = end; continue
                 k = j
                 while k < len(s) and s[k] not in '·' + ''.join(_CLOSE) + ''.join(_CLOSE.values()):
                     k += 1
                 kids, _ = seq_flat(s[j:k])
-                out.append(('lit', '·')); out.append(('grp', '', '', kids, count)); i = k; continue
+                out.append(('lit', '·')); out.append(('grp', '', '', kids, count, None, var)); i = k; continue
             e = _TPL_EL.match(s, i)
             if e and e.group(1) in ATOMIC_WEIGHTS:
                 out.append(('el', e.group(1), int(e.group(2)) if e.group(2) else None, e.group(3) or '')); i = e.end(); continue
@@ -739,22 +936,53 @@ def _h_of(sym):
 def _num(count):
     return float(count) if count else 1.0
 
-def template_counts(nodes, mult=1.0, out=None):
-    """{element: apfu} of the ideal formula itself — a mixed site counted as its first member that is not a vacancy (the
-    end-member; an O/H group counted as its O and H)."""
+def _counts_v(nodes, mult=1.0, out=None):
+    """{(element, valence): apfu} of the ideal formula itself — the valence written ('Fe3+'), else None; a mixed site counted
+    as its first member that is not a vacancy (the end-member; an O/H group as its O and H); the H of an ammonium group
+    ((NH4), NH4) keyed ('H', 'NH4') — it belongs to the (NH4)2O row, not to the water."""
     out = OrderedDict() if out is None else out
-    for n in nodes:
+    add = lambda key, n: out.__setitem__(key, out.get(key, 0) + n)
+    for i, n in enumerate(nodes):
         if n[0] == 'el':
-            out[n[1]] = out.get(n[1], 0) + _num(n[3]) * mult
+            nh4 = n[1] == 'H' and n[3] == '4' and i > 0 and nodes[i - 1][0] == 'el' and nodes[i - 1][1] == 'N'
+            add(('H', 'NH4') if nh4 else (n[1], n[2]), _num(n[3]) * mult)
         elif n[0] == 'site':
-            first = next((e[0] for e in n[3] if e[0] != '□'), None)
+            first = next((e for e in n[3] if e[0] != '□'), None)
             if first is None:
                 continue
-            for el, k in (re.findall(r'([OH])(\d*)', first) if _member_kind(first) != 'el' else [(first, '')]):
-                out[el] = out.get(el, 0) + _num(k) * _num(n[4]) * mult
+            if _member_kind(first[0]) != 'el':
+                for el, k in re.findall(r'([OH])(\d*)', first[0]):
+                    add((el, None), _num(k) * _num(n[4]) * mult)
+            else:
+                add(first, _num(n[4]) * mult)
         elif n[0] == 'grp':
-            template_counts(n[3], mult * _num(n[4]), out)
+            _counts_v(n[3], mult * _num(n[4]), out)
     return out
+
+def template_counts(nodes):
+    """{element: apfu} of the ideal formula itself (`_counts_v` summed over the valences)."""
+    out = OrderedDict()
+    for (el, _v), n in _counts_v(nodes).items():
+        out[el] = out.get(el, 0) + n
+    return out
+
+def _hydrate_var(nodes):
+    """The count of a hydrate written as no number ('n', '(10-12)'), else ''."""
+    for n in nodes:
+        if n[0] == 'grp':
+            if len(n) > 6 and n[6]:
+                return n[6]
+            v = _hydrate_var(n[3])
+            if v:
+                return v
+    return ''
+
+def _half_up(v, digits=2):
+    """v to `digits` decimals as Excel's TEXT() writes it: half away from zero on the value's shortest decimal form (Python's
+    '%.2f' rounds 0.125 to 0.12, Excel to 0.13 — and the live cell must say what the text says)."""
+    from decimal import Decimal, ROUND_HALF_UP
+    q = Decimal(repr(float(v))).quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
+    return ('%.*f' % (digits, q)) if q else '%.*f' % (digits, 0.0)
 
 def _is_h_group(n):
     """(OH), (H2O), ·2H2O, (H3O2): a group of O and H only — its multiplier is what the H apfu sets."""
@@ -769,12 +997,40 @@ def lay_out(red, nodes):
     (OH,F)2 — comes from the H apfu when the formula has one such H carrier (more than one: the H cannot be split between
     them, all are written as typed); a vacancy or an O in a mixed site, (Na,□), (O,OH)2, is what the site's count leaves
     once every other member is known ((value, ('rem', count, [(row keys, divisor) …])) pieces); an element written in two
-    places is written as typed (its apfu cannot be split)."""
+    places is written as typed (its apfu cannot be split); an element written without a valence takes only the rows of a
+    valence the formula does not write elsewhere ((Mg,Fe)Fe3+2O4: the site's Fe is the FeO, the Fe2O3 is the Fe3+); a mixed
+    site holding an analysed member that cannot be placed (written twice, or in a valence no row has) is written as typed."""
     notes = []
+    written = {}                                                           # element -> the valences the formula writes for it
+    def note_written(ns):
+        for n in ns:
+            if n[0] == 'el' and n[2]:
+                written.setdefault(n[1], set()).add(n[2])
+            elif n[0] == 'site':
+                for e in n[3]:
+                    if e[1]:
+                        written.setdefault(e[0], set()).add(e[1])
+            elif n[0] == 'grp':
+                note_written(n[3])
+    note_written(nodes)
     def rows_of(sym, val):
         ks = [k for k, r in red.rows.items() if r.c.element == sym and r.c.kind != 'water'
-              and (val is None or abs(r.c.charge - val) < 1e-6)]
+              and (abs(r.c.charge - val) < 1e-6 if val is not None else not any(abs(r.c.charge - w) < 1e-6 for w in written.get(sym, ())))]
         return ks
+    def analysed(sym):
+        return any(r.c.element == sym and r.c.kind != 'water' for r in red.rows.values())
+    said = set(); held = {}                                                # held: element -> the site written as typed that names it
+    def note_valence(sym, val):
+        if (sym, val) in said:
+            return
+        said.add((sym, val))
+        have = [k for k, r in red.rows.items() if r.c.element == sym and r.c.kind != 'water']
+        kinds = {red.rows[k].c.kind for k in have}
+        if kinds <= {'element', 'element-anion'}:
+            notes.append('%s%d+ is written as typed: %s is analysed as the element (wt%% %s) — write %s without a valence' % (sym, val, sym, sym, sym))
+        else:
+            notes.append('%s%d+ is written as typed: the analysis has no %s%d+ row (%s is analysed as %s) — convert the oxide, or split %s by charge balance (--charge %s)'
+                         % (sym, val, sym, val, sym, ', '.join(have), sym, sym))
     water = [k for k, r in red.rows.items() if r.c.kind == 'water']
     places = {}
     def count_places(ns):
@@ -807,18 +1063,26 @@ def lay_out(red, nodes):
     parts = []
     def site(n, div):
         members = []                                                       # (member, kind, piece or None)
+        blocked = False
         for e in n[3]:
             kind = _member_kind(e[0]); piece = None
             if kind == 'el':
                 ks = rows_of(*e) if places.get(e, 0) == 1 else []
                 if ks:
                     piece = (sum(red.rows[k].apfu for k in ks) / div, ks, div)
+                elif analysed(e[0]) and (places.get(e, 0) > 1 or e[1] is not None):
+                    blocked = True                                         # analysed, but its apfu cannot go here: the site as typed
+                    if e[1] is not None and places.get(e, 0) == 1:
+                        note_valence(*e)
             elif kind == 'h' and one_h:
                 h = _h_of(e[0]) * div
                 piece = (sum(red.rows[k].apfu for k in water) / h, water, h)
             members.append((e, kind, piece))
         known = [p for _e, _k, p in members if p]
-        if not known:                                                      # nothing of it analysed: as typed
+        if blocked:
+            for e in n[3]:
+                held.setdefault(e[0], n[1] + ','.join(fmt_el(*x) for x in n[3]) + n[2] + n[4])
+        if not known or blocked:                                           # nothing of it analysed, or a member that cannot be placed: as typed
             parts.append(n[1] + ','.join(fmt_el(*e) for e in n[3]) + n[2] + n[4]); return
         rem = [i for i, (_e, kind, _p) in enumerate(members) if kind == 'rem']
         if len(rem) == 1 and all(p for _e, kind, p in members if kind == 'h'):
@@ -847,6 +1111,8 @@ def lay_out(red, nodes):
                     parts.append(fmt_el(sym, val)); parts.append((sum(red.rows[k].apfu for k in ks) / div, ks, div)); used.update(ks)
                 else:
                     parts.append(fmt_el(sym, val) + count)
+                    if val is not None and sym != 'O' and places.get((sym, val), 0) == 1 and analysed(sym):
+                        note_valence(sym, val)                             # Fe2+Fe3+2O4 with FeO alone: the Fe3+ is not in the analysis
             elif n[0] == 'site':
                 site(n, div)
             elif n[0] == 'grp':
@@ -860,7 +1126,7 @@ def lay_out(red, nodes):
                     parts.extend([val, inner] if not n[1] else [n[1] + inner + n[2], val])    # ·2.00H2O: a hydrate's count stands before it
                     continue
                 if not n[1]:                                                                  # ·2H2O not analysed: as typed
-                    parts.append(n[4] + (wrap[0] if wrap else '')); walk(n[3], div * _num(n[4]))
+                    parts.append((n[6] if len(n) > 6 and n[6] else '') + n[4] + (wrap[0] if wrap else '')); walk(n[3], div * _num(n[4]))
                     if wrap:
                         parts.append(wrap[1])
                     continue
@@ -868,15 +1134,24 @@ def lay_out(red, nodes):
     walk(nodes, 1.0)
     for k, r in red.rows.items():
         if k not in used and r.c.kind != 'water' and r.c.element != 'O':
+            if any(el == r.c.element for el, _v in said):
+                continue                                                   # its valence already said
             twice = [(v, c) for (el, v), c in places.items() if el == r.c.element and c > 1 and (v is None or abs(v - r.c.charge) < 1e-6)]
             if twice:                                                      # CaFe(SO4)2Fe(OH)2: named, but in two places
                 notes.append('%s is written in %d places of the ideal formula: written as typed there — its %.2f apfu cannot be split between them'
                              % (r.c.element, max(c for _v, c in twice), r.apfu))
                 continue
+            if r.c.element in held:                                        # named, in a site written as typed for another member's sake
+                notes.append('%s (%.2f apfu) is in the site %s, written as typed: another of its members cannot be placed' % (r.c.element, r.apfu, held[r.c.element]))
+                continue
             vals = sorted({v for (el, v) in places if el == r.c.element and v})
             if vals:                                                       # the formula writes Fe3+, the analysis has FeO
-                notes.append('%s is analysed as %s (%s%g+) but the ideal formula writes %s: written as typed — convert the oxide, or write %s without a valence'
-                             % (r.c.element, k, r.c.element, r.c.charge, ', '.join('%s%d+' % (r.c.element, v) for v in vals), r.c.element))
+                if r.c.kind in ('element', 'element-anion'):
+                    notes.append('%s is analysed as the element (wt%% %s) but the ideal formula writes %s: written as typed — write %s without a valence'
+                                 % (r.c.element, r.c.element, ', '.join('%s%d+' % (r.c.element, v) for v in vals), r.c.element))
+                else:
+                    notes.append('%s is analysed as %s (%s%g+) but the ideal formula writes %s: written as typed — convert the oxide, or write %s without a valence'
+                                 % (r.c.element, k, r.c.element, r.c.charge, ', '.join('%s%d+' % (r.c.element, v) for v in vals), r.c.element))
                 continue
             host = next((red.rows[u].c.element for u in red.rows if u in used and red.rows[u].c.kind != 'water' and abs(red.rows[u].c.charge - r.c.charge) < 1e-6), None)
             notes.append('%s (%.2f apfu) is analysed but not placed: the ideal formula does not name it — write it into a site%s'
@@ -886,7 +1161,7 @@ def lay_out(red, nodes):
     return parts, notes
 
 def laid_out_text(parts, digits=2):
-    return ''.join(p if isinstance(p, str) else '%.*f' % (digits, p[0]) for p in parts)
+    return ''.join(p if isinstance(p, str) else _half_up(p[0], digits) for p in parts)
 
 def laid_out_excel(parts, cell_of, digits=2):
     """The live formula: ="(Cu"&TEXT(J2,"0.00")&"Zn"&TEXT(J3,"0.00")&")S"&… — cell_of(row key) -> its apfu cell."""
@@ -914,21 +1189,40 @@ def laid_out_excel(parts, cell_of, digits=2):
     return '=' + '&'.join(out)
 
 def ideal_from_template(red, nodes):
-    """The Ideal column from the ideal formula: each element's apfu on the table's constituent of that element (H on the H2O
-    row) -> ({constituent: wt%}, notes)."""
-    counts = template_counts(nodes); apfu = OrderedDict(); notes = []
-    for el, n in counts.items():
-        if el == 'O':
-            continue
+    """The Ideal column from the ideal formula: each element's apfu on the table's constituent of that element and valence
+    (Fe3+ on Fe2O3, a bare Fe on the Fe row of a valence the formula does not write elsewhere), H on the H2O row (an ammonium
+    group's H on the (NH4)2O row, which carries it) -> ({constituent: wt%}, notes)."""
+    counts = _counts_v(nodes); apfu = OrderedDict(); notes = []
+    written = {}
+    for (el, v) in counts:
+        if isinstance(v, int):
+            written.setdefault(el, set()).add(v)
+    def row_for(el, v):
+        rs = [k for k, r in red.rows.items() if r.c.element == el and r.c.kind != 'water']
+        if v is not None:
+            k = next((k for k in rs if abs(red.rows[k].c.charge - v) < 1e-6), None)
+            if k or not rs:
+                return k
+            notes.append('%s%d+ of the ideal formula has no %s%d+ row: counted on %s in the Ideal column' % (el, v, el, v, rs[0]))
+            return rs[0]
+        free = [k for k in rs if not any(abs(red.rows[k].c.charge - w) < 1e-6 for w in written.get(el, ()))]
+        return (free or rs or [None])[0]
+    ammonium = next((k for k, r in red.rows.items() if r.c.formula == 'N2H8O'), None)
+    for (el, v), n in counts.items():
+        if el == 'O' or (el == 'H' and v == 'NH4' and ammonium):
+            continue                                                # the (NH4)2O row carries the ammonium's H
         if el == 'H':
             k = next((k for k, r in red.rows.items() if r.c.kind == 'water'), None)
             if k:
                 apfu[k] = apfu.get(k, 0) + n / 2; continue          # ideal_wt_percent counts H2O as molecules
         else:
-            k = next((k for k, r in red.rows.items() if r.c.element == el and r.c.kind != 'water'), None)
+            k = row_for(el, v)
             if k:
                 apfu[k] = apfu.get(k, 0) + n; continue
         notes.append('%s of the ideal formula has no constituent in the table: left out of the Ideal column' % el)
+    var = _hydrate_var(nodes)
+    if var:
+        notes.append('the hydrate count %s is not a number: the Ideal column takes 1 H2O for it' % var)
     return (ideal_wt_percent(apfu) if apfu else None), notes
 
 def report_text(red, table):
@@ -1041,10 +1335,13 @@ def write_xlsx(red, table, path, ds=None, method='', published=None, notes=(), s
         col = L(j + 2)
         rng = '%s2:%s%d' % (col, col, n + 1) if len(sel) == n else ','.join(
             ('%s%d:%s%d' % (col, a + 2, col, b + 2)) if b > a else '%s%d' % (col, a + 2) for a, b in runs)   # runs, not cells: Excel drops a function of more than 255 arguments
-        ws.cell(r_mean, j + 2, '=AVERAGE(%s)' % rng)
+        # 'n.d.' on every point is a blank column: 0, as reduce() takes it (AVERAGE of blanks is #DIV/0!, which ran through
+        # the total and the factor into every apfu); one point has no s.d. (STDEV of one value is #DIV/0! too)
+        ws.cell(r_mean, j + 2, '=IF(COUNT(%s)=0,0,AVERAGE(%s))' % (rng, rng))
         if len(sel) > 1:                                                    # one row (a paper's means) has no spread
             ws.cell(r_mean + 1, 1, 's.d.'); ws.cell(r_mean + 2, 1, 'min'); ws.cell(r_mean + 3, 1, 'max')
-            ws.cell(r_mean + 1, j + 2, '=STDEV(%s)' % rng); ws.cell(r_mean + 2, j + 2, '=MIN(%s)' % rng); ws.cell(r_mean + 3, j + 2, '=MAX(%s)' % rng)
+            ws.cell(r_mean + 1, j + 2, '=IF(COUNT(%s)<2,0,STDEV(%s))' % (rng, rng))
+            ws.cell(r_mean + 2, j + 2, '=IF(COUNT(%s)=0,0,MIN(%s))' % (rng, rng)); ws.cell(r_mean + 3, j + 2, '=IF(COUNT(%s)=0,0,MAX(%s))' % (rng, rng))
     _write_reduction(wb, wb.create_sheet('reduction'), red, ds, r_mean, published, notes, None, decimals, table_total, not_judged, hold)
     # ---- table
     wt = wb.create_sheet('table')
@@ -1839,14 +2136,17 @@ def main(argv=None):
     if not a.probe:
         raise SystemExit('epma: give the probe export, e.g.  pxrd epma probe.xlsx --basis O=21 --xlsx')
     if a.blocks:
-        bl = probe_blocks(a.probe, a.sheet, parse_region(a.region) if a.region else None); d = default_block(bl)
+        try:
+            bl = probe_blocks(a.probe, a.sheet, parse_region(a.region) if a.region else None); d = default_block(bl)
+        except (ValueError, OSError) as e:
+            raise SystemExit('epma: %s' % e)
         print('\n'.join('%s %2d  %s' % ('*' if i == d else ' ', i + 1, b['label']) for i, b in enumerate(bl)) or 'no blocks of analyses found')
         return
     try:
         ds, red, table, text = prepare(a.probe, a.basis, a.charge, a.anions, a.raw_anions, a.add, a.convert, a.drop,
                                        a.points, a.standards, a.ideal, a.name, a.sheet, block=a.block - 1 if a.block is not None else None,
                                        region=a.region)
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         raise SystemExit('epma: %s' % e)
     print(text)
     if a.basis_sensitivity:

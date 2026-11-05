@@ -134,6 +134,44 @@ class Bands(unittest.TestCase):
         self.assertEqual(self._b('The low-energy (<400 cm–1) and OH-stretching ranges are distinctive.'), [])
         self.assertEqual(S.band_ranges('A broad band from 3550 to 3100 cm–1 is present.')[0][:2], (3100.0, 3550.0))
 
+    def test_pairing_classes_of_the_proposals(self):
+        b = self._b
+        # a band in parentheses inside its assignment's words goes to that assignment, not to the group named next
+        self.assertEqual(b('The IR spectrum shows bands of O-H stretching (in the range from 3286 to 3365 cm-1) and H-O-H bending (at 1675 cm-1) '
+                           'vibrations of H2O molecules and C-O stretching (in the range 1399-1598 cm-1) vibrations of CO32- groups.'), [(1675.0, 'H2O', 'bend')])
+        # a numbered mode inside the same parentheses as the band; a mode with its own band after it keeps that one
+        self.assertIn((964.0, 'SO4', 1), b('Bands of the asymmetric stretching mode of distorted SO42- anions (at 964 cm-1, non-degenerate A1(ν1) mode) are seen.'))
+        self.assertEqual(b('For the free ion the Raman frequencies (ν1 ≈980 cm-1, ν2 ≈450 cm-1) of SO42- are known.')[:2], [(980.0, 'SO4', 1), (450.0, 'SO4', 2)])
+        # 'respectively': two groups of one mode word, and a list of modes completed by one parenthesis
+        self.assertEqual(b('The peaks at 999 and 1068 cm-1 correspond to the symmetric stretching modes of PO43- and CO32-, respectively.'),
+                         [(999.0, 'PO4', 1), (1068.0, 'CO3', 1)])
+        self.assertEqual(b('The spectrum shows asymmetric F2(ν3) stretching, symmetric A1(ν1) stretching and F2(ν4) bending modes of PO43- groups '
+                           '(at 1072 and 1001 cm-1 and in the range of 500-600 cm-1, respectively).'), [(1072.0, 'PO4', 3), (1001.0, 'PO4', 1)])
+        # named jointly, without 'respectively': neither is claimed
+        self.assertEqual(b('The stretching modes of both H2O and NH4+ species give rise to a broad band with maxima at ~3020 and ~3540 cm-1.'),
+                         [(3020.0, None, None), (3540.0, None, None)])
+        # an oxyanion the list does not name keeps its mode from the group before it
+        self.assertEqual(b('Unlike in most uranyl minerals where the uranyl ν1 symmetric stretch dominates spectra, the strongest band in testite at '
+                           '723 cm-1 belongs to the ν2 or ν7 VO5 stretching vibrations.'), [(723.0, 'other', 2)])
+        # a bond written M-O,OH is a bond; its own polyanion's bond is the polyanion's
+        self.assertEqual(b('Bands at 543 and 454 cm-1 can be assigned to the M-O,OH symmetric stretching.'), [(543.0, 'M-O', 'stretch'), (454.0, 'M-O', 'stretch')])
+        self.assertEqual(b('A strong band at 853 cm-1 corresponds to As5+-O stretching vibrations of AsO43- groups.'), [(853.0, 'AsO4', 'stretch')])
+        # a mode word inside a merged name; an alternative ('or') and a ';' are borders a mode word does not cross
+        self.assertEqual(b('The weak band centered at 1594 cm-1 is attributed to the H-O-H bending modes within the H2O molecules.'), [(1594.0, 'H2O', 'bend')])
+        self.assertEqual(b('The band at 477 cm-1 can be assigned to libration modes of molecular H2O or WO5 bending.'), [(477.0, None, None)])
+        # a negated list; a range with the unit on both ends; a charge written before the subscript; a font ν after its group
+        self.assertEqual(b('Bands of the ν2 CO32- out-of-plane bending (about 880 cm-1) and ν4 CO32- in-plane bending (about 680 cm-1) vibrations were not observed.'), [])
+        self.assertEqual(b('The peaks in the range 1200 cm-1 - 600 cm-1 are related to stretching vibrations of SiO4 tetrahedra.'), [])
+        self.assertEqual(b('The weak bands at 1659 and 1395 cm-1 are due to the ν2 (δ) bending of H2O and the ν3 CO2- 3 antisymmetric stretching, respectively.'),
+                         [(1659.0, 'H2O', 2), (1395.0, 'CO3', 3)])
+        self.assertEqual(b('The PO4 n3 occurs at 1159 cm-1, PO4 ν1 stretching mode at 988 cm-1 and a PO4 n2 at 415 cm-1.'),
+                         [(1159.0, 'PO4', 3), (988.0, 'PO4', 1), (415.0, 'PO4', 2)])
+        # a number's own parentheses; a band the assignment refers to is not its own
+        self.assertEqual(b('The Raman spectrum shows two strong peaks at 607 (O-Si-O stretch) and 1070 cm-1 (Si-O stretch).'), [(607.0, 'M-O', 'stretch'), (1070.0, 'M-O', 'stretch')])
+        self.assertEqual(b('The band at 611 cm-1 is, presumably, an overtone of the band at 294 cm-1.')[0], (611.0, 'overtone', 'overtone'))
+        # the word 'silicate' names the group (its pattern had an escaped backslash and never matched)
+        self.assertEqual(b('The strong band at 965 cm-1 is due to the symmetric stretching of the silicate tetrahedra.'), [(965.0, 'SiO4', 1)])
+
     def test_semicolon_ends_a_run(self):
         b = self._b('The band at 3535 cm–1 is assigned to H2O stretching vibrations; 1385 and 1275 cm–1 to CO2 Fermi resonance; 1070 cm–1 (weak) to vibrations of the framework or HF librations.')
         self.assertEqual(b[0], (3535.0, 'H2O', 'stretch'))
@@ -251,6 +289,16 @@ class Libowitzky(unittest.TestCase):
 
     def test_a_class_boundary_is_not_a_distance(self):
         self.assertEqual(S.stated_distances('According to the Libowitzky (1999) classification, only these are strong bonds, with O···O < 2.7 Å.'), [])
+
+    def test_a_band_predicted_from_a_distance_and_the_wording(self):
+        # 'predicts bands at about 3600 … for O···O = 3.153 Å': the relation's own band for the distance (3579) is the comparison
+        r = S.check_claims('The relation of Libowitzky (1999) predicts bands at about 3600, 3550 and 2900 cm-1 for the hydrogen bonds predicted from '
+                           'the structure (O2···OW = 3.153, OW···OW = 3.01 and OW···O1 = 2.63 Å, respectively).')
+        self.assertTrue(r and all(x['status'] == 'reproduced' for x in r), [(x['status'], x['line']) for x in r])
+        # the paper's value first, then what the relation gives — never 'stated … by' the relation
+        r = S.check_claims('According to Libowitzky (1999), the O–H stretching band at 3330 cm-1 corresponds to an O···O distance of 2.83 Å.')
+        line = next(x['line'] for x in r if x['line'])
+        self.assertTrue(line.startswith('O···O 2.83 Å stated for the band at 3330 cm⁻¹; Libowitzky (1999) gives'), line)
 
     def test_a_proved_reading_makes_a_stated_pair_a_finding(self):
         t = ('Using Libowitzky (1999), the distances expected are ~2.66 Å (3028 cm–1) and ~2.72 Å (3253 cm–1). '
@@ -586,6 +634,13 @@ class Wording(unittest.TestCase):
             infos += got
         infos += S.table_lines([S.Band(1086.0, None, '', 'CO3', 1, 'row', True), S.Band(1150.0, None, '', 'CO3', 4, 'row', True)],
                                [S.Band(1086.0, 'raman', '', 'CO3', 3, 'The band at 1086 cm-1 is assigned to ν3 of CO3.', True)])
+        # the paper's assignments against themselves and the library: the inversion is a finding, the rest information
+        mk = lambda pos, fam, mode, sent: S.Band(pos, 'raman', '', fam, mode, sent, True)
+        flags += [ln for ln in S.assignment_lines([mk(1105.0, 'SO4', 1, 'The band at 1105 cm-1 is the ν1 of SO4.'),
+                                                   mk(990.0, 'SO4', 3, 'The band at 990 cm-1 is the ν3 of SO4.')]) if ln.startswith('mode order')]
+        infos += S.assignment_lines([mk(1100.0, 'SO4', 1, 'The strong band at 1100 cm-1 is attributable to ν1 symmetric stretching of SO4.')])
+        infos += S.assignment_lines([mk(435.0, 'AsO4', 4, 'The bands at 449 and 435 cm-1 are related to the ν4 AsO4 vibrations.'),
+                                     mk(435.0, 'AsO4', 2, 'Weak bands at 435 cm-1 belong to ν2 bending of arsenate in this mineral.')])
         return flags, infos
 
     def test_flags_and_information(self):
@@ -597,6 +652,31 @@ class Wording(unittest.TestCase):
             self.assertTrue(PR.is_flag(ln), ln); self.assertEqual(G._calc_kind(ln), 'calc', ln)
         for ln in infos:
             self.assertFalse(PR.is_flag(ln), ln); self.assertEqual(G._calc_kind(ln), 'calcinfo', ln)
+
+
+class Assignments(unittest.TestCase):
+    """The paper's band assignments against each other and against the band library (assignment_lines)."""
+    def _lines(self, text):
+        return S.assignment_lines([b for b in S.bands(text) if b.own])
+
+    def test_mode_order_wrong_mode_and_two_assignments(self):
+        inv = self._lines('The band at 1105 cm-1 is assigned to the ν1 symmetric stretching of SO4. The band at 995 cm-1 is assigned to the ν3 of SO4.')
+        self.assertTrue(any(ln.startswith('mode order: ν1 of SO4 at 1105') for ln in inv), inv)
+        ok = self._lines('The band at 995 cm-1 is assigned to the ν1 symmetric stretching of SO4. The band at 1105 cm-1 is assigned to the ν3 of SO4.')
+        self.assertEqual(ok, [])
+        wrong = self._lines('The strong band at ~1100 cm-1 is attributable to ν1 symmetric stretching of S-O bonds in sulfate groups.')
+        self.assertEqual(len(wrong), 1); self.assertIn('ν3 (', wrong[0]); self.assertIn('(information)', wrong[0])
+        two = self._lines('The bands at 468 and 435 cm-1 are related to the ν4 AsO4 vibrations. The weak bands at 435 and 401 cm-1 are related to the ν2 AsO4 bending vibrations.')
+        self.assertTrue(any('435 cm⁻¹ is assigned to ν4 AsO4 in one place and to ν2 AsO4 in another' in ln for ln in two), two)
+
+    def test_what_is_not_judged(self):
+        # a second mode word with no group of its own, an exception, a range from memory, a silicate, two groups, 'stretch' beside ν3
+        self.assertEqual(self._lines('The bands at 954 and 976 cm-1 correspond to symmetric stretching, whereas the band at 1133 cm-1 is the antisymmetric stretching of SO4.'), [])
+        self.assertEqual(self._lines('Perhaps with the exception of the band at 1099 cm-1, the bands correspond to bending of BO3 groups.'), [])
+        self.assertEqual(self._lines('The band at 1092 cm-1 is attributed to the symmetric Si-O stretching vibrations of the Si2O7 groups.'), [])
+        self.assertEqual(self._lines('The bands at 1110 and 1080 cm-1 correspond to the antisymmetric stretching of SO4. Two bands (at 1110 and 1080 cm-1) are related to SO4 stretching.'), [])
+        # a water molecule's rocking is a libration, not a bend
+        self.assertEqual([(b.family, b.mode) for b in S.bands('The band at 852 cm-1 is attributed to water rocking vibrations.')], [('H2O', 'lib')])
 
 
 class Windows(unittest.TestCase):
