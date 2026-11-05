@@ -653,7 +653,7 @@ button.mini { padding: 3px 8px; font-size: .82em; flex: none; }
 .pubtable .tb-site-click:hover { color: var(--accent); }
 .pubtable .tb-site-on { color: var(--fix); }
 .tb-site-bar { margin: 0 0 10px; font-size: .85em; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.tb-site-bar code { padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; }
+.tb-site-bar code { padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; font-family: inherit; }   /* the page font: O and 0 told apart in a composition */
 .tb-site-panel { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; max-width: 760px; font-size: .88em; }
 .tb-site-panel h4 { margin: 0 0 8px; font-size: 1em; }
 .tb-site-panel table { border-collapse: collapse; margin: 4px 0 8px; }

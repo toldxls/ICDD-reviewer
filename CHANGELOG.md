@@ -49,6 +49,26 @@ package version in `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added — the Tables tab's bond tables
+- **The manuscript check follows the site options.** With site options on a .cif and a paper chosen, the Bond valence tab
+  checks the paper's bond tables against the structure under those options (`/api/tb/bvcheck`, `bv_check.run` with
+  `sites=`): a paper that weights a mixed anion site over its species is checked under its own convention. Fill ▸'s check
+  stays the default reading.
+- **`×n rows`** (the Bond valence pane; `pxrd tables --xn`): Table 2 prints one row per bond with its multiplicity
+  (`Ti1–O1³ ×2`, the loop's row and esd, a code that shows the image) instead of a row per equivalent bond.
+- **Esds for the computed bonds**: a bond the .cif's loop does not list gets an esd propagated from the coordinate and cell
+  esds without correlations, written as SHELXL writes them (two digits to 19, one from 20). Against the 8,512 corpus
+  bonds the loops do list: median ratio to SHELXL's esd 1.02, half printed identically, 74 % within one unit of the last
+  digit; the note says how they were derived.
+
+### Fixed
+- Table 2's means are over every bond: a loop that writes a ×4 bond once had counted it once (rutile's `<Ti–O>` 1.964 for
+  1.959).
+- `pxrd bv --table`: a column of a partly vacant anion adds up by the anion's occupancy, as the site sum does — a paper that
+  prints the scaled Σ under unscaled cells had been told its column did not add up (the BV statements seed identical on
+  153 structures, the workbook gauntlet unchanged on 1,145 papers).
+- The site-options bar shows a composition in the page font: in monospace `O0.9F0.1`'s O read as a zero.
+
 ## [0.21.0] — 2026-11-05
 **The Tables tab's bond tables follow the .cif, and a site can be given its own bond-valence terms.** A symmetry code's
 superscript is the .cif's own operator number; Table 2 lists every bond the bond-valence table counts; a cation's column

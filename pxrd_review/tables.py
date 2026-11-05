@@ -411,28 +411,93 @@ def _code_pos(st, site, code):
     q = B._apply(st.ops[int(m.group(1)) - 1], site.frac)
     return [q[k] + t[k] for k in range(3)]
 
+def _esds(st):
+    """{atom label: [σx, σy, σz]} and [σa, σb, σc, σα, σβ, σγ] from the .cif's own numbers ('0.74485(14)' -> 0.00014; a
+    coordinate with no esd — a special position, a fixed value — counts as exact)."""
+    it = st.block['items']
+    cell = [B._esd(it.get('_cell_length_' + k, '')) or 0.0 for k in ('a', 'b', 'c')] + \
+           [B._esd(it.get('_cell_angle_' + k, '')) or 0.0 for k in ('alpha', 'beta', 'gamma')]
+    tags, rows = B._loop(st.block, '_atom_site_fract_x')
+    labs = B._col(tags, rows, '_atom_site_label')
+    xyz = [B._col(tags, rows, '_atom_site_fract_' + k) for k in 'xyz']
+    return {lab: [B._esd(xyz[k][i]) or 0.0 for k in range(3)] for i, lab in enumerate(labs)}, cell
+
+def _dist_esd(st, esds, cat, an, code):
+    """The esd of a computed distance from the coordinate and cell esds, by propagation with no correlations (a .cif
+    carries no covariances; SHELXL's own esds use the full matrix). None when nothing carries an esd."""
+    at, cell_e = esds
+    cs, asite = st.site(cat), st.site(an)
+    if cs is None or asite is None:
+        return None
+    m = _NKLM.match((code or '.').strip()) if code not in ('.', '', '?', None) else None
+    if code not in ('.', '', '?', None, '1_555') and not (m and 1 <= int(m.group(1)) <= len(st.ops)):
+        return None                                        # a code the operators cannot place
+    rot, tr = (st.ops[int(m.group(1)) - 1] if m else ([[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0]))
+    t = [int(m.group(k)) - 5 for k in (2, 3, 4)] if m and m.group(2) else [0, 0, 0]
+    def dist(p, q, cellv):
+        a, b, c, al, be, ga = cellv
+        ca, cb, cg = (math.cos(math.radians(x)) for x in (al, be, ga))
+        G = [[a * a, a * b * cg, a * c * cb], [a * b * cg, b * b, b * c * ca], [a * c * cb, b * c * ca, c * c]]
+        qq = B._apply((rot, [tr[i] + t[i] for i in range(3)]), q)
+        d = [qq[i] - p[i] for i in range(3)]
+        return math.sqrt(max(sum(d[i] * G[i][j] * d[j] for i in range(3) for j in range(3)), 0.0))
+    p0, q0, c0 = list(cs.frac), list(asite.frac), list(st.cell)
+    d0 = dist(p0, q0, c0)
+    e_p = at.get(cat.split('/')[0]) or [0.0] * 3; e_q = at.get(an.split('/')[0]) or [0.0] * 3
+    var = 0.0
+    for k in range(3):                                     # numerical derivatives: a step of one esd each, independently
+        if e_p[k]:
+            p1 = list(p0); p1[k] += e_p[k]; var += (dist(p1, q0, c0) - d0) ** 2
+        if e_q[k]:
+            q1 = list(q0); q1[k] += e_q[k]; var += (dist(p0, q1, c0) - d0) ** 2
+    for k in range(6):
+        if cell_e[k]:
+            c1 = list(c0); c1[k] += cell_e[k]; var += (dist(p0, q0, c1) - d0) ** 2
+    return math.sqrt(var) if var > 0 else None
+
+def with_esd(value, esd):
+    """'2.1234' with esd 0.0198 -> '2.123(20)': the value rounded where its esd's two digits end (one digit from 20 up,
+    as SHELXL writes them: 2.123(20) but 2.12(3))."""
+    if not esd:
+        return '%.3f' % value
+    k = -int(math.floor(math.log10(esd)))                   # the decimal of the esd's first digit
+    digits = esd * 10 ** k
+    if digits < 2:                                          # 1.x: keep two digits (14, 19)
+        k += 1
+    k = max(k, 0)
+    e = int(round(esd * 10 ** k))
+    if e >= 20 and k > 0 and esd * 10 ** (k - 1) >= 2:      # rounded up into two digits from 20 on: one digit
+        k -= 1; e = int(round(esd * 10 ** k))
+    return '%.*f(%d)' % (k, value, e)
+
 def _bond_source(st, P, result):
     """[(cation label, anion label, distance string, code)] — exactly the bonds the bond-valence table counts
     (compute's result, so a site's own longest bond or parameter set moves both tables), one row per
     symmetry-equivalent bond. A bond the .cif's _geom_bond loop lists takes the loop's distance with its esd and
     the loop's code, and the loop's own granularity (a loop that writes a ×4 bond once keeps one row); a bond the loop
     lacks altogether (SHELXL's CONN default stops short of a long contact) is computed, one row per image: no esd, the
-    code of its image. Returns (rows, has_loop, n_computed)."""
+    code of its image, its esd propagated from the coordinate and cell esds (`_dist_esd`; none when the .cif gives
+    none). Returns (rows, has_loop, n_computed); a row is (cation, anion, distance, code, bond, weight, from_loop):
+    `bond` numbers the bond (one distance to one anion, `count` times) and `weight` is the row's share of its count, so
+    a mean over the rows is over every bond however the loop writes them (a ×4 written once weighs 4)."""
     loop, has_loop = _loop_bonds(st)
-    out = []; n_comp = 0
+    out = []; n_comp = 0; nb = 0; esds = _esds(st)
     for c, bonds, *_r in result:
         if c.element == 'H' or not bonds:
             continue
-        mine = [(an, d, code, B._num(d)) for cat, an, d, code in loop if cat == c.label and B._num(d) is not None]
+        mine = []
+        for cat, an, d, code in loop:
+            if cat == c.label and B._num(d) is not None and (an, d, code) not in [(m[0], m[1], m[2]) for m in mine]:
+                mine.append((an, d, code, B._num(d)))     # a mixed site (Ca1/Na1): each bond once, not per species
         taken = set(); used_pos = []
         imgs = None
         for b in sorted(bonds, key=lambda x: x.dist):
-            need = b.count
+            need = b.count; nb += 1
             cand = sorted((k for k, (an, d, code, dv) in enumerate(mine) if k not in taken and an == b.anion.label and abs(dv - b.dist) < 0.006),
-                          key=lambda k: abs(mine[k][3] - b.dist))
-            for k in cand[:need]:
+                          key=lambda k: abs(mine[k][3] - b.dist))[:need]
+            for k in cand:
                 taken.add(k); an, d, code, dv = mine[k]
-                out.append((c.label, an, d, code))
+                out.append((c.label, an, d, code, nb, b.count / len(cand), True))
                 pos = _code_pos(st, b.anion, code)
                 if pos is not None and abs(st.dist(c.frac, pos) - dv) < 0.01:     # a loop code that puts the atom elsewhere claims no image
                     used_pos.append(pos)
@@ -448,7 +513,7 @@ def _bond_source(st, P, result):
                 pos = _code_pos(st, o, code)
                 if pos is not None and any(max(abs(pos[k] - u[k]) for k in range(3)) < 1e-3 for u in used_pos):
                     continue                              # the image a loop row already is
-                out.append((c.label, o.label, '%.3f' % d, code)); n_comp += 1; need -= 1
+                out.append((c.label, o.label, with_esd(d, _dist_esd(st, esds, c.label, o.label, code)), code, nb, 1.0, False)); n_comp += 1; need -= 1
                 if pos is not None:
                     used_pos.append(pos)
     return out, has_loop, n_comp
@@ -521,14 +586,25 @@ def _neighbours_with_codes(st, site, cutoff):
         seen.add(key); out.append((other, d, '.' if code == '1_555' else code))
     return out
 
-def bond_table(st, codes, P, J=None, result=None):
+def bond_table(st, codes, P, J=None, result=None, xn=False):
+    """Table 2. xn: one row per bond with its multiplicity ('Ti1–O1³ ×2', the code of one image) instead of a row per
+    equivalent bond as the .cif's loop writes them."""
     J = J or journal(None)
     codes.begin_table('bonds')
     if result is None:
         result = B.compute(st, P, None, 'none')[0]
     src, has_loop, n_comp = _bond_source(st, P, result)
-    for _c, _a, d, code in src:                          # the .cif's own codes first: a bond its loop lacks takes the prime
-        if '(' in d:
+    if xn:                                               # one row per bond: the loop's row (with its esd) and a code that shows the image
+        merged = OrderedDict()
+        for row in src:
+            merged.setdefault(row[4], []).append(row)
+        src = []
+        for rows_ in merged.values():
+            # the loop's row (it carries the esd) before a computed one; of those, one with a code, which shows the image
+            pick = min(rows_, key=lambda r_: (not r_[6], r_[3] in ('.', '', '?', '1_555')))
+            src.append(pick[:5] + (sum(r_[5] for r_ in rows_), pick[6]))
+    for _c, _a, d, code, _b, _w, from_loop in src:       # the .cif's own codes first: a bond its loop lacks takes the prime
+        if from_loop:
             codes._register(code)
     order = {s_.label: k for k, s_ in enumerate(st.anions)}
     blocks = []
@@ -544,26 +620,27 @@ def bond_table(st, codes, P, J=None, result=None):
         el_sites = [s_ for s_ in st.cations if s_.element == site.element and s_.element != 'H']
         catlab = site.label if len(el_sites) > 1 or '/' in site.label else re.sub(r'\d+$', '', site.label)
         groups = OrderedDict()
-        seen = set()
-        for cat, an, d, code in mine:
-            key = (an, d, code)                  # a mixed site (Ca1/Na1) lists each bond once, not per species
-            if key in seen:
-                continue
-            seen.add(key)
-            groups.setdefault(el_of(an), []).append((_bond_cell(site.label, an, codes.index(code, '%s–%s' % (site.label, an), d)), C(d), B._num(d), an))
+        for cat, an, d, code, _b, w, _l in mine:
+            cell = _bond_cell(site.label, an, codes.index(code, '%s–%s' % (site.label, an), d))
+            n_ = int(round(w))
+            if xn and n_ > 1 and abs(w - n_) < 1e-6:
+                cell = cell + R(' ×%d' % n_)
+            groups.setdefault(el_of(an), []).append((cell, C(d), B._num(d), an, w))
         lines = []
         for el, rows in groups.items():
-            lines += [(a, b_) for a, b_, _, _ in rows]
-            vals = [v for _, _, v, _ in rows if v is not None]
+            lines += [(a, b_) for a, b_, _, _, _ in rows]
+            vals = [(v, w) for _, _, v, _, w in rows if v is not None]   # each row weighed by its share of the bond's multiplicity
             if not vals:
                 continue
+            wmean = lambda vs: sum(v * w for v, w in vs) / sum(w for _, w in vs)
             # a mean per anion when the cation has two kinds ('<Pb1–O>' and '<Pb1–S>'); uranyl gets <U–Oyl> and <U–Oeq>
-            if site.element == 'U' and el == 'O' and any(sp.ox == 6 for sp in site.species) and len(vals) >= 4:
-                sv = sorted(vals); yl, eq = sv[:2], sv[2:]
+            if site.element == 'U' and el == 'O' and any(sp.ox == 6 for sp in site.species) and sum(w for _, w in vals) >= 4 - 1e-6:
+                every = sorted(v for v, w in vals for _ in range(max(1, int(round(w)))))     # the two shortest BONDS are the uranyl
+                yl, eq = every[:2], every[2:]
                 lines.append((C('<', R(catlab + '–O', 'i'), R('yl', 'i', 'sub'), '>'), C('%.3f' % (sum(yl) / len(yl)))))
                 lines.append((C('<', R(catlab + '–O', 'i'), R('eq', 'i', 'sub'), '>'), C('%.3f' % (sum(eq) / len(eq)))))
             else:
-                lines.append((C('<', R('%s–%s' % (catlab, el), 'i'), '>'), C('%.3f' % (sum(vals) / len(vals)))))
+                lines.append((C('<', R('%s–%s' % (catlab, el), 'i'), '>'), C('%.3f' % wmean(vals))))
         blocks.append({'cation': site.label, 'rows': lines})
     # lay the blocks out in three columns: each block goes to the shortest column, in order
     cols = [[], [], []]
@@ -583,7 +660,9 @@ def bond_table(st, codes, P, J=None, result=None):
     if not has_loop:
         how = ' Distances computed from the .cif coordinates (no esds: the .cif has no _geom_bond loop).'
     elif n_comp:
-        how = ' Distances without an esd are computed from the .cif coordinates (bonds its _geom_bond loop does not list).'
+        how = (' Distances the .cif\'s _geom_bond loop does not list are computed from its coordinates' +
+               (', their esds propagated from the coordinate and cell esds without correlations.' if any(not r_[6] and '(' in r_[2] for r_ in src)
+                else ' (no esds: the .cif gives none for the coordinates).'))
     else:
         how = ''
     return {'caption': _title(J, J['bonds_caption'].format(name=st.name)), 'head': None, 'rows': rows,
@@ -706,7 +785,7 @@ def site_meta(st, params, result):
 # ----------------------------------------------------------------------------- build + render
 
 def build(cif, params='gh', ox=None, cutoff=None, include_h=True, journal_key=None, hbond='oo', hmax=None, donors=None, hb=None, u6='burns',
-          sites=None):
+          sites=None, xn=False):
     """The tables of one .cif. include_h=False leaves hydrogen out of everything (no H sites, no
     hydrogen bonds); hbond/hmax/donors/hb/u6 as in bv_check.run; sites = per-site options (bv_check.parse_sites:
     a cation's own set / R0 and b / longest bond, a site's composition) — for the bonds and the bond valences; the
@@ -720,7 +799,7 @@ def build(cif, params='gh', ox=None, cutoff=None, include_h=True, journal_key=No
                                                  B._parse_donors(donors) if isinstance(donors, str) else donors,
                                                  B._parse_hb(hb) if isinstance(hb, str) else hb)
     codes = SymCodes(st)
-    tabs = [('coords', coords), ('bonds', bond_table(st, codes, P, J, result))]
+    tabs = [('coords', coords), ('bonds', bond_table(st, codes, P, J, result, xn=xn))]
     hbt = hbond_table(st, codes, J, hbonds, hmax) if include_h else None
     if hbt:
         tabs.append(('hbonds', hbt))
@@ -816,8 +895,8 @@ def write_word(st, tabs, path):
     _save_docx(doc, path)
 
 def run(cif, word=False, params='gh', ox=None, cutoff=None, include_h=True, out_dir=None, quiet=False, journal_key=None,
-        hbond='oo', hmax=None, donors=None, hb=None, u6='burns', sites=None):
-    st, tabs = build(cif, params, ox, cutoff, include_h, journal_key, hbond, hmax, donors, hb, u6, sites)
+        hbond='oo', hmax=None, donors=None, hb=None, u6='burns', sites=None, xn=False):
+    st, tabs = build(cif, params, ox, cutoff, include_h, journal_key, hbond, hmax, donors, hb, u6, sites, xn)
     text = render_text(tabs)
     if not quiet:
         print(text)
@@ -848,10 +927,11 @@ def main(argv=None):
     ap.add_argument('--u6', default='burns', choices=['burns', 'params'], help='U6+–O parameters: burns = Burns et al. (1997) (default), params = the chosen set')
     ap.add_argument('--site', action='append', default=[], metavar='OPTION',
                     help="a site's own option, repeatable: 'Pb1 set=ba', 'Pb1 S=2.541/0.37[/ref]', 'Pb1 max=3.0', 'O1 comp=O0.9F0.1' (see pxrd bv --help)")
+    ap.add_argument('--xn', action='store_true', help="Table 2: one row per bond with its multiplicity ('Ti1–O1³ ×2') instead of a row per equivalent bond")
     a = ap.parse_args(argv)
     try:
         run(a.cif, a.word, a.params, a.ox, a.cutoff, not a.no_h, a.out, journal_key=a.journal,
-            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6, sites='; '.join(a.site) or None)
+            hbond=a.hbonds, hmax=a.hmax, donors=a.donors, hb=a.hb, u6=a.u6, sites='; '.join(a.site) or None, xn=a.xn)
     except ValueError as e:
         raise SystemExit('tables: %s' % e)
     return 0

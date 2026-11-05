@@ -32,7 +32,7 @@ startup — no raw paths from the page, so no path traversal. A per-launch auth 
 a shared machine out; Host-allowlist + Origin checks handle DNS rebinding and CSRF.
 No data leaves the machine.
 """
-import sys, os, re, io, math, bisect, json, html, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time, secrets
+import sys, os, re, io, math, bisect, json, html, argparse, datetime, threading, webbrowser, subprocess, hashlib, zipfile, shutil, time, secrets, tempfile
 
 from pxrd_review import cell_lambda_check as C
 from pxrd_review import extra_checks as X
@@ -2045,7 +2045,7 @@ def _tb_opts():
     sites = re.sub(r'[\x00-\x09\x0b-\x1f]', '', request.args.get('sites') or '')[:2000].strip()
     return dict(params=params, ox=ox or None, cutoff=_qf('cutoff', 1.0, 6.0), include_h=request.args.get('noh') != '1',
                 journal_key=_tb_journal(), hbond=hb, hmax=_qf('hmax', 2.6, 4.0), donors=donors or None, hb=pairs or None,
-                u6='params' if request.args.get('u6set') == '1' else 'burns', sites=sites or None)
+                u6='params' if request.args.get('u6set') == '1' else 'burns', sites=sites or None, xn=request.args.get('xn') == '1')
 
 def _q(name, default='', n=300):
     v = request.args.get(name)
@@ -2264,6 +2264,30 @@ def api_tb_bvs_export(key):
     except Exception as ex:
         return jsonify({'ok': False, 'error': E.explain(ex, MS['cifs'][key])}), 500
     return jsonify({'ok': True, 'file': key + '_bv.xlsx', 'note': note})
+
+@app.route('/api/tb/bvcheck/<key>')
+def api_tb_bvcheck(key):
+    """The chosen paper's bond tables checked against the .cif with the Bond valence tab's own options — its site options
+    above all (a paper that weights a mixed anion site over its species is checked under that convention, not the default).
+    The paper check that Fill ▸ shows is the default reading; this one is what the pane computes. Written nowhere."""
+    if key not in MS['cifs']:
+        abort(404)
+    pk = request.args.get('paper') or ''
+    paper = ((MS.get('pdfs') or {}).get(pk) or _tb_docx_path(pk)) if pk else None    # one of the folder's papers, never a path from the page
+    if not paper:
+        abort(404)
+    opts = _tb_opts()
+    tmp = tempfile.mkdtemp(prefix='pxrd_bvcheck_')
+    try:
+        st, result, anion_sum, cells, text = BV.run(MS['cifs'][key], table=paper, params=opts['params'], ox=opts['ox'], cutoff=opts['cutoff'],
+                                                    include_h=opts['include_h'], out_dir=tmp, quiet=True, hbond=opts['hbond'], hmax=opts['hmax'],
+                                                    donors=opts['donors'], hb=opts['hb'], u6=opts['u6'], follow_table=False, sites=opts['sites'])
+    except Exception as ex:
+        return jsonify({'ok': False, 'error': E.explain(ex, paper)}), 500
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    i = text.find('MANUSCRIPT TABLE CHECK')
+    return jsonify({'ok': True, 'name': os.path.basename(paper), 'text': text[i:] if i >= 0 else '', 'sites': opts.get('sites') or ''})
 
 def _tb_docx_path(key):
     """One of the folder's manuscript .docx files by key (never a path from the page)."""

@@ -54,6 +54,36 @@ class TablesMode(unittest.TestCase):
                 if os.path.exists(os.path.join(self.tmp, 'review_out', fn)):
                     os.remove(os.path.join(self.tmp, 'review_out', fn))
 
+    def test_the_manuscript_check_follows_the_site_options(self):
+        # a paper whose bond-valence table counts O1 as 20 % vacant: wrong under the default reading, right under the site option
+        from docx import Document
+        G = self.G
+        st = __import__('pxrd_review.bv_check', fromlist=['x'])
+        S = st.Structure(os.path.join(self.tmp, 'rutile.cif')); P = st.Params(prefer='bo'); st.apply_sites(S, P, 'O1 comp=O0.8')
+        res, an, cells, _hb = st.compute(S, P)
+        doc = Document(); t = doc.add_table(rows=0, cols=3)
+        for row in (('Atom', 'Ti1', 'Σ'), ('O1', ', '.join('%.2f%s' % (v, st._mark(nd, na)) for v, nd, na in cells[('O1', 'Ti1')]), '%.2f' % an['O1']),
+                    ('Σ', '%.2f' % res[0][2], '')):
+            r = t.add_row().cells
+            for i, x in enumerate(row):
+                r[i].text = x
+        path = os.path.join(self.tmp, 'ms.docx'); doc.save(path)
+        G.MS['files']['ms'] = path
+        rep = os.path.join(self.tmp, 'review_out', 'rutile_bv.txt')
+        stamp = lambda: os.path.getmtime(rep) if os.path.exists(rep) else None
+        before = stamp()
+        try:
+            q = lambda sites: self.c.get('/api/tb/bvcheck/rutile?' + urllib.parse.urlencode({'paper': 'ms', 'params': 'bo', 'sites': sites})).get_json()
+            plain, given = q(''), q('O1 comp=O0.8')
+            self.assertTrue(plain['ok'] and given['ok'])
+            self.assertIn('MANUSCRIPT TABLE CHECK', given['text'])
+            self.assertIn('Σ for Ti1', plain['text']); self.assertNotIn('Σ for Ti1', given['text'])   # the sum the vacancy scales
+            self.assertEqual(given['sites'], 'O1 comp=O0.8')
+            self.assertEqual(self.c.get('/api/tb/bvcheck/rutile?paper=nope').status_code, 404)   # a paper of the folder only
+            self.assertEqual(stamp(), before)                                         # written nowhere (the folder's report untouched)
+        finally:
+            G.MS['files'].pop('ms', None); os.remove(path)
+
     def test_with_no_folder_open_the_tables_routes_answer(self):
         G = self.G
         keep, G.MS['out_dir'] = G.MS['out_dir'], None

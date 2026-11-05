@@ -225,7 +225,14 @@ class BondTableFromTheBonds(unittest.TestCase):
         self.assertIn('1.9485(5)', text)                                            # the loop's, with its esd, as the loop writes it (once)
         self.assertEqual(re.findall(r'Ti1–O1(\S*)\s+1\.980\b', text), ['', '²'], text)   # the ×2 the loop lacked, one row per image, no esd:
                                                                                      # O1 as listed (no code) and its 2_555 image
-        self.assertIn('without an esd are computed', b['note'])
+        self.assertIn('does not list are computed from its coordinates (no esds: the .cif gives none', b['note'])
+        esd_cif = _write(self.tmp, 'e.cif', RUTILE.replace('Ti1 O1 1.9800(5) 3_555\n', '').replace('O1 O2- 0.30479 0.30479 0 1', 'O1 O2- 0.30479(5) 0.30479(5) 0 1')
+                         .replace('_cell_length_a 4.5937', '_cell_length_a 4.5937(2)').replace('_cell_length_b 4.5937', '_cell_length_b 4.5937(2)'))
+        st, tabs = T.build(esd_cif, params='bo')
+        b = dict(tabs)['bonds']; text = T.render_text([('bonds', b)])
+        self.assertEqual(re.findall(r'Ti1–O1\S*\s+(1\.98\d+\(\d\))', text), ['1.9801(2)'] * 2, text)   # the computed bonds carry a propagated esd
+        self.assertIn('esds propagated from the coordinate and cell esds without correlations', b['note'])
+        self.assertEqual((T.with_esd(2.1234, 0.0198), T.with_esd(2.1234, 0.031), T.with_esd(1.9485, 0.00049)), ('2.123(20)', '2.12(3)', '1.9485(5)'))
         self.assertEqual(T.coord('1.25'), '1¼'); self.assertEqual(T.coord('-1.5'), '-1½'); self.assertEqual(T.coord('0.75'), '¾')
 
     def test_mean_per_anion_and_the_cif_frame(self):
@@ -247,3 +254,15 @@ class BondTableFromTheBonds(unittest.TestCase):
         meta = {m['label']: m for m in bvs['sites']}
         self.assertEqual((meta['Ti1']['kind'], meta['Ti1']['max'], meta['O1']['species']), ('cation', 1.96, 'O0.90F0.10'))
         self.assertEqual({(p['cation'], p['anion']) for p in meta['Ti1']['pairs']}, {('Ti', 'O'), ('Ti', 'F')})
+
+    def test_mean_over_every_bond_and_xn_rows(self):
+        # the rutile loop writes the ×4 bond once: the mean still weighs it four times; --xn prints one row per bond with its count
+        cif = _write(self.tmp, 'rutile.cif', RUTILE)
+        mean = (4 * 1.9485 + 2 * 1.98) / 6
+        st, tabs = T.build(cif, params='bo')
+        self.assertIn('<Ti–O>   %.3f' % mean, T.render_text([('bonds', dict(tabs)['bonds'])]))
+        st, tabs = T.build(cif, params='bo', xn=True)
+        text = T.render_text([('bonds', dict(tabs)['bonds'])])
+        self.assertIn('Ti1–O1 ×4   1.9485(5)', text); self.assertIn('Ti1–O1³ ×2  1.9800(5)', text)   # the loop's rows, its esds and its code
+        self.assertIn('%.3f' % mean, text)
+        self.assertIn('Symmetry codes: (3)', dict(tabs)['bonds']['note'])

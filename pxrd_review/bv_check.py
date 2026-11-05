@@ -2430,7 +2430,7 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
             elif re.match(r'^\s*(A|Acceptor|Accepted|H[- ]?bonds?|vu)', x.strip(), re.I):
                 col_kind[ci] = 'acceptor'
         ncell = nbad = 0
-        col_tot = {ci: [0.0, 0.0] for ci in col_cat}       # [per-bond reading, total reading]
+        col_tot = {ci: [0.0, 0.0, 0.0] for ci in col_cat}  # [per-bond reading, total reading, per-bond × the anion's occupancy]
         col_ok = {}; col_bad_lines = {}                     # per cation column: cells agreeing, and the line indices of those that do not
         # The paper's own Σ row says how much of a site it counted: a column whose printed sum is under
         # half the computed one is a site the paper weights by an occupancy the table does not print
@@ -2474,14 +2474,18 @@ def check_bvs_table(st, result, cells, anion_sum, tables, params_label='?', comp
                                 and abs(nums[0] - calc[0][0]) > 0.015:
                             reading = 'total'                      # '1.46' = 3 × 0.49, for the column
                     if cat in h_cols:                                  # H columns: in the row total, not the cation part
-                        row_h += sum(nums); col_tot[ci][1] += sum(nums); col_tot[ci][0] += sum(nums)
+                        row_h += sum(nums); col_tot[ci][1] += sum(nums); col_tot[ci][0] += sum(nums); col_tot[ci][2] += sum(nums)
                         rec(ti, 'cell', an, cat, row[ci], nums, 'not compared', 'a hydrogen column: donor/acceptor bookkeeping varies')
                         continue
+                    # a partly vacant anion counts in its cation's sum by its occupancy (as compute's site sum does): a paper
+                    # that prints the scaled Σ under unscaled cells has a column that adds up that way
+                    a_site = st.site(an); a_occ = min(a_site.occ_total, 1.0) if a_site else 1.0
                     if reading == 'total':
-                        row_pb += nums[0] / calc[0][1] * n_across; col_tot[ci][0] += nums[0]
+                        row_pb += nums[0] / calc[0][1] * n_across; col_tot[ci][0] += nums[0]; col_tot[ci][2] += nums[0] * a_occ
                         row_occ += nums[0] / calc[0][1] * n_across * cat_occ.get(cat, 1.0)
                     else:
                         row_pb += sum(v * na for v, _, na in segs); col_tot[ci][0] += sum(v * nd for v, nd, _ in segs)
+                        col_tot[ci][2] += sum(v * nd for v, nd, _ in segs) * a_occ
                         row_occ += sum(v * na for v, _, na in segs) * cat_occ.get(cat, 1.0)
                     row_tot += sum(nums); col_tot[ci][1] += sum(nums)
                     row_alt += sum(v * max(nd, na) for v, nd, na in segs)   # a '×3↓' some authors also count in the row

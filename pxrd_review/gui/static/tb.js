@@ -202,7 +202,7 @@ function tbQuery(tab) {
     // the bond-valence pane's options shape every table of the .cif (the hydrogen-bond table too)
     const b = tbCollect('bvs');
     q.set('params', b.params || 'gh');
-    for (const k of ['ox', 'cutoff', 'hb', 'hmax', 'donors', 'hbp', 'u6set']) if (b[k]) q.set(k, b[k]);
+    for (const k of ['ox', 'cutoff', 'hb', 'hmax', 'donors', 'hbp', 'u6set', 'xn']) if (b[k]) q.set(k, b[k]);
     const sites = tbSitesFor(TBS.key); if (sites) q.set('sites', sites);
     if (o.noh) q.set('noh', '1');
     q.set('part', tab);
@@ -269,7 +269,16 @@ async function tbRender() {
              + (tab === 'coords' ? tbSymCodes(r.symcodes || []) : '');
   tbRenderBody(html);
   if (tab === 'bvs') tbSiteHooks(r);
-  if (tab === 'bvs' && TBS.mscheck && (TBS.mscheck.fromPaper || TBS.mscheck.key === TBS.key)) tbShowCheck(TBS.mscheck);
+  // with site options, the paper's tables are checked under them (Fill ▸'s check is the default reading): the chosen paper
+  const paperKey = tab === 'bvs' && tbSitesFor(TBS.key) && $('#tb-paper') ? $('#tb-paper').value : '';
+  if (paperKey) {
+    let c;
+    try { c = await fetch('/api/tb/bvcheck/' + enc(TBS.key) + '?' + tbQuery('bvs') + '&paper=' + enc(paperKey)).then(x => x.json()); } catch (ex) { c = { ok: false, error: String(ex) }; }
+    if (seq !== TBS.seq || tab !== TBS.tab) return;
+    if (c.ok && c.text) tbShowCheck({ name: c.name, text: c.text }, 'manuscript table check with the site options (' + c.sites + ')');
+    else if (!c.ok) tbShowCheck({ name: paperKey, text: '⚠ ' + (c.error || 'failed') }, 'manuscript table check with the site options');
+  }
+  else if (tab === 'bvs' && TBS.mscheck && (TBS.mscheck.fromPaper || TBS.mscheck.key === TBS.key)) tbShowCheck(TBS.mscheck);
   if (tab === 'epma' && TBS.papercheck) tbShowCheck(TBS.papercheck, 'what the paper says, checked against itself');
 }
 
