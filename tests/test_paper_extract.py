@@ -1131,7 +1131,7 @@ class ReviewFixes(unittest.TestCase):
         e = PE.epma_table(path, 'testite')
         f = next(r for r in e['rows'] if r['constituent'] == 'F')
         self.assertAlmostEqual(f['mean'], 0.295); self.assertEqual(f['all'], [0.3, 0.0, 0.28, 0.31, 0.0, 0.29])
-        self.assertEqual(e['total'], 95.6)                                              # 'Sum' is the total row, not a continuation of the F row
+        self.assertAlmostEqual(e['total'], 95.583, places=2)                            # 'Sum' is the total row, not a continuation of the F row — and the spots' sums are averaged as their rows are
         self.assertEqual(len(next(r for r in e['rows'] if r['constituent'] == 'MgO')['all']), 6)
 
     def test_transposed_fully_twinned_header(self):
@@ -2895,3 +2895,55 @@ class TableCompleteness(unittest.TestCase):
               mk(99, (95, 'MgO'), (171, '16.21'), (251, '15.68-17.20')), mk(113, (95, 'Total'), (171, '96.81'))]
         first = PE._continued_pages([p1, p2])[0][1]
         self.assertEqual([ln['w'][0][4] for ln in first][-3:], ['MnO', 'MgO', 'Total'])
+
+    def test_a_comparison_table_names_its_own_column(self):
+        # numbered columns keyed to sources below the table: the paper's own column alone is its analysis, its Total included
+        rows = [('CaO', '5.23', '5.60', '4.82', '5.50'), ('Y2O3', '15.30', '14.01', '17.85', '18.94'), ('SiO2', '13.90', '14.0', '12.98', '14.94'),
+                ('Fe2O3', '', '3.69', '1.78', '2.18'), ('F', '9.36', '7.85', '8.59', '7.07'), ('Total', '43.79', '45.15', '46.02', '48.63')]
+        y_tail = 60 + 32 + 14 * 7 + 6
+        extra = ((40, y_tail, '2 Proshchenko et al. (1966). Wet chemical analysis.'), (40, y_tail + 12, '3 Boiocchi et al. (2004). EMP analysis of Na, Ca, Fe.'),
+                 (40, y_tail + 24, '4 Smith and Jones (1999). SIMS.'))
+        e, (read, ok) = self._read('keyed.pdf', rows, head=('', '1', '2', '3', '4'), xs=(40, 120, 180, 240, 300), extra=extra)
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'CaO': 5.23, 'Y2O3': 15.30, 'SiO2': 13.90, 'F': 9.36})   # Fe2O3: blank in column 1
+        self.assertEqual(e['total'], 43.79); self.assertTrue(ok, (read, e['total']))
+        # the same columns headed 'Pln (holotype) | Pln (cotype) | …': the holotype's column
+        e, _ = self._read('holo.pdf', rows[:5] + [('Total', '43.79', '45.15', '46.02', '48.63')], head=('No.', '1', '2', '3', '4'), xs=(40, 120, 180, 240, 300),
+                          extra=((100, 60 + 32 + 8, 'Pln'), (118, 60 + 32 + 8, '(holotype)'), (165, 60 + 32 + 8, 'Pln'), (180, 60 + 32 + 8, '(cotype)')))
+        self.assertEqual(e['total'], 43.79); self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}['Y2O3'], 15.30)
+
+    def test_spots_average_and_the_range_column(self):
+        # spot analyses 1…4 with no own-column marker: averaged over the same-phase columns, and so are their totals
+        rows = [('MgO', '11.00', '13.71', '10.28', '8.59'), ('CuO', '31.18', '30.10', '32.00', '31.50'), ('SO3', '54.76', '55.00', '54.20', '55.10'),
+                ('Total', '96.94', '98.81', '96.48', '95.19')]
+        e, (read, ok) = self._read('spots.pdf', rows, head=('', '1', '2', '3', '4'), xs=(40, 120, 180, 240, 300))
+        self.assertAlmostEqual(e['total'], 96.855, places=2); self.assertTrue(ok, (read, e['total']))
+        # column 1 carries a range beside each value: it is the averaged analysis, the others single spots
+        rows = [('MgO', '11.00 (8.59-13.71)', '', '13.71', '10.28', '8.59'), ('CuO', '31.18 (30.1-32.0)', '', '30.10', '32.00', '31.50'),
+                ('SO3', '54.76 (54.2-55.1)', '', '55.00', '54.20', '55.10'), ('Total', '96.94', '', '98.81', '96.48', '95.19')]   # a hyphen: the test font prints no en dash
+        e, (read, ok) = self._read('rangecol.pdf', rows, head=('', '1', '', '2', '3', '4'), xs=(40, 100, 170, 240, 300, 360))
+        self.assertEqual(e['total'], 96.94); self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'MgO': 11.00, 'CuO': 31.18, 'SO3': 54.76})
+        self.assertEqual(PE._numbers(['3.70[2.4–4.4]', '5.07']), [('num', 3.7), ('range', (2.4, 4.4)), ('num', 5.07)])
+        self.assertTrue(PE._numlike('3.70[2.4–4.4]'))
+
+    def test_literature_columns_beside_this_study(self):
+        # Source | Williams (1979) | Kampf et al. (2010) | This study – average: the own column, a '–' under it being not detected
+        rows = [('SiO2', '–', '–', '0.46'), ('CaO', '0.3', '–', '–'), ('TeO2', '22.1', '42.0', '33.7'), ('PbO', '58.0', '58.4', '61.0'), ('Total', '80.4', '100.4', '95.16')]
+        extra = ((110, 60 + 32 - 14, 'Williams'), (170, 60 + 32 - 14, 'Kampf et al.'), (240, 60 + 32 - 14, 'This'), (262, 60 + 32 - 14, 'study'))
+        e, (read, ok) = self._read('lit.pdf', rows, head=('Source', '(1979)', '(2010)', 'average'), xs=(40, 110, 170, 270), extra=extra)   # 'average' 22 pt right of its column
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'SiO2': 0.46, 'TeO2': 33.7, 'PbO': 61.0})
+        self.assertEqual(e['total'], 95.16); self.assertTrue(ok, (read, e['total']))
+        # the same table with the header words over their columns and no 'This study': the '–' under Mean is still not another column's number
+        e, _ = self._read('lit2.pdf', rows, head=('Source', 'Williams', 'Kampf', 'Mean'), xs=(40, 110, 170, 248))
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'SiO2': 0.46, 'TeO2': 33.7, 'PbO': 61.0})
+
+    def test_caption_words_name_no_column(self):
+        # 'Tab. 2 Chemical composition … (in wt. % and apfu)' and 'the mean composition used for SC-XRD' above the header name no column
+        rows = [('SiO2', '33.11', '33.20', '33.15'), ('Al2O3', '18.70', '18.60', '18.67'), ('FeO', '9.30', '9.40', '9.32'), ('Total', '61.11', '61.20', '61.14')]
+        e, _ = self._read('cap.pdf', rows, head=('An.', '1', '2', 'mean$'), xs=(40, 120, 180, 240),
+                          extra=((40, 60 + 32 - 14, 'Table 2. Analyses and the'), (120, 60 + 32 - 14, 'mean composition used for SC-XRD'),))   # the caption's 'mean' over column 1
+        self.assertEqual({r['constituent']: r['mean'] for r in e['rows']}, {'SiO2': 33.15, 'Al2O3': 18.67, 'FeO': 9.32}); self.assertEqual(e['total'], 61.14)
+        # a Total inside the apfu block ('Atoms per formula unit … Total 25 64 60') is the atoms' sum
+        rows = [('Mn', '1.02', '0.14'), ('Cu', '26.19', '0.02'), ('S', '25.38', '24.52'), ('Total', '52.59', '24.68'), ('Mn', '0.28', '0.12'), ('Cu', '6.25', '0.01'), ('S', '12.00', '36.30'),
+                ('Total', '19', '36')]
+        e, _ = self._read('apfutot.pdf', rows, head=('', 'Aktashite', 'Boscardinite'), xs=(40, 120, 190), extra=((40, 60 + 32 + 14 * 5 - 4, 'Atoms per formula unit'),))
+        self.assertEqual(e['total'], 52.59)

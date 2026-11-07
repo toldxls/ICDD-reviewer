@@ -117,6 +117,29 @@ read by hand against the papers.
   (`*Mn2O3`, `***H2Ocalc`), the font's `þ` for `+` (`H2Oþ`).
 - A table whose first row is the last line of a page, under its header, is joined to the rest on the next page.
 
+### Fixed — the analytical table, fifth round: comparison tables
+667 → 674 of 760 corpus tables add up (88 → 89 %), 142 → 143 of 150 in the second set; the two tables that stopped adding
+up both hide a constituent in a footnote to their Total ("*Total includes Co = 1.29"), which the reader now reports honestly
+instead of matching a wrong column by luck. Whole-corpus A/B: one composition to 'ok', two names to 'agrees', that
+literature table to 'unverified'; seeded recall up at every size (wt% slips at 2 %: 151 → 155 papers, mean-only typos at
+5 %: 315 → 319, never caught 303 → 300); the statements gauntlet's contradictions still 0, one more EPMA sheet clean.
+- **The paper's own column among others.** Numbered columns keyed to sources under the table (`2 = pale pink rossmanite …
+  (Selway et al. 1998)`, `4 Boiocchi et al. (2004)`), a header naming it (`Pln (holotype)`, `This study`), or the one column
+  whose cells carry a range (`11.00 (8.59–13.71)`, `3.70[2.4–4.4]`) make that column the analysis, its Total included; the
+  literature analyses had been averaged in as spot analyses.
+- **Spot analyses stay averaged**, and so are their Totals — the rows had been compared against column 1's.
+- **A value is read into the column it stands under** (the integers' positions), so a blank cell no longer shifts the row;
+  a column that spans mean | s.d. | range disables the mapping rather than misreading it.
+- **A header word stands over its column only approximately**: `average` set a little right of the numbers is snapped to
+  them — and only when nothing stands under the word, never to a bigger neighbour. A `–` under the Mean column is the row's
+  value (not detected), never a cue to take another column's number; a value under it overrides a `–` in column 1.
+- **Caption and units lines name no column**: `Tab. 2 … (in wt. % and apfu)` and `… the mean composition used for SC-XRD`
+  had set the Mean column at their own words; a lone `wt%` line likewise. `mean$` (a footnote mark) is `mean`. The
+  integer row is looked for two lines further up when the lines between are header-shaped.
+- **A Total under 'Atoms per formula unit'** (the atoms' sum, `Total 25 64 60`) is never the analysis's; a footnote
+  `*Total includes …` no longer nulls the real Total; the own-column position is taken over the rows above the first
+  Total, not a block that runs on into the next table.
+
 ### Fixed
 - Table 2's means are over every bond: a loop that writes a ×4 bond once had counted it once (rutile's `<Ti–O>` 1.964 for
   1.959).

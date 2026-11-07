@@ -459,6 +459,9 @@ def _numbers(tokens):
             out.append(('range', (float(m.group(1)), float(m.group(2))))); i += 1; continue
         if _NUM.match(t) and i + 2 < len(tokens) and _dash(tokens[i + 1]) == '-' and _NUM.match(_dash(tokens[i + 2])):
             out.append(('range', (float(t), float(_dash(tokens[i + 2]))))); i += 3; continue
+        m = re.fullmatch(r'(\d+\.\d+)\[(\d+\.?\d*)\s*[–-]\s*(\d+\.?\d*)\]', t)
+        if m:                                               # '3.70[2.4–4.4]': the mean with its range in one token
+            out.append(('num', float(m.group(1)))); out.append(('range', (float(m.group(2)), float(m.group(3))))); i += 1; continue
         if _NUM.match(t):
             out.append(('num', float(t))); i += 1; continue
         if re.fullmatch(r'\(\d+\.\d+\)', t):
@@ -571,7 +574,7 @@ def _numlike(t):
     if t.endswith('%') and len(t) > 1:
         t = t[:-1]
     t = _dash(t)
-    return bool(_NUM.match(t) or _NUM_ESD.match(t) or re.fullmatch(r'\(\d+\.\d+\)', t))
+    return bool(_NUM.match(t) or _NUM_ESD.match(t) or re.fullmatch(r'\(\d+\.\d+\)', t) or re.fullmatch(r'\d+\.\d+\[[^\]]{3,}\]', t))
 
 def _num_x(w):
     t = _dash(w[4])
@@ -894,6 +897,24 @@ def rows_add_up(rows, total, slack=0.6, o_eq=None):
     return read, abs(read - total) <= slack or abs(net - total) <= slack or (bool(o_eq) and abs(read - o_eq - total) <= slack)
 
 
+_SOURCE_KEY = re.compile(r'(?:^|(?<!\d)\.\s*|[;:)]\s*)(\d{1,2})\s*(?:=|:|[–-])?\s*[^;]{0,140}?(?:\(?[A-Z][\w-]+(?: et al\.?| and [A-Z]\w+| & [A-Z]\w+)?,? \(?(?:1[89]|20)\d\d[a-c]?\)?|this (?:work|study|paper)|present (?:work|study))')
+
+def _int_cells(ws_row, x_col, int_xs, col_gap):
+    """{column index: value} for a row under integer-headed columns: each value / n.d. cell (right of the label column) read into
+    the column whose header integer it stands under, within half the column spacing; n.d. = None."""
+    cells = {}
+    for w in ws_row:
+        if x_col is not None and w[0] <= x_col:
+            continue
+        t_ = w[4]
+        if not (_numlike(t_) or _NA.match(t_)):
+            continue
+        cx = (w[0] + w[2]) / 2
+        q = min(range(len(int_xs)), key=lambda q_: abs(int_xs[q_] - cx))
+        if abs(int_xs[q] - cx) < 0.9 * col_gap and q not in cells:          # the integer may sit at the column's edge, the values left-aligned under it
+            cells[q] = None if _NA.match(t_) else float(re.match(r'-?\d+\.?\d*', t_.replace('−', '-').lstrip('(')).group(0))
+    return cells
+
 def epma_table(pdf, name=''):
     """The analytical table with the most constituent rows: {'rows': [{'constituent', 'mean',
     'range', 'sd', 'standard'}], 'total', 'header', 'page'}; None when no table is found.
@@ -957,6 +978,27 @@ def epma_table(pdf, name=''):
                 for k in (i - 1, i - 2):
                     if k >= 0:
                         head = [w[4] for w in lines[k]['w']] + head; head_ws = list(lines[k]['w']) + head_ws
+                # the column-header words: not a caption's ('Tab. 2 … (in wt. % and apfu)', '… and the mean composition used for
+                # SC-XRD' name no column) and not a line of one word (a 'wt%' units line stands over nothing)
+                _capl = lambda ln_: bool(ln_['w']) and bool(re.match(r'^(Table|TABLE|Tab\.|Таблица)$', ln_['w'][0][4]))
+                head_nc = []
+                for k in (i - 1, i - 2):
+                    if k >= 0 and not _capl(lines[k]) and len(lines[k]['w']) >= 2:
+                        head_nc = list(lines[k]['w']) + head_nc
+                # the integer row (1 2 3 … n, the analyses as columns): in the header, else up to two lines further up when the lines
+                # between are header-shaped ('No. 1 2 … 9' over 'Locality …' over 'Mineral Pln (holotype) …')
+                int_ws = head_nc; int_k = i - 2
+                _ints_of = lambda ws_: [int(w[4]) for w in ws_ if re.fullmatch(r'\d{1,2}', w[4])]
+                _int_run = lambda ii: len(ii) >= 4 and ii == sorted(ii) and len(set(ii)) == len(ii)
+                if not _int_run(_ints_of(head_nc)):
+                    for k in (i - 3, i - 4):
+                        if k >= 0 and not _capl(lines[k]) and 2 <= len(lines[k]['w']) <= 16 and _int_run(_ints_of(lines[k]['w'])) \
+                                and all(len(lines[k2]['w']) <= 16 and not _capl(lines[k2]) for k2 in range(k + 1, i)):
+                            int_ws = lines[k]['w']; int_k = k
+                            for k2 in range(k, i - 2):                                   # the header runs from the integer row down to the table
+                                if len(lines[k2]['w']) >= 2:
+                                    head_nc = list(lines[k2]['w']) + head_nc
+                            break
                 head_cells = []
                 above = [i - 3, i - 2, i - 1]
                 for k in (i - 4, i - 5, i - 6):                                  # a names row further up ('Burnettite Melilite Paqueite …' over 'Constituent wt% n = 5 SD'): header-shaped, below the caption
@@ -1005,15 +1047,34 @@ def epma_table(pdf, name=''):
                 n_oxide = sum(1 for c, k, v, _ in block if k == 'constituent' and re.search(r'[A-Za-z]\d*O\d*$', c) and c != 'O' and not c.startswith('H2O'))
                 oxide_els = {m_.group(0) for m_ in (re.match(r'[A-Z][a-z]?', c) for c, k, v, _ in block if k == 'constituent' and re.search(r'O\d*$', c)) if m_}
                 # the column the means sit in: under a 'Mean' / 'Average' header token when there is one
-                mean_like = [(0 if re.match(r'^(mean|aver(?:age)?\.?|avg\.?|av\.?)$', w[4], re.I) else 1, (w[0] + w[2]) / 2) for w in head_ws
-                             if re.match(r'^(mean|aver(?:age)?\.?|avg\.?|av\.?|wt\.?%?)$', w[4], re.I)] if head_ws else []   # 'Av.' (13077: fourteen analyses, then 'Av. St.dev.' — the first analysis was read as the mean)
+                hw_ = lambda w: re.sub(r'[$*∗⁎†‡§#¹²³]+$', '', w[4])                     # 'mean$', 'Mean*': the footnote mark after the word
+                mean_like = [(0 if re.match(r'^(mean|aver(?:age)?\.?|avg\.?|av\.?)$', hw_(w), re.I) else 1, (w[0] + w[2]) / 2) for w in head_nc
+                             if re.match(r'^(mean|aver(?:age)?\.?|avg\.?|av\.?|wt\.?%?)$', hw_(w), re.I)] if head_nc else []   # 'Av.' (13077: fourteen analyses, then 'Av. St.dev.' — the first analysis was read as the mean)
+                for w1_, w2_ in zip(head_nc, head_nc[1:]):                           # 'This study', 'present work': the paper's own column among literature ones
+                    if re.match(r'^(this|present)$', w1_[4], re.I) and re.match(r'^(study|work|paper|sample)\b', w2_[4], re.I):
+                        mean_like.append((0, (w1_[0] + w2_[2]) / 2))
                 mean_x = min(mean_like)[1] if mean_like else None                   # 'Mean' outranks a 'wt.%' over another column; leftmost among equals
                 head_low = [h.lower() for h in head]; first_is_mean = False
                 if mean_x is not None and any(h in ('constituent', 'constituents', 'oxide', 'element', 'component') for h in head_low):
                     k0 = max(i_ for i_, h in enumerate(head_low) if h in ('constituent', 'constituents', 'oxide', 'element', 'component'))
                     if k0 + 1 < len(head_low) and re.match(r'^(mean|aver(?:age)?\.?|avg\.?|av\.?|wt\.?%?)$', head_low[k0 + 1]):
                         mean_x = None; first_is_mean = True                    # Mean is the first column: the first number is it
-                ints = [int(t) for t in head if re.fullmatch(r'\d{1,2}', t)]
+                if mean_x is not None:
+                    # the header word sits over its column only approximately ('average' set a little right of the numbers): the
+                    # numbers say where the column is — the largest cluster of value cells within 32 pt, when it is 8 pt or more off
+                    near_ = sorted((w[0] + w[2]) / 2 for c_, k_, v_, wr_ in block if k_ == 'constituent' for w in wr_
+                                   if (_numlike(w[4]) or _NA.match(w[4])) and abs((w[0] + w[2]) / 2 - mean_x) < 32)
+                    groups_ = []
+                    for x_ in near_:
+                        if groups_ and x_ - groups_[-1][-1] <= 8:
+                            groups_[-1].append(x_)
+                        else:
+                            groups_.append([x_])
+                    big_ = [g_ for g_ in groups_ if len(g_) >= 3]
+                    if big_ and not any(abs(g_[len(g_) // 2] - mean_x) <= 12 for g_ in big_):
+                        mean_x = min(big_, key=lambda g_: abs(g_[len(g_) // 2] - mean_x))[len(min(big_, key=lambda g_: abs(g_[len(g_) // 2] - mean_x))) // 2]
+                        # only when nothing stands under the word: a neighbouring column one stray cell larger is never preferred
+                ints = _ints_of(int_ws)
                 point_cols = len(ints) >= 4 and mean_x is None and not first_is_mean and not merged_above and ints == sorted(ints) and len(set(ints)) == len(ints)   # points 1…n as columns
                 keep_cols = None
                 if point_cols:                                                   # only the analyses of the same phase as column 1: the major constituent within 15 %
@@ -1022,6 +1083,74 @@ def epma_table(pdf, name=''):
                         nums_m = [v for kk, v in major[2] if kk == 'num']
                         if nums_m:
                             keep_cols = [q for q, v in enumerate(nums_m) if abs(v - nums_m[0]) <= 0.15 * nums_m[0]]
+                int_xs = col_gap_i = None; src_cols = False
+                if point_cols and int_ws:
+                    xs_i = [(w[0] + w[2]) / 2 for w in int_ws if re.fullmatch(r'\d{1,2}', w[4])]
+                    if len(xs_i) == len(ints) and xs_i == sorted(xs_i):
+                        gaps_i = sorted(b2 - a2 for a2, b2 in zip(xs_i, xs_i[1:]))
+                        if gaps_i and gaps_i[0] >= 15:
+                            int_xs, col_gap_i = xs_i, gaps_i[len(gaps_i) // 2]     # the columns' x: a value is read into the column it stands under
+                            # one value column per integer, or no mapping: on the fullest rows every value cell must land in a column of its
+                            # own (a column 1 that spans mean | s.d. | range puts its s.d. under the integer and its mean under nothing)
+                            full_i = sorted((b_ for b_ in block if b_[1] == 'constituent'),
+                                            key=lambda b_: -sum(1 for w in b_[3] if (_numlike(w[4]) or _NA.match(w[4])) and w[0] > x_col))[:4]
+                            for b_ in full_i:
+                                n_tok = sum(1 for w in b_[3] if (_numlike(w[4]) or _NA.match(w[4])) and w[0] > x_col)
+                                if n_tok and n_tok != len(_int_cells(b_[3], x_col, int_xs, col_gap_i)):
+                                    int_xs = col_gap_i = None; break
+                    # the integers keyed to SOURCES under the table ('2 = pale pink rossmanite … (Selway et al. 1998)', '4 Boiocchi et al.
+                    # (2004)'): a comparison with the literature, not spot analyses — the paper's own column alone is its analysis
+                    tail_ = ' '.join(' '.join(w[4] for w in ln_['w']) for ln_ in lines[j:j + 26])
+                    keys_ = {}
+                    for m_ in _SOURCE_KEY.finditer(tail_):
+                        k_ = int(m_.group(1))
+                        if k_ in ints and k_ not in keys_:
+                            keys_[k_] = m_.group(0)
+                    if len(keys_) >= 2:
+                        own_ = next((k_ for k_, v_ in keys_.items() if re.search(r'this (?:work|study|paper)|present (?:work|study)|holotype', v_, re.I)), None)
+                        if own_ is None and 1 in ints and 1 not in keys_ or own_ is None and 1 in ints and re.search(r'this (?:work|study)', keys_.get(1, ''), re.I):
+                            own_ = 1
+                        if own_ is None:
+                            own_ = min(k_ for k_ in ints if k_ not in keys_) if any(k_ not in keys_ for k_ in ints) else 1
+                        if own_ in ints:
+                            keep_cols = [ints.index(own_)]; src_cols = True
+                    if not src_cols and int_xs:
+                        # a header line naming the own column over its integer ('Pln (holotype) | Pln (cotype) | … | FAp', 'this study'):
+                        # that column alone is the paper's analysis
+                        own_x = None
+                        for ln_ in lines[max(0, min(int_k, i - 2)):i]:                   # the header lines only, never the prose above
+                            for w1_, w2_ in zip(ln_['w'], ln_['w'][1:] + [None]):
+                                t1 = w1_[4].strip('()').lower(); t2 = (w2_[4].strip('()').lower() if w2_ else '')
+                                if t1 == 'holotype' or (t1 in ('this', 'present') and t2 in ('study', 'work', 'paper')):
+                                    own_x = (w1_[0] + (w2_[2] if w2_ and t1 != 'holotype' else w1_[2])) / 2; break
+                            if own_x is not None:
+                                break
+                        if own_x is not None:
+                            q_ = min(range(len(int_xs)), key=lambda q2: abs(int_xs[q2] - own_x))
+                            if abs(int_xs[q_] - own_x) < col_gap_i:
+                                keep_cols = [q_]; src_cols = True
+                    if not src_cols and int_xs:
+                        # the one column whose cells carry a range ('11.00 (8.59–13.71)', '3.70[2.4–4.4]') is the averaged analysis —
+                        # the paper's own — beside single spots or other samples; ranges in several columns decide nothing
+                        rng_cols = Counter()
+                        for b_ in block:
+                            if b_[1] != 'constituent':
+                                continue
+                            ws_b = [w for w in b_[3] if w[0] > x_col]
+                            for q2, w in enumerate(ws_b):
+                                t_ = w[4]
+                                if re.fullmatch(r'\d+\.\d+\[[^\]]{3,}\]', t_):
+                                    cx = (w[0] + w[2]) / 2
+                                elif re.fullmatch(r'\(?\d+\.\d+\s*[–-]\s*\d+\.\d+\)?', t_) and q2 > 0 and _numlike(ws_b[q2 - 1][4]):
+                                    cx = (ws_b[q2 - 1][0] + ws_b[q2 - 1][2]) / 2       # the range belongs to the value before it
+                                else:
+                                    continue
+                                q3 = min(range(len(int_xs)), key=lambda q4: abs(int_xs[q4] - cx))
+                                if abs(int_xs[q3] - cx) < 0.9 * col_gap_i:
+                                    rng_cols[q3] += 1
+                        strong = [q2 for q2, n2 in rng_cols.items() if n2 >= 2]
+                        if len(strong) == 1:
+                            keep_cols = strong; src_cols = True
                 past_total = False; first_val = {}; rows_nd = []; apfu = {}; repeats_after_total = 0; second_block = False   # apfu: the paper's own atoms per formula unit, read off the block it prints them in
                 sd_x = next(((w[0] + w[2]) / 2 for w in head_ws if re.match(r'^\(?(s\.?d\.?|σ|1σ|sigma|e\.?s\.?d\.?|st\.?\s?dev\.?|stdev|sd)\)?$', w[4], re.I)), None) if head_ws else None
                 if sd_x is None and head_ws:                                    # 'St. Dev.' / 'Std dev' as two header words: the column sits between them
@@ -1053,7 +1182,7 @@ def epma_table(pdf, name=''):
                 # under ANOTHER named column (relianceite's 'C2O3*  7.78' and 'H2O*  23.32', printed in the
                 # Normalised column alone — constituents taken from the structure) has no mean.
                 mean_hits = sum(1 for c_, k_, v_, wr_ in block if k_ == 'constituent'
-                                and any(abs((w[0] + w[2]) / 2 - mean_x) < 22 for w in wr_ if _numlike(w[4]))) if mean_x is not None else 0
+                                and any(abs((w[0] + w[2]) / 2 - mean_x) < 22 for w in wr_ if _numlike(w[4]) or _NA.match(w[4]))) if mean_x is not None else 0   # a '–' under Mean is a value: n.d.
                 col_cells = []                                               # (constituent, [(x, value)]) per row: the paper's other columns, for the sets K_C may be formed from
                 # where the rows' FIRST numbers sit when the first number is the mean: a row whose one
                 # number is far to the right of that (relianceite's 'C2O3*  7.78', in the Normalised
@@ -1072,8 +1201,14 @@ def epma_table(pdf, name=''):
                 element_table = len(above) >= 2 and sum(1 for c_ in above if bare(c_)) >= 0.75 * len(above)
                 # the same, counting only numbers right of the label column: on a two-column page a line's first number may be
                 # the facing column's (a reflectance table beside the analysis)
+                above_tot = []
+                for b_ in block:                                                  # the analysis's rows: above its first Total (a block may run on into the next table)
+                    if b_[1] == 'total' and b_[0].lower().startswith(('total', 'sum')):
+                        break
+                    if b_[1] == 'constituent':
+                        above_tot.append(b_)
                 own_xs = sorted(x_ for x_ in (next(((w[0] + w[2]) / 2 for w in wr_ if _numlike(w[4]) and w[0] > x_col), None)
-                                               for c_, k_, v_, wr_ in block if k_ == 'constituent') if x_ is not None)
+                                               for c_, k_, v_, wr_ in above_tot) if x_ is not None)
                 own_x_med = own_xs[len(own_xs) // 2] if len(own_xs) >= 3 else None
                 # several analyses side by side with no Mean header: where column 1 sits and how far apart the columns are, from the
                 # rows that fill every column — a row whose first number is a column or more to the right has no value in column 1
@@ -1148,6 +1283,8 @@ def epma_table(pdf, name=''):
                     rng = next((v for k, v in vals if k == 'range'), None)
                     texts = [v for k, v in vals if k == 'text' and not re.fullmatch(r'[a-d*†‡§]+', v)] if has_std else []
                     if kind == 'total':
+                        if in_apfu and not c.startswith('O='):
+                            continue                                             # 'Total 25 64 60 …' under 'Atoms per formula unit': the atoms' sum, not the analysis's
                         if c.startswith('O=') and nums and not in_apfu:
                             v_oe = abs(nums[0])                  # 'Sum 101.15, O = S −1.82, O = Cl −0.05, Total 99.28': each deduction counts
                             if mean_x is not None:
@@ -1163,6 +1300,18 @@ def epma_table(pdf, name=''):
                                 second_block = True                      # a second analysis block ran on below the first Total (the same constituents again, then a
                                 continue                                 # wt% Total of their own): its Total is not this table's, and its rows were never apfu
                             total = nums[0]; past_total = True
+                            if src_cols and int_xs:
+                                cells_t = _int_cells(ws_row, x_col, int_xs, col_gap_i)
+                                if keep_cols[0] in cells_t and cells_t[keep_cols[0]] >= 40:
+                                    total = cells_t[keep_cols[0]]                   # the own column's Total
+                            elif point_cols and keep_cols and len(keep_cols) >= 2:
+                                if int_xs:
+                                    cells_t = _int_cells(ws_row, x_col, int_xs, col_gap_i)
+                                    use_t = [cells_t[q] for q in keep_cols if cells_t.get(q) is not None and 40 <= cells_t[q] <= 120]
+                                else:
+                                    use_t = [nums[q] for q in keep_cols if q < len(nums) and 40 <= nums[q] <= 120]
+                                if len(use_t) >= 2:
+                                    total = round(sum(use_t) / len(use_t), 2)     # the spots are averaged: so are their totals
                             if mean_x is not None:                      # the Total under the Mean column, as each constituent's mean is
                                 cand = [(abs((w[0] + w[2]) / 2 - mean_x), w[4]) for w in ws_row if _numlike(w[4])]
                                 if cand and min(cand)[0] < 22:
@@ -1171,7 +1320,7 @@ def epma_table(pdf, name=''):
                                     total_other = total; total = None                      # every number of the Total under another column (a Normalised one): the Mean column prints none
                             elif total < 40 and any(40 <= v <= 120 for v in nums):
                                 total = next(v for v in nums if 40 <= v <= 120)   # 'Total 1.3 99.5': an s.d. or a range first, the total after it
-                            elif own_x_med is not None and stagger_x is None:
+                            elif own_x_med is not None and stagger_x is None and total >= 40:
                                 xs_t = [(w[0] + w[2]) / 2 for w in ws_row if _numlike(w[4]) and w[0] > x_col]
                                 if xs_t and min(xs_t) > own_x_med + 40:
                                     # 'Total 100.00' under the Norm. column only, the H2O* the structure gives beside it: the
@@ -1188,13 +1337,23 @@ def epma_table(pdf, name=''):
                     if not nums:
                         continue
                     mean = 0.0 if nd_first else nums[0]                          # n.d. in the first column: no mean of its own, the row serves the named columns only
-                    if point_cols and len(nums) >= 3:
+                    if point_cols and int_xs and kind == 'constituent':
+                        cells_ = _int_cells(ws_row, x_col, int_xs, col_gap_i)  # each value in the column it stands under (a blank cell shifts nothing)
+                        use_ = [cells_[q] for q in (keep_cols or range(len(int_xs))) if q in cells_ and cells_[q] is not None]
+                        if not use_:
+                            continue                                             # nothing in the columns kept (the own column blank, or n.d.): no mean (kept in col_cells)
+                        mean = round(sum(use_) / len(use_), 3)                # the points' average (of the same phase), or the own column's value
+                    elif point_cols and len(nums) >= 3:
                         use_ = [nums[q] for q in (keep_cols or range(len(nums))) if q < len(nums)] or nums
                         mean = round(sum(use_) / len(use_), 3)                # no Mean column: the points' average (of the same phase)
                     if mean_x is not None:                                      # the value under the Mean column
-                        cand = [(abs((w[0] + w[2]) / 2 - mean_x), w[4]) for w in ws_row if _numlike(w[4])]
+                        cand = [(abs((w[0] + w[2]) / 2 - mean_x), w[4]) for w in ws_row if _numlike(w[4]) or _NA.match(w[4])]
                         if cand and min(cand)[0] < 22:
+                            if _NA.match(min(cand)[1]):
+                                continue                                         # '–' under the Mean column: not detected — the row has no mean (kept in col_cells), and
+                                                                                 # another column's number is not it (a comparison table's literature analyses)
                             mean = float(re.match(r'-?\d+\.?\d*', min(cand)[1].replace('−', '-').lstrip('(')).group(0))
+                            nd_first = False                                     # a value under the Mean column is the row's, whatever the first column prints ('–' in a literature column)
                         elif cand and mean_hits >= max(2, n_const // 2):
                             continue                                             # every number of the row is under another column: no mean (kept in col_cells)
                     elif stagger_x is not None and kind == 'constituent' and id(b_row) not in merged_x:
