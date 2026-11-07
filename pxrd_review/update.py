@@ -17,7 +17,7 @@ want pip to verify the download).
 """
 import os, re, sys, json, time, argparse, threading, subprocess, urllib.request
 
-REPO = 'toldxls/ICDD-reviewer'
+REPO = 'toldxls/xl-eyes'
 MAIN_ZIP = 'https://github.com/%s/archive/refs/heads/main.zip' % REPO
 MAIN_INIT = 'https://raw.githubusercontent.com/%s/main/pxrd_review/__init__.py' % REPO
 RELEASES_URL = 'https://github.com/%s/releases/latest' % REPO

@@ -429,7 +429,7 @@ STALE_DAYS = 14                 # the AUTO-REFRESH bar: how old a key-backed cac
 # false flag. IMA approves ~100 species a year (of 6,226), so ~4 months is a fair bar.
 SEED_STALE_DAYS = 120
 
-RELEASES_URL = 'https://github.com/toldxls/ICDD-reviewer/releases/latest'
+RELEASES_URL = 'https://github.com/toldxls/xl-eyes/releases/latest'
 
 def _using_seed():
     """True when the data is coming from the snapshot shipped in the package, not a local pull."""

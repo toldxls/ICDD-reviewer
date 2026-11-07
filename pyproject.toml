@@ -21,9 +21,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/toldxls/ICDD-reviewer"
-Source = "https://github.com/toldxls/ICDD-reviewer"
-Issues = "https://github.com/toldxls/ICDD-reviewer/issues"
+Homepage = "https://github.com/toldxls/xl-eyes"
+Source = "https://github.com/toldxls/xl-eyes"
+Issues = "https://github.com/toldxls/xl-eyes/issues"
 
 [project.scripts]
 pxrd = "pxrd_review.cli:main"

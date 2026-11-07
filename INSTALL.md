@@ -41,7 +41,7 @@ the step above and open a **new** Command Prompt.
 
 **The latest version is always on the Releases page:**
 
-### **<https://github.com/toldxls/ICDD-reviewer/releases/latest>**
+### **<https://github.com/toldxls/xl-eyes/releases/latest>**
 
 That link always resolves to the newest release. Nothing gets emailed, and there is no files
 site to check. You do **not** need a GitHub account.
@@ -56,7 +56,7 @@ site to check. You do **not** need a GitHub account.
 This always fetches the **current** version — there is nothing to download by hand, and
 nothing to keep up to date:
 ```
-pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/heads/main.zip"
+pip install --upgrade "https://github.com/toldxls/xl-eyes/archive/refs/heads/main.zip"
 ```
 Run that same line again to upgrade. You do **not** need `git` installed.
 
@@ -69,7 +69,7 @@ Run that same line again to upgrade. You do **not** need `git` installed.
 > install if a single byte differs. Do not copy such a line out of this file or an old message —
 > it pins a specific version, and an old one will quietly install an **old tool**. Take it from
 > the release you are installing:
-> **<https://github.com/toldxls/ICDD-reviewer/releases/latest>**
+> **<https://github.com/toldxls/xl-eyes/releases/latest>**
 >
 > (Option **A**'s `.whl` + `certutil` gives the same assurance, checked by hand.)
 
@@ -93,7 +93,7 @@ Prefer to see the files? On the Releases page (or the repository page → green 
 choose **Source code (zip)**, unzip it (right-click → *Extract All…*), then in a Command Prompt
 go into the unzipped folder and install with `.` (a dot — it means "the folder I am in"):
 ```
-cd Desktop\ICDD-reviewer-<version>
+cd Desktop\xl-eyes-<version>
 pip install -e .
 ```
 *(Tip: type `cd ` then drag the folder into the window to fill in the path.)*
@@ -120,7 +120,7 @@ reopens by itself, and the page you had open reloads. No typing needed.
 pxrd --version
 ```
 It should print `pxrd-review <version>` — and that version should match the one marked
-**`Latest`** on the [Releases page](https://github.com/toldxls/ICDD-reviewer/releases). If it
+**`Latest`** on the [Releases page](https://github.com/toldxls/xl-eyes/releases). If it
 is older, the upgrade didn't take: re-run the install command and reopen the Command Prompt.
 
 **If it says `'pxrd' is not recognized`:** first close and reopen the Command Prompt. If it
@@ -283,17 +283,17 @@ editable install keeps its `.cache/` and `.mindat_key` at the repo root.
    here for it, and it is the only install path pip actually verifies:
    ```
    Source archive SHA-256 (v<version>.zip):
-   pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/tags/v<version>.zip#sha256=<hash>"
+   pip install --upgrade "https://github.com/toldxls/xl-eyes/archive/refs/tags/v<version>.zip#sha256=<hash>"
    ```
    Get that hash *after* pushing the tag:
    ```
-   curl -sL -o /tmp/src.zip https://github.com/toldxls/ICDD-reviewer/archive/refs/tags/v<version>.zip
+   curl -sL -o /tmp/src.zip https://github.com/toldxls/xl-eyes/archive/refs/tags/v<version>.zip
    shasum -a 256 /tmp/src.zip
    ```
 
 7. **Verify what you actually published** — the check that catches every mistake above at once:
    ```
    gh release view v<version> --json assets -q '.assets[].name'    # the NEW wheel + SHA256SUMS.txt
-   pip install --upgrade "https://github.com/toldxls/ICDD-reviewer/archive/refs/heads/main.zip"
+   pip install --upgrade "https://github.com/toldxls/xl-eyes/archive/refs/heads/main.zip"
    pxrd --version                                                  # must print the new version
    ```

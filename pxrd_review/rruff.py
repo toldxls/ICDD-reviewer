@@ -36,7 +36,7 @@ DEFAULT_SETS = ('excellent_oriented', 'excellent_unoriented', 'fair_oriented', '
                 'unrated_oriented', 'unrated_unoriented', 'LR-Raman')
 QUALITY_RANK = {'excellent': 0, 'fair': 1, 'unrated': 2, 'poor': 3, 'broad': 4, '': 5}
 LASER_RANK = {532: 0, 785: 1, 780: 1, 514: 2, 515: 2, 633: 3, 632: 3, 638: 3, 488: 3, 458: 3, 405: 4}
-UA = 'pxrd-review (https://github.com/toldxls/ICDD-reviewer)'
+UA = 'pxrd-review (https://github.com/toldxls/xl-eyes)'
 PROGRESS = {}                   # the fetch in hand, for a window that asked for one: stage, set, done, total, spectra, error, finished
 
 def _ssl_context():
